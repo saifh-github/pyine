@@ -1,0 +1,48 @@
+# Project data / results directories
+data/
+datasets/
+results/
+output/
+logs/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+ENV/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Local development settings
+.env
+.env.local
+
+# Logs
+*.log
+
+# OS specific
+.DS_Store
+Thumbs.db
