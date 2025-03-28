@@ -1,8 +1,10 @@
 import enum
-import json
+import os
 
-import langchain.prompts
-import langchain.output_parsers
+import langchain_deepseek
+import langchain_core.prompts
+import langchain_core.output_parsers
+import langchain_core.runnables
 import pydantic
 
 
@@ -27,13 +29,15 @@ class InputTypeOptions(str, enum.Enum):
     
     The options are: `stdin` (standard input), i.e. the code expects a string to be provided via Python's `input()`
     function; `cli` (command-line arguments), i.e. the code expects a list of strings to be provided as command-line
-    arguments; `env-vars` (environment variables), i.e. the code tries to read arguments from environment variables;
-    `callable` (callable with arguments), i.e. the code declares a callable object that expects to be provided arguments
-    directly upon use; and `no-input`, i.e. the code does not expect any input.
+    arguments; `file`, i.e. the code tries to read input arguments or data from a file; `env-vars` (environment
+    variables), i.e. the code tries to read arguments from environment variables; `callable` (callable with arguments),
+    i.e. the code declares a callable object that expects to be provided arguments directly upon use; and `no-input`,
+    i.e. the code does not expect any input.
     """
 
     STDIN = "stdin"
     CLI = "cli"
+    FILE = "file"
     ENV = "env-vars"
     CALLABLE = "callable"
     NO_INPUT = "no-input"
@@ -102,7 +106,7 @@ class CodeAnalysisResponse(pydantic.BaseModel):
         description="Specifies how the code expects the algorithm to return its output(s)",
     )
 
-code_analysis_output_parser = langchain.output_parsers.PydanticOutputParser(
+code_analysis_output_parser = langchain_core.output_parsers.PydanticOutputParser(
     pydantic_object=CodeAnalysisResponse,
 
 )
@@ -174,6 +178,8 @@ CodeAnalysisResponse(
 
 _code_analysis_template_str = \
 f"""
+You are an expert at interpreting and analyzing Python 3 code.
+
 Given a Python code snippet, we want to determine the following:
 - Is this code deterministic?.
 - Does this code import packages that are NOT standard, i.e. not included in the Python standard library?
@@ -198,7 +204,7 @@ Here is the code you must now analyze:
 ```
 """
 
-code_analysis_prompt = langchain.prompts.PromptTemplate(
+code_analysis_prompt = langchain_core.prompts.PromptTemplate(
     input_variables=["code", "expected_output_format", "example_outputs"],
     template=_code_analysis_template_str,
 )
@@ -207,3 +213,21 @@ code_analysis_prompt = code_analysis_prompt.partial(
     expected_output_format=_code_analysis_expected_output_format_str,
     example_outputs=_code_analysis_example_outputs_str,
 )
+
+
+def get_deepseek_code_analysis_chain() -> langchain_core.runnables.Runnable:
+    """Get a DeepSeek code analysis chain based on the above prompt template and parser."""
+    llm = langchain_deepseek.ChatDeepSeek(
+        model="deepseek-chat",
+        temperature=0.0,  # recommended setting for coding/math
+        max_tokens=1024,
+        timeout=None,
+        max_retries=50,
+        api_key=os.environ.get("DEEPSEEK_API_KEY"),
+    )
+    llm_with_structured_output = llm.with_structured_output(CodeAnalysisResponse)
+    code_analysis_chain = langchain_core.runnables.RunnableSequence(
+        code_analysis_prompt,
+        llm_with_structured_output,
+    )
+    return code_analysis_chain
