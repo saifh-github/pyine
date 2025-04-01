@@ -8,7 +8,7 @@ import langchain_core.runnables
 import pydantic
 
 
-class CodeTypeOptions(str, enum.Enum):
+class CodeTypeOptions(enum.StrEnum):
     """Code type options for executing algorithms in Python.
     
     The options are: `simple`, i.e. simple code to be executed as-is, that captures required inputs
@@ -24,7 +24,7 @@ class CodeTypeOptions(str, enum.Enum):
     CALLABLE = "callable"
 
 
-class InputTypeOptions(str, enum.Enum):
+class InputTypeOptions(enum.StrEnum):
     """Input (argument) type options for passing inputs to algorithms in Python.
     
     The options are: `stdin` (standard input), i.e. the code expects a string to be provided via Python's `input()`
@@ -43,7 +43,7 @@ class InputTypeOptions(str, enum.Enum):
     NO_INPUT = "no-input"
 
 
-class OutputTypeOptions(str, enum.Enum):
+class OutputTypeOptions(enum.StrEnum):
     """Output type options for returning algorithm results in Python.
 
     The options are: `stdout` (standard output), i.e. the code prints a string to standard output as the final result,
