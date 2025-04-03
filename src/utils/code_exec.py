@@ -9,8 +9,6 @@ import typing
 import src.utils.reprod
 from src.utils.portable_repr import get_portable_representation as portable_repr
 
-
-
 @dataclasses.dataclass(frozen=True)
 class TraceKey:
     """Dataclass for storing and exporting execution trace keys."""
@@ -39,8 +37,10 @@ class TraceEvent:
     """The return value of the function at the time of the event."""
     exception: typing.Optional[typing.Dict[str, typing.Any]]
     """A dictionary containing information about the exception that occurred, if any."""
-    trace_step: int
-    """The trace step number at the time of the event; should be unique for each event."""
+    trace_step_idx: int
+    """The trace step index at the time of the event; should be unique for each event."""
+    trace_key: TraceKey
+    """The trace key associated with this event, for convenience."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,13 +50,24 @@ class TraceResult:
     """The original code string that was executed."""
     inputs: str
     """The inputs that were available to the code during execution."""
-    traced_states: typing.Dict[TraceKey, typing.List[typing.Optional[TraceEvent]]]
-    """A dictionary containing the execution trace states at each line of code.
+    max_events_per_line: typing.Optional[int]
+    """The maximum number of events to record per line (if needed)."""
+    traced_steps: typing.List[typing.Optional[TraceEvent]]
+    """A list of all traced steps, in order of execution.
+    
+    The states correspond to variables at each line of code prior to execution. If a line has more
+    than `max_events_per_line` events, additional events are substituted by `None` in this list. To
+    determine which line an event occurred on, see the `TraceKey` attribute of each event, or the
+    `traced_steps_map` dictionary below.
+    """
+    traced_steps_map: typing.Dict[TraceKey, typing.List[int]]
+    """A dictionary containing the indices of each traced step for each line of executed code.
     
     In this dictionary, keys are `TraceKey` instances (combining file, function, and line info)
-    and values are lists of `TraceEvent` objects representing the execution state at each
-    line of code (prior to execution). If a line has more than `max_events_per_line` events,
-    subsequent events objects will be replaced with `None`.
+    and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
+    list. If a line has more than `max_events_per_line` events, its corresponding indices list will
+    still contain all trace step indices, but some events in `traced_steps` will be substituted with
+    `None`.
     """
     tracing_steps: int
     """The total number of tracing steps taken during execution."""
@@ -68,8 +79,8 @@ class TraceResult:
     """The captured stdout output during execution."""
     stderr: str
     """The captured stderr output during execution."""
-    env_metadata: typing.Dict[str, typing.Any]
-    """A dictionary containing metadata about the execution environment."""
+    metadata: typing.Dict[str, typing.Any]
+    """A dictionary containing metadata about the execution environment & settings."""
 
 
 def execute_code_with_mocked_input(
@@ -156,24 +167,49 @@ def execute_code_with_mocked_input(
     # return the captured output and any exception
     return stdout_capture.getvalue(), result_exception
 
+@contextlib.contextmanager
+def trace_context(
+    trace_callback: typing.Callable,
+) -> typing.Iterator[None]:
+    """
+    Context manager for sys.settrace.
+
+    Args:
+        trace_callback: The trace function to set during the context
+
+    Yields:
+        None
+    """
+    old_trace = sys.gettrace()
+    sys.settrace(trace_callback)
+    try:
+        yield
+    finally:
+        sys.settrace(old_trace)
+
 
 def execute_and_trace_code(
     code_string: str,
-    blacklisted_functions: typing.Optional[typing.List[str]] = None,
+    blacklisted_modules: typing.Optional[typing.Iterable[str]] = None,
+    blacklisted_functions: typing.Optional[typing.Iterable[str]] = None,
     max_events_per_line: typing.Optional[int] = None,
+    seed: typing.Optional[int] = 42,
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
     Args:
         code_string: A string containing the Python code to execute and trace.
+        blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_functions: A list of function names to exclude from tracing.
         max_events_per_line: The maximum number of events to record per line.
+        seed: The seed to use for random number generation. Defaults to 42.
 
     Returns:
         A `TraceResult` instance containing the execution results.
     """
-    traced_states: typing.Dict[TraceKey, typing.List[typing.Optional[TraceEvent]]] = {}
-    trace_step = 0  # will be incremented each time the callback function is called
+    traced_steps: typing.List[typing.Optional[TraceEvent]] = []
+    traced_steps_map: typing.Dict[TraceKey, typing.List[int]] = {}
+    last_trace_step_idx = 0  # will be incremented each time the callback function is called
 
     def _trace_callback(
         frame: types.FrameType,  # noqa
@@ -181,21 +217,24 @@ def execute_and_trace_code(
         arg: typing.Any,
     ) -> typing.Optional[typing.Callable]:
         """Callback function for sys.settrace that records execution state at each line."""
-        nonlocal trace_step
+        nonlocal last_trace_step_idx
 
         trace_key = TraceKey(
             file=frame.f_code.co_filename,
             function=frame.f_code.co_name,
             line=frame.f_lineno
         )
-        if event == "call" and blacklisted_functions and trace_key.function in blacklisted_functions:
-            return_trace_callback = None  # do not trace that function, skip over it
-        else:
-            return_trace_callback = _trace_callback  # any non-blacklisted function will be traced
-        trace_step += 1  # will reflect the total number of calls to this callback, no matter what
-        if trace_key not in traced_states:
-            traced_states[trace_key] = []
-        if max_events_per_line and len(traced_states[trace_key]) >= max_events_per_line:
+        return_trace_callback = _trace_callback  # any non-blacklisted function will be traced
+        if event == "call":
+            is_blacklisted = (
+                (blacklisted_functions and trace_key.function in blacklisted_functions)
+                or (blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules)))
+            )
+            if is_blacklisted:
+                return_trace_callback = None  # do not trace that function, skip over it
+        if trace_key not in traced_steps_map:
+            traced_steps_map[trace_key] = []
+        if max_events_per_line and len(traced_steps_map[trace_key]) >= max_events_per_line:
             # if we have reached the trace event limit for this line, append `None` instead of event
             trace_event = None
         else:
@@ -239,49 +278,60 @@ def execute_and_trace_code(
                 arguments=arguments,
                 return_value=return_value,
                 exception=exception,
-                trace_step=trace_step,
+                trace_step_idx=last_trace_step_idx,
+                trace_key=trace_key,
             )
-
-        traced_states[trace_key].append(trace_event)
+        traced_steps.append(trace_event)
+        traced_steps_map[trace_key].append(last_trace_step_idx)
+        last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
         return return_trace_callback
 
     compiled_code = compile(code_string, "<string>", "exec")
     stdout_capture = io.StringIO()  # capture stdout to avoid polluting the output
-    namespace = {}  # create a namespace for execution (to keep potential global defs)
+    caught_exception = None
+    global_scope, local_scope = {}, {}
+    src.utils.reprod.set_seed(seed)
     try:
-        with contextlib.redirect_stdout(stdout_capture):
-            sys.settrace(_trace_callback)
-            exec(compiled_code, namespace)
-    finally:
-        sys.settrace(None)
+        #with contextlib.redirect_stdout(stdout_capture):  # @@@@@@@@@@@@@@
+        with trace_context(_trace_callback):
+            exec(compiled_code, global_scope, local_scope)
+    except Exception as e:
+        caught_exception = e  # store any exception that occurred
+    print(f"{local_scope=}")
+    print(f"{local_scope['Something'].__module__=}")
+    reprod_metadata = src.utils.reprod.get_reprod_metadata()
+    reprod_metadata["initial_seed"] = seed
+    reprod_metadata["max_events_per_line"] = max_events_per_line
+    reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
+    reprod_metadata["blacklisted_functions"] = list(blacklisted_functions or [])
     trace_result = TraceResult(
         code_string=code_string,
         inputs="", # @@@@@ TODO
-        traced_states=traced_states,
-        tracing_steps=trace_step,
+        max_events_per_line=max_events_per_line,
+        traced_steps=traced_steps,
+        traced_steps_map=traced_steps_map,
+        tracing_steps=last_trace_step_idx,
         return_value=None, # @@@@@ TODO
-        exception=None, # @@@@@ TODO
+        exception=caught_exception,
         stdout=stdout_capture.getvalue(),
         stderr=None, # @@@@@ TODO
-        env_metadata=src.utils.reprod.get_reprod_metadata(),
+        metadata=reprod_metadata,
     )
     return trace_result
 
 
 def format_traced_code_execution(
-    code_string: str,
-    traced_states: typing.Dict[TraceKey, typing.List[TraceEvent]]
+    trace_result: TraceResult,
 ) -> str:
     """Format traced code execution results into a readable report.
 
     Args:
-        code_string: The original code string that was executed.
-        traced_states: Dictionary of TraceKey instances to lists of TraceEvent objects.
+        trace_result: A TraceResult instance containing the execution results.
 
     Returns:
         A formatted string showing the code execution with variable states.
     """
-    code_lines = code_string.splitlines()
+    code_lines = trace_result.code_string.splitlines()
     result = []
     result.append("Code Execution Trace:")
     result.append("=====================")
@@ -290,17 +340,22 @@ def format_traced_code_execution(
     for line_number, line in enumerate(code_lines, 1):
         result.append(f"Line {line_number}: {line}")
         relevant_events = [
-            (key, events)
-            for key, events in traced_states.items()
+            (key, trace_result.traced_steps_map[key])
+            for key in trace_result.traced_steps_map
             if key.line == line_number
         ]
-        for trace_key, events in relevant_events:
-            for event_number, trace_event in enumerate(events, 1):
+        for trace_key, event_indices in relevant_events:
+            for event_number, trace_step_idx in enumerate(event_indices, 1):
+                trace_event = trace_result.traced_steps[trace_step_idx]
+                if trace_event is None:
+                    result.append("  [Event skipped due to max_events_per_line limit]")
+                    continue
+
                 if event_number > 1:
                     result.append(f"  Visit #{event_number}:")
 
                 result.append(f"  Event Type: {trace_event.event_type}")
-                result.append(f"  Trace Step: {trace_event.trace_step}")
+                result.append(f"  Trace Step: {trace_event.trace_step_idx}")
 
                 if trace_event.arguments:
                     result.append("  Arguments:")
@@ -345,13 +400,13 @@ def format_traced_code_execution(
 
 if __name__ == "__main__":
     # example usage of tracing + printing (note: gets spammy for large functions!):
+    print("hello")
     _sample_code = \
 """\
 
-import numpy as np
-
-def potato():
-    print("potato")
+def potato(a: int) -> int:
+    print(f"potato {a}")
+    return a + 1
     
 class Something:
     def __init__(self):
@@ -361,11 +416,6 @@ class Something:
 
 some_potato = Something()
 
-something_else = np.array
-hllo = np
-sdkjnsdkg = np.random.random
-sjdgknsd = Something.ok
-
 a = 1
 b = 2
 for i in range(3):
@@ -373,6 +423,11 @@ for i in range(3):
     b *= i if i > 0 else 1
 print(f"Final values: a={a}, b={b}")
 """
-    _trace_result = execute_and_trace_code(_sample_code)
-    _report = format_traced_code_execution(_sample_code, _trace_result.traced_states)
+    _trace_result = execute_and_trace_code(
+        code_string=_sample_code,
+        blacklisted_modules=["numpy", "torch"],
+    )
+    _report = format_traced_code_execution(
+        trace_result=_trace_result,
+    )
     print(_report)

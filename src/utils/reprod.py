@@ -1,9 +1,12 @@
 import hashlib
 import os
 import platform
+import random
 import re
 import time
 import typing
+
+import numpy as np
 
 
 def get_platform_name() -> str:
@@ -22,7 +25,7 @@ def get_git_revision_hash() -> str:
     If a git repository is not found, the function will return a static string.
     """
     try:
-        import git
+        import git  # noqa
     except (ImportError, AttributeError):
         return "git-import-error"
     try:
@@ -69,6 +72,12 @@ def get_params_hash(*args, **kwargs):
     return hashlib.sha1(clean_str.encode(), usedforsecurity=False).hexdigest()
 
 
+def set_seed(seed: int) -> None:
+    """Sets the seed for the random and numpy.random modules."""
+    random.seed(seed)
+    np.random.seed(seed)
+
+
 def get_reprod_metadata() -> typing.Dict[str, typing.Any]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     return {
@@ -77,3 +86,4 @@ def get_reprod_metadata() -> typing.Dict[str, typing.Any]:
         "git_revision_hash": get_git_revision_hash(),
         "installed_packages": get_installed_packages(),
     }
+
