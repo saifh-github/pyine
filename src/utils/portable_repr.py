@@ -20,7 +20,6 @@ def get_portable_representation(
     Returns:
         Dict containing structured information about the object with stable identifiers.
     """
-    print(f"{obj=} {type(obj)=}")
     if obj is None:
         return "None"
     elif isinstance(obj, (int, float, bool, str, bytes)):
@@ -49,8 +48,13 @@ def get_portable_representation(
     elif inspect.ismodule(obj):
         return f"module:{obj.__name__}"
     elif callable(obj):
-        module = obj.__module__
-        name = obj.__qualname__ if hasattr(obj, "__qualname__") else obj.__name__
+        module = getattr(obj, "__module__", None)
+        if hasattr(obj, "__qualname__"):
+            name = obj.__qualname__
+        elif hasattr(obj, "__name__"):
+            name = obj.__name__
+        else:
+            name = f"anonymous:{obj}"
         if module is not None:
             return f"callable:{module}.{name}"
         else:

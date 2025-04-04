@@ -2,12 +2,17 @@ import sys
 import io
 import contextlib
 import dataclasses
+import functools
 import pprint
 import types
 import typing
 
 import src.utils.reprod
+import src.utils.code_blocks
 from src.utils.portable_repr import get_portable_representation as portable_repr
+
+_orig_stdin = sys.stdin
+
 
 @dataclasses.dataclass(frozen=True)
 class TraceKey:
@@ -48,6 +53,8 @@ class TraceResult:
     """Dataclass for storing and exporting execution trace results."""
     code_string: str
     """The original code string that was executed."""
+    code_blocks: typing.Dict[int, src.utils.code_blocks.CodeBlock]
+    """A dictionary containing the logic blocks of the executed code, indexed by line number."""
     inputs: str
     """The inputs that were available to the code during execution."""
     max_events_per_line: typing.Optional[int]
@@ -83,90 +90,6 @@ class TraceResult:
     """A dictionary containing metadata about the execution environment & settings."""
 
 
-def execute_code_with_mocked_input(
-    code_string: str,
-    inputs: str
-) -> typing.Tuple[str, typing.Optional[Exception]]:  # type: ignore
-    """Execute Python code with mocked input.
-
-    Replaces calls to input() or sys.stdin.readline() with lines from the
-    provided inputs string.
-
-    Args:
-        code_string: a string containing arbitrary Python code to execute.
-        inputs: a string containing individual lines to be used as input values
-            (one line per input call).
-
-    Returns:
-        A tuple containing:
-            - The captured stdout output as a string
-            - Any exception that was raised during execution, or None if execution
-              was successful
-    """
-    # split inputs into lines and create an iterator
-    input_lines = inputs.splitlines()
-    input_iter = iter(input_lines)
-
-    # mock the input function
-    def mock_input(prompt: str = "") -> str:
-        try:
-            next_input = next(input_iter)
-            print(f"providing next mocked input: {next_input}")
-            return next_input
-        except StopIteration:
-            raise EOFError("Not enough input lines provided")
-
-    # create a mock stdin that returns our predefined inputs
-    class MockStdin:
-        def readline(self) -> str:
-            try:
-                next_input = next(input_iter)
-                print(f"providing next mocked input: {next_input}")
-                return f"{next_input}\n"  # add newline as readline would return
-            except StopIteration:
-                return ""  # return empty string when no more inputs
-
-        def read(self) -> str:
-            result = "".join(f"{line}\n" for line in input_iter)
-            print(f"providing mocked read: {result.strip()}")
-            return result
-
-        def readlines(self) -> typing.List[str]:
-            result = [f"{line}\n" for line in input_iter]
-            print(f"providing mocked readlines: {result}")
-            return result
-
-        def __getattr__(self, name: str) -> typing.Any:
-            # pass through any other attributes to the real stdin
-            return getattr(sys.__stdin__, name)
-
-    # store the original stdin, stdout, and input function
-    original_stdin = sys.stdin
-    original_input = __builtins__["input"]  # type: ignore
-
-    # replace stdin and input with our mocks
-    sys.stdin = MockStdin()  # type: ignore
-    __builtins__["input"] = mock_input  # type: ignore
-
-    # create StringIO objects to capture stdout and stderr
-    stdout_capture = io.StringIO()
-    result_exception = None
-    try:
-        # execute the code with captured stdout and our mocked input
-        with contextlib.redirect_stdout(stdout_capture):
-            # execute the code
-            exec(code_string, {})
-    except Exception as e:
-        # store any exception that occurred
-        result_exception = e
-    finally:
-        # restore the original stdin and input function
-        sys.stdin = original_stdin
-        __builtins__["input"] = original_input  # type: ignore
-
-    # return the captured output and any exception
-    return stdout_capture.getvalue(), result_exception
-
 @contextlib.contextmanager
 def trace_context(
     trace_callback: typing.Callable,
@@ -188,8 +111,90 @@ def trace_context(
         sys.settrace(old_trace)
 
 
+class MockInput:
+    """Mock class for sys.stdin.readline() and input() to read from a provided list of inputs."""
+
+    def __init__(self, inputs: str = ""):
+        """Initialize the MockInput instance with an input string to be read from.
+
+        If the input string contains newlines, each line will be read separately. If it does not
+        possess a final newline, one will be added automatically.
+        """
+        self._orig_inputs = inputs
+        if inputs and not inputs.endswith("\n"):
+            inputs += "\n"
+        self._input_iter = iter(inputs.splitlines())
+
+    def readline(self) -> str:
+        """Read a line from the iterator of inputs."""
+        try:
+            next_input = next(self._input_iter)
+            return f"{next_input}\n"  # add newline as readline would return
+        except StopIteration:
+            return ""  # return empty string when no more inputs
+
+    def read(self) -> str:
+        """Read all remaining inputs into a single string."""
+        result = "".join(f"{line}\n" for line in self._input_iter)
+        return result
+
+    def readlines(self) -> typing.List[str]:
+        """Read all remaining inputs into a list of strings."""
+        result = [f"{line}\n" for line in self._input_iter]
+        return result
+
+    def __getattr__(self, name: str) -> typing.Any:
+        """Forward attribute access to sys.stdin for any attributes not found in MockInput."""
+        try:
+            stdin_attr = getattr(_orig_stdin, name)
+            if callable(stdin_attr):
+                def wrapper(*args, **kwargs):
+                    method = getattr(sys.stdin, name)
+                    return method(*args, **kwargs)
+                return wrapper
+            else:
+                return stdin_attr
+        except AttributeError:
+            raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'")
+
+    def mock_input(self, prompt: str = "") -> str:
+        """Read the next input from the iterator of inputs."""
+        try:
+            print(f"{self._orig_inputs=}")
+            next_input = next(self._input_iter)
+            return next_input
+        except StopIteration:
+            raise EOFError("Not enough input lines provided")
+
+
+class MockInputContext(contextlib.AbstractContextManager):
+    """Context manager for replacing sys.stdin.readline() and input() with MockInput."""
+
+    def __init__(self, inputs: str = ""):
+        """Initialize the MockInput instance with an input string to be read from.
+
+        If the input string contains newlines, each line will be read separately. If it does not
+        possess a final newline, one will be added automatically.
+        """
+        self.mocker = MockInput(inputs)
+
+    def __enter__(self, inputs: str = ""):
+        """Replaces sys.stdin.readline() and input() with MockInput."""
+        self.original_stdin = sys.stdin
+        self.original_input = __builtins__["input"]  # type: ignore
+        sys.stdin = self.mocker  # type: ignore
+        __builtins__["input"] = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Restores sys.stdin.readline() and input() to their original values."""
+        sys.stdin = self.original_stdin
+        __builtins__["input"] = self.original_input  # type: ignore
+
+
+
 def execute_and_trace_code(
     code_string: str,
+    inputs: str = "",
     blacklisted_modules: typing.Optional[typing.Iterable[str]] = None,
     blacklisted_functions: typing.Optional[typing.Iterable[str]] = None,
     max_events_per_line: typing.Optional[int] = None,
@@ -197,8 +202,13 @@ def execute_and_trace_code(
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
+    Also replaces calls to input() or sys.stdin.readline() with lines from the provided inputs
+    string, and captures stdout and stderr during execution.
+
     Args:
-        code_string: A string containing the Python code to execute and trace.
+        code_string: a string containing arbitrary Python code to execute and trace.
+        inputs: a string containing individual lines to be used as input values
+            (one line per input call).
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_functions: A list of function names to exclude from tracing.
         max_events_per_line: The maximum number of events to record per line.
@@ -207,6 +217,11 @@ def execute_and_trace_code(
     Returns:
         A `TraceResult` instance containing the execution results.
     """
+    try:
+        code_blocks = src.utils.code_blocks.identify_code_blocks(code_string)
+        compiled_code = compile(code_string, "<string>", "exec")
+    except Exception as e:
+        raise Exception(f"error while analyzing and compiling code: {e}")
     traced_steps: typing.List[typing.Optional[TraceEvent]] = []
     traced_steps_map: typing.Dict[TraceKey, typing.List[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback function is called
@@ -286,19 +301,17 @@ def execute_and_trace_code(
         last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
         return return_trace_callback
 
-    compiled_code = compile(code_string, "<string>", "exec")
-    stdout_capture = io.StringIO()  # capture stdout to avoid polluting the output
+    stdout_capture, stderr_capture = io.StringIO(), io.StringIO()  # to avoid polluting the output
     caught_exception = None
     global_scope, local_scope = {}, {}
     src.utils.reprod.set_seed(seed)
     try:
-        #with contextlib.redirect_stdout(stdout_capture):  # @@@@@@@@@@@@@@
-        with trace_context(_trace_callback):
-            exec(compiled_code, global_scope, local_scope)
+        with MockInputContext(inputs):
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                with trace_context(_trace_callback):
+                    exec(compiled_code, global_scope, local_scope)
     except Exception as e:
         caught_exception = e  # store any exception that occurred
-    print(f"{local_scope=}")
-    print(f"{local_scope['Something'].__module__=}")
     reprod_metadata = src.utils.reprod.get_reprod_metadata()
     reprod_metadata["initial_seed"] = seed
     reprod_metadata["max_events_per_line"] = max_events_per_line
@@ -306,7 +319,8 @@ def execute_and_trace_code(
     reprod_metadata["blacklisted_functions"] = list(blacklisted_functions or [])
     trace_result = TraceResult(
         code_string=code_string,
-        inputs="", # @@@@@ TODO
+        code_blocks=code_blocks,
+        inputs=inputs,
         max_events_per_line=max_events_per_line,
         traced_steps=traced_steps,
         traced_steps_map=traced_steps_map,
@@ -314,7 +328,7 @@ def execute_and_trace_code(
         return_value=None, # @@@@@ TODO
         exception=caught_exception,
         stdout=stdout_capture.getvalue(),
-        stderr=None, # @@@@@ TODO
+        stderr=stderr_capture.getvalue(),
         metadata=reprod_metadata,
     )
     return trace_result
@@ -336,7 +350,6 @@ def format_traced_code_execution(
     result.append("Code Execution Trace:")
     result.append("=====================")
     result.append("")
-
     for line_number, line in enumerate(code_lines, 1):
         result.append(f"Line {line_number}: {line}")
         relevant_events = [
@@ -350,13 +363,10 @@ def format_traced_code_execution(
                 if trace_event is None:
                     result.append("  [Event skipped due to max_events_per_line limit]")
                     continue
-
                 if event_number > 1:
                     result.append(f"  Visit #{event_number}:")
-
                 result.append(f"  Event Type: {trace_event.event_type}")
                 result.append(f"  Trace Step: {trace_event.trace_step_idx}")
-
                 if trace_event.arguments:
                     result.append("  Arguments:")
                     for arg_name, arg_value in trace_event.arguments.items():
@@ -364,7 +374,6 @@ def format_traced_code_execution(
                             result.append(f"    {arg_name}: {pprint.pformat(arg_value)}")
                         except Exception:
                             result.append(f"    {arg_name}: <unable to display value>")
-
                 if trace_event.variables:
                     result.append("  Variables:")
                     for var_name, var_value in trace_event.variables.items():
@@ -372,7 +381,6 @@ def format_traced_code_execution(
                             result.append(f"    {var_name}: {pprint.pformat(var_value)}")
                         except Exception:
                             result.append(f"    {var_name}: <unable to display value>")
-
                 if trace_event.internal_variables:
                     result.append("  Internal Variables:")
                     for intern_name, intern_value in trace_event.internal_variables.items():
@@ -380,27 +388,22 @@ def format_traced_code_execution(
                             result.append(f"    {intern_name}: {pprint.pformat(intern_value)}")
                         except Exception:
                             result.append(f"    {intern_name}: <unable to display value>")
-
                 if trace_event.return_value is not None:
                     result.append("  Return Value:")
                     try:
                         result.append(f"    {pprint.pformat(trace_event.return_value)}")
                     except Exception:
                         result.append("    <unable to display return value>")
-
                 if trace_event.exception:
                     result.append("  Exception:")
                     for exc_key, exc_value in trace_event.exception.items():
                         result.append(f"    {exc_key}: {exc_value}")
-
                 result.append("")  # add spacing between events
-
     return "\n".join(result)
 
 
 if __name__ == "__main__":
     # example usage of tracing + printing (note: gets spammy for large functions!):
-    print("hello")
     _sample_code = \
 """\
 
