@@ -162,7 +162,6 @@ class MockInput:
     def mock_input(self, prompt: str = "") -> str:
         """Read the next input from the iterator of inputs."""
         try:
-            print(f"{self._orig_inputs=}")
             next_input = next(self._input_iter)
             return next_input
         except StopIteration:
