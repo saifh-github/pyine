@@ -11,8 +11,10 @@ import typing
 
 import src.utils.reprod
 import src.utils.code_blocks
-from src.utils.portable_repr import get_portable_representation as portable_repr
+import src.utils.time_limit
+import src.utils.portable_repr
 
+portable_repr = src.utils.portable_repr.get_portable_representation
 _orig_stdin = sys.stdin
 
 
@@ -123,6 +125,11 @@ class MockInput:
         possess a final newline, one will be added automatically.
         """
         self._orig_inputs = inputs
+        if not isinstance(inputs, str):
+            if isinstance(inputs, list):
+                inputs = "\n".join(inputs)
+            else:
+                inputs = str(inputs)
         if inputs and not inputs.endswith("\n"):
             inputs += "\n"
         self._input_iter = iter(inputs.splitlines())
@@ -219,10 +226,12 @@ def _get_clean_filename(filename: str) -> str:
 def execute_and_trace_code(
     code_string: str,
     inputs: str = "",
+    entrypoint_name: typing.Optional[str] = None,
     blacklisted_modules: typing.Optional[typing.Iterable[str]] = None,
     blacklisted_objects: typing.Optional[typing.Iterable[str]] = None,
     trace_only_inside_code_string: bool = False,
     max_events_per_line: typing.Optional[int] = None,
+    timeout_seconds: float = 60,
     seed: typing.Optional[int] = 42,
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
@@ -234,10 +243,12 @@ def execute_and_trace_code(
         code_string: a string containing arbitrary Python code to execute and trace.
         inputs: a string containing individual lines to be used as input values
             (one line per input call).
+        entrypoint_name: The name of the entrypoint function to execute.
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_objects: A list of object names to exclude from tracing.
         trace_only_inside_code_string: If True, only trace code inside the provided code_string.
         max_events_per_line: The maximum number of events to record per line.
+        timeout_seconds: The maximum number of seconds to allow for code execution.
         seed: The seed to use for random number generation. Defaults to 42.
 
     Returns:
@@ -330,14 +341,22 @@ def execute_and_trace_code(
         return return_trace_callback
 
     stdout_capture, stderr_capture = io.StringIO(), io.StringIO()  # to avoid polluting the output
-    caught_exception = None
-    global_scope, local_scope = {}, {}
+    return_value, caught_exception = None, None
     src.utils.reprod.set_seed(seed)
+    exec_namespace = {}
     try:
-        with MockInputContext(inputs):
-            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
-                with trace_context(_trace_callback):
-                    exec(compiled_code, global_scope, local_scope)
+        with src.utils.time_limit.TimeLimit(timeout_seconds):
+                with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                    if entrypoint_name is not None:
+                        with trace_context(_trace_callback):
+                            exec(compiled_code, exec_namespace)
+                            # note for later: if this is buggy/annoying, could add call inside code string itself
+                            if entrypoint_name and entrypoint_name in exec_namespace:
+                                return_value = exec_namespace[entrypoint_name](inputs)
+                    else:
+                        with MockInputContext(inputs):
+                            with trace_context(_trace_callback):
+                                exec(compiled_code, exec_namespace)
     except Exception as e:
         caught_exception = e  # store any exception that occurred
     reprod_metadata = src.utils.reprod.get_reprod_metadata()
@@ -353,7 +372,7 @@ def execute_and_trace_code(
         traced_steps=traced_steps,
         traced_steps_map=traced_steps_map,
         tracing_steps=last_trace_step_idx,
-        return_value=None, # @@@@@ TODO
+        return_value=return_value,
         exception=caught_exception,
         stdout=stdout_capture.getvalue(),
         stderr=stderr_capture.getvalue(),
