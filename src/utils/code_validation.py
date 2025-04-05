@@ -1,5 +1,10 @@
 import ast
+import itertools
+import re
+import typing
 import warnings
+
+import Levenshtein
 
 
 def validate_code(code_string: str, max_size: int = 100_000):
@@ -52,3 +57,105 @@ def validate_code(code_string: str, max_size: int = 100_000):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         compile(code_string, "<string>", "exec")
+
+
+def find_near_duplicate_code(
+    code_strings: typing.List[str],
+    threshold: typing.Union[int, float],  # int = edit distance; float = dissimilarity, in [0,1]
+    ignore_whitespace: bool = True,
+    ignore_comments: bool = True,
+    preprocess_fn: typing.Optional[typing.Callable[[str], str]] = None
+) -> typing.Dict[int, typing.List[typing.Tuple[int, float]]]:
+    """
+    Find near-duplicate code snippets based on edit distance or similarity score.
+
+    Args:
+        code_strings: List of code snippets to check for near-duplicates.
+        threshold: Maximum edit distance or dissimilarity. For relative threshold, use a float
+            between 0.0 and 1.0 (where 0.0 is no dissimilarity, meaning we want exact matches).
+        ignore_whitespace: Whether to normalize whitespace differences.
+        ignore_comments: Whether to remove comments before comparison.
+        preprocess_fn: Optional custom function to preprocess code snippets.
+
+    Returns:
+        A dictionary where keys are indices of code snippets and values are lists of tuples containing
+        indices of their near-duplicates and their edit distances or dissimilarity scores.
+    """
+    result: typing.Dict[int, typing.List[typing.Tuple[int, float]]] = {i: [] for i in range(len(code_strings))}
+    use_relative_threshold = isinstance(threshold, float)
+    if use_relative_threshold:
+        assert 0.0 <= threshold <= 1.0, "relative threshold must be in [0.0, 1.0]"
+    else:
+        assert threshold > 0, "absolute threshold must be non-negative"
+    processed_snippets = []
+    for snippet in code_strings:
+        processed = snippet
+        if ignore_comments:
+            processed = re.sub(r'#.*$', '', processed, flags=re.MULTILINE)
+            processed = re.sub(r'""".*?"""', '', processed, flags=re.DOTALL)
+            processed = re.sub(r"'''.*?'''", '', processed, flags=re.DOTALL)
+        if ignore_whitespace:
+            processed = re.sub(r'\s+', ' ', processed)
+            processed = processed.strip()
+        if preprocess_fn:
+            processed = preprocess_fn(processed)
+        processed_snippets.append(processed)
+    for i, j in itertools.combinations(range(len(code_strings)), 2):
+        code1, code2 = processed_snippets[i], processed_snippets[j]
+        if use_relative_threshold:
+            max_len = max(len(code1), len(code2))
+            if max_len == 0:
+                dissimilarity = 0.0
+            else:
+                edit_distance = Levenshtein.distance(code1, code2)
+                dissimilarity = edit_distance / max_len
+            if dissimilarity <= threshold:
+                result[i].append((j, dissimilarity))
+                result[j].append((i, dissimilarity))
+        else:
+            edit_distance = Levenshtein.distance(code1, code2)
+            if edit_distance <= threshold:
+                result[i].append((j, edit_distance))
+                result[j].append((i, edit_distance))
+    for snippet_idx, match_results in result.items():
+        result[snippet_idx] = list(sorted(match_results, key=lambda x: x[1]))
+    return result
+
+
+def find_near_duplicate_code_clusters(
+    code_strings: typing.List[str],
+    threshold: typing.Union[int, float],
+    **kwargs
+) -> typing.List[typing.List[int]]:
+    """
+    Find clusters of near-duplicate code snippets.
+
+    Args:
+        code_strings: List of code snippets to check for near-duplicates.
+        threshold: Maximum edit distance or dissimilarity score.
+        **kwargs: Additional arguments to pass to find_near_duplicate_code.
+
+    Returns:
+        A list of clusters, where each cluster is a list of tuples containing indices of
+        near-duplicate code snippets.
+    """
+    match_results = find_near_duplicate_code(code_strings, threshold, **kwargs)
+    clustered: typing.Set[int] = set()
+    clusters: typing.List[typing.List[int]] = []
+    for i in range(len(code_strings)):
+        if i in clustered:
+            continue
+        cluster = [i]
+        clustered.add(i)
+        queue = [matched_idx for matched_idx, _ in match_results[i]]
+        while queue:
+            related = queue.pop(0)
+            if related not in clustered:
+                cluster.append(related)
+                clustered.add(related)
+                for new_related in match_results[related]:
+                    if new_related[0] not in clustered and new_related[0] not in queue:
+                        queue.append(new_related[0])
+        clusters.append(cluster)
+    return clusters
+
