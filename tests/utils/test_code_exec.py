@@ -196,36 +196,71 @@ print("You pressed Enter")
     assert result.exception is None and "You pressed Enter" in result.stdout
 
 
-def test_simple_tracing():
+def test_tracing_with_blacklist():
     code = \
 """\
 
 import numpy as np
-
-def potato(a: int) -> int:
-    print(f"potato {a}")
-    return a + 1
-
-class Something:
-    def __init__(self):
-        self.potato = "potato"
-        self.val = 10
-    def ok(self):
-        return self.val
-
-some_potato = Something()
 
 a = 1
 b = 2
 for i in range(3):
     a += i
     b *= i if i > 0 else 1
-c = int(np.sum(np.ones((5, 5)) * some_potato.ok()))
-print(f"Final values: a={a}, b={b}, c={c}")
+c = int(np.sum(np.ones((5, 5)) * 10))        # L8
+print(f"Final values: a={a}, b={b}, c={c}")  # L9
+"""
+    blacklisted_modules = ["numpy", "contextlib", "traceback", "linecache"]
+    blacklisted_objects = ["_internal_set_trace", "trace_context", "_get_stack_str"]
+    trace_result = execute_and_trace_code(
+        code_string=code,
+        blacklisted_modules=blacklisted_modules,
+        blacklisted_objects=blacklisted_objects,
+    )
+    assert "Final values: a=4, b=4, c=250" in trace_result.stdout
+    assert len(trace_result.traced_steps) > 0
+    last_return, last_line = None, None
+    for trace_step in trace_result.traced_steps:
+        if trace_step is None:
+            continue
+        assert trace_step.trace_key.object not in blacklisted_objects
+        assert not any([trace_step.trace_key.file.startswith(m) for m in blacklisted_modules])
+        if trace_step.event_type == "return":
+            last_return = trace_step
+        if trace_step.event_type == "line":
+            last_line = trace_step
+    assert last_return.trace_key.line == 10
+    assert last_line.trace_key.line == 10
+
+
+def test_tracing_within_code_only():
+    code = \
+"""\
+
+import numpy as np
+
+a = 1
+b = 2
+for i in range(3):
+    a += i
+    b *= i if i > 0 else 1
+c = int(np.sum(np.ones((5, 5)) * 10))        # L8
+print(f"Final values: a={a}, b={b}, c={c}")  # L9
 """
     trace_result = execute_and_trace_code(
         code_string=code,
-        blacklisted_modules=["numpy"],
+        trace_only_inside_code_string=True,
     )
     assert "Final values: a=4, b=4, c=250" in trace_result.stdout
-    # @@@@@@ check trace steps here!!!
+    assert len(trace_result.traced_steps) > 0
+    last_return, last_line = None, None
+    for trace_step in trace_result.traced_steps:
+        if trace_step is None:
+            continue
+        assert trace_step.trace_key.file == "<string>"
+        if trace_step.event_type == "return":
+            last_return = trace_step
+        if trace_step.event_type == "line":
+            last_line = trace_step
+    assert last_return.trace_key.line == 10
+    assert last_line.trace_key.line == 10

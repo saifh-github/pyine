@@ -3,7 +3,9 @@ import io
 import contextlib
 import dataclasses
 import functools
+import os
 import pprint
+import site
 import types
 import typing
 
@@ -19,8 +21,8 @@ class TraceKey:
     """Dataclass for storing and exporting execution trace keys."""
     file: str
     """The file name containing the code that was executed."""
-    function: str
-    """The name of the function that was executed."""
+    object: str
+    """The name of the code object that was executed."""
     line: int
     """The number of the code line that was executed."""
 
@@ -37,9 +39,9 @@ class TraceEvent:
     internal_variables: typing.Dict[str, typing.Any]
     """A dictionary containing internal variables at the time of the event."""
     arguments: typing.Optional[typing.Dict[str, typing.Any]]
-    """A dictionary containing the arguments passed to the function at the time of the event."""
+    """A dictionary containing the arguments passed to the code object at the time of the event."""
     return_value: typing.Optional[typing.Any]
-    """The return value of the function at the time of the event."""
+    """The return value of the code object at the time of the event."""
     exception: typing.Optional[typing.Dict[str, typing.Any]]
     """A dictionary containing information about the exception that occurred, if any."""
     trace_step_idx: int
@@ -70,7 +72,7 @@ class TraceResult:
     traced_steps_map: typing.Dict[TraceKey, typing.List[int]]
     """A dictionary containing the indices of each traced step for each line of executed code.
     
-    In this dictionary, keys are `TraceKey` instances (combining file, function, and line info)
+    In this dictionary, keys are `TraceKey` instances (combining file, object, and line info)
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
     list. If a line has more than `max_events_per_line` events, its corresponding indices list will
     still contain all trace step indices, but some events in `traced_steps` will be substituted with
@@ -181,22 +183,46 @@ class MockInputContext(contextlib.AbstractContextManager):
     def __enter__(self, inputs: str = ""):
         """Replaces sys.stdin.readline() and input() with MockInput."""
         self.original_stdin = sys.stdin
-        self.original_input = __builtins__["input"]  # type: ignore
+        if isinstance(__builtins__, dict):
+            self.original_input = __builtins__["input"]  # type: ignore
+            __builtins__["input"] = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
+        else:
+            self.original_input = __builtins__.input  # type: ignore
+            __builtins__.input = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
         sys.stdin = self.mocker  # type: ignore
-        __builtins__["input"] = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
+
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Restores sys.stdin.readline() and input() to their original values."""
         sys.stdin = self.original_stdin
-        __builtins__["input"] = self.original_input  # type: ignore
+        if isinstance(__builtins__, dict):
+            __builtins__["input"] = self.original_input  # type: ignore
+        else:
+            __builtins__.input = self.original_input  # type: ignore
 
+
+def _get_clean_filename(filename: str) -> str:
+    if filename == "<string>":
+        return filename  # nothing to do
+    site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
+    for site_dir in site_pkgs:
+        if filename.startswith(site_dir):
+            return os.path.relpath(filename, site_dir)
+    stdlib_dir = os.path.dirname(os.__file__)
+    if filename.startswith(stdlib_dir):
+        return os.path.relpath(filename, stdlib_dir)
+    project_root = os.getcwd()
+    if filename.startswith(project_root):
+        return os.path.relpath(filename, project_root)
+    return filename
 
 
 def execute_and_trace_code(
     code_string: str,
     inputs: str = "",
     blacklisted_modules: typing.Optional[typing.Iterable[str]] = None,
-    blacklisted_functions: typing.Optional[typing.Iterable[str]] = None,
+    blacklisted_objects: typing.Optional[typing.Iterable[str]] = None,
+    trace_only_inside_code_string: bool = False,
     max_events_per_line: typing.Optional[int] = None,
     seed: typing.Optional[int] = 42,
 ) -> TraceResult:
@@ -210,7 +236,8 @@ def execute_and_trace_code(
         inputs: a string containing individual lines to be used as input values
             (one line per input call).
         blacklisted_modules: A list of module names to exclude from tracing.
-        blacklisted_functions: A list of function names to exclude from tracing.
+        blacklisted_objects: A list of object names to exclude from tracing.
+        trace_only_inside_code_string: If True, only trace code inside the provided code_string.
         max_events_per_line: The maximum number of events to record per line.
         seed: The seed to use for random number generation. Defaults to 42.
 
@@ -224,7 +251,7 @@ def execute_and_trace_code(
         raise Exception(f"error while analyzing and compiling code: {e}")
     traced_steps: typing.List[typing.Optional[TraceEvent]] = []
     traced_steps_map: typing.Dict[TraceKey, typing.List[int]] = {}
-    last_trace_step_idx = 0  # will be incremented each time the callback function is called
+    last_trace_step_idx = 0  # will be incremented each time the callback is called
 
     def _trace_callback(
         frame: types.FrameType,  # noqa
@@ -235,22 +262,24 @@ def execute_and_trace_code(
         nonlocal last_trace_step_idx
 
         trace_key = TraceKey(
-            file=frame.f_code.co_filename,
-            function=frame.f_code.co_name,
+            file=_get_clean_filename(frame.f_code.co_filename),
+            object=frame.f_code.co_name,
             line=frame.f_lineno
         )
-        return_trace_callback = _trace_callback  # any non-blacklisted function will be traced
-        if event == "call":
-            is_blacklisted = (
-                (blacklisted_functions and trace_key.function in blacklisted_functions)
-                or (blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules)))
-            )
-            if is_blacklisted:
-                return_trace_callback = None  # do not trace that function, skip over it
+        return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
+        is_blacklisted = (
+            (blacklisted_objects and trace_key.object in blacklisted_objects)
+            or (blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules)))
+        )
+        is_inside_code_string = trace_key.file == "<string>"
+        must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
+        if event == "call" and must_skip:
+            return_trace_callback = None  # do not trace that function, skip over it
         if trace_key not in traced_steps_map:
             traced_steps_map[trace_key] = []
-        if max_events_per_line and len(traced_steps_map[trace_key]) >= max_events_per_line:
-            # if we have reached the trace event limit for this line, append `None` instead of event
+        max_event_capped = max_events_per_line and len(traced_steps_map[trace_key]) >= max_events_per_line
+        if max_event_capped or must_skip:
+            # if we have reached the trace limit or a blacklisted event, append `None` instead of event
             trace_event = None
         else:
             # gather the actual event data and create the corresponding object
@@ -258,8 +287,8 @@ def execute_and_trace_code(
             current_frame = frame
             while current_frame:
                 stack_trace.append(TraceKey(
-                    file=current_frame.f_code.co_filename,
-                    function=current_frame.f_code.co_name,
+                    file=_get_clean_filename(current_frame.f_code.co_filename),
+                    object=current_frame.f_code.co_name,
                     line=current_frame.f_lineno
                 ))
                 current_frame = current_frame.f_back
@@ -316,7 +345,7 @@ def execute_and_trace_code(
     reprod_metadata["initial_seed"] = seed
     reprod_metadata["max_events_per_line"] = max_events_per_line
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
-    reprod_metadata["blacklisted_functions"] = list(blacklisted_functions or [])
+    reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
     trace_result = TraceResult(
         code_string=code_string,
         code_blocks=code_blocks,
@@ -358,46 +387,46 @@ def format_traced_code_execution(
             if key.line == line_number
         ]
         for trace_key, event_indices in relevant_events:
+            result.append(f"  {trace_key}")
             for event_number, trace_step_idx in enumerate(event_indices, 1):
                 trace_event = trace_result.traced_steps[trace_step_idx]
                 if trace_event is None:
                     result.append("  [Event skipped due to max_events_per_line limit]")
                     continue
-                if event_number > 1:
-                    result.append(f"  Visit #{event_number}:")
-                result.append(f"  Event Type: {trace_event.event_type}")
-                result.append(f"  Trace Step: {trace_event.trace_step_idx}")
+                result.append(f"    Visit #{event_number} (step #{trace_event.trace_step_idx}):")
+                result.append(f"    Event Type: {trace_event.event_type}")
+                result.append(f"    Trace Step: {trace_event.trace_step_idx}")
                 if trace_event.arguments:
-                    result.append("  Arguments:")
+                    result.append("    Arguments:")
                     for arg_name, arg_value in trace_event.arguments.items():
                         try:
-                            result.append(f"    {arg_name}: {pprint.pformat(arg_value)}")
+                            result.append(f"      {arg_name}: {pprint.pformat(arg_value)}")
                         except Exception:
-                            result.append(f"    {arg_name}: <unable to display value>")
+                            result.append(f"      {arg_name}: <unable to display value>")
                 if trace_event.variables:
-                    result.append("  Variables:")
+                    result.append("    Variables:")
                     for var_name, var_value in trace_event.variables.items():
                         try:
-                            result.append(f"    {var_name}: {pprint.pformat(var_value)}")
+                            result.append(f"      {var_name}: {pprint.pformat(var_value)}")
                         except Exception:
-                            result.append(f"    {var_name}: <unable to display value>")
+                            result.append(f"      {var_name}: <unable to display value>")
                 if trace_event.internal_variables:
-                    result.append("  Internal Variables:")
+                    result.append("    Internal Variables:")
                     for intern_name, intern_value in trace_event.internal_variables.items():
                         try:
-                            result.append(f"    {intern_name}: {pprint.pformat(intern_value)}")
+                            result.append(f"      {intern_name}: {pprint.pformat(intern_value)}")
                         except Exception:
-                            result.append(f"    {intern_name}: <unable to display value>")
+                            result.append(f"      {intern_name}: <unable to display value>")
                 if trace_event.return_value is not None:
-                    result.append("  Return Value:")
+                    result.append("    Return Value:")
                     try:
-                        result.append(f"    {pprint.pformat(trace_event.return_value)}")
+                        result.append(f"      {pprint.pformat(trace_event.return_value)}")
                     except Exception:
-                        result.append("    <unable to display return value>")
+                        result.append("      <unable to display return value>")
                 if trace_event.exception:
-                    result.append("  Exception:")
+                    result.append("    Exception:")
                     for exc_key, exc_value in trace_event.exception.items():
-                        result.append(f"    {exc_key}: {exc_value}")
+                        result.append(f"      {exc_key}: {exc_value}")
                 result.append("")  # add spacing between events
     return "\n".join(result)
 
@@ -414,23 +443,35 @@ def potato(a: int) -> int:
 class Something:
     def __init__(self):
         self.potato = "potato"
-    def ok():
-        todo
+    def ok(self):
+        return 10
+    class SomethingElse:
+        def __init__(self):
+            self.potato = "potato2"
+        def ok2(self, a: int, b: int):
+            todo2
 
 some_potato = Something()
+
+import numpy as np
 
 a = 1
 b = 2
 for i in range(3):
     a += i
     b *= i if i > 0 else 1
-print(f"Final values: a={a}, b={b}")
+c = int(np.sum(np.ones((5, 5)) * some_potato.ok()))
+print(f"Final values: a={a}, b={b}, c={c}")
 """
     _trace_result = execute_and_trace_code(
         code_string=_sample_code,
-        blacklisted_modules=["numpy", "torch"],
+        inputs="",
+        blacklisted_modules=["linecache", "traceback", "pydev", "pydevd_tracing", "contextlib", "numpy"],
+        #trace_only_inside_code_string=True,
     )
+    print(_trace_result.stdout)
     _report = format_traced_code_execution(
         trace_result=_trace_result,
     )
     print(_report)
+    print("Done.")
