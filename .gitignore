@@ -1,14 +1,15 @@
 # Project data / results directories
-data/
-datasets/
-results/
-output/
-logs/
+/data/
+/datasets/
+/results/
+/output/
+/logs/
 
-# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / temp files
 __pycache__/
 *.py[cod]
 *$py.class
+*.tmp*
 
 # Distribution / packaging
 dist/
