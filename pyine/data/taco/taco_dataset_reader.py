@@ -1,7 +1,7 @@
 import ast
+import json
 import typing
 
-import json
 import datasets
 import tiktoken
 import tqdm
@@ -22,13 +22,13 @@ class TacoDatasetReader:
         self.train_dataset = datasets.load_dataset("BAAI/TACO", split="train")
         self.test_dataset = datasets.load_dataset("BAAI/TACO", split="test")
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
-        self._broken_samples_cache: typing.Dict[int, str] = {}
+        self._broken_samples_cache: dict[int, str] = {}
 
     def __len__(self) -> int:
         """Return the number of samples in the (train+test) dataset."""
         return len(self.train_dataset) + len(self.test_dataset)
 
-    def __getitem__(self, idx: int) -> typing.Dict[str, typing.Any]:
+    def __getitem__(self, idx: int) -> dict[str, typing.Any]:
         """
         Get a processed sample by index with all fields properly parsed.
 
@@ -114,7 +114,7 @@ class TacoDatasetReader:
                 self._broken_samples_cache[idx] = str(e)
             raise ValueError(f"error processing sample at index {idx}: {str(e)}")
 
-    def _validate_types(self, values: typing.List[typing.Any]) -> bool:
+    def _validate_types(self, values: list[typing.Any]) -> bool:
         """
         Recursively validate that all values are of acceptable types.
 
@@ -150,7 +150,7 @@ class TacoDatasetReader:
         else:
             return isinstance(val, (str, int, float)) or val is None
 
-    def get_broken_indices(self) -> typing.List[int]:
+    def get_broken_indices(self) -> list[int]:
         """
         Get indices of all broken samples.
 
@@ -165,7 +165,7 @@ class TacoDatasetReader:
                 pass
         return list(self._broken_samples_cache.keys())
 
-    def get_statistics(self, validate=False) -> typing.Dict[str, typing.Any]:
+    def get_statistics(self, validate=False) -> dict[str, typing.Any]:
         """
         Calculate dataset statistics similar to those in the notebook.
 
@@ -231,12 +231,12 @@ class TacoDatasetReader:
             "min_solution_length": min(solution_lengths) if solution_lengths else 0,
             "raw_tags_distribution": raw_tags_counts,
             "tags_distribution": tags_counts,
-            "skill_types_distribution": skill_types_counts
+            "skill_types_distribution": skill_types_counts,
         }
 
 
 if __name__ == "__main__":
-    
+
     reader = TacoDatasetReader()
     print(f"Total samples: {len(reader)}")
 

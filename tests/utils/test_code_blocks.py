@@ -6,8 +6,7 @@ import pyine.utils.code_blocks
 @pytest.fixture
 def complex_code_sample():
     """A sample with various Python constructs."""
-    return \
-"""\
+    return """\
 def outer_function(param1, param2=None):     # L1
     '''Docstring for outer function.'''      # L2
     x = 10                                   # L3

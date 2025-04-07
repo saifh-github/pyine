@@ -5,7 +5,6 @@ import dotenv
 
 import pyine.utils.async_processing
 
-
 if __name__ == "__main__":
     dotenv.load_dotenv()
     asyncio.run(

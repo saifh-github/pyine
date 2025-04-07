@@ -26,8 +26,8 @@ def _generate_dummy_dict(
     max_key_length: int = 16,
     max_value_length: int = 1_000_000,
     max_depth: int = 10,
-    current_size: typing.List[int] = None,  # use for recursion only
-) -> typing.Dict[str, typing.Union[str, typing.Dict]]:
+    current_size: list[int] = None,  # use for recursion only
+) -> dict[str, str | dict]:
     """Recursively generate a random dict where values are either strings or similar nested dicts."""
     if current_size is None:
         current_size = [0]
@@ -78,10 +78,7 @@ def benchmark_serialization_methods(
             np.random.normal(sample_size_mean, sample_size_stdev, size=num_samples).astype(int),
             1,
         )
-        entries = {
-            f"key{i}": _generate_dummy_dict(max_size_bytes=sample_sizes[i])
-            for i in range(num_samples)
-        }
+        entries = {f"key{i}": _generate_dummy_dict(max_size_bytes=sample_sizes[i]) for i in range(num_samples)}
         data_size = sys.getsizeof(pickle.dumps(obj=entries, protocol=pickle.HIGHEST_PROTOCOL))
         # IMPORTANT NOTE: since the data is RANDOM, this might be worse-case for compression!
         # (so don't look at compression ratio, just look at the speed, and even then, with grain of salt)
@@ -97,7 +94,7 @@ def benchmark_serialization_methods(
             if use_random_data:
                 writer = lmdb_io.LMDBWriter(
                     path=database_path,
-                    map_size=1024 ** 3,
+                    map_size=1024**3,
                     serialization=method,
                 )
                 writer.put_batch(items=entries)

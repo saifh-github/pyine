@@ -1,10 +1,10 @@
 import os
 import typing
 
-import langchain_deepseek
-import langchain_core.prompts
 import langchain_core.output_parsers
+import langchain_core.prompts
 import langchain_core.runnables
+import langchain_deepseek
 import pydantic
 
 
@@ -16,14 +16,14 @@ class CallableAnalysisResponse(pydantic.BaseModel):
         description=(
             "Specifies the name of the entrypoint function; if the function is inside "
             "a class, this field should ONLY be the name of the function inside that class."
-        )
+        ),
     )
-    entrypoint_function_arg_names: typing.List[str] = pydantic.Field(
+    entrypoint_function_arg_names: list[str] = pydantic.Field(
         default=...,  # required
         description=(
             "Specifies the names of the arguments that the entrypoint function takes; "
             "if the function takes no arguments, this field should be an empty list."
-        )
+        ),
     )
     parent_class_name: str = pydantic.Field(
         default="",
@@ -31,16 +31,16 @@ class CallableAnalysisResponse(pydantic.BaseModel):
             "Specifies the name of the parent class of the entrypoint function; this is only "
             "relevant if the entrypoint function is inside a class; if it is not, this field "
             "should be an empty string."
-        )
+        ),
     )
-    parent_class_arg_names: typing.List[str] = pydantic.Field(
+    parent_class_arg_names: list[str] = pydantic.Field(
         default=[],
         description=(
             "Specifies the names of the arguments that the parent class of the entrypoint "
             "function requires in order to be instantiated; if the class constructor takes "
             "no arguments, this field should be an empty list; this field is only relevant "
             "if the targeted entrypoint function is inside a class."
-        )
+        ),
     )
 
 
@@ -50,9 +50,7 @@ callable_analysis_output_parser = langchain_core.output_parsers.PydanticOutputPa
 
 _callable_analysis_expected_output_format_str = callable_analysis_output_parser.get_format_instructions()
 
-_callable_analysis_example_outputs_str = \
-f"""
-
+_callable_analysis_example_outputs_str = f"""\
 Example:
 ```python
 class Solution:
@@ -60,19 +58,19 @@ class Solution:
     def __init__(self):
         pass
 
-    def romanToDecimal(self, S): 
+    def romanToDecimal(self, S):
 
         # code here
 ```
 
 Expected output:
 {
-CallableAnalysisResponse(
-    entrypoint_function_name="romanToDecimal",
-    entrypoint_function_arg_names=["S"],
-    parent_class_name="Solution",
-    parent_class_arg_names=[],
-).model_dump_json(indent=2)
+    CallableAnalysisResponse(
+        entrypoint_function_name="romanToDecimal",
+        entrypoint_function_arg_names=["S"],
+        parent_class_name="Solution",
+        parent_class_arg_names=[],
+    ).model_dump_json(indent=2)
 }
 
 Another example:
@@ -83,26 +81,25 @@ def sum_two_numbers(a, b):
 ```
 Expected output:
 {
-CallableAnalysisResponse(
-    entrypoint_function_name="sum_two_numbers",
-    entrypoint_function_arg_names=["a", "b"],
-    parent_class_name="",
-    parent_class_arg_names=[],
-).model_dump_json(indent=2)
+    CallableAnalysisResponse(
+        entrypoint_function_name="sum_two_numbers",
+        entrypoint_function_arg_names=["a", "b"],
+        parent_class_name="",
+        parent_class_arg_names=[],
+    ).model_dump_json(indent=2)
 }
 """
 
-_callable_analysis_template_str = \
-f"""
+_callable_analysis_template_str = """\
 You are an expert at analyzing Python code and determining how to correctly call the most relevant \
-function (the "entrypoint") to execute a given algorithm, even when that function is part of a class. 
+function (the "entrypoint") to execute a given algorithm, even when that function is part of a class.
 
 We will give you a code template ("starter code") that we expect will later be fully implemented.
 
 We are currently only interested in how the algorithm would later be executed given that code template. \
-Your task is to extract relevant information on the "entrypoint" that will be used for this execution. 
+Your task is to extract relevant information on the "entrypoint" that will be used for this execution.
 
-If the function is inside a class, we expect to instantiate the class before accessing its function. \ 
+If the function is inside a class, we expect to instantiate the class before accessing its function. \
 If the function is not inside a class, we expect to use it directly.
 
 {{expected_output_format}}

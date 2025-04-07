@@ -1,8 +1,9 @@
 import io
 import sys
+
 import pytest
 
-from utils.code_exec import MockInput, MockInputContext, execute_and_trace_code
+from pyine.utils.code_exec import MockInput, MockInputContext, execute_and_trace_code
 
 
 class TestMockInput:
@@ -30,7 +31,7 @@ class TestMockInput:
         mock = MockInput("test")
         stdin_mock = io.StringIO()
         stdin_mock.fileno = lambda: 42
-        monkeypatch.setattr(sys, 'stdin', stdin_mock)
+        monkeypatch.setattr(sys, "stdin", stdin_mock)
         assert mock.fileno() == 42
 
     def test_mock_input_function(self, capsys):
@@ -65,8 +66,7 @@ class TestMockInputContext:
 
     def test_with_tracing(self):
         """Test mocking works with code tracing (for troubleshooting)"""
-        code = \
-"""\
+        code = """\
 value = input("Enter: ")
 print(f"Got: {value}")
 """
@@ -77,8 +77,7 @@ print(f"Got: {value}")
 
 def test_basic_input_mocking():
     """Test basic input mocking functionality."""
-    code = \
-"""\
+    code = """\
 name = input("What's your name? ")
 age = input("What's your age? ")
 print(f"Hello, {name}! You are {age} years old.")
@@ -90,8 +89,7 @@ print(f"Hello, {name}! You are {age} years old.")
 
 def test_sys_stdin_readline():
     """Test mocking of sys.stdin.readline()."""
-    code = \
-"""\
+    code = """\
 import sys
 print("Enter your name:")
 name = sys.stdin.readline().strip()
@@ -106,8 +104,7 @@ print(f"{name} is from {country}.")
 
 def test_sys_stdin_read():
     """Test mocking of sys.stdin.read()."""
-    code = \
-"""\
+    code = """\
 import sys
 print("Enter multiple lines of text:")
 text = sys.stdin.read()
@@ -122,8 +119,7 @@ print(f"You entered {word_count} words.")
 
 def test_sys_stdin_readlines():
     """Test mocking of sys.stdin.readlines()."""
-    code = \
-"""\
+    code = """\
 import sys
 print("Enter multiple lines:")
 lines = sys.stdin.readlines()
@@ -139,8 +135,7 @@ print(f"First line: {lines[0].strip()}")
 
 def test_mixed_input_methods():
     """Test mixing different input methods."""
-    code = \
-"""\
+    code = """\
 import sys
 name = input("Enter name: ")
 print("Enter address:")
@@ -157,8 +152,7 @@ print(f"Name: {name}, Address: {address}, Info: {info.strip()}")
 
 def test_not_enough_inputs():
     """Test behavior when not enough inputs are provided."""
-    code = \
-"""\
+    code = """\
 name = input("What's your name? ")
 age = input("What's your age? ")
 country = input("What's your country? ")
@@ -170,8 +164,7 @@ country = input("What's your country? ")
 
 def test_error_in_executed_code():
     """Test behavior when the executed code contains an error."""
-    code = \
-"""\
+    code = """\
 x = 10
 y = 0
 result = x / y  # Division by zero error
@@ -182,8 +175,7 @@ result = x / y  # Division by zero error
 
 def test_empty_input():
     """Test with empty input strings."""
-    code = \
-"""\
+    code = """\
 response = input("Press Enter to continue...")
 print("You pressed Enter")
 """
@@ -197,8 +189,7 @@ print("You pressed Enter")
 
 
 def test_tracing_with_blacklist():
-    code = \
-"""\
+    code = """\
 
 import numpy as np
 
@@ -234,8 +225,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
 
 
 def test_tracing_within_code_only():
-    code = \
-"""\
+    code = """\
 
 import numpy as np
 

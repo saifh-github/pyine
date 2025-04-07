@@ -68,7 +68,7 @@ def get_portable_representation(
         # clean the default repr of memory addresses
         try:
             default_repr = repr(obj)
-            cleaned_repr = re.sub(r" at 0x[0-9a-f]+", "", default_repr) # remove pointers
+            cleaned_repr = re.sub(r" at 0x[0-9a-f]+", "", default_repr)  # remove pointers
             cleaned_repr = re.sub(r" from '.*?'", "", cleaned_repr)  # remove file paths
             return cleaned_repr
         except Exception:
@@ -79,7 +79,7 @@ def format_object_changes(
     past_obj: typing.Any,
     current_obj: typing.Any,
     max_count: int = 10,
-) -> typing.Optional[typing.List[str]]:
+) -> list[str] | None:
     """Tracks changes between past and current state of an object.
 
     Formats those changes for JSON export if the number of changes is below max_count.
@@ -109,7 +109,7 @@ def format_object_changes(
         >>> format_object_changes(past_list, current_list)
         ['list:len=3:1:5']
     """
-    if type(past_obj) != type(current_obj):
+    if type(past_obj) is not type(current_obj):
         return None  # different objects, nothing to do here
     changes = []
     if isinstance(current_obj, np.ndarray):
@@ -166,10 +166,7 @@ def format_object_changes(
     elif isinstance(current_obj, (list, tuple)):
         if len(past_obj) != len(current_obj):
             return None  # different lengths, too complex to track
-        changed_indices = [
-            index for index, (past, current) in enumerate(zip(past_obj, current_obj))
-            if past != current
-        ]
+        changed_indices = [index for index, (past, current) in enumerate(zip(past_obj, current_obj)) if past != current]
         if len(changed_indices) > max_count:
             return None  # too many changes
         metadata = f"len={len(current_obj)}"
@@ -179,14 +176,17 @@ def format_object_changes(
     elif hasattr(current_obj, "__class__"):
         past_attrs = {
             attr: getattr(past_obj, attr)
-            for attr in dir(past_obj) if not attr.startswith("_") and hasattr(past_obj, attr)
+            for attr in dir(past_obj)
+            if not attr.startswith("_") and hasattr(past_obj, attr)
         }
         current_attrs = {
             attr: getattr(current_obj, attr)
-            for attr in dir(current_obj) if not attr.startswith("_") and hasattr(current_obj, attr)
+            for attr in dir(current_obj)
+            if not attr.startswith("_") and hasattr(current_obj, attr)
         }
         changed_attrs = {
-            attr for attr in set(past_attrs.keys()) | set(current_attrs.keys())
+            attr
+            for attr in set(past_attrs.keys()) | set(current_attrs.keys())
             if past_attrs.get(attr, None) != current_attrs.get(attr, None)
         }
         total_changes = len(changed_attrs)

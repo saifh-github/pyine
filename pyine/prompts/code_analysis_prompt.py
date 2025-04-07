@@ -1,16 +1,16 @@
 import enum
 import os
 
-import langchain_deepseek
-import langchain_core.prompts
 import langchain_core.output_parsers
+import langchain_core.prompts
 import langchain_core.runnables
+import langchain_deepseek
 import pydantic
 
 
 class CodeTypeOptions(enum.StrEnum):
     """Code type options for executing algorithms in Python.
-    
+
     The options are: `simple`, i.e. simple code to be executed as-is, that captures required inputs
     and returns expected outputs on its own, and that does not contain any function or class declaration;
     `simple-with-declarations`, i.e. simple code to be executed as-is, that also manages its own inputs and outputs,
@@ -26,7 +26,7 @@ class CodeTypeOptions(enum.StrEnum):
 
 class InputTypeOptions(enum.StrEnum):
     """Input (argument) type options for passing inputs to algorithms in Python.
-    
+
     The options are: `stdin` (standard input), i.e. the code expects a string to be provided via Python's `input()`
     function; `cli` (command-line arguments), i.e. the code expects a list of strings to be provided as command-line
     arguments; `file`, i.e. the code tries to read input arguments or data from a file; `env-vars` (environment
@@ -106,15 +106,14 @@ class CodeAnalysisResponse(pydantic.BaseModel):
         description="Specifies how the code expects the algorithm to return its output(s)",
     )
 
+
 code_analysis_output_parser = langchain_core.output_parsers.PydanticOutputParser(
     pydantic_object=CodeAnalysisResponse,
 )
 
 _code_analysis_expected_output_format_str = code_analysis_output_parser.get_format_instructions()
 
-_code_analysis_example_outputs_str = \
-f"""
-
+_code_analysis_example_outputs_str = f"""\
 Example:
 
 ```python
@@ -130,19 +129,19 @@ print(add(2, int(input())))
 
 Expected output:
 {
-CodeAnalysisResponse(
-    is_deterministic=True,
-    imports_nonstandard_packages=False,
-    invalid_syntax=False,
-    blocks_execution=True,
-    unnecessary_lines=True,
-    filesystem_access=True,
-    system_commands=False,
-    network_access=False,
-    code_type=CodeTypeOptions.SIMPLE_WITH_DECL,
-    input_type=InputTypeOptions.STDIN,
-    output_type=OutputTypeOptions.STDOUT,
-).model_dump_json(indent=2)
+    CodeAnalysisResponse(
+        is_deterministic=True,
+        imports_nonstandard_packages=False,
+        invalid_syntax=False,
+        blocks_execution=True,
+        unnecessary_lines=True,
+        filesystem_access=True,
+        system_commands=False,
+        network_access=False,
+        code_type=CodeTypeOptions.SIMPLE_WITH_DECL,
+        input_type=InputTypeOptions.STDIN,
+        output_type=OutputTypeOptions.STDOUT,
+    ).model_dump_json(indent=2)
 }
 
 Another example:
@@ -159,24 +158,23 @@ def compute_mean(numbers):
 
 Expected output:
 {
-CodeAnalysisResponse(
-    is_deterministic=True,
-    imports_nonstandard_packages=True,
-    invalid_syntax=True,
-    blocks_execution=False,
-    unnecessary_lines=False,
-    filesystem_access=False,
-    system_commands=True,
-    network_access=True,
-    code_type=CodeTypeOptions.CALLABLE,
-    input_type=InputTypeOptions.CALLABLE,
-    output_type=OutputTypeOptions.CALLABLE,
-).model_dump_json(indent=2)
+    CodeAnalysisResponse(
+        is_deterministic=True,
+        imports_nonstandard_packages=True,
+        invalid_syntax=True,
+        blocks_execution=False,
+        unnecessary_lines=False,
+        filesystem_access=False,
+        system_commands=True,
+        network_access=True,
+        code_type=CodeTypeOptions.CALLABLE,
+        input_type=InputTypeOptions.CALLABLE,
+        output_type=OutputTypeOptions.CALLABLE,
+    ).model_dump_json(indent=2)
 }
 """
 
-_code_analysis_template_str = \
-f"""
+_code_analysis_template_str = """\
 You are an expert at interpreting and analyzing Python 3 code.
 
 Given a Python code snippet, we want to determine the following:
@@ -233,10 +231,9 @@ def get_deepseek_chain() -> langchain_core.runnables.Runnable:
 
 
 if __name__ == "__main__":
-    _dummy_code = \
-"""\
+    _dummy_code = """\
 def add(a, b):
-return a + b + 1
+    return a + b + 1
 """
     _dummy_prompt = code_analysis_prompt.format(code=_dummy_code)
     print(_dummy_prompt)

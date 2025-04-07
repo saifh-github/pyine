@@ -33,7 +33,7 @@ class CodeTraceDataset(torch.utils.data.Dataset):
         """
         return len(self.reader)
 
-    def __getitem__(self, index: int) -> typing.Dict[str, typing.Any]:
+    def __getitem__(self, index: int) -> dict[str, typing.Any]:
         """
         Fetches an individual sample from the LMDB database by its index.
 

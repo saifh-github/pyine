@@ -31,8 +31,8 @@ class TimeLimit:
     def __init__(
         self,
         seconds: float,
-        timeout_message: typing.Optional[str] = None,
-        on_timeout: typing.Optional[typing.Callable[[], typing.Any]] = None,
+        timeout_message: str | None = None,
+        on_timeout: typing.Callable[[], typing.Any] | None = None,
     ):
         """
         Initializes the TimeLimit context manager.
@@ -45,13 +45,13 @@ class TimeLimit:
         self.seconds = seconds
         self.timeout_message = timeout_message or f"Code execution timed out after {seconds} seconds."
         self.on_timeout = on_timeout
-        self._old_handler: typing.Optional[typing.Callable] = None
+        self._old_handler: typing.Callable | None = None
         self._start_time: float = 0
 
     def _timeout_handler(
         self,
         signum: int,
-        frame: typing.Optional[types.FrameType],
+        frame: types.FrameType | None,
     ) -> None:
         """
         Signal handler for the SIGALRM signal.
@@ -92,9 +92,9 @@ class TimeLimit:
 
     def __exit__(
         self,
-        exc_type: typing.Optional[typing.Type[BaseException]],
-        exc_val: typing.Optional[BaseException],
-        exc_tb: typing.Optional[typing.Any],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: typing.Any | None,
     ) -> bool:
         """
         Exits the context and cancels the timer.

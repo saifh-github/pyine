@@ -1,10 +1,10 @@
 """
 
-                        @@@@@@@@@@@@@@@@@@
-                        @@@ HUGE NOTE! @@@
+                       @@@@@@@@@@@@@@@@@@
+                       @@@ HUGE NOTE! @@@
 
-          THIS IS A DEMO / WORK IN PROGRESS THAT IS NOT FINAL!
- (just using this module for prototyping, for now, lots of cleanups needed)
+         THIS IS A DEMO / WORK IN PROGRESS THAT IS NOT FINAL!
+(just using this module for prototyping, for now, lots of cleanups needed)
 
 """
 
@@ -19,9 +19,8 @@ import numpy as np
 
 import pyine.data.lmdb_io
 import pyine.prompts.code_analysis_prompt
-import pyine.utils.code_validation
 import pyine.utils.code_exec
-
+import pyine.utils.code_validation
 
 banned_solutions = {
     # THESE ARE SOLUTIONS THAT CAUSE SEGFAULTS OR OTHER CRASHES, CAN'T AVOID THOSE YET
@@ -59,7 +58,7 @@ def _estimate_isclose_params(float_str):
         decimal_part = decimal_part.rstrip("0")
         decimal_precision = len(decimal_part)
         rtol = 10 ** -(decimal_precision + 1)
-        atol = 10 ** -decimal_precision
+        atol = 10**-decimal_precision
     else:
         rtol = 1e-5
         atol = 1e-8
@@ -78,7 +77,7 @@ def _compare_result_strings(proposed: str, reference: str) -> bool:
 
 def load_json_files(
     folder_path: pathlib.Path,
-) -> typing.Iterator[typing.Dict[typing.Any, typing.Any]]:
+) -> typing.Iterator[dict[typing.Any, typing.Any]]:
     """
     Load individual JSON files found in a folder and yield their content one at a time.
 
@@ -101,7 +100,7 @@ def load_json_files(
     json_file_paths = folder_path.glob("*.json")
     for json_file in json_file_paths:
         try:
-            with open(json_file, "r", encoding="utf-8") as f:
+            with open(json_file, encoding="utf-8") as f:
                 data = json.load(f)
                 yield data
         except json.JSONDecodeError:
@@ -115,14 +114,18 @@ def write_dataset(
     max_valid_solutions_per_sample: int = 2,
     max_traces_per_solution: int = 1,
     max_trace_events_per_line: int = 100,
-    minimum_solution_dissimilarity = 0.1,
+    minimum_solution_dissimilarity=0.1,
 ):
     assert raw_json_dir_path.exists()
     if output_dataset_path.exists():
-        overwrite = input(
-            f"A dataset already exists at: {output_dataset_path.absolute()}\n"
-            "Do you want to delete it so it can be recreated? [y/N]: "
-        ).strip().lower()
+        overwrite = (
+            input(
+                f"A dataset already exists at: {output_dataset_path.absolute()}\n"
+                "Do you want to delete it so it can be recreated? [y/N]: "
+            )
+            .strip()
+            .lower()
+        )
         if overwrite != "y":
             print("Operation aborted.")
             return
@@ -166,12 +169,11 @@ def write_dataset(
         )
         retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
         retained_solution_successes = {idx: False for idx in retained_solution_indices}
-        traces_to_write: typing.List[typing.Dict[str, typing.Any]] = []
+        traces_to_write: list[dict[str, typing.Any]] = []
         written_solutions = 0
         for solution_idx, solution in enumerate(solutions):
             solution_prefix = f"{sample_prefix} => solution #{solution_idx}"
-            is_banned = \
-                solution_idx in banned_solutions.get(sample_subset, {}).get(sample_subset_idx, {})
+            is_banned = solution_idx in banned_solutions.get(sample_subset, {}).get(sample_subset_idx, {})
             if is_banned:
                 print(f"{solution_prefix}: skipped due to banned solution")
                 continue
@@ -197,10 +199,11 @@ def write_dataset(
             if not analysis_output.is_deterministic:
                 print(f"{solution_prefix}: skipped due to potentially nondeterministic code")
                 continue
-            if (
-                analysis_output.input_type not in ["stdin", "no-input", "callable"]
-                or analysis_output.output_type not in ["stdout", "no-output", "callable"]
-            ):
+            if analysis_output.input_type not in [
+                "stdin",
+                "no-input",
+                "callable",
+            ] or analysis_output.output_type not in ["stdout", "no-output", "callable"]:
                 print(f"{solution_prefix}: skipped due to annoying input/output types")
                 continue
             entrypoint_name = None
@@ -226,10 +229,12 @@ def write_dataset(
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                for test_idx, (inputs, outputs) in enumerate(zip(
-                    itertools.islice(inputs_array, max_traces_per_solution),
-                    itertools.islice(outputs_array, max_traces_per_solution),
-                )):
+                for test_idx, (inputs, outputs) in enumerate(
+                    zip(
+                        itertools.islice(inputs_array, max_traces_per_solution),
+                        itertools.islice(outputs_array, max_traces_per_solution),
+                    )
+                ):
                     if entrypoint_name is not None:
                         if isinstance(inputs, list) and isinstance(outputs, list) and len(inputs) == len(outputs) == 1:
                             print("might be an issue here")
@@ -258,18 +263,22 @@ def write_dataset(
                                 if len(return_value) != len(outputs):
                                     test_success_flags[test_idx] = False
                                 else:
-                                    test_success_flags[test_idx] = all([
-                                        _compare_result_strings(return_value[i], outputs[i])
-                                        for i in range(len(return_value))
-                                    ])
+                                    test_success_flags[test_idx] = all(
+                                        [
+                                            _compare_result_strings(return_value[i], outputs[i])
+                                            for i in range(len(return_value))
+                                        ]
+                                    )
                             else:  # use default comparator
                                 test_success_flags[test_idx] = return_value == outputs
                         if test_success_flags[test_idx]:
-                            traces_to_write.append({
-                                "solution_idx": solution_idx,
-                                "test_idx": test_idx,
-                                "trace_results": trace_results,
-                            })
+                            traces_to_write.append(
+                                {
+                                    "solution_idx": solution_idx,
+                                    "test_idx": test_idx,
+                                    "trace_results": trace_results,
+                                }
+                            )
                     except Exception as e:
                         print(f"{solution_prefix}: exec failed due to tracing error: {e}")
                         break
@@ -292,7 +301,7 @@ def write_dataset(
                 },
             )
             written_outputs += 1
-            written_solutions += len([set([r["solution_idx"] for r in traces_to_write])])
+            written_solutions += len([{r["solution_idx"] for r in traces_to_write}])
             print(f"{written_outputs=}")
             if written_outputs >= max_outputs:
                 break

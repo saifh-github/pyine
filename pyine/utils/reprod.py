@@ -36,7 +36,7 @@ def get_git_revision_hash() -> str:
         return "git-revision-unknown"
 
 
-def get_installed_packages() -> typing.List[str]:
+def get_installed_packages() -> list[str]:
     """Returns a list of all packages installed in the current environment.
 
     If the required packages cannot be imported, the returned list will be empty. Note that some
@@ -78,7 +78,7 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
-def get_reprod_metadata() -> typing.Dict[str, typing.Any]:
+def get_reprod_metadata() -> dict[str, typing.Any]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     return {
         "platform": get_platform_name(),
@@ -86,4 +86,3 @@ def get_reprod_metadata() -> typing.Dict[str, typing.Any]:
         "git_revision_hash": get_git_revision_hash(),
         "installed_packages": get_installed_packages(),
     }
-

@@ -1,6 +1,5 @@
 import lmdb
 import pytest
-from torch.fx.passes.graph_manipulation import size_bytes
 
 import pyine.data.lmdb_io as lmdb_io
 
@@ -9,7 +8,7 @@ import pyine.data.lmdb_io as lmdb_io
 def mock_lmdb_env(tmp_path):
     """Fixture to set up a mock LMDB environment for testing."""
     env_path = tmp_path / "test_lmdb"
-    env = lmdb.open(str(env_path), map_size=10 ** 6, max_readers=10)
+    env = lmdb.open(str(env_path), map_size=10**6, max_readers=10)
     yield env
     env.close()
 
@@ -38,7 +37,7 @@ class TestLMDBWriteAndRead:
     def _get_writer(
         self,
         path,
-        map_size=10 ** 6,
+        map_size=10**6,
         max_readers=10,
         serialization=lmdb_io.SerializationMethod.PICKLE,
     ):
@@ -52,7 +51,7 @@ class TestLMDBWriteAndRead:
     def test_writer_init(self, mock_lmdb_env):
         writer = self._get_writer(path=mock_lmdb_env.path())
         assert writer.path is not None
-        assert writer.map_size == 10 ** 6
+        assert writer.map_size == 10**6
         assert writer.env is not None
         writer.close()
         assert writer.env is None
@@ -88,13 +87,10 @@ class TestLMDBWriteAndRead:
             lmdb_io.SerializationMethod.PICKLE_LZ4,
             lmdb_io.SerializationMethod.JSON,
             lmdb_io.SerializationMethod.JSON_LZ4,
-        ]
+        ],
     )
     def test_writer_with_various_serialization_methods(self, mock_lmdb_env, serialization_method):
-        writer = self._get_writer(
-            path=mock_lmdb_env.path(),
-            serialization=serialization_method
-        )
+        writer = self._get_writer(path=mock_lmdb_env.path(), serialization=serialization_method)
         key, value = "key1", {"test": 1}
         inserted_key = writer.put(key=key, value=value)
         assert isinstance(inserted_key, bytes)

@@ -23,7 +23,7 @@ def validate_code(code_string: str, max_size: int = 100_000):
             stack.append(char)
         elif char in brackets.values():
             if not stack or brackets[stack.pop()] != char:
-                raise AssertionError("code possesses unbalanced delimiters")
+                raise AssertionError("code possesses imbalanced delimiters")
     assert len(stack) == 0, "code possesses imbalanced delimiters"
 
     # check for indentation issues
@@ -37,8 +37,8 @@ def validate_code(code_string: str, max_size: int = 100_000):
         warnings.simplefilter("ignore")
         parsed_tree = ast.parse(code_string)
     for node in ast.walk(parsed_tree):
-        restricted_functions = ['exec', 'eval', '__import__', 'compile', 'globals', 'locals']
-        restricted_imports = ['subprocess', 'shutil', 'importlib']
+        restricted_functions = ["exec", "eval", "__import__", "compile", "globals", "locals"]
+        restricted_imports = ["subprocess", "shutil", "importlib"]
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in restricted_functions, "found potentially problematic function call"
         elif isinstance(node, ast.Import):
@@ -49,9 +49,9 @@ def validate_code(code_string: str, max_size: int = 100_000):
                 assert node.module.split(".")[0] not in restricted_imports, "found potentially problematic import"
         elif isinstance(node, ast.While):  # check for infinite while loop
             if isinstance(node.test, ast.Constant) and node.test.value:
-                assert any([isinstance(inner, (ast.Break, ast.Return)) for inner in ast.walk(node)]), (
-                    "found potentially infinite while loop without break or return"
-                )
+                assert any(
+                    [isinstance(inner, (ast.Break, ast.Return)) for inner in ast.walk(node)]
+                ), "found potentially infinite while loop without break or return"
 
     # finally, compile to check syntax, but don't execute; will throw an exception if anything goes wrong
     with warnings.catch_warnings():
@@ -60,12 +60,12 @@ def validate_code(code_string: str, max_size: int = 100_000):
 
 
 def find_near_duplicate_code(
-    code_strings: typing.List[str],
-    threshold: typing.Union[int, float],  # int = edit distance; float = dissimilarity, in [0,1]
+    code_strings: list[str],
+    threshold: int | float,  # int = edit distance; float = dissimilarity, in [0,1]
     ignore_whitespace: bool = True,
     ignore_comments: bool = True,
-    preprocess_fn: typing.Optional[typing.Callable[[str], str]] = None
-) -> typing.Dict[int, typing.List[typing.Tuple[int, float]]]:
+    preprocess_fn: typing.Callable[[str], str] | None = None,
+) -> dict[int, list[tuple[int, float]]]:
     """
     Find near-duplicate code snippets based on edit distance or similarity score.
 
@@ -81,7 +81,7 @@ def find_near_duplicate_code(
         A dictionary where keys are indices of code snippets and values are lists of tuples containing
         indices of their near-duplicates and their edit distances or dissimilarity scores.
     """
-    result: typing.Dict[int, typing.List[typing.Tuple[int, float]]] = {i: [] for i in range(len(code_strings))}
+    result: dict[int, list[tuple[int, float]]] = {i: [] for i in range(len(code_strings))}
     use_relative_threshold = isinstance(threshold, float)
     if use_relative_threshold:
         assert 0.0 <= threshold <= 1.0, "relative threshold must be in [0.0, 1.0]"
@@ -91,11 +91,11 @@ def find_near_duplicate_code(
     for snippet in code_strings:
         processed = snippet
         if ignore_comments:
-            processed = re.sub(r'#.*$', '', processed, flags=re.MULTILINE)
-            processed = re.sub(r'""".*?"""', '', processed, flags=re.DOTALL)
-            processed = re.sub(r"'''.*?'''", '', processed, flags=re.DOTALL)
+            processed = re.sub(r"#.*$", "", processed, flags=re.MULTILINE)
+            processed = re.sub(r'""".*?"""', "", processed, flags=re.DOTALL)
+            processed = re.sub(r"'''.*?'''", "", processed, flags=re.DOTALL)
         if ignore_whitespace:
-            processed = re.sub(r'\s+', ' ', processed)
+            processed = re.sub(r"\s+", " ", processed)
             processed = processed.strip()
         if preprocess_fn:
             processed = preprocess_fn(processed)
@@ -122,11 +122,7 @@ def find_near_duplicate_code(
     return result
 
 
-def find_near_duplicate_code_clusters(
-    code_strings: typing.List[str],
-    threshold: typing.Union[int, float],
-    **kwargs
-) -> typing.List[typing.List[int]]:
+def find_near_duplicate_code_clusters(code_strings: list[str], threshold: int | float, **kwargs) -> list[list[int]]:
     """
     Find clusters of near-duplicate code snippets.
 
@@ -140,8 +136,8 @@ def find_near_duplicate_code_clusters(
         near-duplicate code snippets.
     """
     match_results = find_near_duplicate_code(code_strings, threshold, **kwargs)
-    clustered: typing.Set[int] = set()
-    clusters: typing.List[typing.List[int]] = []
+    clustered: set[int] = set()
+    clusters: list[list[int]] = []
     for i in range(len(code_strings)):
         if i in clustered:
             continue

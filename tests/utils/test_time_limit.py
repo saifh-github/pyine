@@ -65,4 +65,3 @@ def test_time_limit_no_timeout_on_short_execution() -> None:
     """Test that TimeLimit works without timeout for a quick operation."""
     with time_limit.TimeLimit(0.1):
         sum(range(100000))  # a quick operation
-

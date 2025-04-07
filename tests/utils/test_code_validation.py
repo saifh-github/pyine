@@ -59,16 +59,14 @@ class TestValidateCode:
                 validate_code(f"from {module} import something")
 
     def test_infinite_while_loop(self):
-        infinite_loop = \
-"""\
+        infinite_loop = """\
 def func():
     while True:
         print("This will run forever")
 """
         with pytest.raises(AssertionError, match="found potentially infinite while loop without break or return"):
             validate_code(infinite_loop)
-        with_break = \
-"""\
+        with_break = """\
 def func():
     while True:
         print("This will not run forever")
@@ -76,8 +74,7 @@ def func():
             break
 """
         validate_code(with_break)  # should not raise an exception
-        with_return = \
-"""\
+        with_return = """\
 def func():
     while True:
         print("This will not run forever")
@@ -93,8 +90,7 @@ def func():
             validate_code("def func():\nreturn 'no indentation'")
 
     def test_nested_problematic_code(self):
-        nested_problem = \
-"""\
+        nested_problem = """\
 def outer():
     def inner():
         import subprocess
@@ -105,8 +101,7 @@ def outer():
             validate_code(nested_problem)
 
     def test_complex_valid_code(self):
-        valid_code = \
-"""\
+        valid_code = """\
 class Calculator:
     def __init__(self, initial=0):
         self.value = initial
@@ -130,8 +125,7 @@ print(f"The result is {result}")
         validate_code(valid_code)
 
     def test_disguised_restricted_import(self):
-        disguised_import = \
-"""\
+        disguised_import = """\
 mod_name = 'sub' + 'process'
 __import__(mod_name)
 """
@@ -139,8 +133,7 @@ __import__(mod_name)
             validate_code(disguised_import)
 
     def test_commented_code(self):
-        commented_code = \
-"""\
+        commented_code = """\
 # import subprocess
 # eval("print('hello')")
 x = 10
@@ -178,7 +171,7 @@ class TestNearDuplicateCode:
                 import requests
                 response = requests.get(url)
                 return response.json()
-            """
+            """,
         ]
 
     def test_find_near_duplicate_code(self, code_snippets):
@@ -189,7 +182,7 @@ class TestNearDuplicateCode:
             ignore_whitespace=True,
         )
         assert len(duplicates) == 6 and list(range(6)) == list(duplicates.keys())
-        assert set([match[0] for match in duplicates[0]]) == {1, 2, 3}
+        assert {match[0] for match in duplicates[0]} == {1, 2, 3}
 
     def test_find_near_duplicate_code_clusters(self, code_snippets):
         clusters = pyine.utils.code_validation.find_near_duplicate_code_clusters(

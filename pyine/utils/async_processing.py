@@ -1,10 +1,11 @@
 import asyncio
 import json
 import pathlib
+
 import tiktoken
 
-import pyine.prompts.code_analysis_prompt
 import data.taco.taco_dataset_reader
+import pyine.prompts.code_analysis_prompt
 import pyine.utils.code_validation
 
 
@@ -44,8 +45,7 @@ async def reprocess_code_samples(
     for batch_start in range(0, total_samples, batch_size):
         batch_end = min(batch_start + batch_size, total_samples)
         batch_indices = [  # keep only sample indices that are not already done
-            idx for idx in range(batch_start, batch_end)
-            if not (output_dir_path / f"{idx:06d}.json").exists()
+            idx for idx in range(batch_start, batch_end) if not (output_dir_path / f"{idx:06d}.json").exists()
         ]
         if not batch_indices:
             continue
@@ -78,39 +78,39 @@ async def reprocess_code_samples(
                 try:
                     solution_token_count = _count_tokens(solution)
                     query_token_count = solution_token_count + prompt_token_count
-                    assert query_token_count <= max_token_count, (
-                        f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
-                    )
+                    assert (
+                        query_token_count <= max_token_count
+                    ), f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
                     pyine.utils.code_validation.validate_code(solution)
                 except Exception as e:
                     validation_errors.append(str(e))
-                all_solutions.append({
-                    "orig_code": orig_code,
-                    "code": solution,
-                    "validation_errors": validation_errors,
-                    "analysis_outputs": analysis_outputs,
-                })
+                all_solutions.append(
+                    {
+                        "orig_code": orig_code,
+                        "code": solution,
+                        "validation_errors": validation_errors,
+                        "analysis_outputs": analysis_outputs,
+                    }
+                )
                 solution_mapping.append((sample_idx, sample))
 
         print(f"sending batch [{batch_start}-{batch_end}] with {len(all_solutions)} solutions")
 
         analysis_outputs = []
         for i in range(0, len(all_solutions), chunk_size):
-            chunk_solutions = all_solutions[i:i + chunk_size]
+            chunk_solutions = all_solutions[i : i + chunk_size]
             chunk_inputs = [{"code": s["code"]} for s in chunk_solutions]
 
             print(f"Processing chunk {i // chunk_size + 1}/{(len(all_solutions) + chunk_size - 1) // chunk_size}")
 
             tasks = []
             for input_data in chunk_inputs:
+
                 async def process_with_retry(input_data, max_retries=5, backoff=2):
                     retries = 0
                     while retries < max_retries:
                         try:
-                            return await code_analysis_chain.ainvoke(
-                                input_data,
-                                config={"max_concurrency": 512}
-                            )
+                            return await code_analysis_chain.ainvoke(input_data, config={"max_concurrency": 512})
                         except Exception as e:
                             full_stop_exceptions = ["insufficient balance", "stopping processing at "]
                             if any([s in str(e).lower() for s in full_stop_exceptions]):
@@ -119,7 +119,7 @@ async def reprocess_code_samples(
                             if retries >= max_retries:
                                 print(f"Failed after {max_retries} retries: {str(e)}")
                                 return {"error": str(e)}
-                            wait_time = backoff ** retries
+                            wait_time = backoff**retries
                             print(f"Retry {retries} after {wait_time}s due to: {str(e)}")
                             await asyncio.sleep(wait_time)
 

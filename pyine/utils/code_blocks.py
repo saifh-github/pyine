@@ -1,6 +1,6 @@
 import ast
-import enum
 import dataclasses
+import enum
 import typing
 
 
@@ -9,6 +9,7 @@ class CodeBlockType(enum.StrEnum):
 
     Note: we ignore lambdas, list comprehensions, and generator expressions.
     """
+
     IF = "if"
     FOR = "for"
     WHILE = "while"
@@ -40,13 +41,14 @@ _ast_node_type_mapping = {
 @dataclasses.dataclass(frozen=True)
 class CodeBlock:
     """Information about a logical block in a Python code snippet."""
+
     type: CodeBlockType
     """The type of block (see CodeBlockType enum)."""
-    name: typing.Optional[str]
+    name: str | None
     """The name of the block (if applicable, for classes/functions)."""
     depth: int
     """The nesting depth of the block (0 for top-level blocks)."""
-    parent_line: typing.Optional[int]
+    parent_line: int | None
     """Line number of the parent block (if any)."""
     start_line: int
     """Line number of the start of the block."""
@@ -56,7 +58,7 @@ class CodeBlock:
 
 def identify_code_blocks(
     code_string: str,
-) -> typing.Dict[int, CodeBlock]:
+) -> dict[int, CodeBlock]:
     """Analyze a Python code string and identify logical flow blocks.
 
     This function parses the code string using the AST module and identifies
@@ -67,19 +69,19 @@ def identify_code_blocks(
     code_blocks = _capture_child_nodes(ast.parse(code_string))
     blocks_map = {}
     for block in code_blocks:
-        assert block.start_line not in blocks_map, (
-            f"found multiple blocks on same line! see L{block.start_line} in:\n{code_string}"
-        )
+        assert (
+            block.start_line not in blocks_map
+        ), f"found multiple blocks on same line! see L{block.start_line} in:\n{code_string}"
         blocks_map[block.start_line] = block
     return dict(sorted(blocks_map.items()))
 
 
 def _capture_child_nodes(
     node: ast.AST,
-    results: typing.Optional[typing.List[typing.Dict[str, typing.Any]]] = None,
-    parent_line: typing.Optional[int] = None,
-    next_depth: typing.Optional[int] = None,
-) -> typing.List[CodeBlock]:
+    results: list[dict[str, typing.Any]] | None = None,
+    parent_line: int | None = None,
+    next_depth: int | None = None,
+) -> list[CodeBlock]:
     if results is None:
         results = []
     node_type = _ast_node_type_mapping.get(type(node))
@@ -106,8 +108,7 @@ def _capture_child_nodes(
 
 
 if __name__ == "__main__":
-    _example_code = \
-"""\
+    _example_code = """\
 class Example:  # L 1
     def __init__(self):  # L 2
         self.name = "hello"  # L 3

@@ -1,18 +1,18 @@
-import sys
-import io
 import contextlib
 import dataclasses
 import functools
+import io
 import os
 import pprint
 import site
+import sys
 import types
 import typing
 
-import pyine.utils.reprod
 import pyine.utils.code_blocks
-import pyine.utils.time_limit
 import pyine.utils.portable_repr
+import pyine.utils.reprod
+import pyine.utils.time_limit
 
 portable_repr = pyine.utils.portable_repr.get_portable_representation
 _orig_stdin = sys.stdin
@@ -21,6 +21,7 @@ _orig_stdin = sys.stdin
 @dataclasses.dataclass(frozen=True)
 class TraceKey:
     """Dataclass for storing and exporting execution trace keys."""
+
     file: str
     """The file name containing the code that was executed."""
     object: str
@@ -32,19 +33,20 @@ class TraceKey:
 @dataclasses.dataclass(frozen=True)
 class TraceEvent:
     """Dataclass for storing and exporting execution trace events."""
+
     event_type: str
     """The type of event that occurred (e.g., "call", "return", "exception")."""
-    stack_trace: typing.List[TraceKey]
+    stack_trace: list[TraceKey]
     """A list of TraceKey instances representing the call stack at the time of the event."""
-    variables: typing.Dict[str, typing.Any]
+    variables: dict[str, typing.Any]
     """A dictionary containing the variables at the time of the event."""
-    internal_variables: typing.Dict[str, typing.Any]
+    internal_variables: dict[str, typing.Any]
     """A dictionary containing internal variables at the time of the event."""
-    arguments: typing.Optional[typing.Dict[str, typing.Any]]
+    arguments: dict[str, typing.Any] | None
     """A dictionary containing the arguments passed to the code object at the time of the event."""
-    return_value: typing.Optional[typing.Any]
+    return_value: typing.Any | None
     """The return value of the code object at the time of the event."""
-    exception: typing.Optional[typing.Dict[str, typing.Any]]
+    exception: dict[str, typing.Any] | None
     """A dictionary containing information about the exception that occurred, if any."""
     trace_step_idx: int
     """The trace step index at the time of the event; should be unique for each event."""
@@ -55,25 +57,26 @@ class TraceEvent:
 @dataclasses.dataclass(frozen=True)
 class TraceResult:
     """Dataclass for storing and exporting execution trace results."""
+
     code_string: str
     """The original code string that was executed."""
-    code_blocks: typing.Dict[int, pyine.utils.code_blocks.CodeBlock]
+    code_blocks: dict[int, pyine.utils.code_blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by line number."""
     inputs: str
     """The inputs that were available to the code during execution."""
-    max_events_per_line: typing.Optional[int]
+    max_events_per_line: int | None
     """The maximum number of events to record per line (if needed)."""
-    traced_steps: typing.List[typing.Optional[TraceEvent]]
+    traced_steps: list[TraceEvent | None]
     """A list of all traced steps, in order of execution.
-    
+
     The states correspond to variables at each line of code prior to execution. If a line has more
     than `max_events_per_line` events, additional events are substituted by `None` in this list. To
     determine which line an event occurred on, see the `TraceKey` attribute of each event, or the
     `traced_steps_map` dictionary below.
     """
-    traced_steps_map: typing.Dict[TraceKey, typing.List[int]]
+    traced_steps_map: dict[TraceKey, list[int]]
     """A dictionary containing the indices of each traced step for each line of executed code.
-    
+
     In this dictionary, keys are `TraceKey` instances (combining file, object, and line info)
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
     list. If a line has more than `max_events_per_line` events, its corresponding indices list will
@@ -82,15 +85,15 @@ class TraceResult:
     """
     tracing_steps: int
     """The total number of tracing steps taken during execution."""
-    return_value: typing.Optional[typing.Any]
+    return_value: typing.Any | None
     """The return value of the executed code, if any."""
-    exception: typing.Optional[Exception]
+    exception: Exception | None
     """The exception that occurred during execution, if any."""
     stdout: str
     """The captured stdout output during execution."""
     stderr: str
     """The captured stderr output during execution."""
-    metadata: typing.Dict[str, typing.Any]
+    metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
 
 
@@ -147,7 +150,7 @@ class MockInput:
         result = "".join(f"{line}\n" for line in self._input_iter)
         return result
 
-    def readlines(self) -> typing.List[str]:
+    def readlines(self) -> list[str]:
         """Read all remaining inputs into a list of strings."""
         result = [f"{line}\n" for line in self._input_iter]
         return result
@@ -157,9 +160,11 @@ class MockInput:
         try:
             stdin_attr = getattr(_orig_stdin, name)
             if callable(stdin_attr):
+
                 def wrapper(*args, **kwargs):
                     method = getattr(sys.stdin, name)
                     return method(*args, **kwargs)
+
                 return wrapper
             else:
                 return stdin_attr
@@ -197,7 +202,6 @@ class MockInputContext(contextlib.AbstractContextManager):
             __builtins__.input = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
         sys.stdin = self.mocker  # type: ignore
 
-
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Restores sys.stdin.readline() and input() to their original values."""
         sys.stdin = self.original_stdin
@@ -226,13 +230,13 @@ def _get_clean_filename(filename: str) -> str:
 def execute_and_trace_code(
     code_string: str,
     inputs: str = "",
-    entrypoint_name: typing.Optional[str] = None,
-    blacklisted_modules: typing.Optional[typing.Iterable[str]] = None,
-    blacklisted_objects: typing.Optional[typing.Iterable[str]] = None,
+    entrypoint_name: str | None = None,
+    blacklisted_modules: typing.Iterable[str] | None = None,
+    blacklisted_objects: typing.Iterable[str] | None = None,
     trace_only_inside_code_string: bool = False,
-    max_events_per_line: typing.Optional[int] = None,
+    max_events_per_line: int | None = None,
     timeout_seconds: float = 60,
-    seed: typing.Optional[int] = 42,
+    seed: int | None = 42,
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
@@ -259,27 +263,24 @@ def execute_and_trace_code(
         compiled_code = compile(code_string, "<string>", "exec")
     except Exception as e:
         raise Exception(f"error while analyzing and compiling code: {e}")
-    traced_steps: typing.List[typing.Optional[TraceEvent]] = []
-    traced_steps_map: typing.Dict[TraceKey, typing.List[int]] = {}
+    traced_steps: list[TraceEvent | None] = []
+    traced_steps_map: dict[TraceKey, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
 
     def _trace_callback(
         frame: types.FrameType,  # noqa
         event: str,
         arg: typing.Any,
-    ) -> typing.Optional[typing.Callable]:
+    ) -> typing.Callable | None:
         """Callback function for sys.settrace that records execution state at each line."""
         nonlocal last_trace_step_idx
 
         trace_key = TraceKey(
-            file=_get_clean_filename(frame.f_code.co_filename),
-            object=frame.f_code.co_name,
-            line=frame.f_lineno
+            file=_get_clean_filename(frame.f_code.co_filename), object=frame.f_code.co_name, line=frame.f_lineno
         )
         return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
-        is_blacklisted = (
-            (blacklisted_objects and trace_key.object in blacklisted_objects)
-            or (blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules)))
+        is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
+            blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
         )
         is_inside_code_string = trace_key.file == "<string>"
         must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
@@ -296,25 +297,28 @@ def execute_and_trace_code(
             stack_trace = []
             current_frame = frame
             while current_frame:
-                stack_trace.append(TraceKey(
-                    file=_get_clean_filename(current_frame.f_code.co_filename),
-                    object=current_frame.f_code.co_name,
-                    line=current_frame.f_lineno
-                ))
+                stack_trace.append(
+                    TraceKey(
+                        file=_get_clean_filename(current_frame.f_code.co_filename),
+                        object=current_frame.f_code.co_name,
+                        line=current_frame.f_lineno,
+                    )
+                )
                 current_frame = current_frame.f_back
             regular_vars = {
-                name: portable_repr(value) for name, value in frame.f_locals.items()
+                name: portable_repr(value)
+                for name, value in frame.f_locals.items()
                 if not name.startswith("__") and name != "_trace_callback"
             }
             internal_vars = {
-                name: portable_repr(value) for name, value in frame.f_locals.items()
+                name: portable_repr(value)
+                for name, value in frame.f_locals.items()
                 if name.startswith("__") and name != "__builtins__"
             }
             arguments, return_value, exception = None, None, None
             if event == "call":
                 arguments = {
-                    name: portable_repr(value) for name, value in frame.f_locals.items()
-                    if not name.startswith("__")
+                    name: portable_repr(value) for name, value in frame.f_locals.items() if not name.startswith("__")
                 }
             elif event == "return":
                 return_value = portable_repr(arg)
@@ -346,17 +350,17 @@ def execute_and_trace_code(
     exec_namespace = {}
     try:
         with pyine.utils.time_limit.TimeLimit(timeout_seconds):
-                with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
-                    if entrypoint_name is not None:
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                if entrypoint_name is not None:
+                    with trace_context(_trace_callback):
+                        exec(compiled_code, exec_namespace)
+                        # note for later: if this is buggy/annoying, could add call inside code string itself
+                        if entrypoint_name and entrypoint_name in exec_namespace:
+                            return_value = exec_namespace[entrypoint_name](inputs)
+                else:
+                    with MockInputContext(inputs):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
-                            # note for later: if this is buggy/annoying, could add call inside code string itself
-                            if entrypoint_name and entrypoint_name in exec_namespace:
-                                return_value = exec_namespace[entrypoint_name](inputs)
-                    else:
-                        with MockInputContext(inputs):
-                            with trace_context(_trace_callback):
-                                exec(compiled_code, exec_namespace)
     except Exception as e:
         caught_exception = e  # store any exception that occurred
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
@@ -451,13 +455,12 @@ def format_traced_code_execution(
 
 if __name__ == "__main__":
     # example usage of tracing + printing (note: gets spammy for large functions!):
-    _sample_code = \
-"""\
+    _sample_code = """\
 
 def potato(a: int) -> int:
     print(f"potato {a}")
     return a + 1
-    
+
 class Something:
     def __init__(self):
         self.potato = "potato"
@@ -485,7 +488,7 @@ print(f"Final values: a={a}, b={b}, c={c}")
         code_string=_sample_code,
         inputs="",
         blacklisted_modules=["linecache", "traceback", "pydev", "pydevd_tracing", "contextlib", "numpy"],
-        #trace_only_inside_code_string=True,
+        # trace_only_inside_code_string=True,
     )
     print(_trace_result.stdout)
     _report = format_traced_code_execution(

@@ -9,12 +9,12 @@ import lmdb
 import lz4.frame
 import tqdm
 
-
 import pyine.utils.reprod
 
 
 class SerializationMethod(enum.Enum):
     """Supported serialization methods for LMDBWriter."""
+
     PICKLE = enum.auto()
     PICKLE_LZ4 = enum.auto()
     JSON = enum.auto()
@@ -31,21 +31,24 @@ def _create_metadata_key(field_name: str) -> bytes:
     """Create a metadata key with proper prefix."""
     return METADATA_PREFIX + field_name.encode("utf-8")
 
+
 def _decode_metadata_key(key: bytes) -> str:
     """Decode the metadata field name from a metadata key that possesses a prefix."""
-    return key[len(METADATA_PREFIX):].decode("utf-8")
+    return key[len(METADATA_PREFIX) :].decode("utf-8")
+
 
 def _create_sample_key(key_index: int) -> bytes:
     """Create a sample key for sequential access w/ 8-byte unsigned integer format."""
     key_idx_bytes = struct.pack(">Q", key_index)
     return SAMPLE_PREFIX + key_idx_bytes
 
+
 def _decode_sample_key(key: bytes) -> int:
     """Decode the sample index (int) from a sample key that possesses a prefix."""
-    return struct.unpack(">Q", key[len(SAMPLE_PREFIX):])[0]
+    return struct.unpack(">Q", key[len(SAMPLE_PREFIX) :])[0]
 
 
-def _get_database_size(path: typing.Union[pathlib.Path, typing.AnyStr]) -> int:
+def _get_database_size(path: pathlib.Path | typing.AnyStr) -> int:
     """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
     path = pathlib.Path(path)
     if not path.is_dir():
@@ -63,13 +66,13 @@ class LMDBWriter:
 
     def __init__(
         self,
-        path: typing.Union[pathlib.Path, typing.AnyStr],
+        path: pathlib.Path | typing.AnyStr,
         map_size: int = 1 * 1024 * 1024 * 1024 * 1024,  # 1TB default size (1 * 1024^4)
         max_readers: int = 126,  # Typical default max readers for LMDB
         serialization: SerializationMethod = SerializationMethod.PICKLE,
     ) -> None:
         """Initialize the LMDB database.
-    
+
         Args:
             path: Path where the LMDB will be stored.
             map_size: Maximum size database may grow to; default 1TB (1 * 1024^4 bytes).
@@ -90,7 +93,7 @@ class LMDBWriter:
             raise ValueError(f"serialization must be an instance of: {list(SerializationMethod)}")
         self.serialization: SerializationMethod = serialization
         self._next_internal_key = 0
-        self.key_map: typing.Dict[str, bytes] = {}  # external-to-internal key map
+        self.key_map: dict[str, bytes] = {}  # external-to-internal key map
         self.max_encoded_value_length: int = 0  # in bytes
 
     def __enter__(self) -> "LMDBWriter":
@@ -99,9 +102,9 @@ class LMDBWriter:
 
     def __exit__(
         self,
-        exc_type: typing.Optional[type],
-        exc_val: typing.Optional[Exception],
-        exc_tb: typing.Optional[typing.Any],
+        exc_type: type | None,
+        exc_val: Exception | None,
+        exc_tb: typing.Any | None,
     ) -> None:
         """Context manager exit point.
 
@@ -142,11 +145,11 @@ class LMDBWriter:
 
     def write_metadata(
         self,
-        metadata: typing.Dict[str, typing.Any],
+        metadata: dict[str, typing.Any],
         overwrite: bool = False,
     ):
         """Write arbitrary metadata to the database, with optional overwrite protection.
-        
+
         Args:
             metadata: Dictionary of metadata to write.
             overwrite: Whether to overwrite existing metadata fields.
@@ -222,9 +225,9 @@ class LMDBWriter:
 
     def put_batch(
         self,
-        items: typing.Dict[str, typing.Any],
+        items: dict[str, typing.Any],
         show_progress: bool = True,
-    ) -> typing.List[bytes]:
+    ) -> list[bytes]:
         """Insert multiple key-value pairs into the database.
 
         Values at the specified keys should NOT already exist in the database.
@@ -263,7 +266,7 @@ class LMDBReader:
 
     def __init__(
         self,
-        path: typing.Union[pathlib.Path, typing.AnyStr],
+        path: pathlib.Path | typing.AnyStr,
     ):
         """
         Initialize the optimized LMDB reader.
@@ -310,7 +313,7 @@ class LMDBReader:
             self.serialization: SerializationMethod = pickle.loads(serialization_bytes)
             max_encoded_value_length_bytes = txn.get(_create_metadata_key("max_encoded_value_length"))
             self.max_encoded_value_length: int = pickle.loads(max_encoded_value_length_bytes)
-            self.key_map: typing.Dict[str, bytes] = pickle.loads(txn.get(_create_metadata_key("key_map")))
+            self.key_map: dict[str, bytes] = pickle.loads(txn.get(_create_metadata_key("key_map")))
             assert len(self.key_map) == self.sample_count, "key_map length does not match sample_count"
 
     def __enter__(self):
@@ -327,11 +330,11 @@ class LMDBReader:
 
     def close(self):
         """Close the database."""
-        if hasattr(self, 'env') and self.env is not None:
+        if hasattr(self, "env") and self.env is not None:
             self.env.close()
             self.env = None
 
-    def get_metadata(self) -> typing.Dict[str, typing.Any]:
+    def get_metadata(self) -> dict[str, typing.Any]:
         """Returns a dictionary of all metadata stored in the database."""
         results = {}
         with self.env.begin(write=False) as txn:
@@ -349,7 +352,7 @@ class LMDBReader:
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
         return _get_database_size(self.path)
 
-    def get(self, key_or_idx: typing.Union[int, str]) -> typing.Any:
+    def get(self, key_or_idx: int | str) -> typing.Any:
         """Get a value by its key or dataset index."""
         if isinstance(key_or_idx, str):
             if key_or_idx not in self.key_map:
@@ -368,7 +371,7 @@ class LMDBReader:
     def iter_from(
         self,
         start_idx: int = 0,
-        end_idx: typing.Optional[int] = None,
+        end_idx: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         """Iterate through items starting from a specific index, yielding values sequentially."""
         assert isinstance(start_idx, int), "start_idx must be an integer"
@@ -394,8 +397,8 @@ class LMDBReader:
         self,
         batch_size: int,
         start_idx: int = 0,
-        end_idx: typing.Optional[int] = None,
-    ) -> typing.Iterator[typing.List[typing.Any]]:
+        end_idx: int | None = None,
+    ) -> typing.Iterator[list[typing.Any]]:
         """
         Iterate through samples in batches for better performance, up to an optional end index.
 
