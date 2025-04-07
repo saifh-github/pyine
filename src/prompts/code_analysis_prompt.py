@@ -108,7 +108,6 @@ class CodeAnalysisResponse(pydantic.BaseModel):
 
 code_analysis_output_parser = langchain_core.output_parsers.PydanticOutputParser(
     pydantic_object=CodeAnalysisResponse,
-
 )
 
 _code_analysis_expected_output_format_str = code_analysis_output_parser.get_format_instructions()
@@ -215,7 +214,7 @@ code_analysis_prompt = code_analysis_prompt.partial(
 )
 
 
-def get_deepseek_code_analysis_chain() -> langchain_core.runnables.Runnable:
+def get_deepseek_chain() -> langchain_core.runnables.Runnable:
     """Get a DeepSeek code analysis chain based on the above prompt template and parser."""
     llm = langchain_deepseek.ChatDeepSeek(
         model="deepseek-chat",
