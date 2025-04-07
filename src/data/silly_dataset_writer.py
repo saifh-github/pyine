@@ -1,14 +1,44 @@
+"""
+
+                        @@@@@@@@@@@@@@@@@@
+                        @@@ HUGE NOTE! @@@
+
+          THIS IS A DEMO / WORK IN PROGRESS THAT IS NOT FINAL!
+ (just using this module for prototyping, for now, lots of cleanups needed)
+
+"""
+
 import itertools
 import json
 import pathlib
+import shutil
 import typing
 import warnings
 
 import numpy as np
 
+import src.data.lmdb_io
 import src.prompts.code_analysis_prompt
 import src.utils.code_validation
 import src.utils.code_exec
+
+
+banned_solutions = {
+    # THESE ARE SOLUTIONS THAT CAUSE SEGFAULTS OR OTHER CRASHES, CAN'T AVOID THOSE YET
+    # (will need to fork the exec+trace process to catch/avoid those)
+    # sample_subset -> sample_subset_idx -> solution_idx
+    "train": {
+        10329: [82, 86, 96, 117, 129],
+        3505: [9, 19],
+        14690: [2, 14, 20, 26, 27, 28, 30, 31, 35, 39, 41, 43, 45],  # and even more...
+        2744: [16, 27, 29, 46, 63],  # and more
+        14385: [84, 94],
+    },
+}
+
+banned_samples = {
+    "train": [14690, 2744, 13505, 329],
+}
 
 
 def _is_float(s):
@@ -78,22 +108,43 @@ def load_json_files(
             print(f"warning: skipping invalid JSON file: {json_file}")
 
 
-# Demo on how to use the function
 def demo_json_loader(
+    data_root_path: pathlib.Path = pathlib.Path("data/"),
+    max_outputs: int = 50,
+    max_valid_solutions_per_sample: int = 2,
+    max_written_results_per_solution: int = 1,
     max_traces_per_solution: int = 1,
     max_trace_events_per_line: int = 100,
     minimum_solution_dissimilarity = 0.1,
 ):
-    folder_path = pathlib.Path("data/2025-03-31-v01/")
-
-    for json_data in load_json_files(folder_path):
+    raw_json_path = data_root_path / "2025-03-31-v01"  # sample jsons w/ code analysis data
+    output_dataset_path = data_root_path / "2025-03-31-v01-lmdb"
+    if output_dataset_path.exists():
+        overwrite = input(
+            f"A dataset already exists at: {output_dataset_path.absolute()}\n"
+            "Do you want to delete it so it can be recreated? [y/N]: "
+        ).strip().lower()
+        if overwrite != "y":
+            print("Operation aborted.")
+            return
+        shutil.rmtree(output_dataset_path)
+    dataset_writer = src.data.lmdb_io.LMDBWriter(
+        path=output_dataset_path,
+    )
+    written_outputs = 0
+    must_exit = False
+    for json_data in load_json_files(raw_json_path):
         if "error" in json_data and json_data["error"]:
             continue  # invalid problem statement (or bad reprocessing result); skip it
 
         sample_subset = json_data["subset"]
         sample_subset_idx = json_data["subset_idx"]
         sample_prefix = f"sample {sample_subset}-#{sample_subset_idx}"
+        written_solutions = 0
 
+        if sample_subset_idx in banned_samples.get(sample_subset, []):
+            print(f"{sample_prefix}: skipping sample as it is banned")
+            continue
         if not json_data["input_output"]:
             print(f"{sample_prefix}: no input/output data found")
             continue  # skip problems with no test data
@@ -117,6 +168,11 @@ def demo_json_loader(
         retained_solution_successes = {idx: False for idx in retained_solution_indices}
         for solution_idx, solution in enumerate(solutions):
             solution_prefix = f"{sample_prefix} => solution #{solution_idx}"
+            is_banned = \
+                solution_idx in banned_solutions.get(sample_subset, {}).get(sample_subset_idx, {})
+            if is_banned:
+                print(f"{solution_prefix}: skipped due to banned solution")
+                continue
             if solution["validation_errors"]:
                 print(f"{solution_prefix}: skipped due to prior error(s):\n\t{solution['validation_errors']}")
                 continue
@@ -155,6 +211,7 @@ def demo_json_loader(
                 if analysis_output.input_type == "callable" or analysis_output.output_type == "callable":
                     # might need to infer how to find the entrypoint given the starter code
                     print(f"{solution_prefix}: skipped due to missing entrypoint with callable input/output")
+                    # @@@@ TODO: will be able to fix these w/ callable analysis results
                     continue
             code_string = solution["code"]
             test_success_flags = [False] * min(max_traces_per_solution, len(inputs_array))
@@ -165,6 +222,7 @@ def demo_json_loader(
                 print(f"{solution_prefix}: skipped due to new validation error: {e}")
                 continue  # @@@@ log these later
 
+            valid_trace_results = {}  # test_idx: trace_result
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 for test_idx, (inputs, outputs) in enumerate(zip(
@@ -177,6 +235,7 @@ def demo_json_loader(
                             inputs = inputs[0]
                             outputs = outputs[0]
                     try:
+                        print(f"{solution_prefix}: starting exec & trace...")
                         trace_results = src.utils.code_exec.execute_and_trace_code(
                             code_string=code_string,
                             inputs=inputs,
@@ -204,24 +263,56 @@ def demo_json_loader(
                                     ])
                             else:  # use default comparator
                                 test_success_flags[test_idx] = return_value == outputs
+                        if test_success_flags[test_idx]:
+                            valid_trace_results[test_idx] = trace_results
                     except Exception as e:
-                        print(f"{solution_prefix}: skipped due to tracing error: {e}")
-                        continue
+                        print(f"{solution_prefix}: exec failed due to tracing error: {e}")
+                        break
             result_str = "VALID" if all(test_success_flags) else "INVALID"
             print(f"{solution_prefix}: {result_str}")
             if result_str == "INVALID":
                 print(f"\t(failed {sum(test_success_flags)}/{len(test_success_flags)} tests)")
                 continue
-            else:
-                retained_solution_successes[solution_idx] = True
 
-            # todo: dump these to temporary dataset?
-            a = 1
+            retained_solution_successes[solution_idx] = True
+
+            go_to_next_sample = False
+            for trace_result_idx, (test_idx, trace_result) in enumerate(valid_trace_results.items()):
+                if written_outputs >= max_outputs:
+                    must_exit = True
+                if written_solutions >= max_valid_solutions_per_sample:
+                    go_to_next_sample = True
+                    break
+                if trace_result_idx >= max_written_results_per_solution:
+                    break
+                dataset_writer.put(
+                    key=(
+                        f"{sample_subset}/"
+                        f"sample{sample_subset_idx:06d}/"
+                        f"solution{solution_idx:06d}/"
+                        f"test{test_idx:06d}"
+                    ),
+                    value={
+                        **json_data,
+                        "trace_result": trace_result,
+                    },
+                )
+                written_outputs += 1
+                written_solutions += 1
+                print(f"{written_outputs=}")
+
+            if must_exit or go_to_next_sample:
+                break
 
         successful_solutions = sum(retained_solution_successes.values())
         success_ratio = successful_solutions / len(retained_solution_successes)
         if success_ratio == 0.0:
             print(f"{sample_prefix}: warning: no successful solutions found")
+
+        if must_exit:
+            break
+
+    print(f"done; wrote {written_outputs} outputs to LMDB dataset at: {dataset_writer.path}!")
 
 
 if __name__ == "__main__":

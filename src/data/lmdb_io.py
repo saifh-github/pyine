@@ -104,6 +104,10 @@ class LMDBWriter:
         """
         self.close()
 
+    def __del__(self) -> None:
+        """Destructor invoked when the object is garbage collected."""
+        self.close()
+
     def close(self) -> None:
         """Close the LMDB environment."""
         if hasattr(self, "env") and self.env is not None:
@@ -282,6 +286,8 @@ class LMDBReader:
         """Load metadata from the database."""
         with self.env.begin() as txn:
             next_internal_key_bytes = txn.get(_NEXT_INTERNAL_KEY)
+            if next_internal_key_bytes is None:
+                raise ValueError("database does not contain next_internal_key; did writing closure fail?")
             self._next_internal_key: int = struct.unpack(">Q", next_internal_key_bytes)[0]
             map_size_bytes = txn.get(_create_metadata_key("map_size"))
             self.orig_map_size: int = pickle.loads(map_size_bytes)
@@ -298,6 +304,9 @@ class LMDBReader:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self) -> None:
         self.close()
 
     def __len__(self):
