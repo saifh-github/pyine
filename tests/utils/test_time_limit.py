@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-import src.utils.time_limit as time_limit
+import pyine.utils.time_limit as time_limit
 
 
 def test_timeout_error_initialization() -> None:

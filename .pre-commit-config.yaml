@@ -1,0 +1,115 @@
+# this file configures the hooks that will run when calling `pre-commit run -a`
+# list of supported hooks: https://pre-commit.com/hooks.html
+
+ default_language_version:
+   python: python3
+
+ repos:
+   # classic hooks
+   - repo: https://github.com/pre-commit/pre-commit-hooks
+     rev: v5.0.0
+     hooks:
+       - id: check-added-large-files
+       - id: check-ast
+       - id: check-case-conflict
+       - id: check-executables-have-shebangs
+       - id: check-illegal-windows-names
+       - id: check-json
+       - id: check-merge-conflict
+       - id: check-toml
+       - id: check-yaml
+       - id: debug-statements
+       - id: detect-private-key
+       - id: end-of-file-fixer
+       - id: forbid-submodules
+       - id: mixed-line-ending
+       - id: trailing-whitespace
+
+   # python code formatting
+   - repo: https://github.com/psf/black
+     rev: 25.1.0
+     hooks:
+       - id: black
+         args: ["--line-length", "120"]
+
+   # python import sorting
+   - repo: https://github.com/PyCQA/isort
+     rev: 6.0.1
+     hooks:
+       - id: isort
+         args: ["--profile", "black", "--filter-files"]
+
+   # python upgrading syntax to newer version
+   - repo: https://github.com/asottile/pyupgrade
+     rev: v3.19.1
+     hooks:
+       - id: pyupgrade
+         args: ["--py310-plus"]
+
+   # python docstring formatting - disabled because of some problem
+   # with the plugin - re-enable if it is fixed
+   #  - repo: https://github.com/myint/docformatter
+   #    rev: v1.7.5
+   #    hooks:
+   #      - id: docformatter
+   #        args:
+   #          [
+   #            "--in-place",
+   #            "--wrap-summaries=100",
+   #            "--wrap-descriptions=100",
+   #            "--style=sphinx",
+   #            "--black",
+   #          ]
+
+   # python check (PEP8), programming errors and code complexity
+   - repo: https://github.com/PyCQA/flake8
+     rev: 7.2.0
+     hooks:
+       - id: flake8
+         args:
+           [
+             "--extend-ignore",
+             "E203,E402,E501,F401,F841,RST2,RST301",
+             "--exclude",
+             "logs/*,data/*",
+           ]
+
+   # shell scripts linter
+   - repo: https://github.com/shellcheck-py/shellcheck-py
+     rev: v0.10.0.1
+     hooks:
+       - id: shellcheck
+
+   # md formatting
+   - repo: https://github.com/executablebooks/mdformat
+     rev: 0.7.22
+     hooks:
+       - id: mdformat
+         args: ["--number"]
+         additional_dependencies:
+           - mdformat-gfm
+           - mdformat-tables
+           - mdformat_frontmatter
+           # - mdformat-toc
+           # - mdformat-black
+
+   # jupyter notebook cell output clearing
+   - repo: https://github.com/kynan/nbstripout
+     rev: 0.8.1
+     hooks:
+       - id: nbstripout
+
+   # jupyter notebook linting
+   - repo: https://github.com/nbQA-dev/nbQA
+     rev: 1.9.1
+     hooks:
+       - id: nbqa-black
+         args: ["--line-length=120"]
+       - id: nbqa-isort
+         args: ["--profile=black"]
+       - id: nbqa-flake8
+         args:
+           [
+             "--extend-ignore=E203,E402,E501,F401,F841",
+             "--exclude=logs/*,data/*",
+           ]

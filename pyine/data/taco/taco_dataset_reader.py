@@ -6,7 +6,7 @@ import datasets
 import tiktoken
 import tqdm
 
-import src.utils.code_validation
+import pyine.utils.code_validation
 
 
 class TacoDatasetReader:
@@ -196,7 +196,7 @@ class TacoDatasetReader:
                 validated_solutions = []
                 for solution in solutions:
                     try:
-                        src.utils.code_validation.validate_code(solution)
+                        pyine.utils.code_validation.validate_code(solution)
                         validated_solutions.append(solution)
                     except Exception as e:
                         continue

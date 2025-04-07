@@ -1,7 +1,8 @@
 import lmdb
 import pytest
+from torch.fx.passes.graph_manipulation import size_bytes
 
-import src.data.lmdb_io as lmdb_io
+import pyine.data.lmdb_io as lmdb_io
 
 
 @pytest.fixture
@@ -65,6 +66,8 @@ class TestLMDBWriteAndRead:
             encoded_value = txn.get(inserted_key)
             assert encoded_value is not None
         writer.close()  # to make sure we write everything, including metadata
+        size_bytes = writer.get_size_on_disk()
+        assert size_bytes > 0
 
         reader = lmdb_io.LMDBReader(path=writer.path)
         metadata = reader.get_metadata()
@@ -76,6 +79,7 @@ class TestLMDBWriteAndRead:
         assert metadata["serialization"] == lmdb_io.SerializationMethod.PICKLE
         result = reader.get("key1")
         assert result == value
+        assert reader.get_size_on_disk() == size_bytes
 
     @pytest.mark.parametrize(
         "serialization_method",

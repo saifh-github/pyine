@@ -10,7 +10,7 @@ import lz4.frame
 import tqdm
 
 
-import src.utils.reprod
+import pyine.utils.reprod
 
 
 class SerializationMethod(enum.Enum):
@@ -43,6 +43,14 @@ def _create_sample_key(key_index: int) -> bytes:
 def _decode_sample_key(key: bytes) -> int:
     """Decode the sample index (int) from a sample key that possesses a prefix."""
     return struct.unpack(">Q", key[len(SAMPLE_PREFIX):])[0]
+
+
+def _get_database_size(path: typing.Union[pathlib.Path, typing.AnyStr]) -> int:
+    """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
+    path = pathlib.Path(path)
+    if not path.is_dir():
+        raise ValueError(f"Path '{path}' is not a valid directory.")
+    return sum(f.stat().st_size for f in path.iterdir() if f.is_file())
 
 
 class LMDBWriter:
@@ -166,7 +174,7 @@ class LMDBWriter:
             self._write_metadata_value(txn, "key_map", self.key_map)
             self._write_metadata_value(txn, "serialization", self.serialization)
             self._write_metadata_value(txn, "max_encoded_value_length", self.max_encoded_value_length)
-            for key, val in src.utils.reprod.get_reprod_metadata().items():
+            for key, val in pyine.utils.reprod.get_reprod_metadata().items():
                 self._write_metadata_value(txn, key, val)
 
     def _write_metadata_value(self, txn: lmdb.Transaction, field_name: str, value: typing.Any):
@@ -174,6 +182,10 @@ class LMDBWriter:
         # note: for metadata, we always write data using pickle only
         key_bytes = _create_metadata_key(field_name)
         txn.put(key_bytes, pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+
+    def get_size_on_disk(self) -> int:
+        """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
+        return _get_database_size(self.path)
 
     def put(
         self,
@@ -259,8 +271,9 @@ class LMDBReader:
         Args:
             path: Path to the LMDB database
         """
+        self.path: pathlib.Path = pathlib.Path(path)
         self.env = lmdb.open(
-            str(path),
+            str(self.path),
             readonly=True,  # open in read-only mode for better performance and safety
             readahead=True,  # always enable readahead for better sequential read performance
             lock=False,  # lock not needed in read-only mode
@@ -331,6 +344,10 @@ class LMDBReader:
                 results[metadata_field_name] = pickle.loads(metadata_value_encoded)
                 cursor.next()
         return results
+
+    def get_size_on_disk(self) -> int:
+        """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
+        return _get_database_size(self.path)
 
     def get(self, key_or_idx: typing.Union[int, str]) -> typing.Any:
         """Get a value by its key or dataset index."""

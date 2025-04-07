@@ -230,3 +230,13 @@ def get_deepseek_chain() -> langchain_core.runnables.Runnable:
         llm_with_structured_output,
     )
     return code_analysis_chain
+
+
+if __name__ == "__main__":
+    _dummy_code = \
+"""\
+def add(a, b):
+return a + b + 1
+"""
+    _dummy_prompt = code_analysis_prompt.format(code=_dummy_code)
+    print(_dummy_prompt)

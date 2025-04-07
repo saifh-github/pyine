@@ -1,22 +1,16 @@
-"""
-
-                        @@@@@@@@@@@@@@@@@@
-                        @@@ HUGE NOTE! @@@
-
-          THIS IS A DEMO / WORK IN PROGRESS THAT IS NOT FINAL!
- (just using this module for prototyping, for now, lots of cleanups needed)
-
-"""
-
 import typing
 
 import torch.utils.data
 
-import src.data.lmdb_io
+import pyine.data.lmdb_io
 
 
 class CodeTraceDataset(torch.utils.data.Dataset):
     """Code execution trace dataset reader.
+
+    Note: this readers allows access to the RAW traces along with the original code
+    and related JSON data. It does NOT attempt to structure the traces into anything
+    useful for explanation-related experiments.
 
     Args:
         lmdb_path: Path to the LMDB database containing code traces.
@@ -28,7 +22,7 @@ class CodeTraceDataset(torch.utils.data.Dataset):
     ) -> None:
         super().__init__()
         self.lmdb_path = lmdb_path
-        self.reader = src.data.lmdb_io.LMDBReader(path=self.lmdb_path)
+        self.reader = pyine.data.lmdb_io.LMDBReader(path=self.lmdb_path)
 
     def __len__(self) -> int:
         """

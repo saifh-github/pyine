@@ -3,9 +3,9 @@ import json
 import pathlib
 import tiktoken
 
-import src.prompts.code_analysis_prompt
-import src.taco_dataset_reader
-import src.utils.code_validation
+import pyine.prompts.code_analysis_prompt
+import data.taco.taco_dataset_reader
+import pyine.utils.code_validation
 
 
 async def reprocess_code_samples(
@@ -32,11 +32,11 @@ async def reprocess_code_samples(
     def _count_tokens(text: str) -> int:
         return len(tokenizer.encode(text))
 
-    dataset_reader = src.taco_dataset_reader.TacoDatasetReader()
-    code_analysis_chain = src.prompts.code_analysis_prompt.get_deepseek_chain()
+    dataset_reader = data.taco.taco_dataset_reader.TacoDatasetReader()
+    code_analysis_chain = pyine.prompts.code_analysis_prompt.get_deepseek_chain()
     total_samples = len(dataset_reader)  # min(10, len(dataset_reader))
     print(f"samples in dataset: {total_samples}")
-    example_prompt_text = src.prompts.code_analysis_prompt.code_analysis_prompt.format(
+    example_prompt_text = pyine.prompts.code_analysis_prompt.code_analysis_prompt.format(
         code="def example(): pass",
     )
     prompt_token_count = _count_tokens(example_prompt_text)
@@ -81,7 +81,7 @@ async def reprocess_code_samples(
                     assert query_token_count <= max_token_count, (
                         f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
                     )
-                    src.utils.code_validation.validate_code(solution)
+                    pyine.utils.code_validation.validate_code(solution)
                 except Exception as e:
                     validation_errors.append(str(e))
                 all_solutions.append({

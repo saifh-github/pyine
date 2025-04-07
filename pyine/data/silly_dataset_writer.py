@@ -17,10 +17,10 @@ import warnings
 
 import numpy as np
 
-import src.data.lmdb_io
-import src.prompts.code_analysis_prompt
-import src.utils.code_validation
-import src.utils.code_exec
+import pyine.data.lmdb_io
+import pyine.prompts.code_analysis_prompt
+import pyine.utils.code_validation
+import pyine.utils.code_exec
 
 
 banned_solutions = {
@@ -108,17 +108,16 @@ def load_json_files(
             print(f"warning: skipping invalid JSON file: {json_file}")
 
 
-def demo_json_loader(
-    data_root_path: pathlib.Path = pathlib.Path("data/"),
+def write_dataset(
+    raw_json_dir_path: pathlib.Path = pathlib.Path("data/2025-03-31-v01"),
+    output_dataset_path: pathlib.Path = pathlib.Path("data/2025-03-31-v01-lmdb"),
     max_outputs: int = 50,
     max_valid_solutions_per_sample: int = 2,
-    max_written_results_per_solution: int = 1,
     max_traces_per_solution: int = 1,
     max_trace_events_per_line: int = 100,
     minimum_solution_dissimilarity = 0.1,
 ):
-    raw_json_path = data_root_path / "2025-03-31-v01"  # sample jsons w/ code analysis data
-    output_dataset_path = data_root_path / "2025-03-31-v01-lmdb"
+    assert raw_json_dir_path.exists()
     if output_dataset_path.exists():
         overwrite = input(
             f"A dataset already exists at: {output_dataset_path.absolute()}\n"
@@ -128,19 +127,20 @@ def demo_json_loader(
             print("Operation aborted.")
             return
         shutil.rmtree(output_dataset_path)
-    dataset_writer = src.data.lmdb_io.LMDBWriter(
+    dataset_writer = pyine.data.lmdb_io.LMDBWriter(
         path=output_dataset_path,
     )
     written_outputs = 0
     must_exit = False
-    for json_data in load_json_files(raw_json_path):
+    for json_data in load_json_files(raw_json_dir_path):
+        if written_outputs >= max_outputs:
+            break
         if "error" in json_data and json_data["error"]:
             continue  # invalid problem statement (or bad reprocessing result); skip it
 
         sample_subset = json_data["subset"]
         sample_subset_idx = json_data["subset_idx"]
         sample_prefix = f"sample {sample_subset}-#{sample_subset_idx}"
-        written_solutions = 0
 
         if sample_subset_idx in banned_samples.get(sample_subset, []):
             print(f"{sample_prefix}: skipping sample as it is banned")
@@ -160,12 +160,14 @@ def demo_json_loader(
             continue
 
         solution_code_strings = [solution["code"] for solution in solutions]
-        code_dupe_clusters = src.utils.code_validation.find_near_duplicate_code_clusters(
+        code_dupe_clusters = pyine.utils.code_validation.find_near_duplicate_code_clusters(
             code_strings=solution_code_strings,
             threshold=minimum_solution_dissimilarity,
         )
         retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
         retained_solution_successes = {idx: False for idx in retained_solution_indices}
+        traces_to_write: typing.List[typing.Dict[str, typing.Any]] = []
+        written_solutions = 0
         for solution_idx, solution in enumerate(solutions):
             solution_prefix = f"{sample_prefix} => solution #{solution_idx}"
             is_banned = \
@@ -180,7 +182,7 @@ def demo_json_loader(
                 print(f"{solution_prefix}: skipped due to potential duplicate")
                 continue
             latest_analysis_output = solution["analysis_outputs"][-1]
-            analysis_output = src.prompts.code_analysis_prompt.CodeAnalysisResponse.model_validate(
+            analysis_output = pyine.prompts.code_analysis_prompt.CodeAnalysisResponse.model_validate(
                 latest_analysis_output
             )
             if (
@@ -217,12 +219,11 @@ def demo_json_loader(
             test_success_flags = [False] * min(max_traces_per_solution, len(inputs_array))
 
             try:
-                src.utils.code_validation.validate_code(code_string)  # last check before running
+                pyine.utils.code_validation.validate_code(code_string)  # last check before running
             except Exception as e:
                 print(f"{solution_prefix}: skipped due to new validation error: {e}")
                 continue  # @@@@ log these later
 
-            valid_trace_results = {}  # test_idx: trace_result
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 for test_idx, (inputs, outputs) in enumerate(zip(
@@ -236,7 +237,7 @@ def demo_json_loader(
                             outputs = outputs[0]
                     try:
                         print(f"{solution_prefix}: starting exec & trace...")
-                        trace_results = src.utils.code_exec.execute_and_trace_code(
+                        trace_results = pyine.utils.code_exec.execute_and_trace_code(
                             code_string=code_string,
                             inputs=inputs,
                             entrypoint_name=entrypoint_name,
@@ -264,7 +265,11 @@ def demo_json_loader(
                             else:  # use default comparator
                                 test_success_flags[test_idx] = return_value == outputs
                         if test_success_flags[test_idx]:
-                            valid_trace_results[test_idx] = trace_results
+                            traces_to_write.append({
+                                "solution_idx": solution_idx,
+                                "test_idx": test_idx,
+                                "trace_results": trace_results,
+                            })
                     except Exception as e:
                         print(f"{solution_prefix}: exec failed due to tracing error: {e}")
                         break
@@ -273,35 +278,25 @@ def demo_json_loader(
             if result_str == "INVALID":
                 print(f"\t(failed {sum(test_success_flags)}/{len(test_success_flags)} tests)")
                 continue
-
             retained_solution_successes[solution_idx] = True
-
-            go_to_next_sample = False
-            for trace_result_idx, (test_idx, trace_result) in enumerate(valid_trace_results.items()):
-                if written_outputs >= max_outputs:
-                    must_exit = True
-                if written_solutions >= max_valid_solutions_per_sample:
-                    go_to_next_sample = True
-                    break
-                if trace_result_idx >= max_written_results_per_solution:
-                    break
-                dataset_writer.put(
-                    key=(
-                        f"{sample_subset}/"
-                        f"sample{sample_subset_idx:06d}/"
-                        f"solution{solution_idx:06d}/"
-                        f"test{test_idx:06d}"
-                    ),
-                    value={
-                        **json_data,
-                        "trace_result": trace_result,
-                    },
-                )
-                written_outputs += 1
-                written_solutions += 1
-                print(f"{written_outputs=}")
-
-            if must_exit or go_to_next_sample:
+            dataset_writer.put(
+                key=(
+                    f"{sample_subset}/"
+                    f"sample{sample_subset_idx:06d}/"
+                    f"solution{solution_idx:06d}/"
+                    f"test{test_idx:06d}"
+                ),
+                value={
+                    **json_data,
+                    "trace_results": traces_to_write,
+                },
+            )
+            written_outputs += 1
+            written_solutions += len([set([r["solution_idx"] for r in traces_to_write])])
+            print(f"{written_outputs=}")
+            if written_outputs >= max_outputs:
+                break
+            if written_solutions >= max_valid_solutions_per_sample:
                 break
 
         successful_solutions = sum(retained_solution_successes.values())
@@ -313,7 +308,9 @@ def demo_json_loader(
             break
 
     print(f"done; wrote {written_outputs} outputs to LMDB dataset at: {dataset_writer.path}!")
+    print(f"\t(dataset size: {dataset_writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+    return dataset_writer
 
 
 if __name__ == "__main__":
-    demo_json_loader()
+    write_dataset()

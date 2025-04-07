@@ -158,4 +158,3 @@ def find_near_duplicate_code_clusters(
                         queue.append(new_related[0])
         clusters.append(cluster)
     return clusters
-

@@ -1,8 +1,8 @@
 import pytest
 
-import src.utils.code_validation
+import pyine.utils.code_validation
 
-validate_code = src.utils.code_validation.validate_code
+validate_code = pyine.utils.code_validation.validate_code
 
 
 class TestValidateCode:
@@ -182,7 +182,7 @@ class TestNearDuplicateCode:
         ]
 
     def test_find_near_duplicate_code(self, code_snippets):
-        duplicates = src.utils.code_validation.find_near_duplicate_code(
+        duplicates = pyine.utils.code_validation.find_near_duplicate_code(
             code_snippets,
             threshold=5,
             ignore_comments=True,
@@ -192,7 +192,7 @@ class TestNearDuplicateCode:
         assert set([match[0] for match in duplicates[0]]) == {1, 2, 3}
 
     def test_find_near_duplicate_code_clusters(self, code_snippets):
-        clusters = src.utils.code_validation.find_near_duplicate_code_clusters(
+        clusters = pyine.utils.code_validation.find_near_duplicate_code_clusters(
             code_snippets,
             threshold=0.2,
             ignore_comments=True,
@@ -202,7 +202,7 @@ class TestNearDuplicateCode:
         assert set(clusters[0]) == {0, 1, 2, 3}
         assert set(clusters[1]) == {4}
         assert set(clusters[2]) == {5}
-        clusters = src.utils.code_validation.find_near_duplicate_code_clusters(
+        clusters = pyine.utils.code_validation.find_near_duplicate_code_clusters(
             code_snippets,
             threshold=0.0,
             ignore_comments=True,

@@ -9,12 +9,12 @@ import site
 import types
 import typing
 
-import src.utils.reprod
-import src.utils.code_blocks
-import src.utils.time_limit
-import src.utils.portable_repr
+import pyine.utils.reprod
+import pyine.utils.code_blocks
+import pyine.utils.time_limit
+import pyine.utils.portable_repr
 
-portable_repr = src.utils.portable_repr.get_portable_representation
+portable_repr = pyine.utils.portable_repr.get_portable_representation
 _orig_stdin = sys.stdin
 
 
@@ -57,7 +57,7 @@ class TraceResult:
     """Dataclass for storing and exporting execution trace results."""
     code_string: str
     """The original code string that was executed."""
-    code_blocks: typing.Dict[int, src.utils.code_blocks.CodeBlock]
+    code_blocks: typing.Dict[int, pyine.utils.code_blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by line number."""
     inputs: str
     """The inputs that were available to the code during execution."""
@@ -255,7 +255,7 @@ def execute_and_trace_code(
         A `TraceResult` instance containing the execution results.
     """
     try:
-        code_blocks = src.utils.code_blocks.identify_code_blocks(code_string)
+        code_blocks = pyine.utils.code_blocks.identify_code_blocks(code_string)
         compiled_code = compile(code_string, "<string>", "exec")
     except Exception as e:
         raise Exception(f"error while analyzing and compiling code: {e}")
@@ -342,10 +342,10 @@ def execute_and_trace_code(
 
     stdout_capture, stderr_capture = io.StringIO(), io.StringIO()  # to avoid polluting the output
     return_value, caught_exception = None, None
-    src.utils.reprod.set_seed(seed)
+    pyine.utils.reprod.set_seed(seed)
     exec_namespace = {}
     try:
-        with src.utils.time_limit.TimeLimit(timeout_seconds):
+        with pyine.utils.time_limit.TimeLimit(timeout_seconds):
                 with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
                     if entrypoint_name is not None:
                         with trace_context(_trace_callback):
@@ -359,7 +359,7 @@ def execute_and_trace_code(
                                 exec(compiled_code, exec_namespace)
     except Exception as e:
         caught_exception = e  # store any exception that occurred
-    reprod_metadata = src.utils.reprod.get_reprod_metadata()
+    reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
     reprod_metadata["initial_seed"] = seed
     reprod_metadata["max_events_per_line"] = max_events_per_line
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])

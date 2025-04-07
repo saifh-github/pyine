@@ -9,18 +9,8 @@ import typing
 
 import numpy as np
 
-import src.data.lmdb_io as lmdb_io
-
-
-def _get_lmdb_size_on_disk(
-    lmdb_path: str,
-) -> float:
-    total_size = 0
-    for file_name in os.listdir(lmdb_path):
-        file_path = os.path.join(lmdb_path, file_name)
-        if os.path.isfile(file_path):
-            total_size += os.path.getsize(file_path)
-    return total_size
+import pyine.data.lmdb_io as lmdb_io
+import pyine.data.silly_dataset_writer as silly_dataset_writer
 
 
 def _generate_random_string(
@@ -68,10 +58,8 @@ def _generate_dummy_dict(
 
 def benchmark_serialization_methods(
     num_samples: int = 100,
-    sample_size_mean: int = 1_000_000,  # in chars
-    sample_size_stdev: int = 1_000_000,  # in chars
+    use_random_data: bool = False,
 ):
-    """Benchmark the performance of the 4 different serialization approaches."""
     methods = [
         lmdb_io.SerializationMethod.PICKLE,
         lmdb_io.SerializationMethod.PICKLE_LZ4,
@@ -81,31 +69,46 @@ def benchmark_serialization_methods(
     results = {}
     tmp_path = pathlib.Path("./.tmp-benchmark")
     tmp_path.mkdir(exist_ok=True)
-    sample_sizes = np.maximum(
-        np.random.normal(sample_size_mean, sample_size_stdev, size=num_samples).astype(int),
-        1,
-    )
-    print("preparing write data...")
-    entries = {
-        f"key{i}": _generate_dummy_dict(max_size_bytes=sample_sizes[i])
-        for i in range(num_samples)
-    }
-    data_size = sys.getsizeof(pickle.dumps(obj=entries, protocol=pickle.HIGHEST_PROTOCOL))
-    # IMPORTANT NOTE: since the data is RANDOM, this might be worse-case for compression!
-    # (so don't look at compression ratio, just look at the speed, and even then, with grain of salt)
-    print(f"prepared {len(entries)} samples for a raw total of {data_size / 1024 ** 2:.2f} MB")
+
+    if use_random_data:
+        print("preparing write data...")
+        sample_size_mean: int = 1_000_000  # in chars
+        sample_size_stdev: int = 1_000_000  # in chars
+        sample_sizes = np.maximum(
+            np.random.normal(sample_size_mean, sample_size_stdev, size=num_samples).astype(int),
+            1,
+        )
+        entries = {
+            f"key{i}": _generate_dummy_dict(max_size_bytes=sample_sizes[i])
+            for i in range(num_samples)
+        }
+        data_size = sys.getsizeof(pickle.dumps(obj=entries, protocol=pickle.HIGHEST_PROTOCOL))
+        # IMPORTANT NOTE: since the data is RANDOM, this might be worse-case for compression!
+        # (so don't look at compression ratio, just look at the speed, and even then, with grain of salt)
+        print(f"prepared {len(entries)} samples for a raw total of {data_size / 1024 ** 2:.2f} MB")
+    else:
+        # nothing to do here, will run dataset write in foor loop below
+        pass
+
     print("running write + read ops...")
     try:
         for method in methods:
             database_path = tmp_path / f"test_lmdb_{method.value}"
-            writer = lmdb_io.LMDBWriter(
-                path=database_path,
-                map_size=1024 ** 3,
-                serialization=method,
-            )
-            writer.put_batch(items=entries)
+            if use_random_data:
+                writer = lmdb_io.LMDBWriter(
+                    path=database_path,
+                    map_size=1024 ** 3,
+                    serialization=method,
+                )
+                writer.put_batch(items=entries)
+            else:
+                writer = silly_dataset_writer.write_dataset(
+                    output_dataset_path=database_path,
+                    max_outputs=num_samples,
+                )
             writer.close()
-            database_size = _get_lmdb_size_on_disk(str(database_path))
+            database_size = writer.get_size_on_disk()
+
             reader = lmdb_io.LMDBReader(path=database_path)
             time_taken = timeit.timeit(
                 stmt="list(reader.iter_from())",
@@ -122,6 +125,8 @@ def benchmark_serialization_methods(
         print(f"{method}: {database_size / (1024 * 1024):.2f} MB, {time_taken:.4f} seconds (={speed_mbps} MB/s)")
 
 
-
 if __name__ == "__main__":
-    benchmark_serialization_methods()
+    benchmark_serialization_methods(
+        num_samples=50,
+        use_random_data=False,
+    )
