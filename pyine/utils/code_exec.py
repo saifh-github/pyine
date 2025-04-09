@@ -24,6 +24,9 @@ _orig_stdin = sys.stdin
 EXEC_TRACE_FILE_NAME = "<string>"
 """Name used to identify code lines that were executed and traced in the code string itself."""
 
+EXEC_PARENT_FILE_NAME = "<parent>"
+"""Name used to identify the parent file executing the code string itself via exec."""
+
 REL_PATH_FROM_ROOT = pyine.utils.filesystem.get_relative_path_to_root(__file__)
 """Relative path from the root of the package to the current file."""
 

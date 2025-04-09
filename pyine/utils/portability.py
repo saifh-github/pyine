@@ -200,3 +200,17 @@ def format_object_changes(
         # unsupported type
         return None
     return changes
+
+
+def print_code_with_numbered_lines(
+    code_string: str,
+) -> None:
+    """
+    Prints each line of the given code string, prefixed with a fixed-width line number.
+
+    Args:
+        code_string (str): The Python code string to be printed.
+    """
+    for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
+        formatted_line = f"L{line_idx:04d}:   {line_content}"
+        print(formatted_line)
