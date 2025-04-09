@@ -3,7 +3,12 @@ import sys
 
 import pytest
 
-from pyine.utils.code_exec import MockInput, MockInputContext, execute_and_trace_code
+from pyine.utils.code_exec import (
+    EXEC_TRACE_FILE_NAME,
+    MockInput,
+    MockInputContext,
+    execute_and_trace_code,
+)
 
 
 class TestMockInput:
@@ -159,7 +164,7 @@ country = input("What's your country? ")
 """
     inputs = "David\n42"
     result = execute_and_trace_code(code, inputs=inputs)
-    assert result.exception is not None and isinstance(result.exception, EOFError)
+    assert result.exception is not None and result.exception.type == "EOFError"
 
 
 def test_error_in_executed_code():
@@ -170,7 +175,7 @@ y = 0
 result = x / y  # Division by zero error
 """
     result = execute_and_trace_code(code, inputs="")
-    assert result.exception is not None and isinstance(result.exception, ZeroDivisionError)
+    assert result.exception is not None and result.exception.type == "ZeroDivisionError"
 
 
 def test_empty_input():
@@ -247,7 +252,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
     for trace_step in trace_result.traced_steps:
         if trace_step is None:
             continue
-        assert trace_step.trace_key.file == "<string>"
+        assert trace_step.trace_key.file == EXEC_TRACE_FILE_NAME
         if trace_step.event_type == "return":
             last_return = trace_step
         if trace_step.event_type == "line":

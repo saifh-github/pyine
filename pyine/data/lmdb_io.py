@@ -12,7 +12,7 @@ import tqdm
 import pyine.utils.reprod
 
 
-class SerializationMethod(enum.Enum):
+class SerializationMethod(enum.StrEnum):
     """Supported serialization methods for LMDBWriter."""
 
     PICKLE = enum.auto()
@@ -91,7 +91,7 @@ class LMDBWriter:
         )
         if not isinstance(serialization, SerializationMethod):
             raise ValueError(f"serialization must be an instance of: {list(SerializationMethod)}")
-        self.serialization: SerializationMethod = serialization
+        self.serialization = serialization
         self._next_internal_key = 0
         self.key_map: dict[str, bytes] = {}  # external-to-internal key map
         self.max_encoded_value_length: int = 0  # in bytes
@@ -175,7 +175,7 @@ class LMDBWriter:
             self._write_metadata_value(txn, "map_size", self.map_size)
             self._write_metadata_value(txn, "sample_count", len(self.key_map))
             self._write_metadata_value(txn, "key_map", self.key_map)
-            self._write_metadata_value(txn, "serialization", self.serialization)
+            self._write_metadata_value(txn, "serialization", self.serialization.value)
             self._write_metadata_value(txn, "max_encoded_value_length", self.max_encoded_value_length)
             for key, val in pyine.utils.reprod.get_reprod_metadata().items():
                 self._write_metadata_value(txn, key, val)
@@ -310,7 +310,7 @@ class LMDBReader:
             sample_count_bytes = txn.get(_create_metadata_key("sample_count"))
             self.sample_count: int = pickle.loads(sample_count_bytes)
             serialization_bytes = txn.get(_create_metadata_key("serialization"))
-            self.serialization: SerializationMethod = pickle.loads(serialization_bytes)
+            self.serialization = SerializationMethod(pickle.loads(serialization_bytes))
             max_encoded_value_length_bytes = txn.get(_create_metadata_key("max_encoded_value_length"))
             self.max_encoded_value_length: int = pickle.loads(max_encoded_value_length_bytes)
             self.key_map: dict[str, bytes] = pickle.loads(txn.get(_create_metadata_key("key_map")))
@@ -327,6 +327,9 @@ class LMDBReader:
 
     def __len__(self):
         return len(self.key_map)
+
+    def __iter__(self):
+        return self.iter_from()
 
     def close(self):
         """Close the database."""

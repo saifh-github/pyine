@@ -4,7 +4,6 @@ import os
 import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
-import langchain_deepseek
 import pydantic
 
 
@@ -214,6 +213,8 @@ code_analysis_prompt = code_analysis_prompt.partial(
 
 def get_deepseek_chain() -> langchain_core.runnables.Runnable:
     """Get a DeepSeek code analysis chain based on the above prompt template and parser."""
+    import langchain_deepseek
+
     llm = langchain_deepseek.ChatDeepSeek(
         model="deepseek-chat",
         temperature=0.0,  # recommended setting for coding/math

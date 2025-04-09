@@ -9,7 +9,7 @@ import tqdm
 import pyine.utils.code_validation
 
 
-class TacoDatasetReader:
+class TacoDatasetParser:
     """
     A class to read and process the TACO dataset sample-by-sample with robust parsing.
 
@@ -237,7 +237,7 @@ class TacoDatasetReader:
 
 if __name__ == "__main__":
 
-    reader = TacoDatasetReader()
+    reader = TacoDatasetParser()
     print(f"Total samples: {len(reader)}")
 
     stats = reader.get_statistics(validate=True)

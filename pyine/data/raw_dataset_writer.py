@@ -21,6 +21,7 @@ import pyine.data.lmdb_io
 import pyine.prompts.code_analysis_prompt
 import pyine.utils.code_exec
 import pyine.utils.code_validation
+import pyine.utils.portability
 
 banned_solutions = {
     # THESE ARE SOLUTIONS THAT CAUSE SEGFAULTS OR OTHER CRASHES, CAN'T AVOID THOSE YET
@@ -107,15 +108,16 @@ def load_json_files(
             print(f"warning: skipping invalid JSON file: {json_file}")
 
 
-def write_dataset(
+def write_raw_dataset(
     raw_json_dir_path: pathlib.Path = pathlib.Path("data/2025-03-31-v01"),
     output_dataset_path: pathlib.Path = pathlib.Path("data/2025-03-31-v01-lmdb"),
     max_outputs: int = 50,
     max_valid_solutions_per_sample: int = 2,
     max_traces_per_solution: int = 1,
     max_trace_events_per_line: int = 100,
-    minimum_solution_dissimilarity=0.1,
+    minimum_solution_dissimilarity: float = 0.1,
 ):
+    source_dataset_name = "TACO"
     assert raw_json_dir_path.exists()
     if output_dataset_path.exists():
         overwrite = (
@@ -169,7 +171,7 @@ def write_dataset(
         )
         retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
         retained_solution_successes = {idx: False for idx in retained_solution_indices}
-        traces_to_write: list[dict[str, typing.Any]] = []
+        traces_to_write = {}
         written_solutions = 0
         for solution_idx, solution in enumerate(solutions):
             solution_prefix = f"{sample_prefix} => solution #{solution_idx}"
@@ -251,7 +253,7 @@ def write_dataset(
                             timeout_seconds=10,
                         )
                         if trace_results.exception is not None:
-                            raise trace_results.exception
+                            raise RuntimeError(f"{trace_results.exception.type}: {trace_results.exception.message}")
                         if entrypoint_name is not None:  # @@@@@ need cleanup (and proper float comps)
                             test_success_flags[test_idx] = trace_results.return_value == outputs
                         else:
@@ -272,13 +274,15 @@ def write_dataset(
                             else:  # use default comparator
                                 test_success_flags[test_idx] = return_value == outputs
                         if test_success_flags[test_idx]:
-                            traces_to_write.append(
-                                {
-                                    "solution_idx": solution_idx,
-                                    "test_idx": test_idx,
-                                    "trace_results": trace_results,
-                                }
+                            trace_result_id = pyine.utils.code_exec.TraceResultIdentifier(
+                                dataset=source_dataset_name,
+                                subset=sample_subset,
+                                sample_idx=sample_subset_idx,
+                                version_idx=solution_idx,
+                                test_idx=test_idx,
                             )
+                            trace_result_id = frozenset(trace_result_id._asdict().items())
+                            traces_to_write[trace_result_id] = trace_results.model_dump()
                     except Exception as e:
                         print(f"{solution_prefix}: exec failed due to tracing error: {e}")
                         break
@@ -288,6 +292,7 @@ def write_dataset(
                 print(f"\t(failed {sum(test_success_flags)}/{len(test_success_flags)} tests)")
                 continue
             retained_solution_successes[solution_idx] = True
+            assert traces_to_write
             dataset_writer.put(
                 key=(
                     f"{sample_subset}/"
@@ -301,7 +306,7 @@ def write_dataset(
                 },
             )
             written_outputs += 1
-            written_solutions += len([{r["solution_idx"] for r in traces_to_write}])
+            written_solutions += 1
             print(f"{written_outputs=}")
             if written_outputs >= max_outputs:
                 break
@@ -322,4 +327,4 @@ def write_dataset(
 
 
 if __name__ == "__main__":
-    write_dataset()
+    write_raw_dataset()

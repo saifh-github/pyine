@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import enum
 import functools
 import io
 import os
@@ -9,19 +10,28 @@ import sys
 import types
 import typing
 
+import pydantic
+
 import pyine.utils.code_blocks
-import pyine.utils.portable_repr
+import pyine.utils.filesystem
+import pyine.utils.portability
 import pyine.utils.reprod
 import pyine.utils.time_limit
 
-portable_repr = pyine.utils.portable_repr.get_portable_representation
+portable_repr = pyine.utils.portability.get_portable_representation
 _orig_stdin = sys.stdin
 
+EXEC_TRACE_FILE_NAME = "<string>"
+"""Name used to identify code lines that were executed and traced in the code string itself."""
 
-@dataclasses.dataclass(frozen=True)
-class TraceKey:
-    """Dataclass for storing and exporting execution trace keys."""
+REL_PATH_FROM_ROOT = pyine.utils.filesystem.get_relative_path_to_root(__file__)
+"""Relative path from the root of the package to the current file."""
 
+
+class TraceKey(typing.NamedTuple):
+    """NamedTuple for storing and exporting execution trace keys."""
+
+    # note: needed instead of frozen dataclass to avoid issues w/ hashing in pydantic models
     file: str
     """The file name containing the code that was executed."""
     object: str
@@ -30,39 +40,60 @@ class TraceKey:
     """The number of the code line that was executed."""
 
 
+class TraceEventType(enum.StrEnum):
+    """Identifies the type of execution event caught via the sys.settrace callback."""
+
+    CALL = "call"
+    RETURN = "return"
+    EXCEPTION = "exception"
+    LINE = "line"
+
+
+class TraceException(typing.NamedTuple):
+    """NamedTuple for storing and exporting execution trace exceptions."""
+
+    type: str
+    """The type of exception that occurred."""
+    message: str
+    """The message of the exception that occurred."""
+
+
 @dataclasses.dataclass(frozen=True)
 class TraceEvent:
     """Dataclass for storing and exporting execution trace events."""
 
-    event_type: str
+    event_type: TraceEventType
     """The type of event that occurred (e.g., "call", "return", "exception")."""
     stack_trace: list[TraceKey]
     """A list of TraceKey instances representing the call stack at the time of the event."""
-    variables: dict[str, typing.Any]
+    variables: dict[str, str]
     """A dictionary containing the variables at the time of the event."""
-    internal_variables: dict[str, typing.Any]
+    internal_variables: dict[str, str]
     """A dictionary containing internal variables at the time of the event."""
-    arguments: dict[str, typing.Any] | None
+    arguments: dict[str, str] | None
     """A dictionary containing the arguments passed to the code object at the time of the event."""
-    return_value: typing.Any | None
+    return_value: str | None
     """The return value of the code object at the time of the event."""
-    exception: dict[str, typing.Any] | None
-    """A dictionary containing information about the exception that occurred, if any."""
+    exception: TraceException | None
+    """Contains information about the exception that occurred, if any."""
     trace_step_idx: int
     """The trace step index at the time of the event; should be unique for each event."""
     trace_key: TraceKey
     """The trace key associated with this event, for convenience."""
 
+    def __hash__(self):
+        """Returns a hash value for the event, considering only relevant unique attributes."""
+        return hash((self.trace_step_idx, self.trace_key))
 
-@dataclasses.dataclass(frozen=True)
-class TraceResult:
+
+class TraceResult(pydantic.BaseModel):
     """Dataclass for storing and exporting execution trace results."""
 
     code_string: str
     """The original code string that was executed."""
     code_blocks: dict[int, pyine.utils.code_blocks.CodeBlock]
-    """A dictionary containing the logic blocks of the executed code, indexed by line number."""
-    inputs: str
+    """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
+    inputs: int | float | str | list[int | float | str]
     """The inputs that were available to the code during execution."""
     max_events_per_line: int | None
     """The maximum number of events to record per line (if needed)."""
@@ -85,16 +116,33 @@ class TraceResult:
     """
     tracing_steps: int
     """The total number of tracing steps taken during execution."""
+    entrypoint_step_idx: int | None
+    """The trace step index just prior to calling the entrypoint function (if one is called)."""
     return_value: typing.Any | None
     """The return value of the executed code, if any."""
-    exception: Exception | None
-    """The exception that occurred during execution, if any."""
+    exception: TraceException | None
+    """Contains information about the exception that occurred, if any."""
     stdout: str
     """The captured stdout output during execution."""
     stderr: str
     """The captured stderr output during execution."""
     metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
+
+
+class TraceResultIdentifier(typing.NamedTuple):
+    """NamedTuple for identifying code execution trace results in the raw dataset."""
+
+    dataset: str
+    """The name of the source dataset where the traced code originated from."""
+    subset: str
+    """The name of the subset (if any) in the source dataset that the code belongs to."""
+    sample_idx: int
+    """The index of the sample within the source subset that the code belongs to."""
+    version_idx: int
+    """The index identifying the exact version (or solution) of the traced code."""
+    test_idx: int
+    """The index identifying the exact test case within the sample that was executed."""
 
 
 @contextlib.contextmanager
@@ -212,7 +260,7 @@ class MockInputContext(contextlib.AbstractContextManager):
 
 
 def _get_clean_filename(filename: str) -> str:
-    if filename == "<string>":
+    if filename == EXEC_TRACE_FILE_NAME:
         return filename  # nothing to do
     site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
     for site_dir in site_pkgs:
@@ -260,7 +308,7 @@ def execute_and_trace_code(
     """
     try:
         code_blocks = pyine.utils.code_blocks.identify_code_blocks(code_string)
-        compiled_code = compile(code_string, "<string>", "exec")
+        compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
         raise Exception(f"error while analyzing and compiling code: {e}")
     traced_steps: list[TraceEvent | None] = []
@@ -282,7 +330,7 @@ def execute_and_trace_code(
         is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
             blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
         )
-        is_inside_code_string = trace_key.file == "<string>"
+        is_inside_code_string = trace_key.file == EXEC_TRACE_FILE_NAME
         must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
         if event == "call" and must_skip:
             return_trace_callback = None  # do not trace that function, skip over it
@@ -297,6 +345,9 @@ def execute_and_trace_code(
             stack_trace = []
             current_frame = frame
             while current_frame:
+                clean_filename = _get_clean_filename(current_frame.f_code.co_filename)
+                if clean_filename == REL_PATH_FROM_ROOT:
+                    break  # stop tracing the stack once we get to this level
                 stack_trace.append(
                     TraceKey(
                         file=_get_clean_filename(current_frame.f_code.co_filename),
@@ -324,12 +375,12 @@ def execute_and_trace_code(
                 return_value = portable_repr(arg)
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
-                exception = {
-                    "type": exc_type.__name__,
-                    "message": portable_repr(exc_value),
-                }
+                exception = TraceException(
+                    type=exc_type.__name__,
+                    message=portable_repr(exc_value),
+                )
             trace_event = TraceEvent(
-                event_type=event,
+                event_type=TraceEventType(event),
                 stack_trace=stack_trace,
                 variables=regular_vars,
                 internal_variables=internal_vars,
@@ -346,6 +397,7 @@ def execute_and_trace_code(
 
     stdout_capture, stderr_capture = io.StringIO(), io.StringIO()  # to avoid polluting the output
     return_value, caught_exception = None, None
+    entrypoint_step_idx = None  # only used if we call an entrypoint after exec
     pyine.utils.reprod.set_seed(seed)
     exec_namespace = {}
     try:
@@ -354,9 +406,13 @@ def execute_and_trace_code(
                 if entrypoint_name is not None:
                     with trace_context(_trace_callback):
                         exec(compiled_code, exec_namespace)
+                    if entrypoint_name and entrypoint_name in exec_namespace:
                         # note for later: if this is buggy/annoying, could add call inside code string itself
-                        if entrypoint_name and entrypoint_name in exec_namespace:
-                            return_value = exec_namespace[entrypoint_name](inputs)
+                        entrypoint_step_idx = last_trace_step_idx
+                        entrypoint = exec_namespace[entrypoint_name]
+                        with trace_context(_trace_callback):
+                            return_value = entrypoint(inputs)
+
                 else:
                     with MockInputContext(inputs):
                         with trace_context(_trace_callback):
@@ -368,20 +424,32 @@ def execute_and_trace_code(
     reprod_metadata["max_events_per_line"] = max_events_per_line
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
     reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
-    trace_result = TraceResult(
-        code_string=code_string,
-        code_blocks=code_blocks,
-        inputs=inputs,
-        max_events_per_line=max_events_per_line,
-        traced_steps=traced_steps,
-        traced_steps_map=traced_steps_map,
-        tracing_steps=last_trace_step_idx,
-        return_value=return_value,
-        exception=caught_exception,
-        stdout=stdout_capture.getvalue(),
-        stderr=stderr_capture.getvalue(),
-        metadata=reprod_metadata,
-    )
+    try:
+        trace_result = TraceResult(
+            code_string=code_string,
+            code_blocks=code_blocks,
+            inputs=inputs,
+            max_events_per_line=max_events_per_line,
+            traced_steps=traced_steps,
+            traced_steps_map=traced_steps_map,
+            tracing_steps=last_trace_step_idx,
+            entrypoint_step_idx=entrypoint_step_idx,
+            return_value=return_value,
+            exception=(
+                TraceException(
+                    type=caught_exception.__class__.__name__,
+                    message=str(caught_exception),
+                )
+                if caught_exception
+                else None
+            ),
+            stdout=stdout_capture.getvalue(),
+            stderr=stderr_capture.getvalue(),
+            metadata=reprod_metadata,
+        )
+    except pydantic.ValidationError as e:
+        print(f"Error while creating TraceResult instance (unrelated to exec): {e}")
+        raise e
     return trace_result
 
 
@@ -447,8 +515,7 @@ def format_traced_code_execution(
                         result.append("      <unable to display return value>")
                 if trace_event.exception:
                     result.append("    Exception:")
-                    for exc_key, exc_value in trace_event.exception.items():
-                        result.append(f"      {exc_key}: {exc_value}")
+                    result.append(f"      {trace_event.exception.type}: {trace_event.exception.message}")
                 result.append("")  # add spacing between events
     return "\n".join(result)
 

@@ -5,8 +5,8 @@ import torch.utils.data
 import pyine.data.lmdb_io
 
 
-class CodeTraceDataset(torch.utils.data.Dataset):
-    """Code execution trace dataset reader.
+class DatasetParser(torch.utils.data.Dataset):
+    """PyINE raw dataset reader.
 
     Note: this readers allows access to the RAW traces along with the original code
     and related JSON data. It does NOT attempt to structure the traces into anything
@@ -50,8 +50,8 @@ class CodeTraceDataset(torch.utils.data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset_reader = CodeTraceDataset(lmdb_path="data/2025-03-31-v01-lmdb")
-    print(f"dataset contains {len(dataset_reader)} samples")
-    sample = dataset_reader[0]
-    print(f"sample: {sample}")
-    dataset_reader.close()
+    _dataset_reader = DatasetParser(lmdb_path="data/2025-03-31-v01-lmdb")
+    print(f"dataset contains {len(_dataset_reader)} samples")
+    _sample = _dataset_reader[0]
+    print(f"sample: {_sample}")
+    _dataset_reader.close()

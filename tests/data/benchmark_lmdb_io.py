@@ -10,7 +10,7 @@ import typing
 import numpy as np
 
 import pyine.data.lmdb_io as lmdb_io
-import pyine.data.silly_dataset_writer as silly_dataset_writer
+import pyine.data.raw_dataset_writer as silly_dataset_writer
 
 
 def _generate_random_string(
