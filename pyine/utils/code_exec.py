@@ -16,7 +16,7 @@ import pyine.utils.code_blocks
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
-import pyine.utils.time_limit
+import pyine.utils.timers
 
 portable_repr = pyine.utils.portability.get_portable_representation
 _orig_stdin = sys.stdin
@@ -404,7 +404,7 @@ def execute_and_trace_code(
     pyine.utils.reprod.set_seed(seed)
     exec_namespace = {}
     try:
-        with pyine.utils.time_limit.TimeLimit(timeout_seconds):
+        with pyine.utils.timers.TimeLimit(timeout_seconds):
             with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
                 if entrypoint_name is not None:
                     with trace_context(_trace_callback):

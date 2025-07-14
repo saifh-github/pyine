@@ -1,7 +1,90 @@
+import contextlib
+import datetime
+import functools
+import logging
+import re
 import signal
 import time
 import types
 import typing
+
+T = typing.TypeVar("T")
+
+
+@typing.overload
+def timeit(
+    _func: T,
+    *,
+    name: str | None = None,
+    logger: logging.Logger | None = None,
+) -> T: ...
+
+
+@typing.overload
+def timeit(
+    _func: None = None,
+    *,
+    name: str | None = None,
+    logger: logging.Logger | None = None,
+) -> typing.Callable[[T], T]: ...
+
+
+def timeit(
+    _func: T | None = None,
+    *,
+    name: str | None = None,
+    logger: logging.Logger | None = None,
+) -> T | typing.Callable[[T], T] | typing.Iterator[None]:
+    """Measures execution time of a function (via decoration) or block (via context-manager).
+
+    For blocks, use as a context manager:
+
+      with timeit(name="block", logger=my_logger):
+          ...
+
+    For functions, use as a decorator:
+
+      @timeit
+      def foo(): ...
+
+      @timeit(name="foo", logger=my_logger)
+      def bar(): ...
+
+    By default, logs to stdout via print(); pass in a Logger to redirect.
+    """
+
+    def _ctx(label: str) -> typing.Iterator[None]:
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed = time.perf_counter() - start
+            time_str = get_human_readable_time(elapsed)
+            msg = f"Time [{label}]: {time_str}"
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+
+    def _decorate(fn: T) -> T:
+        lbl = name or fn.__name__
+
+        @functools.wraps(fn)
+        def _wrapped(*args, **kwargs):
+            with _ctx(lbl):
+                return fn(*args, **kwargs)
+
+        return _wrapped  # type: ignore
+
+    # if used as @timeit with no args:
+    if callable(_func):
+        return _decorate(_func)
+
+    # otherwise, return decorator or context-manager factory
+    if _func is None:
+        return contextlib.contextmanager(lambda: _ctx(name or "block"))()
+
+    raise TypeError(f"invalid func argument: {_func}")
 
 
 class TimeLimit:
@@ -111,3 +194,56 @@ class TimeLimit:
         if self._old_handler:
             signal.signal(signal.SIGALRM, self._old_handler)
         return False
+
+
+def get_human_readable_time(seconds: int | float) -> str:
+    """Convert a duration in seconds to a human-readable string."""
+    secs = float(seconds)
+    units = [
+        ("y", 365 * 24 * 60 * 60.0),
+        ("d", 24 * 60 * 60.0),
+        ("h", 60 * 60.0),
+        ("m", 60.0),
+        ("s", 1.0),
+        ("ms", 1e-3),
+        ("µs", 1e-6),
+        ("ns", 1e-9),
+    ]
+    for unit, factor in units:
+        if abs(secs) >= factor:
+            value = secs / factor
+            return f"{value:.3f}{unit}"
+    # fallback (shouldn’t really be reached)
+    return f"{secs/1e-9:.1f}ns"
+
+
+_TIMEDELTA_PATTERN = re.compile(
+    r"(?:(?P<years>\d*\.?\d+)y)?"
+    r"(?:(?P<days>\d*\.?\d+)d)?"
+    r"(?:(?P<hours>\d*\.?\d+)h)?"
+    r"(?:(?P<mins>\d*\.?\d+)m)?"
+    r"(?:(?P<secs>\d*\.?\d+)s)?"
+    r"(?:(?P<millis>\d*\.?\d+)ms)?"
+    r"(?:(?P<micros>\d*\.?\d+)µs)?"
+    r"(?:(?P<nanos>\d*\.?\d+)ns)?"
+)
+
+
+def parse_timedelta(delta_str: str) -> datetime.timedelta:
+    """Parse a string like '2h30m', '45s', '1d2h', '10m5s' into a timedelta.
+
+    Supports y (years), d (days), h (hours), m (minutes), s (seconds), ms (milliseconds),
+    µs (microseconds), ns (nanoseconds).
+    """
+    m = _TIMEDELTA_PATTERN.fullmatch(delta_str.strip())
+    if not m:
+        raise ValueError(f"invalid timedelta string: '{delta_str}'")
+    parts = {name: float(val) for name, val in m.groupdict(default="0").items()}
+    return datetime.timedelta(
+        days=parts["years"] * 365 + parts["days"],
+        hours=parts["hours"],
+        minutes=parts["mins"],
+        seconds=parts["secs"],
+        milliseconds=parts["millis"],
+        microseconds=parts["micros"] + parts["nanos"] / 1000,
+    )

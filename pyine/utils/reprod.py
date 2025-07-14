@@ -10,6 +10,11 @@ import typing
 import numpy as np
 
 
+def get_python_version() -> str:
+    """Return current Python version, e.g. '3.12.6'."""
+    return platform.python_version()
+
+
 def get_platform_name() -> str:
     """Returns a print-friendly platform name that can be used for logs / data tagging."""
     return str(platform.node())
@@ -82,6 +87,15 @@ def get_params_hash(*args, **kwargs):
     return hashlib.sha1(clean_str.encode(), usedforsecurity=False).hexdigest()
 
 
+def compute_file_hash(path: str, algorithm: str = "sha256", chunk_size: int = 8192) -> str:
+    """Compute checksum of a file using given algorithm."""
+    h = hashlib.new(algorithm)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def set_seed(seed: int) -> None:
     """Sets the seed for the random and numpy.random modules."""
     random.seed(seed)
@@ -91,6 +105,7 @@ def set_seed(seed: int) -> None:
 def get_reprod_metadata() -> dict[str, typing.Any]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     return {
+        "python_version": get_python_version(),
         "platform": get_platform_name(),
         "timestamp": get_timestamp(),
         "framework_version": get_framework_version(),

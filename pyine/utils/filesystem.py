@@ -1,4 +1,5 @@
 import pathlib
+import re
 import shutil
 
 import pyine
@@ -26,6 +27,34 @@ def get_relative_path_to_root(
     return relative_path
 
 
+def get_path_size(path: str | pathlib.Path) -> int:
+    """Calculate the total size of a file or directory in bytes.
+
+    Parameters:
+        path (str | pathlib.Path): Path to the file or directory.
+
+    Returns:
+        int: Total size in bytes.
+    """
+    path = pathlib.Path(path)
+    if path.is_file():
+        return path.stat().st_size
+    total_size = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            total_size += item.stat().st_size
+    return total_size
+
+
+def get_human_readable_size(num_bytes: int, suffix: str = "B") -> str:
+    """Convert bytes to human-readable string, e.g. 1.2MiB."""
+    for unit in ["", "Ki", "Mi", "Gi", "Ti", "Pi"]:
+        if abs(num_bytes) < 1024.0:
+            return f"{num_bytes:3.1f}{unit}{suffix}"
+        num_bytes /= 1024.0
+    return f"{num_bytes:.1f}Ei{suffix}"
+
+
 def check_output_path_overwrite(
     output_path: str | pathlib.Path,
 ) -> None:
@@ -47,4 +76,13 @@ def check_output_path_overwrite(
         if overwrite != "y":
             print("Operation aborted.")
             exit(0)
-        shutil.rmtree(output_path)
+        else:
+            shutil.rmtree(output_path)
+
+
+def slugify(text: str) -> str:
+    """Convert text to a filesystem‐safe slug (lowercase, alnum, hyphens)."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_-]+", "-", text).strip("-")
+    return text

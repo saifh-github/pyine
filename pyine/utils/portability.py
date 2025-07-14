@@ -14,6 +14,9 @@ def get_portable_representation(
     Creates a structured dictionary representation of Python objects that is suitable
     for tracing reproducibility across different environments/runs.
 
+    Note: this function is NOT invertible, and if it encounters an unsupported object,
+    it will return a generic string representation of the object's type only.
+
     Args:
         obj: Any Python object encountered during code tracing.
 
