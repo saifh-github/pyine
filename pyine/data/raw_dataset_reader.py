@@ -50,7 +50,7 @@ class DatasetParser(torch.utils.data.Dataset):
 
 
 if __name__ == "__main__":
-    _dataset_reader = DatasetParser(lmdb_path="data/2025-03-31-v01-lmdb")
+    _dataset_reader = DatasetParser(lmdb_path="data/2025-03-31-v01.raw.lmdb")
     print(f"dataset contains {len(_dataset_reader)} samples")
     _sample = _dataset_reader[0]
     print(f"sample: {_sample}")

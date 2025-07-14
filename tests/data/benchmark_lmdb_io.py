@@ -10,7 +10,7 @@ import typing
 import numpy as np
 
 import pyine.data.lmdb_io as lmdb_io
-import pyine.data.raw_dataset_writer as silly_dataset_writer
+import pyine.data.raw_dataset_writer as dataset_writer
 
 
 def _generate_random_string(
@@ -57,6 +57,7 @@ def _generate_dummy_dict(
 
 
 def benchmark_serialization_methods(
+    raw_json_dir_path: pathlib.Path,
     num_samples: int = 100,
     use_random_data: bool = False,
 ):
@@ -99,7 +100,8 @@ def benchmark_serialization_methods(
                 )
                 writer.put_batch(items=entries)
             else:
-                writer = silly_dataset_writer.write_dataset(
+                writer = dataset_writer.write_raw_dataset(
+                    raw_json_dir_path=raw_json_dir_path,
                     output_dataset_path=database_path,
                     max_outputs=num_samples,
                 )
@@ -124,6 +126,7 @@ def benchmark_serialization_methods(
 
 if __name__ == "__main__":
     benchmark_serialization_methods(
+        raw_json_dir_path=pathlib.Path("data/2025-03-31-v01"),
         num_samples=50,
         use_random_data=False,
     )

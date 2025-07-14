@@ -1,4 +1,5 @@
 import hashlib
+import importlib.metadata
 import os
 import platform
 import random
@@ -17,6 +18,15 @@ def get_platform_name() -> str:
 def get_timestamp() -> str:
     """Returns a print-friendly timestamp (year, month, day, hour, minute, second) for logs."""
     return time.strftime("%Y%m%d-%H%M%S")
+
+
+def get_framework_version() -> str:
+    """Returns the version of the benchmark framework (in MAJOR.MINOR.PATCH format, e.g. 1.2.3)."""
+    try:
+        package_version = importlib.metadata.version("pyine")
+    except importlib.metadata.PackageNotFoundError:
+        raise ValueError("Package 'pyine' not installed; cannot determine framework version!")
+    return package_version
 
 
 def get_git_revision_hash() -> str:
@@ -83,6 +93,7 @@ def get_reprod_metadata() -> dict[str, typing.Any]:
     return {
         "platform": get_platform_name(),
         "timestamp": get_timestamp(),
+        "framework_version": get_framework_version(),
         "git_revision_hash": get_git_revision_hash(),
         "installed_packages": get_installed_packages(),
     }
