@@ -8,20 +8,18 @@
 
 """
 
-import dataclasses
-import enum
 import pathlib
-import typing
 
-import deepdiff
 import tqdm
 
-import pyine.data.lmdb_io
-import pyine.data.trace_delta
+import pyine.data.utils.lmdb_io
+import pyine.data.utils.trace_delta
 import pyine.utils.code_blocks
 import pyine.utils.code_exec
 import pyine.utils.filesystem
 import pyine.utils.portability
+
+DeltaGeneratorType = pyine.data.utils.trace_delta.DeltaGeneratorType
 
 
 def _filter_relevant_source_trace_step_idxs(
@@ -48,11 +46,11 @@ def _filter_relevant_source_trace_step_idxs(
 def write_simple_deltas_dataset(
     raw_dataset_path: pathlib.Path,
     output_dataset_path: pathlib.Path,
-    delta_generator: pyine.data.trace_delta.DeltaGeneratorType = pyine.data.trace_delta.DeltaGeneratorType.SIMPLE,
+    delta_generator: DeltaGeneratorType = DeltaGeneratorType.SIMPLE,
     target_difficulties: list[str] | None = None,
     verbose: bool = True,
     write_with_debug_info: bool = False,
-) -> pyine.data.lmdb_io.LMDBWriter:
+) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a simple deltas dataset from the raw dataset.
 
     Args:
@@ -63,9 +61,9 @@ def write_simple_deltas_dataset(
         verbose: Specifies whether to print verbose output during execution.
         write_with_debug_info: Specifies whether to include debug information in the deltas.
     """
-    parser = pyine.data.lmdb_io.LMDBReader(path=raw_dataset_path)
+    parser = pyine.data.utils.lmdb_io.LMDBReader(path=raw_dataset_path)
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
-    writer = pyine.data.lmdb_io.LMDBWriter(path=output_dataset_path)
+    writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
         dict(
             simple_dataset=dict(
@@ -77,6 +75,7 @@ def write_simple_deltas_dataset(
     )
     parser_iter = tqdm.tqdm(parser, desc="reading raw dataset", total=len(parser))
     delta_counts = []
+    seen_trace_ids = []
     for problem_idx, problem_data in enumerate(parser_iter):
         assert isinstance(problem_data, dict)
         if target_difficulties is not None and problem_data.get("difficulty") not in target_difficulties:
@@ -84,6 +83,8 @@ def write_simple_deltas_dataset(
         for trace_id, trace_res in problem_data["trace_results"].items():
             trace_id = pyine.utils.code_exec.TraceResultIdentifier(**dict(trace_id))
             print(f"{trace_id=}")
+            assert trace_id not in seen_trace_ids
+            seen_trace_ids.append(trace_id)
             trace_res = pyine.utils.code_exec.TraceResult(**trace_res)
             # if trace_id.sample_idx == 13856 and trace_id.version_idx == 0:
             #     continue  # annoying lambda example
@@ -103,7 +104,7 @@ def write_simple_deltas_dataset(
                 trace_res=trace_res,
                 first_relevant_step_idx=first_relevant_step_idx,
             )
-            deltas = pyine.data.trace_delta.get_deltas_from_trace_steps(
+            deltas = pyine.data.utils.trace_delta.get_deltas_from_trace_steps(
                 relevant_step_idxs=relevant_traced_step_idxs,
                 trace_res=trace_res,
                 delta_generator=delta_generator,
@@ -120,15 +121,9 @@ def write_simple_deltas_dataset(
                 print("deltas:")
                 for delta_idx, delta in enumerate(deltas):
                     print(f"\td#{delta_idx}:\t{delta}")
-            writer.put(
-                key=(
-                    f"{trace_id.dataset}/{trace_id.subset}/"
-                    f"sample{trace_id.sample_idx:06d}/"
-                    f"solution{trace_id.version_idx:06d}/"
-                    f"test{trace_id.test_idx:06d}"
-                ),
-                value=deltas,
-            )
+            output_key = str(trace_id)
+            print(f"{output_key=}")
+            writer.put(key=output_key, value=deltas)
             delta_counts.append(len(deltas))
     if verbose:
         print(f"done; wrote {len(delta_counts)} outputs to LMDB dataset at: {writer.path}!")
@@ -141,8 +136,8 @@ def write_simple_deltas_dataset(
 
 if __name__ == "__main__":
     write_simple_deltas_dataset(
-        raw_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb"),
-        output_dataset_path=pathlib.Path("data/2025-03-31-v01.simple.lmdb"),
+        raw_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb.dummy"),
+        output_dataset_path=pathlib.Path("data/2025-03-31-v01.simple.lmdb.dummy"),
         verbose=True,
         write_with_debug_info=False,
     )

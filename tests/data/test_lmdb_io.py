@@ -1,7 +1,7 @@
 import lmdb
 import pytest
 
-import pyine.data.lmdb_io as lmdb_io
+import pyine.data.utils.lmdb_io as lmdb_io
 
 
 @pytest.fixture

@@ -42,6 +42,10 @@ class TraceKey(typing.NamedTuple):
     line: int
     """The number of the code line that was executed."""
 
+    def __repr__(self):
+        """Returns a string representation of the trace key."""
+        return f"{self.file}:{self.object}:L{self.line:04d}"
+
 
 class TraceEventType(enum.StrEnum):
     """Identifies the type of execution event caught via the sys.settrace callback."""
@@ -59,6 +63,10 @@ class TraceException(typing.NamedTuple):
     """The type of exception that occurred."""
     message: str
     """The message of the exception that occurred."""
+
+    def __repr__(self):
+        """Returns a string representation of the trace exception."""
+        return f"{self.type}: {self.message}"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -87,6 +95,10 @@ class TraceEvent:
     def __hash__(self):
         """Returns a hash value for the event, considering only relevant unique attributes."""
         return hash((self.trace_step_idx, self.trace_key))
+
+    def __repr__(self):
+        """Returns a (partial) string representation of the trace event."""
+        return f"{self.event_type}@{self.trace_key}"
 
 
 class TraceResult(pydantic.BaseModel):
@@ -133,19 +145,16 @@ class TraceResult(pydantic.BaseModel):
     """A dictionary containing metadata about the execution environment & settings."""
 
 
-class TraceResultIdentifier(typing.NamedTuple):
+@dataclasses.dataclass(frozen=True)
+class TraceResultIdentifier(pyine.utils.portability.DataSampleIdentifier):
     """NamedTuple for identifying code execution trace results in the raw dataset."""
 
-    dataset: str
-    """The name of the source dataset where the traced code originated from."""
-    subset: str
-    """The name of the subset (if any) in the source dataset that the code belongs to."""
-    sample_idx: int
-    """The index of the sample within the source subset that the code belongs to."""
-    version_idx: int
-    """The index identifying the exact version (or solution) of the traced code."""
     test_idx: int
     """The index identifying the exact test case within the sample that was executed."""
+
+    def __repr__(self):
+        """Returns a string representation of the trace result identifier."""
+        return f"{pyine.utils.portability.DataSampleIdentifier.__repr__(self)}/" f"t{self.test_idx:04d}"
 
 
 @contextlib.contextmanager
@@ -518,7 +527,7 @@ def format_traced_code_execution(
                         result.append("      <unable to display return value>")
                 if trace_event.exception:
                     result.append("    Exception:")
-                    result.append(f"      {trace_event.exception.type}: {trace_event.exception.message}")
+                    result.append(f"      {trace_event.exception}")
                 result.append("")  # add spacing between events
     return "\n".join(result)
 

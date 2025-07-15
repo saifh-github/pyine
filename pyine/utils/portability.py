@@ -1,9 +1,28 @@
+import dataclasses
 import inspect
 import re
 import typing
 
 import numpy as np
 import pandas as pd
+
+
+@dataclasses.dataclass(frozen=True)
+class DataSampleIdentifier:
+    """Frozen tuple used for identifying data samples (with versioning)."""
+
+    dataset: str
+    """The name of the source dataset where the sample originated from."""
+    subset: str
+    """The name of the subset (if any) in the source dataset that the sample belongs to."""
+    sample_idx: int
+    """The index of the sample within the source subset that the code belongs to."""
+    version_idx: int
+    """The index identifying the exact version of the sample."""
+
+    def __repr__(self):
+        """Returns a string representation of the trace result identifier."""
+        return f"{self.dataset}[{self.subset}]:" f"s{self.sample_idx:06d}/" f"v{self.version_idx:04d}"
 
 
 def get_portable_representation(
@@ -217,3 +236,49 @@ def print_code_with_numbered_lines(
     for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
         formatted_line = f"L{line_idx:04d}:   {line_content}"
         print(formatted_line)
+
+
+def estimate_tolerance(value_str: str) -> tuple[float, float]:
+    """Estimate rtol and atol parameters for np.isclose based on string representation.
+
+    The returned rtol and atol values are ARBITRARY and may not be accurate. This function will
+    throw if the provided string is not a valid floating point number.
+
+    Args:
+        value_str: string representation of a floating point number.
+
+    Returns:
+        Tuple of (rtol, atol) values for np.isclose
+    """
+    value_str = value_str.strip()
+    if "e" in value_str.lower():
+        parts = value_str.lower().split("e")
+        mantissa = parts[0]
+        exponent = int(parts[1])
+        mantissa_clean = mantissa.replace("-", "").replace("+", "").replace(".", "")
+        mantissa_clean = mantissa_clean.lstrip("0") or "0"
+        sig_digits = len(mantissa_clean)
+        decimal_places = max(0, sig_digits - exponent - 1)
+    else:
+        if "." in value_str:
+            decimal_part = value_str.split(".")[1]
+            decimal_places = len(decimal_part.rstrip("0"))
+        else:
+            decimal_places = 0
+    float_val = float(value_str)
+    magnitude = abs(float_val)
+    if decimal_places == 0:
+        atol = 0.0
+    else:
+        atol = 0.5 * (10 ** (-decimal_places))
+    if magnitude < 1e-10:
+        rtol = 1e-9
+    elif magnitude < 1e-6:
+        rtol = 1e-8
+    elif magnitude > 1e6:
+        rtol = 1e-5
+    else:
+        rtol = 0.5 * (10 ** (-decimal_places)) / magnitude
+        rtol = max(rtol, 1e-15)
+        rtol = min(rtol, 1e-5)
+    return rtol, atol

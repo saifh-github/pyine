@@ -2,7 +2,7 @@ import typing
 
 import torch.utils.data
 
-import pyine.data.lmdb_io
+import pyine.data.utils.lmdb_io
 
 
 class DatasetParser(torch.utils.data.Dataset):
@@ -22,7 +22,7 @@ class DatasetParser(torch.utils.data.Dataset):
     ) -> None:
         super().__init__()
         self.lmdb_path = lmdb_path
-        self.reader = pyine.data.lmdb_io.LMDBReader(path=self.lmdb_path)
+        self.reader = pyine.data.utils.lmdb_io.LMDBReader(path=self.lmdb_path)
 
     def __len__(self) -> int:
         """

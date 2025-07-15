@@ -17,7 +17,7 @@ import warnings
 import numpy as np
 import tqdm
 
-import pyine.data.lmdb_io
+import pyine.data.utils.lmdb_io
 import pyine.prompts.code_analysis_prompt
 import pyine.utils.code_exec
 import pyine.utils.code_validation
@@ -50,28 +50,11 @@ def _is_float(s):
         return False
 
 
-def _estimate_isclose_params(float_str):
-    clean_str = float_str.strip()
-    if "e" in clean_str.lower():
-        base, exp = clean_str.lower().split("e")
-        clean_str = base
-    if "." in clean_str:
-        decimal_part = clean_str.split(".")[1]
-        decimal_part = decimal_part.rstrip("0")
-        decimal_precision = len(decimal_part)
-        rtol = 10 ** -(decimal_precision + 1)
-        atol = 10**-decimal_precision
-    else:
-        rtol = 1e-5
-        atol = 1e-8
-    return rtol, atol
-
-
 def _compare_result_strings(proposed: str, reference: str) -> bool:
     proposed = proposed.strip()
     reference = reference.strip()
     if _is_float(proposed) and _is_float(reference):
-        rtol, atol = _estimate_isclose_params(reference)
+        rtol, atol = pyine.utils.portability.estimate_tolerance(reference)
         return np.isclose(float(proposed), float(reference), rtol=rtol, atol=atol)
     else:
         return proposed == reference
@@ -117,12 +100,12 @@ def write_raw_dataset(
     max_trace_events_per_line: int = 100,
     minimum_solution_dissimilarity: float = 0.1,
     verbose: bool = True,
-) -> pyine.data.lmdb_io.LMDBWriter:
+) -> pyine.data.utils.lmdb_io.LMDBWriter:
     # @@@@@@ TODO: clean me up!
     source_dataset_name = "TACO"
     assert raw_json_dir_path.exists()
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
-    writer = pyine.data.lmdb_io.LMDBWriter(path=output_dataset_path)
+    writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
         dict(
             raw_dataset=dict(
@@ -175,22 +158,26 @@ def write_raw_dataset(
         )
         retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
         retained_solution_successes = {idx: False for idx in retained_solution_indices}
-        traces_to_write = {}
         written_solutions = 0
         for solution_idx, solution in enumerate(solutions):
-            solution_prefix = f"{sample_prefix} => solution #{solution_idx}"
+            data_sample_id = pyine.utils.portability.DataSampleIdentifier(
+                dataset=source_dataset_name,
+                subset=sample_subset,
+                sample_idx=sample_subset_idx,
+                version_idx=solution_idx,
+            )
             is_banned = solution_idx in banned_solutions.get(sample_subset, {}).get(sample_subset_idx, {})
             if is_banned:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to banned solution")
+                    print(f"{data_sample_id}: skipped due to banned solution")
                 continue
             if solution["validation_errors"]:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to prior error(s):\n\t{solution['validation_errors']}")
+                    print(f"{data_sample_id}: skipped due to prior error(s):\n\t{solution['validation_errors']}")
                 continue
             if solution_idx not in retained_solution_indices:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to potential duplicate")
+                    print(f"{data_sample_id}: skipped due to potential duplicate")
                 continue
             latest_analysis_output = solution["analysis_outputs"][-1]
             analysis_output = pyine.prompts.code_analysis_prompt.CodeAnalysisResponse.model_validate(
@@ -204,11 +191,11 @@ def write_raw_dataset(
                 or analysis_output.network_access
             ):
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to potentially fishy code")
+                    print(f"{data_sample_id}: skipped due to potentially fishy code")
                 continue
             if not analysis_output.is_deterministic:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to potentially nondeterministic code")
+                    print(f"{data_sample_id}: skipped due to potentially nondeterministic code")
                 continue
             if analysis_output.input_type not in [
                 "stdin",
@@ -216,20 +203,20 @@ def write_raw_dataset(
                 "callable",
             ] or analysis_output.output_type not in ["stdout", "no-output", "callable"]:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to annoying input/output types")
+                    print(f"{data_sample_id}: skipped due to annoying input/output types")
                 continue
             entrypoint_name = None
             if json_data["input_output"].get("fn_name", None):
                 if analysis_output.input_type != "callable" or analysis_output.output_type != "callable":
                     if verbose:
-                        print(f"{solution_prefix}: skipped due to callable code with noncallable input/output")
+                        print(f"{data_sample_id}: skipped due to callable code with noncallable input/output")
                     continue
                 entrypoint_name = json_data["input_output"]["fn_name"]
             else:
                 if analysis_output.input_type == "callable" or analysis_output.output_type == "callable":
                     # might need to infer how to find the entrypoint given the starter code
                     if verbose:
-                        print(f"{solution_prefix}: skipped due to missing entrypoint with callable input/output")
+                        print(f"{data_sample_id}: skipped due to missing entrypoint with callable input/output")
                     # @@@@ TODO: will be able to fix these w/ callable analysis results
                     continue
             code_string = solution["code"]
@@ -239,9 +226,10 @@ def write_raw_dataset(
                 pyine.utils.code_validation.validate_code(code_string)  # last check before running
             except Exception as e:
                 if verbose:
-                    print(f"{solution_prefix}: skipped due to new validation error: {e}")
+                    print(f"{data_sample_id}: skipped due to new validation error: {e}")
                 continue  # @@@@ log these later
 
+            traces_to_write = {}
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 for test_idx, (inputs, outputs) in enumerate(
@@ -258,7 +246,7 @@ def write_raw_dataset(
                             outputs = outputs[0]
                     try:
                         if verbose:
-                            print(f"{solution_prefix}: starting exec & trace...")
+                            print(f"{data_sample_id}: starting exec & trace...")
                         trace_results = pyine.utils.code_exec.execute_and_trace_code(
                             code_string=code_string,
                             inputs=inputs,
@@ -268,7 +256,7 @@ def write_raw_dataset(
                             timeout_seconds=10,
                         )
                         if trace_results.exception is not None:
-                            raise RuntimeError(f"{trace_results.exception.type}: {trace_results.exception.message}")
+                            raise RuntimeError(str(trace_results.exception))
                         if entrypoint_name is not None:  # @@@@@ need cleanup (and proper float comps)
                             test_success_flags[test_idx] = trace_results.return_value == outputs
                         else:
@@ -290,39 +278,26 @@ def write_raw_dataset(
                                 test_success_flags[test_idx] = return_value == outputs
                         if test_success_flags[test_idx]:
                             trace_result_id = pyine.utils.code_exec.TraceResultIdentifier(
-                                dataset=source_dataset_name,
-                                subset=sample_subset,
-                                sample_idx=sample_subset_idx,
-                                version_idx=solution_idx,
+                                **vars(data_sample_id),  # noqa
                                 test_idx=test_idx,
                             )
-                            trace_result_id = frozenset(trace_result_id._asdict().items())
-                            traces_to_write[trace_result_id] = trace_results.model_dump()
+                            traces_to_write[str(trace_result_id)] = trace_results.model_dump()
                     except Exception as e:
                         if verbose:
-                            print(f"{solution_prefix}: exec failed due to tracing error: {e}")
+                            print(f"{data_sample_id}: exec failed due to tracing error: {e}")
                         break
             result_str = "VALID" if all(test_success_flags) else "INVALID"
             if verbose:
-                print(f"{solution_prefix}: {result_str}")
+                print(f"{data_sample_id}: {result_str}")
             if result_str == "INVALID":
                 if verbose:
                     print(f"\t(failed {sum(test_success_flags)}/{len(test_success_flags)} tests)")
                 continue
             retained_solution_successes[solution_idx] = True
             assert traces_to_write
-            writer.put(
-                key=(
-                    f"{source_dataset_name}/{sample_subset}/"
-                    f"sample{sample_subset_idx:06d}/"
-                    f"solution{solution_idx:06d}"
-                ),
-                value={
-                    **json_data,
-                    "trace_results": traces_to_write,
-                },
-            )
-            written_outputs += 1
+            writer.put(key=str(data_sample_id), value=json_data)
+            writer.put_batch(traces_to_write, show_progress=False)
+            written_outputs += len(traces_to_write)
             written_solutions += 1
             if verbose:
                 print(f"{written_outputs=}")
@@ -349,6 +324,6 @@ def write_raw_dataset(
 if __name__ == "__main__":
     write_raw_dataset(
         raw_json_dir_path=pathlib.Path("data/2025-03-31-v01"),
-        output_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb"),
+        output_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb.dummy"),
         verbose=True,
     )
