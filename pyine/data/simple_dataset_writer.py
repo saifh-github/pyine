@@ -1,3 +1,13 @@
+"""
+
+                       @@@@@@@@@@@@@@@@@@
+                       @@@ HUGE NOTE! @@@
+
+         THIS IS A DEMO / WORK IN PROGRESS THAT IS NOT FINAL!
+(just using this module for prototyping, for now, lots of cleanups needed)
+
+"""
+
 import dataclasses
 import enum
 import pathlib

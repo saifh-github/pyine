@@ -62,6 +62,45 @@ class LMDBWriter:
     LMDB provides fast, persistent key-value storage with memory-mapped files,
     making it ideal for efficiently storing and retrieving large datasets. This implementation
     focuses on arranging data in a way that maximizes sequential read performance.
+
+    Examples:
+        Basic usage to write a single value:
+        >>> writer = LMDBWriter("path/to/db")
+        >>> writer.put("key1", {"data": "value1"})
+        >>> writer.close()
+
+        Writing multiple values in batch:
+        >>> with LMDBWriter("path/to/db") as writer:
+        ...     data = {
+        ...         "key1": {"data": "value1"},
+        ...         "key2": {"data": "value2"}
+        ...     }
+        ...     writer.put_batch(data)
+
+        Writing with different serialization methods:
+        >>> writer = LMDBWriter(
+        ...     "path/to/db",
+        ...     serialization=SerializationMethod.JSON_LZ4
+        ... )
+        >>> writer.put("key1", {"data": "value1"})
+        >>> writer.close()
+
+        Writing metadata:
+        >>> with LMDBWriter("path/to/db") as writer:
+        ...     metadata = {
+        ...         "dataset_name": "example",
+        ...         "version": "1.0"
+        ...     }
+        ...     writer.write_metadata(metadata)
+
+        Specifying custom map size and readers:
+        >>> writer = LMDBWriter(
+        ...     "path/to/db",
+        ...     map_size=2 * 1024 * 1024 * 1024,  # 2GB
+        ...     max_readers=256
+        ... )
+        >>> writer.put("key1", {"data": "value1"})
+        >>> writer.close()
     """
 
     def __init__(
@@ -262,7 +301,44 @@ class LMDBWriter:
 
 
 class LMDBReader:
-    """LMDB reader highly optimized for fast sequential reading."""
+    """LMDB reader highly optimized for fast sequential reading.
+
+    Examples:
+        Basic usage to read a value by key or index:
+        >>> reader = LMDBReader("path/to/db")
+        >>> value = reader.get("key1")  # get by key
+        >>> value = reader.get(0)       # get by index
+        >>> reader.close()
+
+        Reading metadata:
+        >>> reader = LMDBReader("path/to/db")
+        >>> metadata = reader.get_metadata()
+        >>> print(metadata["dataset_name"])
+        >>> reader.close()
+
+        Sequential iteration through all items:
+        >>> reader = LMDBReader("path/to/db")
+        >>> for value in reader:  # or: for value in reader.iter_from():
+        ...     print(value)
+        >>> reader.close()
+
+        Iterate through a specific range:
+        >>> reader = LMDBReader("path/to/db")
+        >>> for value in reader.iter_from(start_idx=10, end_idx=20):
+        ...     print(value)
+        >>> reader.close()
+
+        Batch iteration for better performance:
+        >>> reader = LMDBReader("path/to/db")
+        >>> for batch in reader.iter_batched(batch_size=32):
+        ...     print(f"Got batch of {len(batch)} items")
+        >>> reader.close()
+
+        Using context manager:
+        >>> with LMDBReader("path/to/db") as reader:
+        ...     print(f"Database has {len(reader)} items")
+        ...     value = reader.get("key1")
+    """
 
     def __init__(
         self,
