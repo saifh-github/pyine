@@ -1,6 +1,7 @@
 import hashlib
 import importlib.metadata
 import os
+import pathlib
 import platform
 import random
 import re
@@ -88,7 +89,7 @@ def get_params_hash(*args, **kwargs):
 
 
 def compute_hash(
-    path: str,
+    path: pathlib.Path | typing.AnyStr,
     algorithm: str = "sha256",
     chunk_size: int = 8192,
     raise_on_error: bool = True,
@@ -109,30 +110,28 @@ def compute_hash(
     Returns:
         Hexadecimal digest of the hash.
     """
-    path_obj = os.path.abspath(os.path.expanduser(path))
-    if os.path.isfile(path_obj):
+    path_obj = pathlib.Path(path).expanduser().resolve()
+    if path_obj.is_file():
         # file case - direct hash of contents
         h = hashlib.new(algorithm)
-        with open(path_obj, "rb") as f:
+        with path_obj.open("rb") as f:
             for chunk in iter(lambda: f.read(chunk_size), b""):
                 h.update(chunk)
         return h.hexdigest()
-    elif os.path.isdir(path_obj):
+    elif path_obj.is_dir():
         # directory case - combine hashes of all files
         dir_hash = hashlib.new(algorithm)
         all_files = []
-        for root, dirs, files in os.walk(path_obj):
-            dirs.sort()  # sort directories to ensure consistent traversal order
-            for file in sorted(files):
-                file_path = os.path.join(root, file)
-                rel_path = os.path.relpath(file_path, path_obj)
-                all_files.append((rel_path, file_path))
+        for file_path in sorted(path_obj.glob("**/*")):
+            if file_path.is_file():
+                rel_path = file_path.relative_to(path_obj)
+                all_files.append((str(rel_path), file_path))
         all_files.sort()  # sort by relative path for deterministic ordering
         for rel_path, file_path in all_files:
             path_hash = hashlib.new(algorithm, rel_path.encode()).hexdigest()
             file_hash = hashlib.new(algorithm)
             try:
-                with open(file_path, "rb") as f:
+                with file_path.open("rb") as f:
                     for chunk in iter(lambda: f.read(chunk_size), b""):
                         file_hash.update(chunk)
             except (OSError, PermissionError) as e:
