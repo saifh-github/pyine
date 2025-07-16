@@ -127,3 +127,63 @@ class TestLMDBWriteAndRead:
         assert found_vals == tuple(entries.values())
         found_vals = tuple(v for vals in reader.iter_batched(batch_size=100) for v in vals)
         assert found_vals == tuple(entries.values())
+
+    def test_get_indices(self, mock_lmdb_env):
+        writer = self._get_writer(path=mock_lmdb_env.path())
+        test_data = {
+            "problem_001": {"type": "problem", "id": 1},
+            "problem_002": {"type": "problem", "id": 2},
+            "problem_100": {"type": "problem", "id": 100},
+            "test_case_001": {"type": "test", "id": 1},
+            "test_case_002": {"type": "test", "id": 2},
+            "solution_a": {"type": "solution", "variant": "a"},
+            "solution_b": {"type": "solution", "variant": "b"},
+            "data_file_001.json": {"type": "data", "format": "json"},
+            "data_file_002.xml": {"type": "data", "format": "xml"},
+            "misc_item": {"type": "misc"},
+        }
+        writer.put_batch(test_data)
+        writer.close()
+
+        reader = lmdb_io.LMDBReader(path=writer.path)
+        indices = reader.get_indices("problem_001")
+        assert len(indices) == 1
+        assert reader.get(indices[0]) == test_data["problem_001"]
+
+        indices = reader.get_indices("problem_*")
+        assert len(indices) == 3
+        expected_keys = ["problem_001", "problem_002", "problem_100"]
+        for idx in indices:
+            assert reader.get(idx) in [test_data[key] for key in expected_keys]
+
+        indices = reader.get_indices("*_001")
+        assert len(indices) == 2
+        expected_keys = ["problem_001", "test_case_001"]
+        for idx in indices:
+            assert reader.get(idx) in [test_data[key] for key in expected_keys]
+
+        indices = reader.get_indices("solution_[ab]")
+        assert len(indices) == 2
+        expected_keys = ["solution_a", "solution_b"]
+        for idx in indices:
+            assert reader.get(idx) in [test_data[key] for key in expected_keys]
+
+        indices = reader.get_indices("*.json")
+        assert len(indices) == 1
+        assert reader.get(indices[0]) == test_data["data_file_001.json"]
+
+        indices = reader.get_indices("nonexistent_*")
+        assert len(indices) == 0
+
+        indices = reader.get_indices("*")
+        assert len(indices) == len(test_data)
+        assert sorted(indices) == list(range(len(test_data)))
+
+        indices = reader.get_indices("*_00[12]")
+        assert len(indices) == 4  # problem_001, problem_002, test_case_001, test_case_002
+        assert indices == sorted(indices)
+
+        with pytest.raises(AssertionError):
+            reader.get_indices(123)  # noqa; should be string
+
+        reader.close()

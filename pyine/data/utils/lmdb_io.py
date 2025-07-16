@@ -1,4 +1,5 @@
 import enum
+import fnmatch
 import json
 import pathlib
 import pickle
@@ -446,6 +447,23 @@ class LMDBReader:
             if value_bytes is not None:
                 return self._deserialize(value_bytes)
             return None
+
+    def get_indices(
+        self,
+        pattern: str,
+    ) -> list[int]:
+        """Get sample indices for all keys that match the provided fnmatch-compatible pattern.
+
+        Args:
+            pattern: pattern to match against keys (e.g., "problem/*", "test_data:[0-9]*")
+
+        Returns:
+            List of sample indices (integers) matched keys, sorted in ascending order.
+        """
+        assert isinstance(pattern, str), "pattern must be a string"
+        matched_keys = fnmatch.filter(self.key_map.keys(), pattern)
+        matched_indices = [_decode_sample_key(self.key_map[key]) for key in matched_keys]
+        return sorted(matched_indices)
 
     def iter_from(
         self,

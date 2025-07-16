@@ -295,6 +295,7 @@ def write_raw_dataset(
                 continue
             retained_solution_successes[solution_idx] = True
             assert traces_to_write
+            json_data["trace_ids"] = [k for k in traces_to_write.keys()]
             writer.put(key=str(data_sample_id), value=json_data)
             writer.put_batch(traces_to_write, show_progress=False)
             written_outputs += len(traces_to_write)
