@@ -134,6 +134,84 @@ def test_get_params_hash_consistency() -> None:
     assert h1 == h2
 
 
+def test_compute_hash_simple(tmp_path) -> None:
+    """Test that compute_hash correctly computes file checksums."""
+    with pytest.raises(ValueError):
+        reprod.compute_hash("/path/that/does/not/exist")
+    content = b"hello world"
+    file_path = tmp_path / "test.txt"
+    file_path.write_bytes(content)
+    expected = hashlib.sha256(content).hexdigest()
+    assert reprod.compute_hash(str(file_path), "sha256", chunk_size=4) == expected
+    expected_md5 = hashlib.md5(content).hexdigest()
+    assert reprod.compute_hash(str(file_path), "md5", chunk_size=4) == expected_md5
+
+
+def test_compute_hash_directory_consistency(tmp_path) -> None:
+    """Test computing hash for a directory gives consistent results."""
+    sub_dir1 = tmp_path / "subdir1"
+    sub_dir2 = tmp_path / "subdir2"
+    sub_dir1.mkdir()
+    sub_dir2.mkdir()
+    (tmp_path / "file1.txt").write_text("content1")
+    (sub_dir1 / "file2.txt").write_text("content2")
+    (sub_dir2 / "file3.txt").write_text("content3")
+    hash1 = reprod.compute_hash(str(tmp_path))
+    hash2 = reprod.compute_hash(str(tmp_path))
+    assert hash1 == hash2
+    (sub_dir1 / "file2.txt").touch()
+    hash2 = reprod.compute_hash(str(tmp_path))
+    assert hash1 == hash2
+    (sub_dir1 / "file2.txt").write_text("modified content")
+    hash3 = reprod.compute_hash(str(tmp_path))
+    assert hash1 != hash3
+    (sub_dir1 / "file2.txt").unlink()
+    (sub_dir1 / "file4.txt").write_text("content1")
+    hash4 = reprod.compute_hash(str(tmp_path))
+    assert hash1 != hash4
+    (sub_dir1 / "file4.txt").unlink()
+    (sub_dir1 / "file2.txt").write_text("content2")
+    hash4 = reprod.compute_hash(str(tmp_path))
+    assert hash1 == hash4
+
+
+def test_compute_hash_empty_directory(tmp_path) -> None:
+    """Test computing hash for an empty directory."""
+    hash1 = reprod.compute_hash(str(tmp_path))
+    hash2 = reprod.compute_hash(str(tmp_path))
+    assert hash1 == hash2
+
+
+def test_compute_hash_different_structure(tmp_path) -> None:
+    """Test that different directory structures with same content have different hashes."""
+    dir1 = tmp_path / "dir1"
+    dir2 = tmp_path / "dir2"
+    dir1.mkdir()
+    dir2.mkdir()
+    (dir1 / "file1.txt").write_text("same content")
+    subdir = dir2 / "subdir"
+    subdir.mkdir()
+    (subdir / "file1.txt").write_text("same content")
+    hash1 = reprod.compute_hash(str(dir1))
+    hash2 = reprod.compute_hash(str(dir2))
+    assert hash1 != hash2
+
+
+def test_compute_hash_deterministic_order(tmp_path) -> None:
+    """Test that file order doesn't affect the hash."""
+    dir1 = tmp_path / "dir1"
+    dir2 = tmp_path / "dir2"
+    dir1.mkdir()
+    dir2.mkdir()
+    (dir1 / "aaa.txt").write_text("content a")
+    (dir1 / "bbb.txt").write_text("content b")
+    (dir2 / "bbb.txt").write_text("content b")
+    (dir2 / "aaa.txt").write_text("content a")
+    hash1 = reprod.compute_hash(str(dir1))
+    hash2 = reprod.compute_hash(str(dir2))
+    assert hash1 == hash2
+
+
 def test_get_params_hash_removes_addresses() -> None:
     """Test that get_params_hash removes memory addresses from object representations."""
 
@@ -144,17 +222,6 @@ def test_get_params_hash_removes_addresses() -> None:
     h = reprod.get_params_hash(A())
     # Should not include "0x" in the hash input
     assert "0x" not in h
-
-
-def test_compute_file_hash(tmp_path) -> None:
-    """Test that compute_file_hash correctly computes file checksums."""
-    content = b"hello world"
-    file_path = tmp_path / "test.txt"
-    file_path.write_bytes(content)
-    expected = hashlib.sha256(content).hexdigest()
-    assert reprod.compute_file_hash(str(file_path), "sha256", chunk_size=4) == expected
-    expected_md5 = hashlib.md5(content).hexdigest()
-    assert reprod.compute_file_hash(str(file_path), "md5", chunk_size=4) == expected_md5
 
 
 def test_set_seed_reproducibility() -> None:

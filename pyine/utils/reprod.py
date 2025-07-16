@@ -87,13 +87,66 @@ def get_params_hash(*args, **kwargs):
     return hashlib.sha1(clean_str.encode(), usedforsecurity=False).hexdigest()
 
 
-def compute_file_hash(path: str, algorithm: str = "sha256", chunk_size: int = 8192) -> str:
-    """Compute checksum of a file using given algorithm."""
-    h = hashlib.new(algorithm)
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def compute_hash(
+    path: str,
+    algorithm: str = "sha256",
+    chunk_size: int = 8192,
+    raise_on_error: bool = True,
+) -> str:
+    """Compute checksum of a file or directory using given hashing algorithm.
+
+    This function handles both individual files and directories. For files, it directly hashes
+    the content. For directories, it recursively processes all contained files and combines
+    their hashes in a deterministic way that depends only on content and relative paths, not
+    on metadata like timestamps or permissions.
+
+    Args:
+        path: path to the file or directory to hash.
+        algorithm: hash algorithm to use (e.g., "md5", "sha1", "sha256").
+        chunk_size: size of chunks to read when hashing large files.
+        raise_on_error: if True, raises an exception if any file cannot be read.
+
+    Returns:
+        Hexadecimal digest of the hash.
+    """
+    path_obj = os.path.abspath(os.path.expanduser(path))
+    if os.path.isfile(path_obj):
+        # file case - direct hash of contents
+        h = hashlib.new(algorithm)
+        with open(path_obj, "rb") as f:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    elif os.path.isdir(path_obj):
+        # directory case - combine hashes of all files
+        dir_hash = hashlib.new(algorithm)
+        all_files = []
+        for root, dirs, files in os.walk(path_obj):
+            dirs.sort()  # sort directories to ensure consistent traversal order
+            for file in sorted(files):
+                file_path = os.path.join(root, file)
+                rel_path = os.path.relpath(file_path, path_obj)
+                all_files.append((rel_path, file_path))
+        all_files.sort()  # sort by relative path for deterministic ordering
+        for rel_path, file_path in all_files:
+            path_hash = hashlib.new(algorithm, rel_path.encode()).hexdigest()
+            file_hash = hashlib.new(algorithm)
+            try:
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(chunk_size), b""):
+                        file_hash.update(chunk)
+            except (OSError, PermissionError) as e:
+                if raise_on_error:
+                    # default behavior: we probably don't expect a dataset to contain bad files
+                    raise e
+                else:
+                    # otherwise, include error information in the hash if we can't read a file
+                    file_hash.update(f"ERROR: {str(e)}".encode())
+            combined = f"{path_hash}:{file_hash.hexdigest()}".encode()
+            dir_hash.update(combined)
+        return dir_hash.hexdigest()
+    else:
+        raise ValueError(f"path does not exist: {path}")
 
 
 def set_seed(seed: int) -> None:
