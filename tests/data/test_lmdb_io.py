@@ -146,6 +146,7 @@ class TestLMDBWriteAndRead:
         writer.close()
 
         reader = lmdb_io.LMDBReader(path=writer.path)
+
         indices = reader.get_indices("problem_001")
         assert len(indices) == 1
         assert reader.get(indices[0]) == test_data["problem_001"]
@@ -182,6 +183,23 @@ class TestLMDBWriteAndRead:
         indices = reader.get_indices("*_00[12]")
         assert len(indices) == 4  # problem_001, problem_002, test_case_001, test_case_002
         assert indices == sorted(indices)
+
+        indices, keys = reader.get_indices("problem_*", return_keys=True)
+        assert len(indices) == 3
+        assert len(keys) == 3
+        assert all(k.startswith("problem_") for k in keys)
+        assert all(reader.get(idx) == test_data[key] for idx, key in zip(indices, keys))
+
+        indices, keys = reader.get_indices("*", return_keys=True)
+        assert len(indices) == len(test_data)
+        assert len(keys) == len(test_data)
+        assert indices == sorted(indices)
+        for idx, key in zip(indices, keys):
+            assert reader.get(idx) == test_data[key]
+
+        indices, keys = reader.get_indices("nonexistent_*", return_keys=True)
+        assert len(indices) == 0
+        assert len(keys) == 0
 
         with pytest.raises(AssertionError):
             reader.get_indices(123)  # noqa; should be string

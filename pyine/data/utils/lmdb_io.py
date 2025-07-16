@@ -451,19 +451,27 @@ class LMDBReader:
     def get_indices(
         self,
         pattern: str,
-    ) -> list[int]:
+        return_keys: bool = False,
+    ) -> list[int] | tuple[list[int], list[str]]:
         """Get sample indices for all keys that match the provided fnmatch-compatible pattern.
 
         Args:
             pattern: pattern to match against keys (e.g., "problem/*", "test_data:[0-9]*")
+            return_keys: if True, returns a tuple of (indices, keys) instead of just indices
 
         Returns:
-            List of sample indices (integers) matched keys, sorted in ascending order.
+            If `return_keys` is False: List of sample indices (integers) of matched keys, sorted in ascending order.
+            If `return_keys` is True: Tuple of (indices, keys) where both lists are sorted by index order.
         """
         assert isinstance(pattern, str), "pattern must be a string"
         matched_keys = fnmatch.filter(self.key_map.keys(), pattern)
-        matched_indices = [_decode_sample_key(self.key_map[key]) for key in matched_keys]
-        return sorted(matched_indices)
+        index_key_pairs = [((_decode_sample_key(self.key_map[key])), key) for key in matched_keys]
+        index_key_pairs.sort()
+        if return_keys:
+            indices, keys = zip(*index_key_pairs) if index_key_pairs else ([], [])
+            return list(indices), list(keys)
+        else:
+            return [idx for idx, _ in index_key_pairs]
 
     def iter_from(
         self,
