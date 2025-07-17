@@ -41,6 +41,10 @@ banned_samples = {
     "train": [14690, 2744, 13505, 329],
 }
 
+PROBLEM_DATA_SUFFIX = "/metadata"
+PROBLEM_DATA_PATTERN = "*" + PROBLEM_DATA_SUFFIX
+TRACE_DATA_SUFFIX = "/t*"
+
 
 def _is_float(s):
     try:
@@ -76,6 +80,7 @@ def load_json_files(
         FileNotFoundError: If the folder path doesn't exist.
         json.JSONDecodeError: If a file contains invalid JSON.
     """
+    # TODO: @@@@ might want to inline this loop so that we can log the paths and hash the files
     if not folder_path.exists():
         raise FileNotFoundError(f"folder path {folder_path} does not exist")
     if not folder_path.is_dir():
@@ -295,8 +300,8 @@ def write_raw_dataset(
                 continue
             retained_solution_successes[solution_idx] = True
             assert traces_to_write
-            json_data["trace_ids"] = [k for k in traces_to_write.keys()]
-            writer.put(key=str(data_sample_id), value=json_data)
+            sample_metadata_key = str(data_sample_id) + PROBLEM_DATA_SUFFIX
+            writer.put(key=sample_metadata_key, value=json_data)
             writer.put_batch(traces_to_write, show_progress=False)
             written_outputs += len(traces_to_write)
             written_solutions += 1
@@ -325,6 +330,6 @@ def write_raw_dataset(
 if __name__ == "__main__":
     write_raw_dataset(
         raw_json_dir_path=pathlib.Path("data/2025-03-31-v01"),
-        output_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb.dummy"),
+        output_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb"),
         verbose=True,
     )

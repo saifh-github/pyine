@@ -1,9 +1,9 @@
-import os
-
 import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
+
+import pyine.utils.llm_providers
 
 
 class CallableAnalysisResponse(pydantic.BaseModel):
@@ -100,16 +100,15 @@ Your task is to extract relevant information on the "entrypoint" that will be us
 If the function is inside a class, we expect to instantiate the class before accessing its function. \
 If the function is not inside a class, we expect to use it directly.
 
-{{expected_output_format}}
+{expected_output_format}
 
-{{example_outputs}}
+{example_outputs}
 
 Here is the "starter code" you must now analyze:
 
 ```python
-{{code}}
+{starter_code}
 ```
-{{starter_code}}
 """
 
 
@@ -118,27 +117,16 @@ callable_analysis_prompt = langchain_core.prompts.PromptTemplate(
     template=_callable_analysis_template_str,
 )
 
-callable_analysis_prompt = callable_analysis_prompt.partial(
-    expected_output_format=_callable_analysis_expected_output_format_str,
-    example_outputs=_callable_analysis_example_outputs_str,
-)
 
-
-def get_deepseek_chain() -> langchain_core.runnables.Runnable:
-    """Get a DeepSeek inference chain based on the above prompt template and parser."""
-    import langchain_deepseek
-
-    llm = langchain_deepseek.ChatDeepSeek(
-        model="deepseek-chat",
-        temperature=0.0,  # recommended setting for coding/math
-        max_tokens=1024,
-        timeout=None,
-        max_retries=50,
-        api_key=os.environ.get("DEEPSEEK_API_KEY"),
-    )
+def get_chain(**kwargs) -> langchain_core.runnables.Runnable:
+    """Get an inference chain based on the above prompt template and parser."""
+    llm = pyine.utils.llm_providers.get_llm_from_provider(**kwargs)
     llm_with_structured_output = llm.with_structured_output(CallableAnalysisResponse)
     callable_analysis_chain = langchain_core.runnables.RunnableSequence(
-        callable_analysis_prompt,
+        callable_analysis_prompt.partial(
+            expected_output_format=_callable_analysis_expected_output_format_str,
+            example_outputs=_callable_analysis_example_outputs_str,
+        ),
         llm_with_structured_output,
     )
     return callable_analysis_chain

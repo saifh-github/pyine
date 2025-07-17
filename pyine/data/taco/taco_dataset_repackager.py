@@ -34,7 +34,7 @@ async def reprocess_code_samples(
         return len(_tokenizer.encode(text))
 
     dataset_reader = data.taco.taco_dataset_parser.TacoDatasetParser()
-    code_analysis_chain = pyine.prompts.code_analysis_prompt.get_deepseek_chain()
+    code_analysis_chain = pyine.prompts.code_analysis_prompt.get_chain(provider="deepseek")
     total_samples = len(dataset_reader)  # min(10, len(dataset_reader))
     print(f"samples in dataset: {total_samples}")
     example_prompt_text = pyine.prompts.code_analysis_prompt.code_analysis_prompt.format(

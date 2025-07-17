@@ -154,7 +154,19 @@ class TraceResultIdentifier(pyine.utils.portability.DataSampleIdentifier):
 
     def __repr__(self):
         """Returns a string representation of the trace result identifier."""
-        return f"{pyine.utils.portability.DataSampleIdentifier.__repr__(self)}/" f"t{self.test_idx:04d}"
+        return f"{pyine.utils.portability.DataSampleIdentifier.__repr__(self)}/t{self.test_idx:04d}"
+
+    def get_parent_identifier(self):
+        """Returns the identifier of the parent data sample."""
+        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name != "test_idx"}
+        return pyine.utils.portability.DataSampleIdentifier(**parent_vars)
+
+    @staticmethod
+    def from_string(identifier_str: str) -> "TraceResultIdentifier":
+        """Creates a TraceResultIdentifier instance from a string representation."""
+        data_sample_str, test_idx_str = identifier_str.rsplit("/", maxsplit=1)
+        data_sample_id = pyine.utils.portability.DataSampleIdentifier.from_string(data_sample_str)
+        return TraceResultIdentifier(**vars(data_sample_id), test_idx=int(test_idx_str[1:]))
 
 
 @contextlib.contextmanager

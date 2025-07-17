@@ -1,10 +1,11 @@
 import enum
-import os
 
 import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
+
+import pyine.utils.llm_providers
 
 
 class CodeTypeOptions(enum.StrEnum):
@@ -189,15 +190,16 @@ Given a Python code snippet, we want to determine the following:
 - How does this code expect to receive inputs?
 - How does this code expect to return its output?
 
-{{expected_output_format}}
+{expected_output_format}
 
-{{example_outputs}}
+{example_outputs}
 
 Here is the code you must now analyze:
 
 ```python
-{{code}}
+{code}
 ```
+Your prediction:
 """
 
 code_analysis_prompt = langchain_core.prompts.PromptTemplate(
@@ -205,27 +207,16 @@ code_analysis_prompt = langchain_core.prompts.PromptTemplate(
     template=_code_analysis_template_str,
 )
 
-code_analysis_prompt = code_analysis_prompt.partial(
-    expected_output_format=_code_analysis_expected_output_format_str,
-    example_outputs=_code_analysis_example_outputs_str,
-)
 
-
-def get_deepseek_chain() -> langchain_core.runnables.Runnable:
-    """Get a DeepSeek code analysis chain based on the above prompt template and parser."""
-    import langchain_deepseek
-
-    llm = langchain_deepseek.ChatDeepSeek(
-        model="deepseek-chat",
-        temperature=0.0,  # recommended setting for coding/math
-        max_tokens=1024,
-        timeout=None,
-        max_retries=50,
-        api_key=os.environ.get("DEEPSEEK_API_KEY"),
-    )
+def get_chain(**kwargs) -> langchain_core.runnables.Runnable:
+    """Get an inference chain based on the above prompt template and parser."""
+    llm = pyine.utils.llm_providers.get_llm_from_provider(**kwargs)
     llm_with_structured_output = llm.with_structured_output(CodeAnalysisResponse)
     code_analysis_chain = langchain_core.runnables.RunnableSequence(
-        code_analysis_prompt,
+        code_analysis_prompt.partial(
+            expected_output_format=_code_analysis_expected_output_format_str,
+            example_outputs=_code_analysis_example_outputs_str,
+        ),
         llm_with_structured_output,
     )
     return code_analysis_chain
@@ -236,5 +227,9 @@ if __name__ == "__main__":
 def add(a, b):
     return a + b + 1
 """
-    _dummy_prompt = code_analysis_prompt.format(code=_dummy_code)
+    _dummy_prompt = code_analysis_prompt.format(
+        code=_dummy_code,
+        expected_output_format=_code_analysis_expected_output_format_str,
+        example_outputs=_code_analysis_example_outputs_str,
+    )
     print(_dummy_prompt)

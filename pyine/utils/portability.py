@@ -22,7 +22,13 @@ class DataSampleIdentifier:
 
     def __repr__(self):
         """Returns a string representation of the trace result identifier."""
-        return f"{self.dataset}[{self.subset}]:" f"s{self.sample_idx:06d}/" f"v{self.version_idx:04d}"
+        return f"{self.dataset}/{self.subset}/s{self.sample_idx:06d}/v{self.version_idx:04d}"
+
+    @staticmethod
+    def from_string(identifier: str) -> "DataSampleIdentifier":
+        """Creates a DataSampleIdentifier from a string representation."""
+        dataset, subset, sample_idx, version_idx = identifier.split("/")
+        return DataSampleIdentifier(dataset, subset, int(sample_idx[1:]), int(version_idx[1:]))
 
 
 def get_portable_representation(
@@ -226,16 +232,34 @@ def format_object_changes(
 
 def print_code_with_numbered_lines(
     code_string: str,
+    prefixed_tabs: int = 0,
+    logger: typing.Any | None = None,
 ) -> None:
     """
-    Prints each line of the given code string, prefixed with a fixed-width line number.
+    Prints each line of the given code string, prefixed with tabs and a fixed-width line number.
+
+    Can output to either a logger or stdout (by default, if no logger is provided)..
 
     Args:
-        code_string (str): The Python code string to be printed.
+        code_string (str): the Python code string to be printed.
+        prefixed_tabs (int): the number of tabs to prefix each line with. Defaults to 0.
+        logger: optional logger object with a info/debug method. If None, output goes to stdout.
     """
+    if logger is not None:
+        if hasattr(logger, "info") and callable(logger.info):
+            logging_func = logger.info
+        elif hasattr(logger, "debug") and callable(logger.debug):
+            logging_func = logger.debug
+        elif hasattr(logger, "log") and callable(logger.log):
+            logging_func = logger.log
+        else:
+            raise ValueError("could not identify how to use logger object")
+    else:
+        logging_func = print
+    tab_prefix = "\t" * prefixed_tabs
     for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
-        formatted_line = f"L{line_idx:04d}:   {line_content}"
-        print(formatted_line)
+        formatted_line = f"{tab_prefix}L{line_idx:04d}:   {line_content}"
+        logging_func(formatted_line)
 
 
 def estimate_tolerance(value_str: str) -> tuple[float, float]:
