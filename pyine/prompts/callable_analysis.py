@@ -112,7 +112,7 @@ Here is the "starter code" you must now analyze:
 """
 
 
-callable_analysis_prompt = langchain_core.prompts.PromptTemplate(
+callable_analysis_prompt = langchain_core.prompts.ChatPromptTemplate(
     input_variables=["starter_code", "expected_output_format", "example_outputs"],
     template=_callable_analysis_template_str,
 )

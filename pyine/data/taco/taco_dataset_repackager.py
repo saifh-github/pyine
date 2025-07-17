@@ -6,7 +6,7 @@ import dotenv
 import tiktoken
 
 import data.taco.taco_dataset_parser
-import pyine.prompts.code_analysis_prompt
+import pyine.prompts.code_analysis
 import pyine.utils.code_validation
 
 
@@ -34,10 +34,10 @@ async def reprocess_code_samples(
         return len(_tokenizer.encode(text))
 
     dataset_reader = data.taco.taco_dataset_parser.TacoDatasetParser()
-    code_analysis_chain = pyine.prompts.code_analysis_prompt.get_chain(provider="deepseek")
+    code_analysis_chain = pyine.prompts.code_analysis.get_chain(provider="deepseek")
     total_samples = len(dataset_reader)  # min(10, len(dataset_reader))
     print(f"samples in dataset: {total_samples}")
-    example_prompt_text = pyine.prompts.code_analysis_prompt.code_analysis_prompt.format(
+    example_prompt_text = pyine.prompts.code_analysis.code_analysis_prompt.format(
         code="def example(): pass",
     )
     prompt_token_count = _count_tokens(example_prompt_text)

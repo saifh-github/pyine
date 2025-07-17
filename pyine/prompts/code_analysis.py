@@ -202,7 +202,7 @@ Here is the code you must now analyze:
 Your prediction:
 """
 
-code_analysis_prompt = langchain_core.prompts.PromptTemplate(
+code_analysis_prompt = langchain_core.prompts.ChatPromptTemplate(
     input_variables=["code", "expected_output_format", "example_outputs"],
     template=_code_analysis_template_str,
 )

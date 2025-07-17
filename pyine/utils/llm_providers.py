@@ -23,7 +23,7 @@ def get_llm_from_provider(
             base_url=os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1"),
         )
     elif provider == "openai":
-        llm = langchain_openai.OpenAI(
+        llm = langchain_openai.ChatOpenAI(
             model=kwargs.get("model", "gpt-4o"),
             temperature=kwargs.get("temperature", 0.0),
             max_tokens=kwargs.get("max_tokens", 1024),

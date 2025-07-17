@@ -6,7 +6,7 @@ import pyine.utils.llm_providers
 import pyine.utils.portability
 
 
-class SafePromptTemplate(langchain_core.prompts.PromptTemplate):
+class SafePromptTemplate(langchain_core.prompts.ChatPromptTemplate):
     """PromptTemplate that safely preserves existing curly braces in template strings.
 
     This class ensures that any curly braces in the original template content remain intact,

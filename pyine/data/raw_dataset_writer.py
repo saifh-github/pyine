@@ -18,7 +18,7 @@ import numpy as np
 import tqdm
 
 import pyine.data.utils.lmdb_io
-import pyine.prompts.code_analysis_prompt
+import pyine.prompts.code_analysis
 import pyine.utils.code_exec
 import pyine.utils.code_validation
 import pyine.utils.filesystem
@@ -185,9 +185,7 @@ def write_raw_dataset(
                     print(f"{data_sample_id}: skipped due to potential duplicate")
                 continue
             latest_analysis_output = solution["analysis_outputs"][-1]
-            analysis_output = pyine.prompts.code_analysis_prompt.CodeAnalysisResponse.model_validate(
-                latest_analysis_output
-            )
+            analysis_output = pyine.prompts.code_analysis.CodeAnalysisResponse.model_validate(latest_analysis_output)
             if (
                 analysis_output.imports_nonstandard_packages
                 or analysis_output.invalid_syntax
