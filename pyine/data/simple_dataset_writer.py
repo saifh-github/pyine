@@ -24,27 +24,6 @@ import pyine.utils.reprod
 DeltaGeneratorType = pyine.data.utils.trace_delta.DeltaGeneratorType
 
 
-def _filter_relevant_source_trace_step_idxs(
-    trace_res: pyine.utils.code_exec.TraceResult,
-    first_relevant_step_idx: int = 0,
-) -> list[int]:
-    """Filters out irrelevant trace steps that are invalid or outside the proposed code string."""
-    raw_trace_steps: list[pyine.utils.code_exec.TraceEvent | None] = trace_res.traced_steps
-    filtered_trace_step_idxs = []
-    for trace_step in raw_trace_steps:
-        if trace_step is None:
-            continue  # step originates from blacklisted, internal, or compiled modules
-        if trace_step.trace_step_idx < first_relevant_step_idx:
-            continue  # trace step occurs before we begin tracing the actual algo exec
-        trace_key = trace_step.trace_key
-        if trace_key.file != pyine.utils.code_exec.EXEC_TRACE_FILE_NAME:
-            continue  # step originates from a separate file instead of the input code string
-        # if trace_step.event_type == "call" and trace_step.trace_step_idx == first_relevant_step_idx:
-        #     continue  # step is the initial call of the algo execution (useless?)
-        filtered_trace_step_idxs.append(trace_step.trace_step_idx)
-    return filtered_trace_step_idxs
-
-
 def write_simple_deltas_dataset(
     raw_dataset_path: pathlib.Path,
     output_dataset_path: pathlib.Path,
@@ -91,22 +70,7 @@ def write_simple_deltas_dataset(
         trace_res = pyine.utils.code_exec.TraceResult(**trace_res)
         # if trace_id.sample_idx == 13856 and trace_id.version_idx == 0:
         #     continue  # annoying lambda example
-        first_relevant_step_idx = 0
-        if trace_res.entrypoint_step_idx is not None:
-            first_entrypoint_trace_step = next(
-                (v for v in trace_res.traced_steps[trace_res.entrypoint_step_idx :] if v is not None),
-                None,
-            )
-            if first_entrypoint_trace_step is None:
-                print(f"invalid entrypoint call step in {trace_id=}")  # (might want to fix these?)  @@@@@
-                continue  # invalid entrypoint call?
-            first_relevant_step_idx = first_entrypoint_trace_step.trace_step_idx
-        relevant_traced_step_idxs = _filter_relevant_source_trace_step_idxs(
-            trace_res=trace_res,
-            first_relevant_step_idx=first_relevant_step_idx,
-        )
         deltas = pyine.data.utils.trace_delta.get_deltas_from_trace_steps(
-            relevant_step_idxs=relevant_traced_step_idxs,
             trace_res=trace_res,
             delta_generator=delta_generator,
             write_with_debug_info=write_with_debug_info,
@@ -115,7 +79,6 @@ def write_simple_deltas_dataset(
         if verbose:
             print(f"{trace_id=}")
             print(f"traced steps: {len(trace_res.traced_steps)}")
-            print(f"first relevant step idx: {first_relevant_step_idx}")
             print("code string:")
             pyine.utils.portability.print_code_with_numbered_lines(trace_res.code_string, 1)
             print(f"input args:\n\t{trace_res.inputs}")
