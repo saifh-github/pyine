@@ -50,6 +50,8 @@ class TraceKey(typing.NamedTuple):
 class TraceEventType(enum.StrEnum):
     """Identifies the type of execution event caught via the sys.settrace callback."""
 
+    # note: do not modify these! they are the actual values used by sys.settrace
+
     CALL = "call"
     RETURN = "return"
     EXCEPTION = "exception"
@@ -66,7 +68,7 @@ class TraceException(typing.NamedTuple):
 
     def __repr__(self):
         """Returns a string representation of the trace exception."""
-        return f"{self.type}: {self.message}"
+        return f"{self.type}({self.message})"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -401,7 +403,7 @@ def execute_and_trace_code(
                 exc_type, exc_value, exc_traceback = arg
                 exception = TraceException(
                     type=exc_type.__name__,
-                    message=portable_repr(exc_value),
+                    message=str(exc_value),
                 )
             trace_event = TraceEvent(
                 event_type=TraceEventType(event),

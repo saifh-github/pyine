@@ -48,33 +48,23 @@ def get_portable_representation(
     Returns:
         Dict containing structured information about the object with stable identifiers.
     """
-    if obj is None:
-        return "None"
-    elif isinstance(obj, (int, float, bool, str, bytes)):
-        type_name = type(obj).__name__
-        if isinstance(obj, bytes):
-            try:
-                # try to decode as utf-8 for readability
-                value_str = obj.decode("utf-8")
-            except UnicodeDecodeError:
-                # fallback to hex representation
-                value_str = obj.hex()
-        else:
-            value_str = str(obj)
-        return f"{type_name}:{value_str}"
+    if isinstance(obj, (int, float, bool, str, bytes)) or obj is None:
+        return f"{repr(obj)}"
     elif isinstance(obj, np.ndarray):
-        return f"numpy.ndarray:shape={obj.shape},dtype={obj.dtype}"
+        return f"numpy.ndarray(shape={obj.shape},dtype={obj.dtype})"
     elif isinstance(obj, pd.DataFrame):
-        return f"pandas.DataFrame:shape={obj.shape}"
+        return f"pandas.DataFrame(shape={obj.shape})"
     elif isinstance(obj, pd.Series):
-        return f"pandas.Series:len={len(obj)},dtype={obj.dtype},name={obj.name}"
+        return f"pandas.Series(len={len(obj)},dtype={obj.dtype},name={obj.name})"
     elif isinstance(obj, (list, tuple, set)):
         container_type = type(obj).__name__
-        return f"{container_type}:len={len(obj)}"
+        return f"{container_type}(len={len(obj)})"
     elif isinstance(obj, dict):
-        return f"dict:len={len(obj)}"
+        return f"dict(len={len(obj)})"
     elif inspect.ismodule(obj):
-        return f"module:{obj.__name__}"
+        return f"module({obj.__name__})"
+    elif isinstance(obj, BaseException):
+        return f"{type(obj).__name__}({str(obj)})"
     elif callable(obj):
         module = getattr(obj, "__module__", None)
         if hasattr(obj, "__qualname__"):
@@ -82,25 +72,26 @@ def get_portable_representation(
         elif hasattr(obj, "__name__"):
             name = obj.__name__
         else:
-            name = f"anonymous:{obj}"
+            name = f"anonymous({obj})"
         if module is not None:
-            return f"callable:{module}.{name}"
+            return f"callable({module}.{name})"
         else:
-            return f"callable:{name}"
+            return f"callable({name})"
     elif hasattr(obj, "__class__") and not isinstance(obj, type):
         class_name = obj.__class__.__name__
         module = obj.__class__.__module__
-        return f"instance:{module}.{class_name}"
+        return f"instance({module}.{class_name})"
     else:
         # fallback for any other objects
         # clean the default repr of memory addresses
+        # noinspection PyBroadException
         try:
             default_repr = repr(obj)
             cleaned_repr = re.sub(r" at 0x[0-9a-f]+", "", default_repr)  # remove pointers
             cleaned_repr = re.sub(r" from '.*?'", "", cleaned_repr)  # remove file paths
             return cleaned_repr
         except Exception:
-            return f"<unprintable-{type(obj).__name__}>"
+            return f"unprintable({type(obj).__name__})"
 
 
 def format_object_changes(
