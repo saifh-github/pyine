@@ -9,37 +9,63 @@ ______________________________________________________________________
 
 ## **Installation**
 
-To get started with the PyINE benchmark and dataset, follow one of the installation methods
-below based on your preferred setup.
+To get started with the PyINE benchmark and dataset, we recommend using a virtual environment.
+Below are instructions for both the fast, modern `uv` tool and the standard `pip` with `venv`.
 
 ______________________________________________________________________
 
-### **1. Installation Using a Virtual Environment**
+### **Option 1: Using `uv` (Recommended for speed)**
 
-#### 1.1. Create and activate a virtual environment:
+[uv](https://github.com/astral-sh/uv) is an extremely fast Python package installer and resolver,
+written in Rust. It can be used as a drop-in replacement for `pip` and `venv`.
 
-```shell script
-# (assuming you are in the project's root directory, and using Python 3.10)
-   python -m venv .venv
-   source .venv/bin/activate  # For MacOS/Linux
-   .\.venv\Scripts\activate   # For Windows
+To create and activate a virtual environment, use:
+
+```shell
+# (assuming you are in the project's root directory)
+uv venv
+source .venv/bin/activate  # for MacOS/Linux
+.\.venv\Scripts\activate   # for Windows
 ```
 
-#### 1.2. Install the project and its dependencies:
+Then, to install the project and its dependencies, use:
 
-```shell script
+```shell
+# install base dependencies
+uv pip install -e .
+
+# to include development tools (black, flake8, pytest, etc.), instead use:
+uv pip install -e .[dev]
+```
+
+### **Option 2: Using `pip` and `venv`**
+
+If you prefer to use the standard tools bundled with Python, follow these steps.
+
+First, to create and activate a virtual environment, use:
+
+```shell
+# (assuming you are in the project's root directory)
+python -m venv .venv
+source .venv/bin/activate  # for MacOS/Linux
+.\.venv\Scripts\activate   # for Windows
+```
+
+Then, to install the project and its dependencies, use:
+
+```shell
+# install base dependencies
 pip install -e .
-```
 
-If you'd like to contribute to the project or work on local development (e.g., code formatting,
-linting, and testing), you can install the optional **dev** dependencies. These include tools
-such as `black`, `flake8`, and `pytest`. To install the development dependencies, run:
-
-```shell script
+# to include development tools (black, flake8, pytest, etc.), instead use:
 pip install -e .[dev]
+
 ```
 
-Also consider installing `pre-commit` and its associated hooks in order to test changes to the
+### **For Contributors: Setting up Pre-commit Hooks**
+
+If you'd like to contribute to the project, you should install the optional **dev** dependencies,
+and also install `pre-commit` and its associated hooks in order to test changes to the
 codebase:
 
 ```shell script
