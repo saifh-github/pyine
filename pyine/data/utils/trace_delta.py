@@ -64,48 +64,6 @@ class DeltaGeneratorType(enum.StrEnum):
     DEEPDIFF = enum.auto()
 
 
-def _get_relation_between_events(
-    curr: pyine.utils.code_exec.TraceEvent,
-    next: pyine.utils.code_exec.TraceEvent,
-) -> EventRelationship:
-    """Returns the relation between two trace events.
-
-    Args:
-        curr: the current trace event, i.e. the starting state of the delta.
-        next: the next trace event, i.e. the ending state of the delta.
-    """
-    assert curr.trace_step_idx < next.trace_step_idx, "out-of-order trace events?"
-    # special handling: we usually only look at the 'next' event type, but will look at curr for this:
-    if curr.event_type == pyine.utils.code_exec.TraceEventType.CALL:
-        # the 'entrypoint' of the traced code; there should only be a single one of these
-        # (we don't need to consider the next event type at all here, it will be reused)
-        return EventRelationship.ENTRYPOINT
-    # below, we now only look at the 'next' event type
-    if next.event_type == pyine.utils.code_exec.TraceEventType.LINE:
-        # going from one line to another is just a 'step over' delta (simplest type of delta)
-        # (note: the 'current' line could be, apart from a regular line itself, an exception catch block)
-        return EventRelationship.STEP_OVER
-    if next.event_type == pyine.utils.code_exec.TraceEventType.CALL:
-        # current event evaluates a function call, and next event moves the trace to that function
-        # (the following event would correspond to the first executed line inside that function)
-        assert curr.event_type == pyine.utils.code_exec.TraceEventType.LINE
-        return EventRelationship.STEP_INTO
-    if next.event_type == pyine.utils.code_exec.TraceEventType.RETURN:
-        # if the next event of the pair is a return from a function call, then...
-        assert curr.event_type in [
-            pyine.utils.code_exec.TraceEventType.LINE,  # the current event might be one last eval
-            pyine.utils.code_exec.TraceEventType.RETURN,  # or a cascading return from a prior call
-            pyine.utils.code_exec.TraceEventType.EXCEPTION,  # or a propagating exception
-        ]
-        # note: this kind of event might be caused by a returned value, or by a raised exception
-        return EventRelationship.STEP_OUT
-    if next.event_type == pyine.utils.code_exec.TraceEventType.EXCEPTION:
-        # current event caused an exception to be raised, which will be propagated until caught
-        return EventRelationship.RAISE
-    # default catch: (if this happens, we need to figure out why, and fix the delta pairing logic)
-    raise NotImplementedError(f"unexpected event type combo: {curr.event_type}+{next.event_type}")
-
-
 def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[str, str]:
     """Compares two variable dicts and returns added/updated entries."""
     # note: we purposefully do NOT show missing/removed values in deltas to reduce useless spam/outputs
@@ -211,6 +169,43 @@ class _EventPairIterator:
             filtered_trace_step_idxs.append(trace_step.trace_step_idx)
         return filtered_trace_step_idxs
 
+    def _get_relation_between_events(
+        self,
+        curr: pyine.utils.code_exec.TraceEvent,
+        next: pyine.utils.code_exec.TraceEvent,
+    ) -> EventRelationship:
+        """Returns the relation between two trace events."""
+        assert curr.trace_step_idx < next.trace_step_idx, "out-of-order trace events?"
+        # special handling: we usually only look at the 'next' event type, but will look at curr for this:
+        if curr.event_type == pyine.utils.code_exec.TraceEventType.CALL:
+            # the 'entrypoint' of the traced code; there should only be a single one of these
+            # (we don't need to consider the next event type at all here, it will be reused)
+            return EventRelationship.ENTRYPOINT
+        # below, we now only look at the 'next' event type
+        if next.event_type == pyine.utils.code_exec.TraceEventType.LINE:
+            # going from one line to another is just a 'step over' delta (simplest type of delta)
+            # (note: the 'current' line could be, apart from a regular line itself, an exception catch block)
+            return EventRelationship.STEP_OVER
+        if next.event_type == pyine.utils.code_exec.TraceEventType.CALL:
+            # current event evaluates a function call, and next event moves the trace to that function
+            # (the following event would correspond to the first executed line inside that function)
+            assert curr.event_type == pyine.utils.code_exec.TraceEventType.LINE
+            return EventRelationship.STEP_INTO
+        if next.event_type == pyine.utils.code_exec.TraceEventType.RETURN:
+            # if the next event of the pair is a return from a function call, then...
+            assert curr.event_type in [
+                pyine.utils.code_exec.TraceEventType.LINE,  # the current event might be one last eval
+                pyine.utils.code_exec.TraceEventType.RETURN,  # or a cascading return from a prior call
+                pyine.utils.code_exec.TraceEventType.EXCEPTION,  # or a propagating exception
+            ]
+            # note: this kind of event might be caused by a returned value, or by a raised exception
+            return EventRelationship.STEP_OUT
+        if next.event_type == pyine.utils.code_exec.TraceEventType.EXCEPTION:
+            # current event caused an exception to be raised, which will be propagated until caught
+            return EventRelationship.RAISE
+        # default catch: (if this happens, we need to figure out why, and fix the delta pairing logic)
+        raise NotImplementedError(f"unexpected event type combo: {curr.event_type}+{next.event_type}")
+
     def get_next_pair(
         self,
     ) -> tuple[pyine.utils.code_exec.TraceEvent, pyine.utils.code_exec.TraceEvent, EventRelationship]:
@@ -220,7 +215,7 @@ class _EventPairIterator:
         next_step = self.trace_res.traced_steps[self.relevant_step_idxs[self.iter_idx + 1]]
         assert curr_step is not None and next_step is not None
         assert curr_step.trace_step_idx < next_step.trace_step_idx, "out-of-order trace steps?"
-        relationship = _get_relation_between_events(curr_step, next_step)
+        relationship = self._get_relation_between_events(curr_step, next_step)
         self.iter_idx += 1
         return curr_step, next_step, relationship
 
