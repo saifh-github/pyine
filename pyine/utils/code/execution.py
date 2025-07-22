@@ -12,7 +12,7 @@ import typing
 
 import pydantic
 
-import pyine.utils.code_blocks
+import pyine.utils.code.blocks
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -108,7 +108,7 @@ class TraceResult(pydantic.BaseModel):
 
     code_string: str
     """The original code string that was executed."""
-    code_blocks: dict[int, pyine.utils.code_blocks.CodeBlock]
+    code_blocks: dict[int, pyine.utils.code.blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
     inputs: int | float | str | list[int | float | str]
     """The inputs that were available to the code during execution."""
@@ -333,7 +333,7 @@ def execute_and_trace_code(
         A `TraceResult` instance containing the execution results.
     """
     try:
-        code_blocks = pyine.utils.code_blocks.identify_code_blocks(code_string)
+        code_blocks = pyine.utils.code.blocks.identify_code_blocks(code_string)
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
         raise Exception(f"error while analyzing and compiling code: {e}")

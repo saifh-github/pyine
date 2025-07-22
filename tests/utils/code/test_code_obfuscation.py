@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-import pyine.utils.code_obfuscation as code_obf
+import pyine.utils.code.obfuscation as code_obf
 
 
 @pytest.fixture

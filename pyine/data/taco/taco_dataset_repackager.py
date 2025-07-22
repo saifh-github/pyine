@@ -7,7 +7,6 @@ import tiktoken
 
 import data.taco.taco_dataset_parser
 import pyine.prompts.code_analysis
-import pyine.utils.code_validation
 
 
 async def reprocess_code_samples(
@@ -80,7 +79,7 @@ async def reprocess_code_samples(
                     assert (
                         query_token_count <= max_token_count
                     ), f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
-                    pyine.utils.code_validation.validate_code(solution)
+                    pyine.utils.code.validation.validate_code(solution)
                 except Exception as e:
                     validation_errors.append(str(e))
                 all_solutions.append(

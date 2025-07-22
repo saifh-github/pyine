@@ -1,6 +1,6 @@
 import pytest
 
-import pyine.utils.code_blocks
+import pyine.utils.code.blocks as code_blocks
 
 
 @pytest.fixture
@@ -51,67 +51,67 @@ print("    hello!    ")                      # L39
 
 def test_identify_code_blocks_comprehensive(complex_code_sample):
     """Test block identification with various Python constructs."""
-    blocks = pyine.utils.code_blocks.identify_code_blocks(complex_code_sample)
+    blocks = code_blocks.identify_code_blocks(complex_code_sample)
     print(complex_code_sample)
     assert len(blocks) == 14
-    assert blocks[1] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.FUNCTION,
+    assert blocks[1] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.FUNCTION,
         name="outer_function",
         depth=0,
         parent_line=None,
         start_line=1,
         end_line=36,
     )
-    assert blocks[5] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.IF,
+    assert blocks[5] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.IF,
         name=None,
         depth=1,
         parent_line=1,
         start_line=5,
         end_line=16,
     )
-    assert blocks[7] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.IF,
+    assert blocks[7] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.IF,
         name=None,
         depth=2,
         parent_line=5,
         start_line=7,
         end_line=16,
     )
-    assert blocks[9] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.WHILE,
+    assert blocks[9] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.WHILE,
         name=None,
         depth=3,
         parent_line=7,
         start_line=9,
         end_line=12,
     )
-    assert blocks[11] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.IF,
+    assert blocks[11] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.IF,
         name=None,
         depth=4,
         parent_line=9,
         start_line=11,
         end_line=12,
     )
-    assert blocks[15] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.IF,
+    assert blocks[15] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.IF,
         name=None,
         depth=3,
         parent_line=7,
         start_line=15,
         end_line=16,
     )
-    assert blocks[25] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.CLASS,
+    assert blocks[25] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.CLASS,
         name="InnerClass",
         depth=1,
         parent_line=1,
         start_line=25,
         end_line=30,
     )
-    assert blocks[26] == pyine.utils.code_blocks.CodeBlock(
-        type=pyine.utils.code_blocks.CodeBlockType.FUNCTION,
+    assert blocks[26] == code_blocks.CodeBlock(
+        type=code_blocks.BlockType.FUNCTION,
         name="some_method",
         depth=2,
         parent_line=25,
@@ -122,15 +122,15 @@ def test_identify_code_blocks_comprehensive(complex_code_sample):
 
 def test_identify_code_blocks_empty_and_simple():
     """Test with empty code and simple structures."""
-    assert len(pyine.utils.code_blocks.identify_code_blocks("")) == 0
-    assert len(pyine.utils.code_blocks.identify_code_blocks("x = 10")) == 0
-    blocks_map = pyine.utils.code_blocks.identify_code_blocks("def simple():\n\treturn None\n\nsimple()")
+    assert len(code_blocks.identify_code_blocks("")) == 0
+    assert len(code_blocks.identify_code_blocks("x = 10")) == 0
+    blocks_map = code_blocks.identify_code_blocks("def simple():\n\treturn None\n\nsimple()")
     expected_def_line = 1
     assert len(blocks_map) == 1 and expected_def_line in blocks_map
     block = blocks_map[expected_def_line]
-    assert isinstance(block, pyine.utils.code_blocks.CodeBlock)
+    assert isinstance(block, code_blocks.CodeBlock)
     assert block.name == "simple"
-    assert block.type == pyine.utils.code_blocks.CodeBlockType.FUNCTION
+    assert block.type == code_blocks.BlockType.FUNCTION
     assert block.start_line == expected_def_line
     assert block.end_line == expected_def_line + 1
     assert block.depth == 0

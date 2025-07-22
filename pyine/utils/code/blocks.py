@@ -4,7 +4,7 @@ import enum
 import typing
 
 
-class CodeBlockType(enum.StrEnum):
+class BlockType(enum.StrEnum):
     """Enumeration of all supported block types for analysis.
 
     Note: we ignore lambdas, list comprehensions, and generator expressions.
@@ -24,17 +24,17 @@ class CodeBlockType(enum.StrEnum):
 
 
 _ast_node_type_mapping = {
-    ast.If: CodeBlockType.IF,
-    ast.For: CodeBlockType.FOR,
-    ast.While: CodeBlockType.WHILE,
-    ast.Try: CodeBlockType.TRY,
-    ast.ExceptHandler: CodeBlockType.EXCEPT,
-    ast.FunctionDef: CodeBlockType.FUNCTION,
-    ast.ClassDef: CodeBlockType.CLASS,
-    ast.With: CodeBlockType.WITH,
-    ast.AsyncFor: CodeBlockType.ASYNC_FOR,
-    ast.AsyncWith: CodeBlockType.ASYNC_WITH,
-    ast.AsyncFunctionDef: CodeBlockType.ASYNC_FUNCTION,
+    ast.If: BlockType.IF,
+    ast.For: BlockType.FOR,
+    ast.While: BlockType.WHILE,
+    ast.Try: BlockType.TRY,
+    ast.ExceptHandler: BlockType.EXCEPT,
+    ast.FunctionDef: BlockType.FUNCTION,
+    ast.ClassDef: BlockType.CLASS,
+    ast.With: BlockType.WITH,
+    ast.AsyncFor: BlockType.ASYNC_FOR,
+    ast.AsyncWith: BlockType.ASYNC_WITH,
+    ast.AsyncFunctionDef: BlockType.ASYNC_FUNCTION,
 }
 
 
@@ -42,8 +42,8 @@ _ast_node_type_mapping = {
 class CodeBlock:
     """Information about a logical block in a Python code snippet."""
 
-    type: CodeBlockType
-    """The type of block (see CodeBlockType enum)."""
+    type: BlockType
+    """The type of block (see BlockType enum)."""
     name: str | None
     """The name of the block (if applicable, for classes/functions)."""
     depth: int
@@ -85,7 +85,7 @@ def _capture_child_nodes(
     if results is None:
         results = []
     node_type = _ast_node_type_mapping.get(type(node))
-    if node_type and node_type in {t.value for t in CodeBlockType}:
+    if node_type and node_type in {t.value for t in BlockType}:
         if next_depth is None:
             next_depth = 0
         node_info = CodeBlock(

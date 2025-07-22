@@ -65,6 +65,14 @@ class DatasetParser(torch.utils.data.Dataset):
         # defines the upper bound of the range of EXTERNAL trace indices (that don't map to lmdb)
         return len(self.trace_indices)
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        """Returns a dictionary of all metadata stored in the database."""
+        return self.reader.get_metadata()
+
+    def get_size_on_disk(self) -> int:
+        """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
+        return self.reader.get_size_on_disk()
+
     def __getitem__(self, index_or_key: int | str) -> dict[str, typing.Any]:
         """
         Fetches an individual trace from the LMDB database by external index or key.

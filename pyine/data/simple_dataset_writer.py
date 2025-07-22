@@ -15,8 +15,7 @@ import tqdm
 import pyine.data.raw_dataset_reader
 import pyine.data.utils.lmdb_io
 import pyine.data.utils.trace_delta
-import pyine.utils.code_blocks
-import pyine.utils.code_exec
+import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -30,7 +29,6 @@ def write_simple_deltas_dataset(
     delta_generator: DeltaGeneratorType = DeltaGeneratorType.SIMPLE,
     target_difficulties: list[str] | None = None,
     verbose: bool = True,
-    write_with_debug_info: bool = False,
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a simple deltas dataset from the raw dataset.
 
@@ -40,7 +38,6 @@ def write_simple_deltas_dataset(
         delta_generator: Type of delta generator to use (e.g., simple vs deepdiff).
         target_difficulties: List of target difficulty labels to include in the dataset. If None, all difficulties are included.
         verbose: Specifies whether to print verbose output during execution.
-        write_with_debug_info: Specifies whether to include debug information in the deltas.
     """
     raw_parser = pyine.data.raw_dataset_reader.DatasetParser(lmdb_path=raw_dataset_path)
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
@@ -62,18 +59,17 @@ def write_simple_deltas_dataset(
         if target_difficulties is not None and raw_data.get("difficulty") not in target_difficulties:
             continue
         trace_key = raw_parser.trace_keys[data_idx]
-        trace_id = pyine.utils.code_exec.TraceResultIdentifier.from_string(trace_key)
+        trace_id = pyine.utils.code.execution.TraceResultIdentifier.from_string(trace_key)
         assert trace_id not in seen_trace_ids
         seen_trace_ids.append(trace_id)
         trace_res = raw_data["trace_result"]  # dict, pre-conversion, just to check the id below
-        assert trace_id == pyine.utils.code_exec.TraceResultIdentifier.from_string(trace_res["trace_id"])
-        trace_res = pyine.utils.code_exec.TraceResult(**trace_res)
+        assert trace_id == pyine.utils.code.execution.TraceResultIdentifier.from_string(trace_res["trace_id"])
+        trace_res = pyine.utils.code.execution.TraceResult(**trace_res)
         # if trace_id.sample_idx == 13856 and trace_id.version_idx == 0:
         #     continue  # annoying lambda example
         deltas = pyine.data.utils.trace_delta.get_deltas_from_trace_steps(
             trace_res=trace_res,
             delta_generator=delta_generator,
-            write_with_debug_info=write_with_debug_info,
         )
         assert deltas
         if verbose:
@@ -103,5 +99,4 @@ if __name__ == "__main__":
         raw_dataset_path=pathlib.Path("data/2025-03-31-v01.raw.lmdb"),
         output_dataset_path=pathlib.Path("data/2025-03-31-v01.simple.lmdb"),
         verbose=True,
-        write_with_debug_info=False,
     )

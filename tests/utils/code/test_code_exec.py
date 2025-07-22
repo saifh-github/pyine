@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from pyine.utils.code_exec import (
+from pyine.utils.code.execution import (
     EXEC_TRACE_FILE_NAME,
     MockInput,
     MockInputContext,
@@ -59,7 +59,7 @@ class TestMockInputContext:
         with pytest.raises(ValueError):
             with MockInputContext("mock"):
                 raise ValueError("Test exception")
-        assert sys.stdin is original_stdin
+        assert sys.stdin is original_stdin  # noqa
 
     def test_nested_contexts(self):
         original_stdin = sys.stdin

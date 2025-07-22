@@ -4,9 +4,11 @@ import typing
 
 import deepdiff
 
-import pyine.utils.code_blocks
-import pyine.utils.code_exec
+import pyine.utils.code.execution
 import pyine.utils.portability
+
+# @@@@@@@@@@@ TODO: write unit tests for all this stuff
+# @@@@@@@@@@@ TODO: then, go back to simple dataset writer and see if it works large scale
 
 
 class EventRelationship(enum.StrEnum):
@@ -28,13 +30,13 @@ class EventRelationship(enum.StrEnum):
 
 @dataclasses.dataclass(frozen=True)
 class TraceDelta:
-    curr_trace_key: pyine.utils.code_exec.TraceKey
+    curr_trace_key: pyine.utils.code.execution.TraceKey
     """The trace key associated with the start of the delta."""
-    next_trace_key: pyine.utils.code_exec.TraceKey
+    next_trace_key: pyine.utils.code.execution.TraceKey
     """The trace key associated with the end of the delta."""
     trace_step_idx: int
     """The trace step index at the start of the delta; should be unique for each delta."""
-    exception: pyine.utils.code_exec.TraceException | None
+    exception: pyine.utils.code.execution.TraceException | None
     """A dictionary containing information about the exception being raised/propagated, if any."""
     variables_delta: dict[str, str]
     """A dictionary containing the added/removed/updated variables in the delta."""
@@ -43,11 +45,11 @@ class TraceDelta:
 
     def __repr__(self):
         """Returns a string representation of the trace delta."""
-        if self.curr_trace_key.file == pyine.utils.code_exec.EXEC_TRACE_FILE_NAME:
+        if self.curr_trace_key.file == pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
             curr_trace_file_prefix = ""
         else:
             curr_trace_file_prefix = f"{self.curr_trace_key.file}:"
-        if self.next_trace_key.file == pyine.utils.code_exec.EXEC_TRACE_FILE_NAME:
+        if self.next_trace_key.file == pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
             next_trace_file_prefix = ""
         else:
             next_trace_file_prefix = f"{self.next_trace_key.file}:"
@@ -80,22 +82,22 @@ def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[s
 class _CallStack:
     """A stack of caller ids and variables, used to track context during execution."""
 
-    orig_caller_trace_key = pyine.utils.code_exec.TraceKey(
+    orig_caller_trace_key = pyine.utils.code.execution.TraceKey(
         # fill these with arbitrary but unique values to be able to easily identify it
-        file=pyine.utils.code_exec.EXEC_PARENT_FILE_NAME,
+        file=pyine.utils.code.execution.EXEC_PARENT_FILE_NAME,
         line=0,
         object="<module>",
     )
 
     def __init__(self) -> None:
         """Initializes the call stack (it will be empty at first, until initialized)."""
-        self._stack: list[tuple[pyine.utils.code_exec.TraceKey, dict[str, typing.Any]]] = []
+        self._stack: list[tuple[pyine.utils.code.execution.TraceKey, dict[str, typing.Any]]] = []
 
     def is_initialized(self) -> bool:
         """Returns whether the call stack is initialized."""
         return len(self._stack) > 0
 
-    def init(self, curr_step: pyine.utils.code_exec.TraceEvent) -> pyine.utils.code_exec.TraceKey:
+    def init(self, curr_step: pyine.utils.code.execution.TraceEvent) -> pyine.utils.code.execution.TraceKey:
         """Initializes the call stack with the current parent-provided arguments.
 
         Returns the hardcoded parent caller id that will identify when we exit the traced code.
@@ -107,12 +109,12 @@ class _CallStack:
 
     def pop(
         self,
-        next_step: pyine.utils.code_exec.TraceEvent,  # used for internal validation only
-    ) -> tuple[pyine.utils.code_exec.TraceKey, dict[str, typing.Any]]:
+        next_step: pyine.utils.code.execution.TraceEvent,  # used for internal validation only
+    ) -> tuple[pyine.utils.code.execution.TraceKey, dict[str, typing.Any]]:
         """Pops the last element of the call stack, and returns its caller id and context vars."""
         assert len(self._stack) > 0, "return events should always be paired with a call?"
         caller_trace_key, caller_vars = self._stack.pop()
-        if caller_trace_key.file == pyine.utils.code_exec.EXEC_PARENT_FILE_NAME:
+        if caller_trace_key.file == pyine.utils.code.execution.EXEC_PARENT_FILE_NAME:
             # TODO @@@@ assert below might fail sometimes (exception situations?), fixme
             # if the caller is the execution parent, it means the stack should be empty
             assert len(self._stack) == 0 and len(next_step.stack_trace) == 1
@@ -123,7 +125,7 @@ class _CallStack:
 
     def push(
         self,
-        curr_step: pyine.utils.code_exec.TraceEvent,
+        curr_step: pyine.utils.code.execution.TraceEvent,
     ) -> None:
         """Pushes a new (caller id, context vars) tuple to the call stack."""
         assert len(self._stack) > 0, "stack should be initialized before pushing a new element"
@@ -135,7 +137,7 @@ class _EventPairIterator:
 
     def __init__(
         self,
-        trace_res: pyine.utils.code_exec.TraceResult,
+        trace_res: pyine.utils.code.execution.TraceResult,
     ):
         """Initializes the event iterator."""
         self.trace_res = trace_res
@@ -156,7 +158,7 @@ class _EventPairIterator:
             if first_entrypoint_trace_step is None:
                 raise AssertionError("invalid entrypoint call step")  # fix if it happens? @@@@
             first_relevant_step_idx = first_entrypoint_trace_step.trace_step_idx
-        raw_trace_steps: list[pyine.utils.code_exec.TraceEvent | None] = self.trace_res.traced_steps
+        raw_trace_steps: list[pyine.utils.code.execution.TraceEvent | None] = self.trace_res.traced_steps
         filtered_trace_step_idxs = []
         for trace_step in raw_trace_steps:
             if trace_step is None:
@@ -164,43 +166,43 @@ class _EventPairIterator:
             if trace_step.trace_step_idx < first_relevant_step_idx:
                 continue  # trace step occurs before we begin tracing the actual algo exec
             trace_key = trace_step.trace_key
-            if trace_key.file != pyine.utils.code_exec.EXEC_TRACE_FILE_NAME:
+            if trace_key.file != pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
                 continue  # step originates from a separate file instead of the input code string
             filtered_trace_step_idxs.append(trace_step.trace_step_idx)
         return filtered_trace_step_idxs
 
     def _get_relation_between_events(
         self,
-        curr: pyine.utils.code_exec.TraceEvent,
-        next: pyine.utils.code_exec.TraceEvent,
+        curr: pyine.utils.code.execution.TraceEvent,
+        next: pyine.utils.code.execution.TraceEvent,
     ) -> EventRelationship:
         """Returns the relation between two trace events."""
         assert curr.trace_step_idx < next.trace_step_idx, "out-of-order trace events?"
         # special handling: we usually only look at the 'next' event type, but will look at curr for this:
-        if curr.event_type == pyine.utils.code_exec.TraceEventType.CALL:
+        if curr.event_type == pyine.utils.code.execution.TraceEventType.CALL:
             # the 'entrypoint' of the traced code; there should only be a single one of these
             # (we don't need to consider the next event type at all here, it will be reused)
             return EventRelationship.ENTRYPOINT
         # below, we now only look at the 'next' event type
-        if next.event_type == pyine.utils.code_exec.TraceEventType.LINE:
+        if next.event_type == pyine.utils.code.execution.TraceEventType.LINE:
             # going from one line to another is just a 'step over' delta (simplest type of delta)
             # (note: the 'current' line could be, apart from a regular line itself, an exception catch block)
             return EventRelationship.STEP_OVER
-        if next.event_type == pyine.utils.code_exec.TraceEventType.CALL:
+        if next.event_type == pyine.utils.code.execution.TraceEventType.CALL:
             # current event evaluates a function call, and next event moves the trace to that function
             # (the following event would correspond to the first executed line inside that function)
-            assert curr.event_type == pyine.utils.code_exec.TraceEventType.LINE
+            assert curr.event_type == pyine.utils.code.execution.TraceEventType.LINE
             return EventRelationship.STEP_INTO
-        if next.event_type == pyine.utils.code_exec.TraceEventType.RETURN:
+        if next.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
             # if the next event of the pair is a return from a function call, then...
             assert curr.event_type in [
-                pyine.utils.code_exec.TraceEventType.LINE,  # the current event might be one last eval
-                pyine.utils.code_exec.TraceEventType.RETURN,  # or a cascading return from a prior call
-                pyine.utils.code_exec.TraceEventType.EXCEPTION,  # or a propagating exception
+                pyine.utils.code.execution.TraceEventType.LINE,  # the current event might be one last eval
+                pyine.utils.code.execution.TraceEventType.RETURN,  # or a cascading return from a prior call
+                pyine.utils.code.execution.TraceEventType.EXCEPTION,  # or a propagating exception
             ]
             # note: this kind of event might be caused by a returned value, or by a raised exception
             return EventRelationship.STEP_OUT
-        if next.event_type == pyine.utils.code_exec.TraceEventType.EXCEPTION:
+        if next.event_type == pyine.utils.code.execution.TraceEventType.EXCEPTION:
             # current event caused an exception to be raised, which will be propagated until caught
             return EventRelationship.RAISE
         # default catch: (if this happens, we need to figure out why, and fix the delta pairing logic)
@@ -208,7 +210,7 @@ class _EventPairIterator:
 
     def get_next_pair(
         self,
-    ) -> tuple[pyine.utils.code_exec.TraceEvent, pyine.utils.code_exec.TraceEvent, EventRelationship]:
+    ) -> tuple[pyine.utils.code.execution.TraceEvent, pyine.utils.code.execution.TraceEvent, EventRelationship]:
         """Returns the next event pair and relationship tuple."""
         assert self.iter_idx < len(self.relevant_step_idxs) - 1, "iterator index out of bounds"
         curr_step = self.trace_res.traced_steps[self.relevant_step_idxs[self.iter_idx]]
@@ -222,7 +224,7 @@ class _EventPairIterator:
     def get_next_event(
         self,
         increment: bool,
-    ) -> pyine.utils.code_exec.TraceEvent | None:
+    ) -> pyine.utils.code.execution.TraceEvent | None:
         """Returns the next event, or None if there are no more events."""
         if self.iter_idx < len(self.relevant_step_idxs):
             next_step = self.trace_res.traced_steps[self.relevant_step_idxs[self.iter_idx + 1]]
@@ -244,7 +246,7 @@ class _EventPairIterator:
 
 
 def get_deltas_from_trace_steps(
-    trace_res: pyine.utils.code_exec.TraceResult,
+    trace_res: pyine.utils.code.execution.TraceResult,
     delta_generator: DeltaGeneratorType,
     verbose: bool = False,
 ) -> list[TraceDelta]:
@@ -294,11 +296,11 @@ def get_deltas_from_trace_steps(
             assert event_iterator.has_next_event(), "trace ends with a raised exception??"
             assert next_next_step.exception is None, "the next-next step can't possibly raise again"
             next_step = next_next_step
-            if next_step.event_type == pyine.utils.code_exec.TraceEventType.RETURN:
+            if next_step.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
                 # if we get here, it means the exception will be propagated to the parent
                 # (the 'STEP_OUT' block below will continue with the proper propagation logic)
                 pass
-            elif next_step.event_type == pyine.utils.code_exec.TraceEventType.LINE:
+            elif next_step.event_type == pyine.utils.code.execution.TraceEventType.LINE:
                 # if we get here, it means the exception was caught, so we can point to the next line directly
                 # note: should we verify/assert that the 'next' line corresponds to the 'except' block?
                 # should we instead skip ahead again, and not care about stepping to the except line itself?
@@ -341,15 +343,15 @@ def get_deltas_from_trace_steps(
             # now, check for the next-next event: if it's a regular line, we'll need a 2nd delta
             if event_iterator.has_next_event():  # we could be at the end of the trace
                 next_next_step = event_iterator.get_next_event(increment=False)
-                if next_next_step.event_type == pyine.utils.code_exec.TraceEventType.EXCEPTION:
+                if next_next_step.event_type == pyine.utils.code.execution.TraceEventType.EXCEPTION:
                     # this means we are propagating the exception to a prior caller
                     event_iterator.increment_iter_idx()  # consume the raise event (we don't need it)
                     # next iteration will create another delta as above
                 # once we get here, we've stopped propagating because we exited tracing or found a catcher
-                elif next_next_step.event_type == pyine.utils.code_exec.TraceEventType.RETURN:
+                elif next_next_step.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
                     # this is OK, nothing else to do, next iteration will create another delta as above
                     pass
-                elif next_next_step.event_type == pyine.utils.code_exec.TraceEventType.LINE:
+                elif next_next_step.event_type == pyine.utils.code.execution.TraceEventType.LINE:
                     # we need to create a 2nd delta to bridge between returned value and next line
                     event_iterator.increment_iter_idx()  # do that now, we are consuming the event
                     output_deltas.append(
@@ -441,7 +443,7 @@ print("all done")
 5.0
 3.0
 """
-    trace_result = pyine.utils.code_exec.execute_and_trace_code(
+    trace_result = pyine.utils.code.execution.execute_and_trace_code(
         example_snippet,
         example_input_args,
         trace_only_inside_code_string=True,

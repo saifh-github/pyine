@@ -19,8 +19,8 @@ import tqdm
 
 import pyine.data.utils.lmdb_io
 import pyine.prompts.code_analysis
-import pyine.utils.code_exec
-import pyine.utils.code_validation
+import pyine.utils.code.execution
+import pyine.utils.code.validation
 import pyine.utils.filesystem
 import pyine.utils.portability
 
@@ -157,7 +157,7 @@ def write_raw_dataset(
             continue
 
         solution_code_strings = [solution["code"] for solution in solutions]
-        code_dupe_clusters = pyine.utils.code_validation.find_near_duplicate_code_clusters(
+        code_dupe_clusters = pyine.utils.code.validation.find_near_duplicate_code_clusters(
             code_strings=solution_code_strings,
             threshold=minimum_solution_dissimilarity,
         )
@@ -226,7 +226,7 @@ def write_raw_dataset(
             test_success_flags = [False] * min(max_traces_per_solution, len(inputs_array))
 
             try:
-                pyine.utils.code_validation.validate_code(code_string)  # last check before running
+                pyine.utils.code.validation.validate_code(code_string)  # last check before running
             except Exception as e:
                 if verbose:
                     print(f"{data_sample_id}: skipped due to new validation error: {e}")
@@ -250,7 +250,7 @@ def write_raw_dataset(
                     try:
                         if verbose:
                             print(f"{data_sample_id}: starting exec & trace...")
-                        trace_results = pyine.utils.code_exec.execute_and_trace_code(
+                        trace_results = pyine.utils.code.execution.execute_and_trace_code(
                             code_string=code_string,
                             inputs=inputs,
                             entrypoint_name=entrypoint_name,
@@ -280,7 +280,7 @@ def write_raw_dataset(
                             else:  # use default comparator
                                 test_success_flags[test_idx] = return_value == outputs
                         if test_success_flags[test_idx]:
-                            trace_result_id = pyine.utils.code_exec.TraceResultIdentifier(
+                            trace_result_id = pyine.utils.code.execution.TraceResultIdentifier(
                                 **vars(data_sample_id),  # noqa
                                 test_idx=test_idx,
                             )
