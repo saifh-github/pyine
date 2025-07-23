@@ -20,6 +20,7 @@ import tqdm
 import pyine.data.utils.lmdb_io
 import pyine.prompts.code_analysis
 import pyine.utils.code.execution
+import pyine.utils.code.formatting
 import pyine.utils.code.validation
 import pyine.utils.filesystem
 import pyine.utils.portability
@@ -224,6 +225,7 @@ def write_raw_dataset(
                     continue
             code_string = solution["code"]
             test_success_flags = [False] * min(max_traces_per_solution, len(inputs_array))
+            code_string = pyine.utils.code.formatting.format_code(code_string)
 
             try:
                 pyine.utils.code.validation.validate_code(code_string)  # last check before running

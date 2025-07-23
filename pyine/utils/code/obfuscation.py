@@ -1,5 +1,7 @@
 import python_minifier
 
+import pyine.utils.code.formatting
+
 
 def obfuscate_code(
     code_string: str,
@@ -8,6 +10,7 @@ def obfuscate_code(
     preserved_local_names: list[str] | None = None,
     rename_global_variables: bool = True,
     preserve_global_names: list[str] | None = None,
+    reformat_output: bool = True,
 ) -> str:
     """Obfuscates a given string of Python code using the python-minifier library.
 
@@ -29,9 +32,10 @@ def obfuscate_code(
         rename_global_variables: whether to rename global variables. If True, the function will
             rename any global names, including imports, function names, builtins, etc.
         preserve_global_names: a list of global names that should not be renamed (optional).
+        reformat_output: whether to reformat the output code using black.
     """
 
-    return python_minifier.minify(
+    output = python_minifier.minify(
         source=code_string,
         remove_annotations=True,
         remove_pass=False,  # to make sure we preserve most execution steps, even if unnecessary
@@ -51,6 +55,9 @@ def obfuscate_code(
         remove_builtin_exception_brackets=True,
         constant_folding=False,  # we want similar-or-worse-complexity examples, and this lowers complexity
     )
+    if reformat_output:
+        output = pyine.utils.code.formatting.format_code(output)
+    return output
 
 
 if __name__ == "__main__":
@@ -61,7 +68,7 @@ import numpy as np
 class MyClass:
     '''This is a sample class.'''
     def __init__(self, value):
-        self.my_variable = value
+        self.my_variable = value  # here's a nice comment
 
     def my_method(self, multiplier):
         '''This method multiplies the variable.'''

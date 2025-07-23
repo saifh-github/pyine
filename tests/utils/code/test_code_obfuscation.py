@@ -18,7 +18,7 @@ class MyTestClass:
 
     def __init__(self, value: int):
         '''Initializes the class.'''
-        self.my_variable: int = value
+        self.my_variable: int = value  # some nice comment
         "A literal string"
 
     def calculate(self, multiplier: int) -> int:
@@ -49,6 +49,7 @@ def test_default_obfuscation(sample_code):
     assert "A literal string" not in obfuscated
     assert ": int" not in obfuscated
     assert "-> float" not in obfuscated
+    assert "some nice comment" not in obfuscated
 
 
 def test_remove_docstrings_disabled(sample_code):

@@ -34,7 +34,7 @@ Then, to install the project and its dependencies, use:
 # install base dependencies
 uv pip install -e .
 
-# to include development tools (black, flake8, pytest, etc.), instead use:
+# to include development tools (flake8, pytest, etc.), instead use:
 uv pip install -e .[dev]
 ```
 
@@ -57,7 +57,7 @@ Then, to install the project and its dependencies, use:
 # install base dependencies
 pip install -e .
 
-# to include development tools (black, flake8, pytest, etc.), instead use:
+# to include development tools (flake8, pytest, etc.), instead use:
 pip install -e .[dev]
 
 ```
