@@ -75,8 +75,9 @@ class TestMockInputContext:
 value = input("Enter: ")
 print(f"Got: {value}")
 """
-        result = execute_and_trace_code(code, inputs="test input")
+        result = execute_and_trace_code(code, identifier="dummy", inputs="test input")
         assert result.exception is None
+        assert result.identifier == "dummy"
         assert "Got: test input" in result.stdout
 
 

@@ -100,12 +100,14 @@ class TraceEvent:
 
     def __repr__(self):
         """Returns a (partial) string representation of the trace event."""
-        return f"{self.event_type}@{self.trace_key}"
+        return f"step#{self.trace_step_idx:06d}:{self.event_type}@{self.trace_key}"
 
 
 class TraceResult(pydantic.BaseModel):
     """Dataclass for storing and exporting execution trace results."""
 
+    identifier: str | None
+    """An identifier for this trace (used for printing/logging purposes only)."""
     code_string: str
     """The original code string that was executed."""
     code_blocks: dict[int, pyine.utils.code.blocks.CodeBlock]
@@ -146,29 +148,12 @@ class TraceResult(pydantic.BaseModel):
     metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
 
-
-@dataclasses.dataclass(frozen=True)
-class TraceResultIdentifier(pyine.utils.portability.DataSampleIdentifier):
-    """NamedTuple for identifying code execution trace results in the raw dataset."""
-
-    test_idx: int
-    """The index identifying the exact test case within the sample that was executed."""
-
-    def __repr__(self):
-        """Returns a string representation of the trace result identifier."""
-        return f"{pyine.utils.portability.DataSampleIdentifier.__repr__(self)}/t{self.test_idx:04d}"
-
-    def get_parent_identifier(self):
-        """Returns the identifier of the parent data sample."""
-        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name != "test_idx"}
-        return pyine.utils.portability.DataSampleIdentifier(**parent_vars)
-
-    @staticmethod
-    def from_string(identifier_str: str) -> "TraceResultIdentifier":
-        """Creates a TraceResultIdentifier instance from a string representation."""
-        data_sample_str, test_idx_str = identifier_str.rsplit("/", maxsplit=1)
-        data_sample_id = pyine.utils.portability.DataSampleIdentifier.from_string(data_sample_str)
-        return TraceResultIdentifier(**vars(data_sample_id), test_idx=int(test_idx_str[1:]))
+    def __str__(self):
+        """Returns a string representation of the trace result based on its identifier."""
+        if self.identifier is not None:
+            return str(self.identifier)
+        else:
+            return str(self.model_dump_json())
 
 
 @contextlib.contextmanager
@@ -304,6 +289,7 @@ def _get_clean_filename(filename: str) -> str:
 def execute_and_trace_code(
     code_string: str,
     inputs: str = "",
+    identifier: str | None = None,
     entrypoint_name: str | None = None,
     blacklisted_modules: typing.Iterable[str] | None = None,
     blacklisted_objects: typing.Iterable[str] | None = None,
@@ -321,6 +307,7 @@ def execute_and_trace_code(
         code_string: a string containing arbitrary Python code to execute and trace.
         inputs: a string containing individual lines to be used as input values
             (one line per input call).
+        identifier: an identifier for this trace (used for printing/logging purposes only).
         entrypoint_name: The name of the entrypoint function to execute.
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_objects: A list of object names to exclude from tracing.
@@ -452,6 +439,7 @@ def execute_and_trace_code(
     reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
     try:
         trace_result = TraceResult(
+            identifier=identifier,
             code_string=code_string,
             code_blocks=code_blocks,
             inputs=inputs,

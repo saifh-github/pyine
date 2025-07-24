@@ -1,8 +1,11 @@
+import logging
 import pathlib
 import re
 import shutil
 
 import pyine
+
+logger = logging.getLogger(__name__)
 
 
 def get_relative_path_to_root(
@@ -65,6 +68,7 @@ def check_output_path_overwrite(
     """
     output_path = pathlib.Path(output_path).resolve()
     if output_path.exists():
+        logger.warning(f"Attempting overwrite at: {output_path.absolute()}")
         overwrite = (
             input(
                 f"The output already exists at: {output_path.absolute()}\n"
@@ -74,9 +78,10 @@ def check_output_path_overwrite(
             .lower()
         )
         if overwrite != "y":
-            print("Operation aborted.")
+            logger.critical("Overwrite operation aborted.")
             exit(0)
         else:
+            logger.warning(f"Overwriting existing output at: {output_path.absolute()}")
             shutil.rmtree(output_path)
 
 

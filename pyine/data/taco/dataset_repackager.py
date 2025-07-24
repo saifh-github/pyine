@@ -1,3 +1,7 @@
+"""
+This module contains the TACO dataset repackaging logic.
+"""
+
 import asyncio
 import json
 import pathlib
@@ -5,8 +9,9 @@ import pathlib
 import dotenv
 import tiktoken
 
-import data.taco.taco_dataset_parser
+import pyine.data.taco.dataset_parser
 import pyine.prompts.code_analysis
+import pyine.utils.code.validation
 
 
 async def reprocess_code_samples(
@@ -32,7 +37,7 @@ async def reprocess_code_samples(
     def _count_tokens(text: str) -> int:
         return len(_tokenizer.encode(text))
 
-    dataset_reader = data.taco.taco_dataset_parser.TacoDatasetParser()
+    dataset_reader = pyine.data.taco.taco_dataset_parser.TacoDatasetParser()
     code_analysis_chain = pyine.prompts.code_analysis.get_chain(provider="deepseek")
     total_samples = len(dataset_reader)  # min(10, len(dataset_reader))
     print(f"samples in dataset: {total_samples}")

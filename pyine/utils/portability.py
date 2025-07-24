@@ -1,34 +1,9 @@
-import dataclasses
 import inspect
 import re
 import typing
 
 import numpy as np
 import pandas as pd
-
-
-@dataclasses.dataclass(frozen=True)
-class DataSampleIdentifier:
-    """Frozen tuple used for identifying data samples (with versioning)."""
-
-    dataset: str
-    """The name of the source dataset where the sample originated from."""
-    subset: str
-    """The name of the subset (if any) in the source dataset that the sample belongs to."""
-    sample_idx: int
-    """The index of the sample within the source subset that the code belongs to."""
-    version_idx: int
-    """The index identifying the exact version of the sample."""
-
-    def __repr__(self):
-        """Returns a string representation of the trace result identifier."""
-        return f"{self.dataset}/{self.subset}/s{self.sample_idx:06d}/v{self.version_idx:04d}"
-
-    @staticmethod
-    def from_string(identifier: str) -> "DataSampleIdentifier":
-        """Creates a DataSampleIdentifier from a string representation."""
-        dataset, subset, sample_idx, version_idx = identifier.split("/")
-        return DataSampleIdentifier(dataset, subset, int(sample_idx[1:]), int(version_idx[1:]))
 
 
 def get_portable_representation(
