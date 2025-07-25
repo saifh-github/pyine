@@ -7,7 +7,10 @@ def test_get_relative_path_to_root(monkeypatch) -> None:
     """Test that get_relative_path_to_root returns the correct relative path."""
     mock_project_root = pathlib.Path("/fake/project/root")
     mock_module_file = mock_project_root / "some" / "module" / "file.py"
-    result = filesystem.get_relative_path_to_root(module_file=mock_module_file, project_root=mock_project_root)
+    result = filesystem.get_relative_path_to_root(
+        module_file=mock_module_file,
+        project_root_path=mock_project_root,
+    )
     assert result == "some/module/file.py"
 
 
