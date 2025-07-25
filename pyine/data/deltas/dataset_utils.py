@@ -1,11 +1,20 @@
 import dataclasses
+import datetime
 import enum
+import pathlib
 import typing
 
 import deepdiff
 
+import pyine.data.traces.dataset_utils
 import pyine.utils.code.execution
+import pyine.utils.filesystem
 import pyine.utils.portability
+import pyine.utils.reprod
+
+SUPPORTED_SOURCE_DATASETS = pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS
+"""The deltas datasets support the same source datasets as the traces datasets."""
+
 
 # @@@@@@@@@@@ TODO: write unit tests for all this stuff
 # @@@@@@@@@@@ TODO: then, go back to simple dataset writer and see if it works large scale
@@ -481,5 +490,36 @@ print("all done")
         print(f"\td#{delta_idx}:\t{delta}")
 
 
+def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
+    """Returns the path to the latest deltas dataset for a specific source dataset.
+
+    If multiple deltas datasets are available, the most recent version is returned.
+    """
+    assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    deltas_root = pyine.utils.filesystem.get_data_root_path() / "deltas" / source_dataset_name
+    assert deltas_root.exists() and deltas_root.is_dir(), f"invalid deltas dataset path: {deltas_root}"
+    dataset_paths = list(deltas_root.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v*.lmdb/"))
+    if not dataset_paths:
+        raise FileNotFoundError(f"No deltas datasets found in {deltas_root}")
+    latest_dataset = max(dataset_paths)
+    return pathlib.Path(latest_dataset)
+
+
+def get_new_dataset_path(
+    source_dataset_name: str,
+    dataset_version: int = 1,
+) -> pathlib.Path:
+    """Returns the path where a new deltas dataset should be saved, for a specific source dataset.
+
+    Will be named based on today's date and version number.
+    """
+    assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    deltas_root = pyine.utils.filesystem.get_data_root_path() / "deltas" / source_dataset_name
+    today = datetime.date.today()
+    dataset_name = f"{today.strftime('%Y-%m-%d')}-v{dataset_version:02d}.lmdb"
+    return deltas_root / dataset_name
+
+
 if __name__ == "__main__":
+    pyine.utils.reprod.entrypoint_setup()
     debug_demo()

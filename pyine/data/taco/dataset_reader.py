@@ -13,12 +13,14 @@ import tqdm
 import pyine.utils.code.validation
 
 
-class TacoDatasetParser:
-    """
-    A class to read and process the TACO dataset sample-by-sample with robust parsing.
+class DatasetReader:
+    """A class to read and process the original TACO dataset sample-by-sample with robust parsing.
 
-    This class handles JSON parsing of solutions and input_output fields,
-    validation of data types, and provides access to processed samples.
+    This class handles JSON parsing of solutions and input_output fields, validation of data types,
+    and provides access to processed samples.
+
+    NOTE: it does NOT read the "repackaged" version of this dataset, which is used for tracing. It
+    only reads the original dataset.
     """
 
     def __init__(self):
@@ -46,10 +48,10 @@ class TacoDatasetParser:
         Raises:
             ValueError: If the sample at the given index is invalid or cannot be parsed.
         """
+        if not (0 <= idx < len(self)):
+            raise IndexError(f"index {idx} out of range")
         if idx in self._broken_samples_cache:
             raise ValueError(f"sample at index {idx} is broken: {self._broken_samples_cache[idx]}")
-        if idx >= len(self):
-            raise ValueError(f"index {idx} is out of range for dataset of length {len(self)}")
         if idx >= len(self.train_dataset):
             subset_idx = idx - len(self.train_dataset)
             curr_subset, curr_subset_name = self.test_dataset, "test"
@@ -229,12 +231,10 @@ class TacoDatasetParser:
 
 
 if __name__ == "__main__":
-
-    reader = TacoDatasetParser()
-    print(f"Total samples: {len(reader)}")
-
-    stats = reader.get_statistics(validate=True)
-    print(f"Valid samples: {stats['valid_samples']}")
-    print(f"Broken samples: {stats['broken_samples']}")
-    print(f"Total solutions: {stats['total_solutions']}")
-    print(f"Average solutions per problem: {stats['avg_solutions_per_problem']:.2f}")
+    _reader = DatasetReader()
+    print(f"Total samples: {len(_reader)}")
+    _stats = _reader.get_statistics(validate=True)
+    print(f"Valid samples: {_stats['valid_samples']}")
+    print(f"Broken samples: {_stats['broken_samples']}")
+    print(f"Total solutions: {_stats['total_solutions']}")
+    print(f"Average solutions per problem: {_stats['avg_solutions_per_problem']:.2f}")

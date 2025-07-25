@@ -14,14 +14,20 @@ import torch.utils.data
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.execution
+import pyine.utils.reprod
 
 
 class DatasetReader(torch.utils.data.Dataset):
     """PyINE raw trace dataset reader.
 
-    Note: this readers allows access to the RAW traces along with the original code and related
-    metadata. It does NOT attempt to structure the traces into deltas, so they will be quite
-    verbose.
+    This reader provides execution traces stored in an LMDB dataset. Each trace corresponds to a
+    successful code execution made for a specific solution to a coding problem, using a specific
+    set of input arguments that are paired with an expected output value. These input/output pairs
+    form a 'test', and the execution attempt is considered successful if the output value matches
+    the expected value.
+
+    Note: this readers does NOT attempt to structure the traces into deltas, so they will be quite
+    verbose, likely too much so for most applications with reasoning models.
 
     Args:
         lmdb_path: Path to the LMDB database containing code traces.
@@ -75,6 +81,10 @@ class DatasetReader(torch.utils.data.Dataset):
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
         return self.reader.get_size_on_disk()
 
+    def get_source_dataset_name(self) -> str:
+        """Returns the name of the source dataset used to create this dataset."""
+        return self.reader.get_metadata()["source_dataset"]["raw_dataset_path"]
+
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
         """
         Fetches an individual trace data object from the LMDB database by external index or key.
@@ -83,7 +93,8 @@ class DatasetReader(torch.utils.data.Dataset):
             index_or_key: index or key of the trace to retrieve.
         """
         if isinstance(index_or_key, int):
-            assert 0 <= index_or_key < len(self), f"index {index_or_key} out of range"
+            if not (0 <= index_or_key < len(self)):
+                raise IndexError(f"index {index_or_key} out of range")
         elif isinstance(index_or_key, str):
             assert index_or_key in self.trace_keys, f"key {index_or_key} not found in dataset"
             index_or_key = self.trace_keys.index(index_or_key)
@@ -122,8 +133,11 @@ class DatasetReader(torch.utils.data.Dataset):
 
 
 if __name__ == "__main__":
-    _dataset_reader = DatasetReader(lmdb_path="data/2025-03-31-v01.traces.mini.lmdb")
-    print(f"dataset contains {len(_dataset_reader)} trace samples")
+    pyine.utils.reprod.entrypoint_setup()
+    _taco_traces_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
+    print(f"trying to load trace dataset at: {_taco_traces_path}")
+    _dataset_reader = DatasetReader(lmdb_path=_taco_traces_path)
+    print(f"traces dataset contains {len(_dataset_reader)} traces")
     _target_sample_idx = 0
     print(f"sample #{_target_sample_idx}:")
     _problem = _dataset_reader.get_problem_data(_target_sample_idx)
@@ -136,4 +150,3 @@ if __name__ == "__main__":
     for _step in _trace_result.traced_steps:
         if _step is not None:
             print(f"\t{_step}")
-    _dataset_reader.close()

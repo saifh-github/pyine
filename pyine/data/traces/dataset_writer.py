@@ -1,5 +1,7 @@
 """
 This module contains a writer for a dataset of code execution traces.
+
+See the `write_dataset` function for more information.
 """
 
 import itertools
@@ -16,6 +18,7 @@ import pyine.utils.code.validation
 import pyine.utils.filesystem
 import pyine.utils.logging
 import pyine.utils.portability
+import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,15 @@ def write_dataset(
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from a source dataset of coding problems and solutions.
 
+    The execution traces are written to an LMDB dataset. Each trace corresponds to a successful
+    code execution made for a specific solution to a coding problem, using a specific set of
+    input arguments that are paired with an expected output value. These input/output pairs form
+    a 'test', and the execution attempt is considered successful if the output value matches the
+    expected value.
+
+    All 'source' datasets supported by this writer provide examples of coding problems paired with
+    solutions and input/output test pairs.
+
     Args:
         source_dataset_name: Name of the source dataset to read from.
         root_dataset_path: Path to the root directory of the source dataset.
@@ -47,7 +59,7 @@ def write_dataset(
         verbose: Toggles verbose output/logging.
 
     Returns:
-        The LMDBWriter object used to write the traces to the output dataset (once writing is complete).
+        The LMDBWriter object that was used to write the traces (once writing is complete).
     """
     log = logger.info if verbose else logger.debug
     problem_data_iter = pyine.data.traces.dataset_utils.CodingProblemIterator(
@@ -132,7 +144,11 @@ def write_dataset(
                     log(f"{solution}: skipped due to missing entrypoint with callable input/output")
                     # @@@@ TODO: will be able to fix these w/ callable analysis results
                     continue
-            test_success_flags = [False] * min(max_traces_per_solution, problem.test_count)
+            if max_traces_per_solution is not None:
+                tot_test_count = min(max_traces_per_solution, problem.test_count)
+            else:
+                tot_test_count = problem.test_count
+            test_success_flags = [False] * tot_test_count
             # reformat the code string (for cleanliness in tracing results)
             code_string = pyine.utils.code.formatting.format_code(solution.code)
             try:
@@ -145,7 +161,7 @@ def write_dataset(
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 for test_idx, (inputs, outputs) in enumerate(
-                    itertools.islice(problem.test_inout_pairs, max_traces_per_solution)
+                    itertools.islice(problem.test_inout_pairs, len(test_success_flags))
                 ):
                     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier(
                         **vars(solution.solution_id),
@@ -235,12 +251,39 @@ def write_dataset(
     return writer
 
 
-if __name__ == "__main__":
-    pyine.utils.logging.setup_logging()
-    write_dataset(
+def write_dataset_from_taco(
+    output_dataset_path: str | pathlib.Path | None = None,  # if none, will be created in default location
+    **kwargs,  # all kwargs will be forwarded to write_dataset function (see that doc for info)
+) -> pyine.data.utils.lmdb_io.LMDBWriter:
+    """Writes a dataset of execution traces from the TACO dataset.
+
+    Args:
+        output_dataset_path: path where the output dataset will be written (LMDB format).
+        kwargs: all kwargs will be forwarded to the `write_dataset` function (see that doc for info).
+
+    Returns:
+        The LMDBWriter object that was used to write the traces (once writing is complete).
+    """
+    import pyine.data.taco.dataset_utils
+
+    source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    if output_dataset_path is None:
+        output_dataset_path = pyine.data.traces.dataset_utils.get_new_dataset_path("TACO")
+    else:
+        output_dataset_path = pathlib.Path(output_dataset_path)
+    writer = write_dataset(
         source_dataset_name="TACO",
-        root_dataset_path=pathlib.Path("data/2025-03-31-v01"),
-        output_dataset_path=pathlib.Path("data/2025-03-31-v01.traces.mini.lmdb"),
+        root_dataset_path=source_dataset_path,
+        output_dataset_path=output_dataset_path,
+        **kwargs,
+    )
+    return writer
+
+
+if __name__ == "__main__":
+    pyine.utils.reprod.entrypoint_setup()
+    write_dataset_from_taco(
+        # create a dummy dataset for quick prototyping
         max_output_traces=50,
         max_valid_solutions_per_problem=2,
         max_traces_per_solution=1,

@@ -1,5 +1,6 @@
 import hashlib
 import importlib.metadata
+import logging
 import os
 import pathlib
 import platform
@@ -8,7 +9,12 @@ import re
 import time
 import typing
 
+import dotenv
 import numpy as np
+
+import pyine.utils.logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_python_version() -> str:
@@ -164,3 +170,23 @@ def get_reprod_metadata() -> dict[str, typing.Any]:
         "git_revision_hash": get_git_revision_hash(),
         "installed_packages": get_installed_packages(),
     }
+
+
+def entrypoint_setup(
+    seed: int | None = None,
+    log_level: int = logging.INFO,
+    log_to_file: bool = False,
+) -> None:
+    """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
+    # use a sentinel object to track first execution
+    if not hasattr(entrypoint_setup, "_executed"):
+        dotenv.load_dotenv()
+        pyine.utils.logging.setup_logging(
+            level=log_level,
+            log_to_file=log_to_file,
+        )
+        entrypoint_setup._executed = True
+    # no matter what execution this is, re-seed if needed
+    if seed is not None:
+        set_seed(seed)
+    logger.info(f"set up entrypoint (seed={seed})")

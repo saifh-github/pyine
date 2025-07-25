@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import importlib.resources as pkg_resources
 import json
 import pathlib
@@ -427,6 +428,38 @@ class CodingProblemIterator:
 
     def __getitem__(self, idx: int) -> tuple[CodingProblem, list[Solution]]:
         """Returns a coding problem + solutions object tuple for the specified index."""
+        if not (0 <= idx < len(self)):
+            raise IndexError(f"index {idx} out of range")
         raw_problem_data = self._load_problem_data(self.problems_metadata[idx])
         problem, solutions = self._process_data(raw_problem_data)
         return problem, solutions
+
+
+def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
+    """Returns the path to the latest trace dataset for a specific source dataset.
+
+    If multiple trace datasets are available, the most recent version is returned.
+    """
+    assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    traces_root = pyine.utils.filesystem.get_data_root_path() / "traces" / source_dataset_name
+    assert traces_root.exists() and traces_root.is_dir(), f"invalid traces dataset path: {traces_root}"
+    dataset_paths = list(traces_root.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v*.lmdb/"))
+    if not dataset_paths:
+        raise FileNotFoundError(f"No trace datasets found in {traces_root}")
+    latest_dataset = max(dataset_paths)
+    return pathlib.Path(latest_dataset)
+
+
+def get_new_dataset_path(
+    source_dataset_name: str,
+    dataset_version: int = 1,
+) -> pathlib.Path:
+    """Returns the path where a new trace dataset should be saved, for a specific source dataset.
+
+    Will be named based on today's date and version number.
+    """
+    assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    traces_root = pyine.utils.filesystem.get_data_root_path() / "traces" / source_dataset_name
+    today = datetime.date.today()
+    dataset_name = f"{today.strftime('%Y-%m-%d')}-v{dataset_version:02d}.lmdb"
+    return traces_root / dataset_name

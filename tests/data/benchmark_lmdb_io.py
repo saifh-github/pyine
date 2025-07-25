@@ -7,8 +7,9 @@ import timeit
 
 import numpy as np
 
-import pyine.data.raw_dataset_writer as dataset_writer
+import pyine.data.traces.dataset_writer as dataset_writer
 import pyine.data.utils.lmdb_io as lmdb_io
+import pyine.utils.reprod
 
 
 def _generate_random_string(
@@ -55,7 +56,6 @@ def _generate_dummy_dict(
 
 
 def benchmark_serialization_methods(
-    raw_json_dir_path: pathlib.Path,
     num_samples: int = 100,
     use_random_data: bool = False,
 ):
@@ -98,10 +98,9 @@ def benchmark_serialization_methods(
                 )
                 writer.put_batch(items=entries)
             else:
-                writer = dataset_writer.write_raw_dataset(
-                    raw_json_dir_path=raw_json_dir_path,
+                writer = dataset_writer.write_dataset_from_taco(
                     output_dataset_path=database_path,
-                    max_outputs=num_samples,
+                    max_output_traces=num_samples,
                 )
             writer.close()
             database_size = writer.get_size_on_disk()
@@ -123,8 +122,8 @@ def benchmark_serialization_methods(
 
 
 if __name__ == "__main__":
+    pyine.utils.reprod.entrypoint_setup()
     benchmark_serialization_methods(
-        raw_json_dir_path=pathlib.Path("data/2025-03-31-v01"),
         num_samples=50,
         use_random_data=False,
     )

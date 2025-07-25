@@ -6,12 +6,13 @@ import asyncio
 import json
 import pathlib
 
-import dotenv
 import tiktoken
 
-import pyine.data.taco.dataset_parser
+import pyine.data.taco.dataset_reader
+import pyine.data.taco.dataset_utils
 import pyine.prompts.code_analysis
 import pyine.utils.code.validation
+import pyine.utils.reprod
 
 
 async def reprocess_code_samples(
@@ -37,9 +38,9 @@ async def reprocess_code_samples(
     def _count_tokens(text: str) -> int:
         return len(_tokenizer.encode(text))
 
-    dataset_reader = pyine.data.taco.taco_dataset_parser.TacoDatasetParser()
+    dataset_reader = pyine.data.taco.dataset_reader.DatasetReader()
     code_analysis_chain = pyine.prompts.code_analysis.get_chain(provider="deepseek")
-    total_samples = len(dataset_reader)  # min(10, len(dataset_reader))
+    total_samples = len(dataset_reader)
     print(f"samples in dataset: {total_samples}")
     example_prompt_text = pyine.prompts.code_analysis.code_analysis_prompt.format(
         code="def example(): pass",
@@ -146,9 +147,9 @@ async def reprocess_code_samples(
 
 
 if __name__ == "__main__":
-    dotenv.load_dotenv()
+    pyine.utils.reprod.entrypoint_setup()
     asyncio.run(
         reprocess_code_samples(
-            output_dir_path=pathlib.Path("./data/2025-03-26-v01/"),
+            output_dir_path=pyine.data.taco.dataset_utils.get_new_repackaged_dataset_path(),
         ),
     )

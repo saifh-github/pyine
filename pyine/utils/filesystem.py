@@ -1,4 +1,5 @@
 import logging
+import os
 import pathlib
 import re
 import shutil
@@ -8,24 +9,56 @@ import pyine
 logger = logging.getLogger(__name__)
 
 
+def get_project_root_path() -> pathlib.Path:
+    """Returns the default path to the project root directory.
+
+    The path can be overridden by setting the 'PROJECT_ROOT_PATH' environment variable.
+    If the variable is not set, it defaults to the parent directory of the `pyine` package.
+
+    Returns:
+        pathlib.Path: The absolute, resolved path to the project root directory.
+    """
+    env_path = os.environ.get("PROJECT_ROOT_PATH", None)
+    if env_path:
+        return pathlib.Path(env_path).resolve()
+    # if the environment variable is not set, default to the 'pyine' root directory
+    return pathlib.Path(pyine.__file__).parents[1].resolve()
+
+
+def get_data_root_path() -> pathlib.Path:
+    """Returns the root path for storing and loading datasets.
+
+    The path can be overridden by setting the 'DATA_ROOT_PATH' environment variable.
+    If the variable is not set, it defaults to a 'data' directory in the project root.
+
+    Returns:
+        pathlib.Path: The absolute, resolved path to the data root directory.
+    """
+    env_path = os.environ.get("DATA_ROOT_PATH", None)
+    if env_path:
+        return pathlib.Path(env_path).resolve()
+    # if the environment variable is not set, default to the 'data' directory
+    return get_project_root_path() / "data"
+
+
 def get_relative_path_to_root(
     module_file: str | pathlib.Path,
-    project_root: str | pathlib.Path | None = None,
+    project_root_path: str | pathlib.Path | None = None,
 ) -> str:
-    """
-    Get the relative path of the given module with respect to the project's root directory.
+    """Returns the relative path of the given module w.r.t. the project's root directory.
 
     Parameters:
         module_file (str): The file path of the current module (__file__).
-        project_root (str): The absolute path of the project's root directory.
+        project_root_path (str): The absolute path of the project's root directory. If `None`, will
+            be inferred from the `pyine` package. Default is `None`.
 
     Returns:
         str: The relative path of the module with respect to the project root.
     """
     module_path = pathlib.Path(module_file).resolve()
-    if project_root is None:
-        project_root = pathlib.Path(pyine.__file__).parents[1].resolve()
-    project_root_path = pathlib.Path(project_root).resolve()
+    if project_root_path is None:
+        project_root_path = get_project_root_path()
+    project_root_path = pathlib.Path(project_root_path).resolve()
     relative_path = str(module_path.relative_to(project_root_path))
     return relative_path
 
