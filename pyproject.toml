@@ -48,3 +48,8 @@ packages = ["pyine"]
 
 [tool.setuptools.package-data]
 "pyine" = ["**/*.yaml"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow to run due to data/compute (deselect with '-m \"not slow\"')",
+]
