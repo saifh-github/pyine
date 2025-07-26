@@ -40,7 +40,7 @@ htmlcov/
 # Local development settings
 .env
 .env.local
-.assistant-instructions
+.assistant-instructions.txt
 
 # Logs
 *.log
