@@ -57,6 +57,80 @@ def test_dataset_paths(
     assert found_dataset_path == path_b
 
 
+@pytest.mark.parametrize("input_val", [0, 1, 2])
+def test_delta_generation_with_raised_exception(input_val: int):
+    """Test delta generation from trace steps with raised exceptions."""
+    example_snippet = """\
+in_val = int(input("Enter a value: "))
+if not in_val:
+    print("OK")
+else:
+    raise ValueError(f"{in_val}")
+print("all done")
+"""
+    input_args = f"{input_val}\n"
+    trace_result = pyine.utils.code.execution.execute_and_trace_code(
+        code_string=example_snippet,
+        inputs=input_args,
+        identifier="dummy",
+        trace_only_inside_code_string=True,
+    )
+    assert trace_result.code_string == example_snippet
+    assert trace_result.inputs == input_args
+    deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
+        trace_res=trace_result,
+        delta_generator=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE,
+    )
+    _check_deltas_ok(deltas)
+    if input_val == 0:
+        assert len(deltas) == 5
+        assert deltas[-1].exception is None
+        assert trace_result.stdout == "OK\nall done\n"
+        assert deltas[-2].stdout == "OK\n"
+        assert deltas[-1].stdout == "all done\n"
+    else:
+        assert len(deltas) == 4
+        assert deltas[-1].exception is not None
+        assert deltas[-1].exception.type == "ValueError"
+        assert deltas[-1].exception.message == str(input_val)
+        assert not trace_result.stdout
+
+
+def test_delta_generation_with_generator_expr():
+    """Test delta generation from trace steps with generator expressions."""
+    example_snippet = """\
+in_vals = []
+while True:
+    curr_val = float(input("Enter a value: "))
+    if not curr_val:
+        break
+    in_vals.append(curr_val)
+res = sum((in_vals[n] ** in_vals[n]) for n in range(len(in_vals)))
+print(f"The result is: {int(res)}")
+"""
+    example_input_args = """\
+5.0
+3.0
+2.0
+0
+"""
+    trace_result = pyine.utils.code.execution.execute_and_trace_code(
+        code_string=example_snippet,
+        inputs=example_input_args,
+        identifier="dummy",
+        trace_only_inside_code_string=True,
+    )
+    assert trace_result.code_string == example_snippet
+    assert trace_result.inputs == example_input_args
+    deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
+        trace_res=trace_result,
+        delta_generator=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE,
+    )
+    assert len(deltas) == 28
+    _check_deltas_ok(deltas)
+    assert trace_result.stdout == "The result is: 3156\n"
+
+
 def test_delta_generation_with_exception_propagation():
     """Test delta generation from trace steps with exception propagation."""
     example_snippet = """\
@@ -95,7 +169,6 @@ print("all done")
         inputs=example_input_args,
         identifier="dummy",
         trace_only_inside_code_string=True,
-        max_events_per_line=100,
     )
     assert trace_result.code_string == example_snippet
     assert trace_result.inputs == example_input_args

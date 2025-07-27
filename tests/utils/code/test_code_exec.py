@@ -194,6 +194,25 @@ print("You pressed Enter")
     assert result.exception is None and "You pressed Enter" in result.stdout
 
 
+def test_stdout_capture():
+    """Test capturing of stdout at individual event level."""
+    code = """\
+print("Hello, world!")
+a = 1 + 2
+print("Goodbye, world!")
+"""
+    result = execute_and_trace_code(code, trace_only_inside_code_string=True)
+    assert result.exception is None
+    assert "Hello, world!" in result.stdout
+    assert "Goodbye, world!" in result.stdout
+    valid_trace_steps = [s for s in result.traced_steps if s is not None]
+    assert len(valid_trace_steps) == 5  # entrypoint + 3 lines + return
+    assert valid_trace_steps[2].stdout == "Hello, world!\n"
+    assert valid_trace_steps[3].stdout is None
+    assert valid_trace_steps[4].stdout == "Goodbye, world!\n"
+    assert result.stdout == "Hello, world!\nGoodbye, world!\n"
+
+
 def test_tracing_with_blacklist():
     code = """\
 

@@ -87,6 +87,10 @@ class TraceEvent:
     """A dictionary containing the arguments passed to the code object at the time of the event."""
     return_value: str | None
     """The return value of the code object at the time of the event."""
+    stdout: str | None
+    """The captured stdout output for this event (if any)."""
+    stderr: str | None
+    """The captured stderr output for this event (if any)."""
     exception: TraceException | None
     """Contains information about the exception that occurred, if any."""
     trace_step_idx: int
@@ -142,9 +146,9 @@ class TraceResult(pydantic.BaseModel):
     exception: TraceException | None
     """Contains information about the exception that occurred, if any."""
     stdout: str
-    """The captured stdout output during execution."""
+    """The captured stdout output during execution (in full)."""
     stderr: str
-    """The captured stderr output during execution."""
+    """The captured stderr output during execution (in full)."""
     metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
 
@@ -327,6 +331,8 @@ def execute_and_trace_code(
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKey, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
+    stdout_capture, stderr_capture = io.StringIO(), io.StringIO()
+    stdout_buffer, stderr_buffer = "", ""
 
     def _trace_callback(
         frame: types.FrameType,  # noqa
@@ -334,12 +340,26 @@ def execute_and_trace_code(
         arg: typing.Any,
     ) -> typing.Callable | None:
         """Callback function for sys.settrace that records execution state at each line."""
-        nonlocal last_trace_step_idx
+        nonlocal last_trace_step_idx, stdout_buffer, stderr_buffer
 
         trace_key = TraceKey(
             file=_get_clean_filename(frame.f_code.co_filename), object=frame.f_code.co_name, line=frame.f_lineno
         )
         return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
+
+        # take care of output/error buffers (gather captured data, clear, and reset for next step)
+        stdout_capture.flush()
+        stderr_capture.flush()
+        new_stdout = stdout_capture.getvalue()
+        new_stderr = stderr_capture.getvalue()
+        stdout_capture.seek(0)
+        stdout_capture.truncate(0)
+        stderr_capture.seek(0)
+        stderr_capture.truncate(0)
+        stdout_buffer += new_stdout
+        stderr_buffer += new_stderr
+
+        # now, determine if we want to keep the event or not
         is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
             blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
         )
@@ -399,6 +419,8 @@ def execute_and_trace_code(
                 internal_variables=internal_vars,
                 arguments=arguments,
                 return_value=return_value,
+                stdout=new_stdout if new_stdout else None,
+                stderr=new_stderr if new_stderr else None,
                 exception=exception,
                 trace_step_idx=last_trace_step_idx,
                 trace_key=trace_key,
@@ -408,7 +430,6 @@ def execute_and_trace_code(
         last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
         return return_trace_callback
 
-    stdout_capture, stderr_capture = io.StringIO(), io.StringIO()  # to avoid polluting the output
     return_value, caught_exception = None, None
     entrypoint_step_idx = None  # only used if we call an entrypoint after exec
     pyine.utils.reprod.set_seed(seed)
@@ -457,8 +478,8 @@ def execute_and_trace_code(
                 if caught_exception
                 else None
             ),
-            stdout=stdout_capture.getvalue(),
-            stderr=stderr_capture.getvalue(),
+            stdout=stdout_buffer,
+            stderr=stderr_buffer,
             metadata=reprod_metadata,
         )
     except pydantic.ValidationError as e:

@@ -52,8 +52,12 @@ class TraceDelta:
     """The trace step index at the start of the delta; should be unique for each delta."""
     exception: pyine.utils.code.execution.TraceException | None
     """A dictionary containing information about the exception being raised/propagated, if any."""
-    variables_delta: dict[str, str]
+    variables: dict[str, str]
     """A dictionary containing the added/removed/updated variables in the delta."""
+    stdout: str | None
+    """A string containing the stdout delta, if any (i.e. stuff caught on the 'next' step)."""
+    stderr: str | None
+    """A string containing the stderr delta, if any (i.e. stuff caught on the 'next' step)."""
     event_relationship: EventRelationship
     """The relationship between the start/end trace events."""
 
@@ -67,9 +71,14 @@ class TraceDelta:
             next_trace_file_prefix = ""
         else:
             next_trace_file_prefix = f"{self.next_trace_key.file}:"
+        delta_str = dict(**self.variables)
+        if self.stdout is not None:
+            delta_str["__stdout__"] = self.stdout
+        if self.stderr is not None:
+            delta_str["__stderr__"] = self.stderr
         return (
             f"{curr_trace_file_prefix}L{self.curr_trace_key.line:04d} -> {next_trace_file_prefix}L{self.next_trace_key.line:04d} "
-            f"({self.event_relationship}) @ step#{self.trace_step_idx} = {self.variables_delta}"
+            f"({self.event_relationship}) @ step#{self.trace_step_idx} = {delta_str}"
         )
 
 
@@ -174,6 +183,15 @@ class _CallStack:
         assert len(self._stack) > 0, "stack should be initialized before pushing a new element"
         self._stack.append((curr_step.trace_key, curr_step.variables))
 
+    def _push_manually(
+        self,
+        caller_trace_key: pyine.utils.code.execution.TraceKey,
+        caller_vars: dict[str, typing.Any],
+    ) -> None:
+        """Pushes a new (caller id, context vars) tuple to the call stack."""
+        assert len(self._stack) > 0, "stack should be initialized before pushing a new element"
+        self._stack.append((caller_trace_key, caller_vars))
+
 
 class _EventPairIterator:
     """An iterator that generates event pairs used to create deltas."""
@@ -234,7 +252,10 @@ class _EventPairIterator:
         if next.event_type == pyine.utils.code.execution.TraceEventType.CALL:
             # current event evaluates a function call, and next event moves the trace to that function
             # (the following event would correspond to the first executed line inside that function)
-            assert curr.event_type == pyine.utils.code.execution.TraceEventType.LINE
+            assert curr.event_type in [
+                pyine.utils.code.execution.TraceEventType.LINE,
+                pyine.utils.code.execution.TraceEventType.RETURN,
+            ]
             return EventRelationship.STEP_INTO
         if next.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
             # if the next event of the pair is a return from a function call, then...
@@ -324,10 +345,12 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=None,
-                    variables_delta=dict(
+                    variables=dict(
                         __call__=repr(curr_step.trace_key),
                         __args__=repr(next_step.arguments),
                     ),
+                    stdout=next_step.stdout,
+                    stderr=next_step.stderr,
                     event_relationship=EventRelationship.ENTRYPOINT,
                 )
             )
@@ -338,7 +361,6 @@ def get_deltas_from_trace_steps(
             delta = dict(__exception__=repr(raised_exception))
             # we need to go fetch the 'next-next' step in order to figure out what to do
             next_next_step = event_iterator.get_next_event(increment=True)
-            assert event_iterator.has_next_event(), "trace ends with a raised exception??"
             assert next_next_step.exception is None, "the next-next step can't possibly raise again"
             next_step = next_next_step
             if next_step.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
@@ -355,7 +377,9 @@ def get_deltas_from_trace_steps(
                         next_trace_key=next_step.trace_key,
                         trace_step_idx=curr_step.trace_step_idx,
                         exception=raised_exception,
-                        variables_delta=delta,
+                        variables=delta,
+                        stdout=next_step.stdout,
+                        stderr=next_step.stderr,
                         event_relationship=EventRelationship.RAISE,
                     )
                 )
@@ -381,7 +405,9 @@ def get_deltas_from_trace_steps(
                     next_trace_key=caller_trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=raised_exception,
-                    variables_delta=delta,
+                    variables=delta,
+                    stdout=next_step.stdout,
+                    stderr=next_step.stderr,
                     event_relationship=output_relationship,
                 )
             )
@@ -396,6 +422,29 @@ def get_deltas_from_trace_steps(
                 elif next_next_step.event_type == pyine.utils.code.execution.TraceEventType.RETURN:
                     # this is OK, nothing else to do, next iteration will create another delta as above
                     pass
+                elif next_next_step.event_type == pyine.utils.code.execution.TraceEventType.CALL:
+                    # we are likely in a generator expression, calling back immediately after returning
+                    # ...manually create the STEP_INTO delta in order to have the correct caller stack
+                    event_iterator.increment_iter_idx()  # do that now, we are consuming the event
+                    call_stack._push_manually(caller_trace_key, caller_vars)  # put orig caller info back on stack
+                    next_call_delta = dict(
+                        __call__=repr(next_next_step.trace_key), __args__=repr(next_next_step.arguments)
+                    )
+                    next_call_step = next_next_step.trace_step_idx
+                    next_next_step = event_iterator.get_next_event(increment=True)  # fetch next event for its trace key
+                    assert next_next_step.exception is None, "why step into a function if an exception is being raised?"
+                    output_deltas.append(
+                        TraceDelta(
+                            curr_trace_key=caller_trace_key,
+                            next_trace_key=next_next_step.trace_key,
+                            trace_step_idx=next_call_step,
+                            exception=None,
+                            variables=next_call_delta,
+                            stdout=next_next_step.stdout,
+                            stderr=next_next_step.stderr,
+                            event_relationship=EventRelationship.STEP_INTO,
+                        )
+                    )
                 elif next_next_step.event_type == pyine.utils.code.execution.TraceEventType.LINE:
                     # we need to create a 2nd delta to bridge between returned value and next line
                     event_iterator.increment_iter_idx()  # do that now, we are consuming the event
@@ -405,7 +454,9 @@ def get_deltas_from_trace_steps(
                             next_trace_key=next_next_step.trace_key,
                             trace_step_idx=next_step.trace_step_idx,
                             exception=None,
-                            variables_delta=delta_generator_fn(caller_vars, next_next_step.variables),
+                            variables=delta_generator_fn(caller_vars, next_next_step.variables),
+                            stdout=next_next_step.stdout,
+                            stderr=next_next_step.stderr,
                             event_relationship=EventRelationship.STEP_OVER,
                         )
                     )
@@ -421,7 +472,9 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=raised_exception,
-                    variables_delta=delta_generator_fn(curr_step.variables, next_step.variables),
+                    variables=delta_generator_fn(curr_step.variables, next_step.variables),
+                    stdout=next_step.stdout,
+                    stderr=next_step.stderr,
                     event_relationship=EventRelationship.STEP_OVER,
                 )
             )
@@ -442,7 +495,9 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=None,
-                    variables_delta=delta,
+                    variables=delta,
+                    stdout=next_step.stdout,
+                    stderr=next_step.stderr,
                     event_relationship=relationship,
                 )
             )
