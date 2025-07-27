@@ -8,7 +8,6 @@ import logging
 import pathlib
 
 import tqdm
-from data.traces.dataset_utils import SUPPORTED_SOURCE_DATASETS
 
 import pyine.data.deltas.dataset_utils
 import pyine.data.traces.dataset_reader
@@ -75,32 +74,30 @@ def write_dataset(
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace.identifier)
         assert trace_id not in seen_trace_ids
         seen_trace_ids.append(trace_id)
-        # if trace_id.sample_idx == 13856 and trace_id.version_idx == 0:
-        #     continue  # annoying lambda example
+        problem_data = trace_reader.get_problem_data(trace_idx)
         deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
             trace_res=trace,
             delta_generator=delta_generator,
         )
-        assert deltas
-        if verbose:
-            print(f"{trace_id=}")
-            print(f"traced steps: {len(trace.traced_steps)}")
-            print("code string:")
-            pyine.utils.portability.print_code_with_numbered_lines(trace.code_string, 1)
-            print(f"input args:\n\t{trace.inputs}")
-            print(f"execution result:\n\t{trace.return_value}")
-            print("deltas:")
-            for delta_idx, delta in enumerate(deltas):
-                print(f"\td#{delta_idx}:\t{delta}")
-        output_key = str(trace_id)
-        writer.put(key=output_key, value=deltas)
+        log(f"generated {len(deltas)} deltas for trace: {trace_id}")
+        if deltas:
+            # we will store the problem data, trace, and the new deltas in the output dataset
+            if problem_data.problem_id not in seen_problem_ids:
+                # store problem data first, but only if this is a problem we have never seen yet
+                seen_problem_ids.append(problem_data.problem_id)
+                problem_metadata_key = str(problem_data) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
+                writer.put(key=problem_metadata_key, value=problem_data.model_dump())
+            # now store trace + deltas using the correct keys
+            trace_output_key = str(trace_id)
+            writer.put(key=trace_output_key, value=trace.model_dump())
+            deltas_output_key = trace_output_key + pyine.data.deltas.dataset_utils.DELTAS_SUFFIX
+            writer.put(key=deltas_output_key, value=deltas.model_dump())
         delta_counts.append(len(deltas))
-    if verbose:
-        print(f"done; wrote {len(delta_counts)} outputs to LMDB dataset at: {writer.path}!")
-        print(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
-        if delta_counts:
-            avg_delta_count = sum(delta_counts) / len(delta_counts)
-            print(f"\t(delta count avg={avg_delta_count:.1f}, min={min(delta_counts)}, max={max(delta_counts)})")
+    log(f"done; wrote {len(delta_counts)} outputs to LMDB dataset at: {writer.path}!")
+    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+    if delta_counts:
+        avg_delta_count = sum(delta_counts) / len(delta_counts)
+        log(f"\t(delta count avg={avg_delta_count:.1f}, min={min(delta_counts)}, max={max(delta_counts)})")
     return writer
 
 

@@ -1,10 +1,12 @@
 import dataclasses
 import datetime
 import enum
+import logging
 import pathlib
 import typing
 
 import deepdiff
+import pydantic
 
 import pyine.data.traces.dataset_utils
 import pyine.utils.code.execution
@@ -14,10 +16,13 @@ import pyine.utils.reprod
 
 SUPPORTED_SOURCE_DATASETS = pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS
 """The deltas datasets support the same source datasets as the traces datasets."""
+DELTAS_SUFFIX = "/deltas"
+"""Suffix for entries that correspond to trace deltas in the LMDB dataset."""
+
+logger = logging.getLogger(__name__)
 
 
-# @@@@@@@@@@@ TODO: write unit tests for all this stuff
-# @@@@@@@@@@@ TODO: then, go back to simple dataset writer and see if it works large scale
+# @@@@@@@@@@@ TODO: go back to simple dataset writer and see if it works large scale
 
 
 class EventRelationship(enum.StrEnum):
@@ -72,7 +77,37 @@ class DeltaGeneratorType(enum.StrEnum):
     """Supported variable state delta generation approaches."""
 
     SIMPLE = enum.auto()
+    """A simple delta generator that produces simple POD deltas with partial support for objects."""
     DEEPDIFF = enum.auto()
+    """A delta generator based on DeepDiff that provides support for diffs between data structures."""
+
+
+class TraceDeltaList(pydantic.BaseModel):
+    """Dataclass used to store a list of trace deltas."""
+
+    trace_id: str
+    """Unique identifier for the parent trace."""
+    deltas: list[TraceDelta]
+    """A list of trace deltas."""
+    gen_type: DeltaGeneratorType
+    """The type of delta generator used to generate the deltas."""
+
+    def __str__(self) -> str:
+        """Returns a string representation of the trace delta list."""
+        deltas_str = [f"\n{d}" for d in self.deltas]
+        return f"{self.trace_id}:deltas=[{deltas_str}\n]"
+
+    def __len__(self) -> int:
+        """Returns the number of deltas in the list."""
+        return len(self.deltas)
+
+    def __iter__(self) -> typing.Iterator[TraceDelta]:
+        """Returns an iterator over the deltas in the list."""
+        return iter(self.deltas)
+
+    def __getitem__(self, index) -> TraceDelta:
+        """Returns the delta at the given index."""
+        return self.deltas[index]
 
 
 def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[str, str]:
@@ -124,9 +159,8 @@ class _CallStack:
         assert len(self._stack) > 0, "return events should always be paired with a call?"
         caller_trace_key, caller_vars = self._stack.pop()
         if caller_trace_key.file == pyine.utils.code.execution.EXEC_PARENT_FILE_NAME:
-            # TODO @@@@ assert below might fail sometimes (exception situations?), fixme
             # if the caller is the execution parent, it means the stack should be empty
-            assert len(self._stack) == 0 and len(next_step.stack_trace) == 1
+            assert len(self._stack) == 0
         else:
             # otherwise, the caller's identity should match the one expected in the stack
             assert caller_trace_key == next_step.stack_trace[1]
@@ -165,7 +199,7 @@ class _EventPairIterator:
                 None,
             )
             if first_entrypoint_trace_step is None:
-                raise AssertionError("invalid entrypoint call step")  # fix if it happens? @@@@
+                raise AssertionError("invalid entrypoint call step")  # fix if it happens?
             first_relevant_step_idx = first_entrypoint_trace_step.trace_step_idx
         raw_trace_steps: list[pyine.utils.code.execution.TraceEvent | None] = self.trace_res.traced_steps
         filtered_trace_step_idxs = []
@@ -258,13 +292,15 @@ def get_deltas_from_trace_steps(
     trace_res: pyine.utils.code.execution.TraceResult,
     delta_generator: DeltaGeneratorType,
     verbose: bool = False,
-) -> list[TraceDelta]:
+) -> TraceDeltaList:
     """Generates a list of deltas from a trace result."""
+    assert trace_res.identifier is not None, "need identifier when generating deltas"
+    log = logger.info if verbose else logger.debug
     assert delta_generator in DeltaGeneratorType
     if delta_generator == DeltaGeneratorType.SIMPLE:
-        delta_generator = simple_delta_generator
+        delta_generator_fn = simple_delta_generator
     else:
-        delta_generator = deepdiff.DeepDiff
+        delta_generator_fn = deepdiff.DeepDiff
     output_deltas = []
     event_iterator = _EventPairIterator(trace_res)
     call_stack = _CallStack()
@@ -273,10 +309,10 @@ def get_deltas_from_trace_steps(
         # the kind of step delta(s) we create will depend on the relationship between the two steps
         raised_exception = curr_step.exception or next_step.exception
         if verbose:
-            print(f"\ncurr_step (#{curr_step.trace_step_idx}): {curr_step}")
-            print(f"next_step (#{next_step.trace_step_idx}): {next_step}")
-            print(f"relationship: {relationship}")
-            print(f"exception: {raised_exception}")
+            log(f"\ncurr_step (#{curr_step.trace_step_idx}): {curr_step}")
+            log(f"next_step (#{next_step.trace_step_idx}): {next_step}")
+            log(f"relationship: {relationship}")
+            log(f"exception: {raised_exception}")
         if relationship == EventRelationship.ENTRYPOINT:
             # special handling: the 'entrypoint' of the traced code should be unique
             assert not call_stack.is_initialized(), "there should only be one entrypoint per trace"
@@ -338,7 +374,7 @@ def get_deltas_from_trace_steps(
                 delta = dict(__return__=repr(next_step.return_value))
                 output_relationship = EventRelationship.STEP_OUT
             if caller_trace_key == _CallStack.orig_caller_trace_key:
-                delta.update(**delta_generator(curr_step.variables, next_step.variables))
+                delta.update(**delta_generator_fn(curr_step.variables, next_step.variables))
             output_deltas.append(
                 TraceDelta(
                     curr_trace_key=next_step.trace_key,
@@ -369,7 +405,7 @@ def get_deltas_from_trace_steps(
                             next_trace_key=next_next_step.trace_key,
                             trace_step_idx=next_step.trace_step_idx,
                             exception=None,
-                            variables_delta=delta_generator(caller_vars, next_next_step.variables),
+                            variables_delta=delta_generator_fn(caller_vars, next_next_step.variables),
                             event_relationship=EventRelationship.STEP_OVER,
                         )
                     )
@@ -385,7 +421,7 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=raised_exception,
-                    variables_delta=delta_generator(curr_step.variables, next_step.variables),
+                    variables_delta=delta_generator_fn(curr_step.variables, next_step.variables),
                     event_relationship=EventRelationship.STEP_OVER,
                 )
             )
@@ -412,82 +448,11 @@ def get_deltas_from_trace_steps(
             )
             continue
         raise NotImplementedError("unhandled delta with relationship: " + str(relationship))
-    return output_deltas
-
-
-def debug_demo():
-    example_snippet = """\
-
-def do_thing(area: float) -> float:
-    '''do thingy'''
-    # try:
-    #     raise ValueError("123")
-    # except:
-    #     print("all good")
-    raise ValueError("123")
-    return area
-
-def calculate_area(length: float, width: float) -> float:
-    '''Returns the area of the rectangle specified via length and width.
-
-    Specifically: returns area = length * width.
-    '''
-    area = length * width
-
-    print(f"The area of the rectangle is: {area:.2f} square units")
-    output = do_thing(area)
-    print("okie")
-    return output
-
-length = float(input("Enter the length: "))
-width = float(input("Enter the width: "))
-# try:
-#     calculate_area(length, width)
-# except ValueError as e:
-#     print(f"An error occurred: {e}")
-calculate_area(length, width)
-print("all done")
-"""
-    example_input_args = """\
-5.0
-3.0
-"""
-    trace_result = pyine.utils.code.execution.execute_and_trace_code(
-        example_snippet,
-        example_input_args,
-        trace_only_inside_code_string=True,
-        max_events_per_line=100,
+    return TraceDeltaList(
+        trace_id=trace_res.identifier,
+        deltas=output_deltas,
+        gen_type=delta_generator,
     )
-    print("\nTraced code string:")
-    pyine.utils.portability.print_code_with_numbered_lines(example_snippet, 1)
-    print("\nTraced steps:")
-    for traced_step_idx, traced_step in enumerate(trace_result.traced_steps):
-        if traced_step is None:
-            print(f"\tstep#{traced_step_idx:04d}:\t(out-of-context execution)")
-        else:
-            print(f"\tstep#{traced_step_idx:04d}:\t{traced_step}")
-    if trace_result.return_value is not None:
-        print(f"\nCaptured return value:\n\t{trace_result.return_value}")
-    if trace_result.exception is not None:
-        print(f"\nCaptured exception:\n\t{trace_result.exception}")
-    if trace_result.stdout:
-        print(f"\nCaptured output:\n\t{trace_result.stdout}")
-    if trace_result.stderr:
-        print(f"\nCaptured error:\n\t{trace_result.stderr}")
-
-    deltas = get_deltas_from_trace_steps(
-        trace_res=trace_result,
-        delta_generator=DeltaGeneratorType.SIMPLE,
-    )
-    assert deltas
-    print(f"traced steps: {len(trace_result.traced_steps)}")
-    print("code string:")
-    pyine.utils.portability.print_code_with_numbered_lines(trace_result.code_string, 1)
-    print(f"input args:\n\t{trace_result.inputs}")
-    print(f"execution result:\n\t{trace_result.return_value}")
-    print("deltas:")
-    for delta_idx, delta in enumerate(deltas):
-        print(f"\td#{delta_idx}:\t{delta}")
 
 
 def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
@@ -518,8 +483,3 @@ def get_new_dataset_path(
     today = datetime.date.today()
     dataset_name = f"{today.strftime('%Y-%m-%d')}-v{dataset_version:02d}.lmdb"
     return deltas_root / dataset_name
-
-
-if __name__ == "__main__":
-    pyine.utils.reprod.entrypoint_setup()
-    debug_demo()

@@ -52,7 +52,7 @@ def compare_result_strings(proposed: str, reference: str) -> bool:
     reference = reference.strip()
     if is_float(proposed) and is_float(reference):
         rtol, atol = pyine.utils.portability.estimate_tolerance(reference)
-        return np.isclose(float(proposed), float(reference), rtol=rtol, atol=atol)
+        return bool(np.isclose(float(proposed), float(reference), rtol=rtol, atol=atol))
     else:
         return proposed == reference
 
@@ -77,10 +77,11 @@ class CodingProblemIdentifier:
         return f"{self.dataset}/{self.subset}"
 
     @staticmethod
-    def from_string(identifier: str) -> "CodingProblemIdentifier":
+    def from_string(identifier_str: str) -> "CodingProblemIdentifier":
         """Creates an identifier object from a string representation."""
-        dataset, subset, problem_idx_str = identifier.split("/")
-        return CodingProblemIdentifier(dataset, subset, int(problem_idx_str))
+        assert isinstance(identifier_str, str), "identifier must be a string"
+        dataset, subset, problem_idx_str = identifier_str.split("/")
+        return CodingProblemIdentifier(dataset, subset, int(problem_idx_str[1:]))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -102,7 +103,8 @@ class SolutionIdentifier(CodingProblemIdentifier):
     @staticmethod
     def from_string(identifier_str: str) -> "SolutionIdentifier":
         """Creates an identifier object from a string representation."""
-        parent_str, solution_idx_str = identifier_str.rsplit("/", maxsplit=1)
+        assert isinstance(identifier_str, str), "identifier must be a string"
+        parent_str, solution_idx_str = identifier_str.rsplit("/s", maxsplit=1)
         parent_id = CodingProblemIdentifier.from_string(parent_str)
         return SolutionIdentifier(**vars(parent_id), solution_idx=int(solution_idx_str))
 
@@ -126,7 +128,8 @@ class TraceIdentifier(SolutionIdentifier):
     @staticmethod
     def from_string(identifier_str: str) -> "TraceIdentifier":
         """Creates an identifier object from a string representation."""
-        parent_str, test_idx_str = identifier_str.rsplit("/", maxsplit=1)
+        assert isinstance(identifier_str, str), "identifier must be a string"
+        parent_str, test_idx_str = identifier_str.rsplit("/t", maxsplit=1)
         parent_id = SolutionIdentifier.from_string(parent_str)
         return TraceIdentifier(**vars(parent_id), test_idx=int(test_idx_str))
 
@@ -280,6 +283,8 @@ class CodingProblemIterator:
             # we actually need to pop the files open and check which ones contain any data
             # (repackaging might have resulted in empty jsons with only an error code)
             for json_file_path in json_file_paths:
+                if json_file_path.stat().st_size < 128:
+                    continue  # skip tiny files that are likely empty/errored
                 # note: if too slow, open the jsons with a binary reader and parse byte-by-byte
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     json_data = json.load(fd)

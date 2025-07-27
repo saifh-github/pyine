@@ -83,7 +83,7 @@ class DatasetReader(torch.utils.data.Dataset):
 
     def get_source_dataset_name(self) -> str:
         """Returns the name of the source dataset used to create this dataset."""
-        return self.reader.get_metadata()["source_dataset"]["raw_dataset_path"]
+        return self.reader.get_metadata()["source_dataset"]["source_dataset_name"]
 
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
         """

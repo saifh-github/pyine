@@ -142,7 +142,7 @@ def write_dataset(
                 ):
                     # might need to infer how to find the entrypoint given the starter code
                     log(f"{solution}: skipped due to missing entrypoint with callable input/output")
-                    # @@@@ TODO: will be able to fix these w/ callable analysis results
+                    # @@@@ TODO: might be able to fix these w/ callable analysis results
                     continue
             if max_traces_per_solution is not None:
                 tot_test_count = min(max_traces_per_solution, problem.test_count)
@@ -155,7 +155,7 @@ def write_dataset(
                 pyine.utils.code.validation.validate_code(code_string)  # last check before running
             except Exception as e:
                 log(f"{solution}: skipped due to new validation error: {e}")
-                continue  # @@@@ log these later
+                continue  # todo @@@@ log these later
 
             traces_to_write = {}  # will gather traces for all input/output pairs, but only write if all succeed
             with warnings.catch_warnings():
@@ -227,8 +227,8 @@ def write_dataset(
             assert traces_to_write
             if written_solutions == 0:
                 # write parent problem data (we found at least one valid solution for it)
-                sample_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
-                writer.put(key=sample_metadata_key, value=problem.model_dump())
+                problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
+                writer.put(key=problem_metadata_key, value=problem.model_dump())
             # write all valid execution traces for the current solution, since it is valid
             writer.put_batch(traces_to_write, show_progress=False)
             written_outputs += len(traces_to_write)
