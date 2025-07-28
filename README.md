@@ -85,7 +85,11 @@ ______________________________________________________________________
 ## **Usage**
 
 After installation, you can recreate the dataset or run demo experiment with it using the provided
-scripts. Further usage instructions will be included here. (TODO!! @@@@)
+scripts. Further usage instructions will be included here.
+
+For now, refer to the [`notebooks`](./notebooks) folder for demos on how to parse the data.
+
+(TODO!! @@@@)
 
 ______________________________________________________________________
 
