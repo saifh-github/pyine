@@ -62,6 +62,17 @@ pip install -e .[dev]
 
 ```
 
+### Setting up environment variables
+
+The project relies on the [dotenv library](https://github.com/theskumar/python-dotenv) to manage
+environment variables. In consequence, we expect that you will create and fill a `.env` file at the
+root of the project directory with all environment variables you would like to use (e.g. local
+dataset root paths, API tokens, etc.).
+
+For reference, we provide a [`.env.template`](./.env.template) file that contains a few example
+environment variables that might be used in the framework; you should probably copy that file,
+rename the copy to `.env`, and edit its contents as necessary with your own values.
+
 ### **For Contributors: Setting up Pre-commit Hooks**
 
 If you'd like to contribute to the project, you should install the optional **dev** dependencies,
