@@ -77,13 +77,12 @@ def test_mini_taco_traces_dataset(
     """Checks that a mini traces dataset can be created and read successfully."""
     output_dataset_path = tmp_path / "mini_taco_traces_dataset"
     assert not output_dataset_path.exists()
-    wanted_trace_count = 5
+    wanted_trace_count = 10
     dataset_writer.write_dataset_from_taco(
         output_dataset_path=output_dataset_path,
         max_output_traces=wanted_trace_count,
         max_valid_solutions_per_problem=2,
         max_traces_per_solution=1,
-        max_trace_events_per_line=100,
         minimum_solution_dissimilarity=0.1,
         verbose=True,
     )

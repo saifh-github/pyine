@@ -11,6 +11,7 @@ import tqdm
 
 import pyine.data.deltas.dataset_utils
 import pyine.data.traces.dataset_reader
+import pyine.data.traces.dataset_utils
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.execution
 import pyine.utils.filesystem
@@ -72,8 +73,6 @@ def write_dataset(
     for trace_idx in tqdm.tqdm(range(len(trace_reader)), desc="parsing traces from raw dataset"):
         trace = trace_reader[trace_idx]
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace.identifier)
-        if str(trace_id) != "TACO/train/p012744/s0003/t0000":
-            continue
         assert trace_id not in seen_trace_ids
         seen_trace_ids.append(trace_id)
         problem_data = trace_reader.get_problem_data(trace_idx)

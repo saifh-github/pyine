@@ -316,6 +316,7 @@ def get_deltas_from_trace_steps(
 ) -> TraceDeltaList:
     """Generates a list of deltas from a trace result."""
     assert trace_res.identifier is not None, "need identifier when generating deltas"
+    assert trace_res.max_events_per_line is None, "cannot generate deltas with capped events per line"
     log = logger.info if verbose else logger.debug
     assert delta_generator in DeltaGeneratorType
     if delta_generator == DeltaGeneratorType.SIMPLE:

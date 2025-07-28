@@ -214,7 +214,6 @@ def test_mini_taco_deltas_dataset(
         max_output_traces=10,
         max_valid_solutions_per_problem=2,
         max_traces_per_solution=1,
-        max_trace_events_per_line=100,
         minimum_solution_dissimilarity=0.1,
         verbose=True,
     )

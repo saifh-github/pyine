@@ -196,13 +196,32 @@ def format_object_changes(
     return changes
 
 
+def get_code_with_numbered_lines(
+    code_string: str,
+    prefixed_tabs: int = 0,
+) -> str:
+    """Generates a string containing code with line numbers and tabs.
+
+    Args:
+        code_string (str): the Python code string to be formatted.
+        prefixed_tabs (int): the number of tabs to prefix each line with. Defaults to 0.
+
+    Returns:
+        str: The formatted code string with line numbers and tabs
+    """
+    tab_prefix = "\t" * prefixed_tabs
+    formatted_lines = []
+    for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
+        formatted_lines.append(f"{tab_prefix}L{line_idx:04d}:   {line_content}")
+    return "\n".join(formatted_lines)
+
+
 def print_code_with_numbered_lines(
     code_string: str,
     prefixed_tabs: int = 0,
     logger: typing.Any | None = None,
 ) -> None:
-    """
-    Prints each line of the given code string, prefixed with tabs and a fixed-width line number.
+    """Prints each line of the given code string, prefixed with tabs and a fixed-width line number.
 
     Can output to either a logger or stdout (by default, if no logger is provided)..
 
@@ -222,10 +241,10 @@ def print_code_with_numbered_lines(
             raise ValueError("could not identify how to use logger object")
     else:
         logging_func = print
-    tab_prefix = "\t" * prefixed_tabs
-    for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
-        formatted_line = f"{tab_prefix}L{line_idx:04d}:   {line_content}"
-        logging_func(formatted_line)
+
+    formatted_code = get_code_with_numbered_lines(code_string, prefixed_tabs)
+    for line in formatted_code.splitlines():
+        logging_func(line)
 
 
 def estimate_tolerance(value_str: str) -> tuple[float, float]:

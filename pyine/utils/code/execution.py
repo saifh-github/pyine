@@ -159,6 +159,11 @@ class TraceResult(pydantic.BaseModel):
         else:
             return str(self.model_dump_json())
 
+    @property
+    def code_string_with_line_numbers(self) -> str:
+        """Returns the code string with line numbers for each line of code."""
+        return pyine.utils.portability.get_code_with_numbered_lines(self.code_string)
+
 
 @contextlib.contextmanager
 def trace_context(
