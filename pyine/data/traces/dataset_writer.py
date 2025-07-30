@@ -33,6 +33,7 @@ def write_dataset(
     max_trace_events_per_line: int | None = None,
     minimum_solution_dissimilarity: float = 0.1,
     execution_timeout_seconds: float = 10,
+    allow_banned_samples: bool = False,
     verbose: bool = False,
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from a source dataset of coding problems and solutions.
@@ -56,15 +57,18 @@ def write_dataset(
         max_trace_events_per_line: Maximum number of trace events per solution code line. If None, no maximum.
         minimum_solution_dissimilarity: Minimum solution dissimilarity threshold to use for solution duplicate removal.
         execution_timeout_seconds: Timeout in seconds for each execution attempt. If exceeded, solution is skipped.
+        allow_banned_samples: allows banned samples to be included in the dataset. If False, banned samples are skipped.
         verbose: Toggles verbose output/logging.
 
     Returns:
         The LMDBWriter object that was used to write the traces (once writing is complete).
     """
     log = logger.info if verbose else logger.debug
+    log(f"parsing problem metadata for {source_dataset_name} source dataset...")
     problem_data_iter = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name=source_dataset_name,
         root_data_path=root_dataset_path,
+        allow_banned_samples=allow_banned_samples,
         show_progress=verbose,
     )
     assert len(problem_data_iter) > 0, f"no problems found in {source_dataset_name} source dataset"
@@ -169,11 +173,13 @@ def write_dataset(
                     )
                     if problem.entrypoint_name is not None:
                         if isinstance(inputs, list) and isinstance(outputs, list) and len(inputs) == len(outputs) == 1:
-                            log(f"{solution}: might cause i/o args issue (inputs: {inputs}, outputs: {outputs})")
+                            logger.debug(
+                                f"{solution}: might cause i/o args issue (inputs: {inputs}, outputs: {outputs})"
+                            )
                             inputs = inputs[0]
                             outputs = outputs[0]
                     try:
-                        log(f"{solution}: starting exec & trace...")
+                        log(f"{solution}: starting exec & trace w/ test #{test_idx:04d}...")
                         trace_results = pyine.utils.code.execution.execute_and_trace_code(
                             code_string=code_string,
                             inputs=inputs,
@@ -218,6 +224,9 @@ def write_dataset(
                     except Exception as e:
                         log(f"{solution}: exec failed due to tracing error: {e}")
                         break
+                    except TimeoutError as e:
+                        log(f"{solution}: exec timed out: {e}")
+                        break
             solution_is_valid = all(test_success_flags)
             log(f"{solution}: {'VALID' if all(test_success_flags) else 'INVALID'}")
             retained_solution_successes[solution_idx] = solution_is_valid  # noqa
@@ -252,12 +261,14 @@ def write_dataset(
 
 
 def write_dataset_from_taco(
+    source_dataset_path: str | pathlib.Path | None = None,  # if none, will try to auto-detect it
     output_dataset_path: str | pathlib.Path | None = None,  # if none, will be created in default location
     **kwargs,  # all kwargs will be forwarded to write_dataset function (see that doc for info)
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from the TACO dataset.
 
     Args:
+        source_dataset_path: path to the repackaged TACO dataset (LMDB format). If None, will try auto-detecting.
         output_dataset_path: path where the output dataset will be written (LMDB format).
         kwargs: all kwargs will be forwarded to the `write_dataset` function (see that doc for info).
 
@@ -266,7 +277,10 @@ def write_dataset_from_taco(
     """
     import pyine.data.taco.dataset_utils
 
-    source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    if source_dataset_path is None:
+        source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    else:
+        source_dataset_path = pathlib.Path(source_dataset_path)
     if output_dataset_path is None:
         output_dataset_path = pyine.data.traces.dataset_utils.get_new_dataset_path("TACO")
     else:

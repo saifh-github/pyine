@@ -3,10 +3,14 @@ import dataclasses
 import enum
 import functools
 import io
+import logging
+import multiprocessing
 import os
 import pprint
 import site
 import sys
+import time
+import traceback
 import types
 import typing
 
@@ -20,6 +24,8 @@ import pyine.utils.timers
 
 portable_repr = pyine.utils.portability.get_portable_representation
 _orig_stdin = sys.stdin
+logger = logging.getLogger(__name__)
+
 
 EXEC_TRACE_FILE_NAME = "<string>"
 """Name used to identify code lines that were executed and traced in the code string itself."""
@@ -239,7 +245,7 @@ class MockInput:
         except AttributeError:
             raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'")
 
-    def mock_input(self, prompt: str = "") -> str:
+    def mock_input(self, _: str = "") -> str:
         """Read the next input from the iterator of inputs."""
         try:
             next_input = next(self._input_iter)
@@ -280,6 +286,7 @@ class MockInputContext(contextlib.AbstractContextManager):
 
 
 def _get_clean_filename(filename: str) -> str:
+    """Returns a cleaned up filename for trace event display/logging purposes."""
     if filename == EXEC_TRACE_FILE_NAME:
         return filename  # nothing to do
     site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
@@ -289,13 +296,118 @@ def _get_clean_filename(filename: str) -> str:
     stdlib_dir = os.path.dirname(os.__file__)
     if filename.startswith(stdlib_dir):
         return os.path.relpath(filename, stdlib_dir)
-    project_root = os.getcwd()
+    project_root = str(pyine.utils.filesystem.get_project_root_path())
     if filename.startswith(project_root):
         return os.path.relpath(filename, project_root)
     return filename
 
 
-def execute_and_trace_code(
+def _execute_in_subprocess(
+    *args,  # we will forward all args + kwargs to `_execute_and_trace_code`
+    result_queue: multiprocessing.Queue,
+    identifier: str | None = None,
+    timeout_seconds: float = 60,
+    **kwargs,
+):
+    """Execute tracing in a separate process (used in the `_safe_execute_and_trace_code` impl)."""
+    # note: this could not be a local define because it gets pickled for multiprocessing
+    result_queue.put(("started", os.getpid()))
+    try:
+        result = _execute_and_trace_code(
+            *args,
+            identifier=identifier,
+            timeout_seconds=timeout_seconds,
+            **kwargs,
+        )
+        result_queue.put(("returned", result))
+        return
+    except Exception as e:
+        result_queue.put(("raised", e, traceback.format_exc()))
+        return
+
+
+def _safe_execute_and_trace_code(
+    *args,  # we will forward all args + kwargs to `_execute_and_trace_code`
+    identifier: str | None = None,
+    timeout_seconds: float = 60,
+    timeout_external_buffer_seconds: float = 5,
+    sleep_duration_seconds: float = 0.1,
+    **kwargs,
+) -> "TraceResult":
+    """
+    Safe wrapper around `_execute_and_trace_code` that handles OS-level crashes.
+
+    Uses process isolation to prevent segfaults, OOM kills, and other OS-level
+    crashes from taking down the main process.
+
+    See the `_execute_and_trace_code` docstring for more details on the tracing process and args.
+
+    Args:
+        identifier: an identifier for this trace (used for printing/logging purposes).
+        timeout_seconds: the maximum number of seconds to allow for code execution. Use internallly
+            in the forked process, but also here to make sure we kill the process if it freezes for
+            some reason. The external check will add a time buffer to whatever number this is.
+        timeout_external_buffer_seconds: the buffer to add to the timeout value when checking for
+            hung processes in this master process; should be positive float, in seconds. Defaults
+            to 5, so we allow 5 extra seconds on top of `timeout_seconds` before raising.
+        sleep_duration_seconds: the default sleep duration between checks for process completion.
+
+    Returns:
+        A `TraceResult` instance containing the execution results.
+    """
+    result_queue = multiprocessing.Queue()
+    logger.debug(f"launching subprocess for tracing (name={identifier})")
+    process = multiprocessing.Process(
+        target=_execute_in_subprocess,
+        args=args,
+        kwargs=dict(
+            result_queue=result_queue,
+            identifier=identifier,
+            timeout_seconds=timeout_seconds,
+            **kwargs,
+        ),
+        name=identifier,
+    )
+    process.start()
+    process_timeout = timeout_seconds + timeout_external_buffer_seconds
+    start_time = time.time()
+    latest_time_delta = 0
+    child_pid, status, returned_val = None, None, None
+    # wait until we get the child pid from the queue
+    while latest_time_delta < process_timeout and returned_val is None:
+        while result_queue.empty():
+            latest_time_delta = time.time() - start_time
+            if latest_time_delta > process_timeout:
+                break
+            time.sleep(sleep_duration_seconds)
+        if not result_queue.empty():
+            if child_pid is None:
+                status, child_pid = result_queue.get_nowait()
+                assert status == "started"
+            else:
+                status, returned_val = result_queue.get_nowait()
+                assert status in ("returned", "raised")
+    if process.is_alive():
+        logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
+        process.kill()
+    elif process.exitcode != 0:
+        # note: this might not be an issue, solutions sometimes use sys.exit for outputs
+        logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
+    if status == "returned":
+        logger.debug(f"tracing subprocess returned results (name={identifier})")
+        assert isinstance(returned_val, TraceResult)
+        return returned_val
+    elif status == "raised":
+        assert isinstance(returned_val, tuple) and len(returned_val) == 2
+        exception, tb = returned_val
+        logger.error(f"tracing subprocess raised exception: {exception}\n{tb}")
+        raise exception
+    error_msg = f"tracing subprocess timed out after {latest_time_delta} seconds (name={identifier})"
+    logger.error(error_msg)
+    raise TimeoutError(error_msg)
+
+
+def _execute_and_trace_code(
     code_string: str,
     inputs: str = "",
     identifier: str | None = None,
@@ -316,7 +428,7 @@ def execute_and_trace_code(
         code_string: a string containing arbitrary Python code to execute and trace.
         inputs: a string containing individual lines to be used as input values
             (one line per input call).
-        identifier: an identifier for this trace (used for printing/logging purposes only).
+        identifier: an identifier for this trace (used for printing/logging purposes).
         entrypoint_name: The name of the entrypoint function to execute.
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_objects: A list of object names to exclude from tracing.
@@ -404,13 +516,13 @@ def execute_and_trace_code(
                 for name, value in frame.f_locals.items()
                 if name.startswith("__") and name != "__builtins__"
             }
-            arguments, return_value, exception = None, None, None
+            arguments, exec_return_value, exception = None, None, None
             if event == "call":
                 arguments = {
                     name: portable_repr(value) for name, value in frame.f_locals.items() if not name.startswith("__")
                 }
             elif event == "return":
-                return_value = portable_repr(arg)
+                exec_return_value = portable_repr(arg)
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
                 exception = TraceException(
@@ -423,7 +535,7 @@ def execute_and_trace_code(
                 variables=regular_vars,
                 internal_variables=internal_vars,
                 arguments=arguments,
-                return_value=return_value,
+                return_value=exec_return_value,
                 stdout=new_stdout if new_stdout else None,
                 stderr=new_stderr if new_stderr else None,
                 exception=exception,
@@ -457,7 +569,15 @@ def execute_and_trace_code(
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
     except Exception as e:
-        caught_exception = e  # store any exception that occurred
+        if isinstance(e, TimeoutError):
+            # we'll let callers handle what happens when code tracing times out
+            raise e
+        # otherwise, if it's not a time out, store the exception as part of the results
+        caught_exception = e
+    except SystemExit as e:
+        # some crazy people also return their outputs via sys.exit, so catch those correctly...
+        caught_exception = e
+        return_value = e.code
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
     reprod_metadata["initial_seed"] = seed
     reprod_metadata["max_events_per_line"] = max_events_per_line
@@ -493,6 +613,35 @@ def execute_and_trace_code(
     return trace_result
 
 
+def execute_and_trace_code(
+    *args,
+    use_safe_execution: bool = True,
+    **kwargs,
+) -> "TraceResult":
+    """Convenience function that chooses between safe and unsafe execution and tracing functions.
+
+    By 'safe', we solely mean process-crash-safe, i.e. that the executed code exiting (using e.g.
+    `sys.exit`) or crashing due to memory or OS-level issues will not cause the main process to
+    also crash.
+
+    See the `_execute_and_trace_code` docstring for more details on the tracing process and args.
+
+    Note that if tracing exceeds the specified timeout delay, it will raise `TimeoutError`.
+
+    Args:
+        use_safe_execution (bool): If True, use process isolation. If False, use the orig tracing
+            function directly. Defaults to True, as there probably isn't much runtime difference
+            between the two, especially given
+
+    Returns:
+        A `TraceResult` instance containing the execution results.
+    """
+    if not use_safe_execution:
+        return _execute_and_trace_code(*args, **kwargs)
+    else:
+        return _safe_execute_and_trace_code(*args, **kwargs)
+
+
 def format_traced_code_execution(
     trace_result: TraceResult,
 ) -> str:
@@ -505,10 +654,7 @@ def format_traced_code_execution(
         A formatted string showing the code execution with variable states.
     """
     code_lines = trace_result.code_string.splitlines()
-    result = []
-    result.append("Code Execution Trace:")
-    result.append("=====================")
-    result.append("")
+    result = ["Code Execution Trace:", "=====================", ""]
     for line_number, line in enumerate(code_lines, 1):
         result.append(f"Line {line_number}: {line}")
         relevant_events = [
@@ -591,7 +737,7 @@ for i in range(3):
 c = int(np.sum(np.ones((5, 5)) * some_potato.ok()))
 print(f"Final values: a={a}, b={b}, c={c}")
 """
-    _trace_result = execute_and_trace_code(
+    _trace_result = _execute_and_trace_code(
         code_string=_sample_code,
         inputs="",
         blacklisted_modules=["linecache", "traceback", "pydev", "pydevd_tracing", "contextlib", "numpy"],

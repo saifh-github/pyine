@@ -89,6 +89,7 @@ introduce issues using:
 ```shell script
 make check  # this actually runs `pre-commit run -a`
 make test  # this actually runs `pytest -k "not slow"`
+make test-all  # in case you have access to datasets, and are patient enough
 ```
 
 ______________________________________________________________________

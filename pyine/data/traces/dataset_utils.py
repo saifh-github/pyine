@@ -256,6 +256,7 @@ class CodingProblemIterator:
         self,
         dataset_name: str,
         root_data_path: pathlib.Path | str,
+        allow_banned_samples: bool = False,
         show_progress: bool = False,
     ):
         """Initialize the iterator, validating source dataset name/path."""
@@ -269,7 +270,10 @@ class CodingProblemIterator:
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
         self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
-        self.banned_problems, self.banned_solutions = self._load_banned_sample_data()
+        if not allow_banned_samples:
+            self.banned_problems, self.banned_solutions = self._load_banned_sample_data()
+        else:
+            self.banned_problems, self.banned_solutions = {}, {}
         self._current_idx = 0
         self._show_progress = show_progress
         self._progress_bar = None

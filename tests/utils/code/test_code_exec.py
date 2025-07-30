@@ -194,6 +194,49 @@ print("You pressed Enter")
     assert result.exception is None and "You pressed Enter" in result.stdout
 
 
+def test_code_exec_with_sys_exit():
+    """Test that code execution with sys.exit() works as expected."""
+    code = """\
+import sys
+print("Hello, world!")
+sys.exit(13)
+"""
+    result = execute_and_trace_code(code)
+    assert "Hello, world!" in result.stdout
+    assert result.return_value == 13
+    assert result.exception is not None
+    assert result.exception.type == "SystemExit"
+    assert result.exception.message == "13"
+
+
+def test_code_exec_with_timeout():
+    """Test that code execution with a timeout works as expected."""
+    code = """\
+import time
+time.sleep({sleep_time})
+"""
+    with pytest.raises(TimeoutError):
+        execute_and_trace_code(
+            code.format(sleep_time=10),
+            timeout_seconds=0.1,
+            use_safe_execution=True,
+            timeout_external_buffer_seconds=0.1,
+        )
+    with pytest.raises(TimeoutError):
+        execute_and_trace_code(
+            code.format(sleep_time=10),
+            timeout_seconds=0.1,
+            use_safe_execution=False,
+        )
+    results = execute_and_trace_code(
+        code.format(sleep_time=0.1),
+        timeout_seconds=0.5,
+        use_safe_execution=True,
+        timeout_external_buffer_seconds=0.5,
+    )
+    assert results.exception is None
+
+
 def test_stdout_capture():
     """Test capturing of stdout at individual event level."""
     code = """\
@@ -279,3 +322,34 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
             last_line = trace_step
     assert last_return.trace_key.line == 10
     assert last_line.trace_key.line == 10
+
+
+def test_safe_vs_unsafe_tracing():
+    """Test that safe tracing provides the same results as unsafe tracing."""
+    code = """\
+def func(b: str) -> int:
+    print("Hello, world!")
+    a = 1 + int(b)
+    print("Goodbye, world!")
+    return a
+"""
+    safe_trace_result = execute_and_trace_code(
+        code_string=code,
+        inputs="2",
+        entrypoint_name="func",
+        trace_only_inside_code_string=True,
+    )
+    unsafe_trace_result = execute_and_trace_code(
+        code_string=code,
+        inputs="2",
+        entrypoint_name="func",
+        trace_only_inside_code_string=True,
+    )
+    assert safe_trace_result.stdout == unsafe_trace_result.stdout
+    valid_safe_steps = [s for s in safe_trace_result.traced_steps if s is not None]
+    valid_unsafe_steps = [s for s in unsafe_trace_result.traced_steps if s is not None]
+    assert len(valid_safe_steps) == len(valid_unsafe_steps)
+    for safe_step, unsafe_step in zip(valid_safe_steps, valid_unsafe_steps):
+        assert safe_step.trace_key == unsafe_step.trace_key
+        assert safe_step.event_type == unsafe_step.event_type
+        assert safe_step.variables == unsafe_step.variables

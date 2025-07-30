@@ -22,9 +22,6 @@ DELTAS_SUFFIX = "/deltas"
 logger = logging.getLogger(__name__)
 
 
-# @@@@@@@@@@@ TODO: go back to simple dataset writer and see if it works large scale
-
-
 class EventRelationship(enum.StrEnum):
     """Relationships between consecutive trace events defining what happened during execution."""
 
@@ -122,7 +119,6 @@ class TraceDeltaList(pydantic.BaseModel):
 def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[str, str]:
     """Compares two variable dicts and returns added/updated entries."""
     # note: we purposefully do NOT show missing/removed values in deltas to reduce useless spam/outputs
-    # @@@@@@ TODO: figure out if we should also add the delta of stderr/stdout?
     output = {}
     for key in next.keys() - curr.keys():  # keys added to next
         output[key] = next[key]
