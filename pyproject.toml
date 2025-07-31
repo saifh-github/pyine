@@ -38,6 +38,7 @@ dev = [
     "notebook>=7.3.0,<7.4.0",
     "pre-commit>=4.0.0,<4.3.0",
     "pytest>=7.0.0,<8.0.0",
+    "pytest-mock>=3.14",
 ]
 
 [build-system]
