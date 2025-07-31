@@ -142,6 +142,8 @@ class CodingProblem(pydantic.BaseModel):
     other interfaces with additional fields.
     """
 
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
     source_dataset_name: str
     """Name of the source dataset this problem comes from."""
     source_data_path: str
@@ -196,6 +198,8 @@ class Solution(pydantic.BaseModel):
     other interfaces with additional fields.
     """
 
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
     parent_id: CodingProblemIdentifier
     """Identifier of the solution's parent (i.e., the problem to which this solution belongs)."""
     solution_id: SolutionIdentifier

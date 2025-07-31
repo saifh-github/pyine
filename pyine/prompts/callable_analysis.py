@@ -9,6 +9,8 @@ import pyine.utils.llm_providers
 class CallableAnalysisResponse(pydantic.BaseModel):
     """Response model for callable analysis."""
 
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
     entrypoint_function_name: str = pydantic.Field(
         ...,  # required
         description=(

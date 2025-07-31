@@ -61,6 +61,8 @@ class OutputTypeOptions(enum.StrEnum):
 class CodeAnalysisResponse(pydantic.BaseModel):
     """Response model for code analysis."""
 
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
     is_deterministic: bool = pydantic.Field(
         ...,  # required
         description="Specifies whether the code is deterministic",

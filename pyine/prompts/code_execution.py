@@ -5,20 +5,6 @@ import langchain_core.runnables
 import pyine.utils.llm_providers
 import pyine.utils.portability
 
-
-class SafePromptTemplate(langchain_core.prompts.PromptTemplate):
-    """PromptTemplate that safely preserves existing curly braces in template strings.
-
-    This class ensures that any curly braces in the original template content remain intact,
-    while still allowing for proper variable formatting.
-    """
-
-    def format(self, **kwargs):
-        """Format the prompt template, preserving any original curly braces."""
-        # The template contains the variables to be replaced
-        return super().format(**kwargs)
-
-
 # @@@@ TODO: put example snippets, inputs, and outputs in a dataclass to make reformatting easier
 # also, use for reformatting: pyine.utils.portability.print_code_with_numbered_lines()
 
@@ -92,7 +78,7 @@ Provided input arguments:
 Your predicted output:
 """
 
-code_execution_prompt = SafePromptTemplate(
+code_execution_prompt = langchain_core.prompts.PromptTemplate(
     input_variables=["code", "input_args", "examples"],
     template=_code_execution_template_str,
 )

@@ -116,6 +116,8 @@ class TraceEvent:
 class TraceResult(pydantic.BaseModel):
     """Dataclass for storing and exporting execution trace results."""
 
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
     identifier: str | None
     """An identifier for this trace (used for printing/logging purposes only)."""
     code_string: str
