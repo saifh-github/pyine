@@ -178,6 +178,8 @@ def entrypoint_setup(
     log_to_file: bool = False,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
+    import pyine.utils.pydantic_loader
+
     # use a sentinel object to track first execution
     if not hasattr(entrypoint_setup, "_executed"):
         dotenv.load_dotenv()
@@ -185,6 +187,7 @@ def entrypoint_setup(
             level=log_level,
             log_to_file=log_to_file,
         )
+        pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_package("pyine")
         entrypoint_setup._executed = True
     # no matter what execution this is, re-seed if needed
     if seed is not None:
