@@ -18,21 +18,18 @@ class CallableAnalysisResponse(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
     entrypoint_function_name: str = pydantic.Field(
-        ...,  # required
         description=(
             "Specifies the name of the entrypoint function; if the function is inside "
             "a class, this field should ONLY be the name of the function inside that class."
         ),
     )
     entrypoint_function_arg_names: list[str] = pydantic.Field(
-        default=...,  # required
         description=(
             "Specifies the names of the arguments that the entrypoint function takes; "
             "if the function takes no arguments, this field should be an empty list."
         ),
     )
     parent_class_name: str = pydantic.Field(
-        default="",
         description=(
             "Specifies the name of the parent class of the entrypoint function; this is only "
             "relevant if the entrypoint function is inside a class; if it is not, this field "
@@ -40,7 +37,6 @@ class CallableAnalysisResponse(pydantic.BaseModel):
         ),
     )
     parent_class_arg_names: list[str] = pydantic.Field(
-        default=[],
         description=(
             "Specifies the names of the arguments that the parent class of the entrypoint "
             "function requires in order to be instantiated; if the class constructor takes "

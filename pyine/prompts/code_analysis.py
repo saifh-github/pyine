@@ -64,47 +64,36 @@ class CodeAnalysisResponse(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
     is_deterministic: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code is deterministic",
     )
     imports_nonstandard_packages: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code imports nonstandard packages",
     )
     invalid_syntax: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code contains invalid Python 3 syntax that would prevent execution",
     )
     blocks_execution: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code contains logic that blocks execution, e.g. infinite loops or queries for user input",
     )
     unnecessary_lines: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code contains unnecessary statements that do not contribute to its outputs, e.g. debugging prints or unit tests",
     )
     filesystem_access: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code attempts to interact (read, write, or execute) anything on the filesystem",
     )
     system_commands: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code attempts to run system commands, e.g. `os.system`, `eval`, etc.",
     )
     network_access: bool = pydantic.Field(
-        ...,  # required
         description="Specifies whether the code attempts to open network connections, exchange data, use external APIs, or use networked services in any way",
     )
     code_type: CodeTypeOptions = pydantic.Field(
-        ...,  # required
         description="Specifies the type of implementation used to execute the algorithm",
     )
     input_type: InputTypeOptions = pydantic.Field(
-        ...,  # required
         description="Specifies how the code expects the algorithm to receive its input(s)",
     )
     output_type: OutputTypeOptions = pydantic.Field(
-        ...,  # required
         description="Specifies how the code expects the algorithm to return its output(s)",
     )
 
