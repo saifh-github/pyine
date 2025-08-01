@@ -4,7 +4,7 @@ v1.0:
     description: Tasks a model to analyze a code snippet and determine how it should be called
   role:
     template: >
-      You are an expert at analyzing Python code.
+      You are an expert at interpreting and analyzing Python 3 code.
 
 
       Your role is to determine how to correctly call the most relevant function in a given code
@@ -34,7 +34,7 @@ v1.0:
       Here is the code snippet you must now analyze:
 
       ```python
-      {{code.rstrip("\n") + "\n"}}
+      {{code.rstrip("\n")}}
       ```
 
       Now, provide the structured output for this code, and nothing else:
@@ -43,7 +43,7 @@ v1.0:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {{code.rstrip("\n") + "\n"}}
+      {{code.rstrip("\n")}}
       ```
       Expected output:
       {{output.model_dump_json() + "\n"}}
