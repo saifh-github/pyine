@@ -16,5 +16,5 @@ check checks: ## Runs pre-commit hooks (cleanups, auto-reformats, ...)
 test tests: ## Runs not-slow tests using pytest
 	pytest -k "not slow"
 
-test-all tests-all: ## Runs all tests (including slow ones)
-	pytest
+test-all tests-all: ## Runs all tests (including slow ones) w/ verbose to see warnings
+	pytest -v

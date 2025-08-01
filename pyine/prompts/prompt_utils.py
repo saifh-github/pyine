@@ -168,7 +168,7 @@ class PromptConfig(pydantic.BaseModel):
             example_vars[EXAMPLE_OUTPUT_KEY] = example.output
             # add any variables that might be in the example object directly (but not in its input vars attribute)
             example_vars.update(
-                {k: v for k, v in example.dict().items() if k not in [*example_vars, "input_variables"]}
+                {k: v for k, v in example.model_dump().items() if k not in [*example_vars, "input_variables"]}
             )
             if EXAMPLE_OPT_INDEX_KEY in prompt_template.input_variables and EXAMPLE_OPT_INDEX_KEY not in example_vars:
                 # add the index of the example as an additional variable if needed

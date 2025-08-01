@@ -282,11 +282,9 @@ class TestPromptManager:
         with pytest.raises(FileNotFoundError):
             manager._load_prompt_config("nonexistent")
         mock_prompt_file.is_file.return_value = True
-        with mocker.patch.object(
-            prompt_utils.VersionedPromptConfig, "from_yaml", side_effect=yaml.YAMLError("Invalid YAML")
-        ):
-            with pytest.raises(ValueError, match="Invalid YAML"):
-                manager._load_prompt_config("invalid_yaml")
+        mocker.patch.object(prompt_utils.VersionedPromptConfig, "from_yaml", side_effect=yaml.YAMLError("Invalid YAML"))
+        with pytest.raises(ValueError, match="Invalid YAML"):
+            manager._load_prompt_config("invalid_yaml")
 
     def test_list_prompts_directory_exists(self, mocker, manager: prompt_utils.PromptManager):
         mock_files = mocker.patch("importlib.resources.files")
@@ -322,6 +320,6 @@ class TestPromptManager:
         mock_package_files.__truediv__.return_value = mock_prompt_file
         mock_versioned_config = mocker.MagicMock()
         mock_versioned_config.versions = {"v1.0.0": "config1", "v2.0.0": "config2"}
-        with mocker.patch.object(prompt_utils.VersionedPromptConfig, "from_yaml", return_value=mock_versioned_config):
-            result = manager.list_prompt_versions("test_prompt")
-            assert result == ["v1.0.0", "v2.0.0"]
+        mocker.patch.object(prompt_utils.VersionedPromptConfig, "from_yaml", return_value=mock_versioned_config)
+        result = manager.list_prompt_versions("test_prompt")
+        assert result == ["v1.0.0", "v2.0.0"]
