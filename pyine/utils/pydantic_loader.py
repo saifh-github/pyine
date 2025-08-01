@@ -158,7 +158,7 @@ def _generic_pydantic_constructor(
         raise ValueError(f"unknown Pydantic model tag: '{tag_suffix}'. " f"available tags: {available_tags}")
     model_class = loader._model_registry[tag_suffix]
     try:
-        data = loader.construct_mapping(node)  # will load data as a dictionary
+        data = loader.construct_mapping(node, deep=True)  # will load data as a dictionary
     except Exception as error:
         raise ValueError(f"failed to construct YAML mapping: {error}") from error
     try:
