@@ -9,6 +9,8 @@ import langchain_core.prompts
 import pydantic
 import yaml
 
+import pyine.utils.pydantic_loader
+
 DEFAULT_PROMPT_VERSION_KEY = "__default__"
 """Key used in config files to identify the default prompt version to use if none is specified.
 
@@ -69,7 +71,7 @@ class PromptExample(pydantic.BaseModel):
 
     input_variables: dict[str, typing.Any]
     """List of inputs for the example that will be fed into an example template."""
-    output: str
+    output: typing.Any
     """Expected output for the example (i.e. what a model should produce)."""
     description: str | None = None
     """Optional description of what this example demonstrates."""
@@ -87,8 +89,6 @@ class PromptMetadata(pydantic.BaseModel):
     """Description of what this prompt does."""
     version: str
     """Version or reference name for the prompt (e.g. "v1.0", "big-provider/target_model", ...)."""
-    tags: list[str] = []
-    """Tags for categorizing the prompt."""
 
 
 class PromptConfig(pydantic.BaseModel):
@@ -216,12 +216,13 @@ class PromptConfig(pydantic.BaseModel):
             ).format(**(context_variables or {}))
             template_parts.append(context_prompt)
         if include_examples and self.examples:
-            assert (
-                self.examples_block_template is not None
-            ), "examples block template must be specified to render examples"
+            if self.examples_block_template:
+                examples_block_template = self.examples_block_template
+            else:
+                examples_block_template = DefaultExamplesBlockTemplate
             examples_block_template = langchain_core.prompts.PromptTemplate.from_template(
-                template=self.examples_block_template.template,
-                template_format=self.examples_block_template.format,
+                template=examples_block_template.template,
+                template_format=examples_block_template.format,
             )
             assert (
                 "examples_str" in examples_block_template.input_variables
@@ -309,10 +310,7 @@ class VersionedPromptConfig(pydantic.BaseModel):
     @classmethod
     def from_yaml(cls, yaml_file_path: pathlib.Path | str) -> "VersionedPromptConfig":
         """Parse YAML file content into a VersionedPromptConfig object."""
-        yaml_file_path = pathlib.Path(yaml_file_path)
-        assert yaml_file_path.is_file(), f"YAML file does not exist: {yaml_file_path}"
-        yaml_content = yaml_file_path.read_text(encoding="utf-8")
-        raw_data = yaml.safe_load(yaml_content)
+        raw_data = pyine.utils.pydantic_loader.load_yaml_with_pydantic_support(yaml_file_path)
         versions = {}
         # note: we do not enforce a version pattern since versions might be named after targeted LLMs/APIs
         for version, config_data in raw_data.items():
@@ -454,3 +452,32 @@ class PromptManager:
         """Clear the internal prompt cache."""
         self._cache.clear()
         self.get_prompt_config.cache_clear()
+
+
+_default_prompt_manager: PromptManager | None = None
+"""Singleton instance of the framework's default prompt manager."""
+
+
+def get_framework_prompt_manager() -> PromptManager:
+    """Get the default prompt manager instance for the pyine framework (singleton)."""
+    global _default_prompt_manager
+    if _default_prompt_manager is None:
+        _default_prompt_manager = PromptManager()
+    return _default_prompt_manager
+
+
+def get_prompt_config(
+    prompt_name: str,
+    version: str | None = None,
+) -> PromptConfig:
+    """Convenience function to get a prompt config using the default manager.
+
+    Args:
+        prompt_name: Name of the prompt to retrieve
+        version: Specific version to retrieve, or None for the default version
+
+    Returns:
+        The prompt configuration for the requested version
+    """
+    manager = get_framework_prompt_manager()
+    return manager.get_prompt_config(prompt_name, version)

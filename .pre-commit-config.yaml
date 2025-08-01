@@ -17,13 +17,14 @@
        - id: check-json
        - id: check-merge-conflict
        - id: check-toml
-       - id: check-yaml
        - id: debug-statements
        - id: detect-private-key
        - id: end-of-file-fixer
        - id: forbid-submodules
        - id: mixed-line-ending
        - id: trailing-whitespace
+       - id: check-yaml
+         args: [ "--unsafe" ]  # needed since we use tags in YAML files w/ custom safe loading
 
    # python code formatting
    - repo: https://github.com/psf/black

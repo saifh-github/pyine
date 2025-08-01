@@ -1,0 +1,69 @@
+v1.0:
+  metadata:
+    name: callable_analysis
+    description: Tasks a model to analyze a code snippet and determine how it should be called
+  role:
+    template: >
+      You are an expert at analyzing Python code.
+
+      Your role is to determine how to correctly call the most relevant function in a given code
+      snippet (i.e. its "entrypoint") such that we can execute the algorithm it contains. You must
+      identify the correct entrypoint even in cases where code snippets contain many functions, and
+      even in cases where the entrypoint might be part of a class.
+  context:
+    template: >
+      We will give you a code template that may be incomplete but always contains the "interface"
+      of the algorithm we care about, and that defines the entrypoint. Ignore any missing part.
+
+      If the entrypoint is inside a class, you will need to specify which class. If that class
+      requires arguments to be constructed, you will need to list the names of those arguments.
+      If the entrypoint is a function, you will need to specify which function. If that function
+      takes arguments, you will need to list the names of those arguments. If you cannot determine
+      what the entrypoint should be, or if there does not seem to be one, you must return only
+      empty strings and lists.
+
+      You will provide all relevant information under a structured output.
+
+      {expected_output_format}
+  question:
+    template: |
+      Here is the code snippet you must now analyze:
+
+      ```python
+      {code}
+      ```
+  example_template:
+    template: |
+      Example {example_idx}/{example_count}:
+      ```python
+      {code}
+      ```
+      Expected output:
+      {output}
+  example_block_template:  # unspecified = keep default
+  template_block_separator: "\n\n"
+  examples:
+    - input_variables:
+        code: |
+          class Solution:
+
+              def __init__(self):
+                  pass
+
+              def romanToDecimal(self, S):
+                  # code here
+      output: !pyine.prompts.callable_analysis.CallableAnalysisResponse
+        entrypoint_function_name: romanToDecimal
+        entrypoint_function_arg_names: ["S"]
+        parent_class_name: Solution
+        parent_class_arg_names: []
+    - input_variables:
+        code: |
+          # USER CODE TEMPLATE v0.1
+          def sum_two_numbers(a, b):
+              # SOLUTION HERE
+      output: !pyine.prompts.callable_analysis.CallableAnalysisResponse
+        entrypoint_function_name: sum_two_numbers
+        entrypoint_function_arg_names: ["a", "b"]
+        parent_class_name: ""
+        parent_class_arg_names: []

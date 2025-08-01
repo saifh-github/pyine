@@ -3,11 +3,17 @@ import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
 
+import pyine.prompts.prompt_utils
 import pyine.utils.llm_providers
+import pyine.utils.pydantic_loader
 
 
 class CallableAnalysisResponse(pydantic.BaseModel):
-    """Response model for callable analysis."""
+    """Response model for callable entrypoint analysis.
+
+    This model is used to describe the output of a model tasked with identifying the callable
+    entrypoint of a Python program. See the corresponding template YAML file for more details.
+    """
 
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
@@ -44,91 +50,79 @@ class CallableAnalysisResponse(pydantic.BaseModel):
     )
 
 
-callable_analysis_output_parser = langchain_core.output_parsers.PydanticOutputParser(
+output_parser = langchain_core.output_parsers.PydanticOutputParser(
     pydantic_object=CallableAnalysisResponse,
 )
-
-_callable_analysis_expected_output_format_str = callable_analysis_output_parser.get_format_instructions()
-
-_callable_analysis_example_outputs_str = f"""\
-Example:
-```python
-class Solution:
-
-    def __init__(self):
-        pass
-
-    def romanToDecimal(self, S):
-
-        # code here
-```
-
-Expected output:
-{
-    CallableAnalysisResponse(
-        entrypoint_function_name="romanToDecimal",
-        entrypoint_function_arg_names=["S"],
-        parent_class_name="Solution",
-        parent_class_arg_names=[],
-    ).model_dump_json(indent=2)
-}
-
-Another example:
-```python
-# USER CODE TEMPLATE v0.1
-def sum_two_numbers(a, b):
-    # SOLUTION HERE
-```
-Expected output:
-{
-    CallableAnalysisResponse(
-        entrypoint_function_name="sum_two_numbers",
-        entrypoint_function_arg_names=["a", "b"],
-        parent_class_name="",
-        parent_class_arg_names=[],
-    ).model_dump_json(indent=2)
-}
-"""
-
-_callable_analysis_template_str = """\
-You are an expert at analyzing Python code and determining how to correctly call the most relevant \
-function (the "entrypoint") to execute a given algorithm, even when that function is part of a class.
-
-We will give you a code template ("starter code") that we expect will later be fully implemented.
-
-We are currently only interested in how the algorithm would later be executed given that code template. \
-Your task is to extract relevant information on the "entrypoint" that will be used for this execution.
-
-If the function is inside a class, we expect to instantiate the class before accessing its function. \
-If the function is not inside a class, we expect to use it directly.
-
-{expected_output_format}
-
-{example_outputs}
-
-Here is the "starter code" you must now analyze:
-
-```python
-{starter_code}
-```
-"""
+expected_output_format_str = output_parser.get_format_instructions()
 
 
-callable_analysis_prompt = langchain_core.prompts.PromptTemplate(
-    input_variables=["starter_code", "expected_output_format", "example_outputs"],
-    template=_callable_analysis_template_str,
-)
+def get_prompt_config(
+    version: str | None = None,
+) -> pyine.prompts.prompt_utils.PromptConfig:
+    """Get the prompt configuration for the callable analysis prompt.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+    """
+    # first, make sure the pydantic loader has already registered this class
+    pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_module(__name__)
+    # note: this will be cached by the prompt manager
+    return pyine.prompts.prompt_utils.get_prompt_config(
+        prompt_name="callable_analysis",
+        version=version,
+    )
 
 
-def get_chain(**kwargs) -> langchain_core.runnables.Runnable:
-    """Get an inference chain based on the above prompt template and parser."""
-    llm = pyine.utils.llm_providers.get_llm_from_provider(**kwargs)
+def get_prompt_template(
+    version: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+) -> langchain_core.prompts.PromptTemplate:
+    """Get the langchain prompt template for the callable analysis prompt.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+    """
+    prompt_config = get_prompt_config(version=version)
+    context_vars = dict(
+        expected_output_format=expected_output_format_str,
+    )
+    return prompt_config.create_prompt_template(
+        include_examples=include_examples,
+        target_examples=target_examples,
+        context_variables=context_vars,
+    )
+
+
+def get_chain(
+    version: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+    **llm_provider_kwargs,
+) -> langchain_core.runnables.Runnable:
+    """Get an inference chain based on the above prompt template and parser.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
+    """
+    llm = pyine.utils.llm_providers.get_llm_from_provider(**llm_provider_kwargs)
     llm_with_structured_output = llm.with_structured_output(CallableAnalysisResponse)
-    callable_analysis_chain = langchain_core.runnables.RunnableSequence(
-        callable_analysis_prompt.partial(
-            expected_output_format=_callable_analysis_expected_output_format_str,
-            example_outputs=_callable_analysis_example_outputs_str,
-        ),
+    prompt_template = get_prompt_template(
+        version=version,
+        include_examples=include_examples,
+        target_examples=target_examples,
+    )
+    chain = langchain_core.runnables.RunnableSequence(
+        prompt_template,
         llm_with_structured_output,
     )
-    return callable_analysis_chain
+    return chain
