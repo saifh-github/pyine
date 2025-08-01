@@ -2,6 +2,7 @@ import dataclasses
 import datetime
 import importlib.resources as pkg_resources
 import json
+import logging
 import pathlib
 import typing
 
@@ -25,7 +26,6 @@ PROBLEM_DATA_PATTERN = "*" + PROBLEM_DATA_SUFFIX
 """Pattern for matching coding problem entries in the LMDB dataset."""
 TRACE_DATA_SUFFIX = "/s*/t*"
 """Suffix for entries that correspond to execution traces in the LMDB dataset."""
-
 SUPPORTED_SOURCE_DATASETS = [
     "TACO",
     # add more supported datasets here
@@ -37,6 +37,10 @@ JSON_BASED_SOURCE_DATASETS = [
     # add more supported datasets here
 ]
 """List of source datasets that store coding problem data in json files."""
+BANNED_DATA_YAML_PATH = pkg_resources.files("pyine.data.traces") / "banned_data.yaml"
+"""Path to the YAML file containing banned data information for each supported source dataset."""
+
+logger = logging.getLogger(__name__)
 
 
 def is_float(s):
@@ -256,6 +260,24 @@ class Solution(pydantic.BaseModel):
 class CodingProblemIterator:
     """Iterator class for iterating over coding problem data from a source dataset."""
 
+    @dataclasses.dataclass
+    class _BannedData:
+        """Data class containing banned data information."""
+
+        metadata: dict = dataclasses.field(default_factory=dict)
+        """Dataset-dependent map of banned metadata; allows some stuff to be entirely avoided."""
+        problems: dict[str, list[int]] = dataclasses.field(default_factory=dict)
+        """Generic banned problems indices map.
+
+        For each data subset (e.g. 'train', 'valid', ...), provides a list of banned problem indices.
+        """
+        solutions: dict[str, dict[int, list[int]]] = dataclasses.field(default_factory=dict)
+        """Generic banned solutions indices map.
+
+        For each data subset (e.g. 'train', 'valid', ...), provides a dictionary pairing problem
+        indices with a list of banned solution indices.
+        """
+
     def __init__(
         self,
         dataset_name: str,
@@ -273,11 +295,12 @@ class CodingProblemIterator:
             raise NotADirectoryError(f"{root_data_path} is not a directory")
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
-        self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
-        if not allow_banned_samples:
-            self.banned_problems, self.banned_solutions = self._load_banned_sample_data()
+        if allow_banned_samples:
+            logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
+            self.banned = self._BannedData()  # will be initialized w/ empty maps
         else:
-            self.banned_problems, self.banned_solutions = {}, {}
+            self.banned = self._load_banned_data()
+        self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
         self._current_idx = 0
         self._show_progress = show_progress
         self._progress_bar = None
@@ -293,6 +316,8 @@ class CodingProblemIterator:
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
+                if json_file_path.name in self.banned.metadata:
+                    continue  # skip banned samples (likely due to code analysis failure)
                 # note: if too slow, open the jsons with a binary reader and parse byte-by-byte
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     json_data = json.load(fd)
@@ -305,21 +330,23 @@ class CodingProblemIterator:
         else:
             raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
 
-    def _load_banned_sample_data(
+    def _load_banned_data(
         self,
-    ) -> tuple[
-        dict[str, list[int]],  # for each sample subset, list of bad problem idxs
-        dict[str, dict[int, list[int]]],  # for each sample subset, list of problem dicts with banned solution idxs
-    ]:  # banned_problems, banned_solutions
-        """Load banned sample info from the `banned_samples.yaml` file for a target dataset."""
-        banned_sample_data_path = pkg_resources.files("pyine.data.traces") / "banned_samples.yaml"
-        with open(str(banned_sample_data_path)) as f:
-            banned_sample_data = yaml.safe_load(f) or {}
-        banned_problems_all = banned_sample_data.get("banned_problems", {})
-        banned_solutions_all = banned_sample_data.get("banned_solutions", {})
-        banned_problems = banned_problems_all.get(self.dataset_name, {})
-        banned_solutions = banned_solutions_all.get(self.dataset_name, {})
-        return banned_problems, banned_solutions
+    ) -> _BannedData:
+        """Load banned data info for a target dataset."""
+        with open(str(BANNED_DATA_YAML_PATH)) as f:
+            banned_data = yaml.safe_load(f) or {}
+        banned_metadata_all = banned_data.get("banned_metadata", {})
+        banned_problems_all = banned_data.get("banned_problems", {})
+        banned_solutions_all = banned_data.get("banned_solutions", {})
+        target_banned_metadata = banned_metadata_all.get(self.dataset_name, {})
+        target_banned_problems = banned_problems_all.get(self.dataset_name, {})
+        target_banned_solutions = banned_solutions_all.get(self.dataset_name, {})
+        return self._BannedData(
+            metadata=target_banned_metadata,
+            problems=target_banned_problems,
+            solutions=target_banned_solutions,
+        )
 
     def _load_problem_data(self, problem_metadata: typing.Any) -> dict[str, typing.Any]:
         """Loads 'raw' data from the source dataset for a specific coding problem."""
@@ -351,7 +378,7 @@ class CodingProblemIterator:
                 problem_idx=problem_data["subset_idx"],
             )
             problem_statement = problem_data["question"]
-            is_banned = problem_id.problem_idx in self.banned_problems.get(problem_id.subset, [])
+            is_banned = problem_id.problem_idx in self.banned.problems.get(problem_id.subset, [])
             inputs_array = problem_data["input_output"]["inputs"]
             outputs_array = problem_data["input_output"]["outputs"]
             assert isinstance(inputs_array, list) and isinstance(outputs_array, list)
@@ -366,7 +393,7 @@ class CodingProblemIterator:
                 parsing_errors.append("no solutions found")
             else:
                 rpkgd_solutions = problem_data["solutions"]
-                banned_solution_idxs = self.banned_solutions.get(problem_id.subset, {}).get(problem_id.problem_idx, {})
+                banned_solution_idxs = self.banned.solutions.get(problem_id.subset, {}).get(problem_id.problem_idx, {})
                 assert all([isinstance(s, dict) and "code" in s for s in rpkgd_solutions]), "missing repackaged code?"
                 for solution_idx, solution in enumerate(rpkgd_solutions):
                     solution_id = SolutionIdentifier(
