@@ -218,7 +218,7 @@ __default__: "v1.0.0"
         assert default_config.question.template == "Greetings {name}, how are you?"
 
     def test_from_invalid_yaml(self):
-        with pytest.raises(AssertionError, match="YAML file does not exist"):
+        with pytest.raises(FileNotFoundError):
             prompt_utils.VersionedPromptConfig.from_yaml("nonexistent.yaml")
 
         yaml_content = """\

@@ -6,6 +6,7 @@ v1.0:
     template: >
       You are an expert at analyzing Python code.
 
+
       Your role is to determine how to correctly call the most relevant function in a given code
       snippet (i.e. its "entrypoint") such that we can execute the algorithm it contains. You must
       identify the correct entrypoint even in cases where code snippets contain many functions, and
@@ -15,6 +16,7 @@ v1.0:
       We will give you a code template that may be incomplete but always contains the "interface"
       of the algorithm we care about, and that defines the entrypoint. Ignore any missing part.
 
+
       If the entrypoint is inside a class, you will need to specify which class. If that class
       requires arguments to be constructed, you will need to list the names of those arguments.
       If the entrypoint is a function, you will need to specify which function. If that function
@@ -22,7 +24,9 @@ v1.0:
       what the entrypoint should be, or if there does not seem to be one, you must return only
       empty strings and lists.
 
+
       You will provide all relevant information under a structured output.
+
 
       {expected_output_format}
   question:
@@ -30,18 +34,22 @@ v1.0:
       Here is the code snippet you must now analyze:
 
       ```python
-      {code}
+      {{code.rstrip("\n") + "\n"}}
       ```
+
+      Now, provide the structured output for this code, and nothing else:
+    format: jinja2
   example_template:
     template: |
-      Example {example_idx}/{example_count}:
+      Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {code}
+      {{code.rstrip("\n") + "\n"}}
       ```
       Expected output:
-      {output}
+      {{output.model_dump_json() + "\n"}}
+    format: jinja2
   example_block_template:  # unspecified = keep default
-  template_block_separator: "\n\n"
+  template_block_separator: "\n"
   examples:
     - input_variables:
         code: |
