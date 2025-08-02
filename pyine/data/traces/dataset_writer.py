@@ -11,7 +11,6 @@ import warnings
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.lmdb_io
-import pyine.prompts.code_analysis
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
 import pyine.utils.code.validation

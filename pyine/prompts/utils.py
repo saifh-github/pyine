@@ -1,5 +1,3 @@
-import functools
-import importlib.resources
 import logging
 import pathlib
 import random
@@ -7,7 +5,6 @@ import typing
 
 import langchain_core.prompts
 import pydantic
-import yaml
 
 import pyine.utils.pydantic_loader
 
@@ -34,8 +31,6 @@ EXAMPLE_OPT_COUNT_KEY = "example_count"
 """Key used to identify the total number of examples in example templates; optional, provided if detected."""
 
 logger = logging.getLogger(__name__)
-
-# @@@@@@@ TODO: update all past prompt stuff into yamls
 
 
 class PromptTemplate(pydantic.BaseModel):
@@ -189,6 +184,10 @@ class PromptConfig(pydantic.BaseModel):
     ) -> langchain_core.prompts.PromptTemplate:
         """Create a LangChain prompt template from role, context, examples, and question templates.
 
+        Note: this implementation will fully render (format) all the role, context, and examples
+        prompts, meaning all variables (arguments) for these prompts must have already been
+        specified, or they must be specified via the corresponding dictionaries.
+
         Args:
             include_examples: Whether to include few-shot examples in the template.
             target_examples: List of examples to target when rendering the prompt. Can pass in
@@ -202,19 +201,19 @@ class PromptConfig(pydantic.BaseModel):
         Returns:
             A `langchain_core.prompts.PromptTemplate` instance ready for use with LangChain.
         """
-        template_parts = []
+        rendered_template_parts = []
         if self.role is not None:
             role_prompt = langchain_core.prompts.PromptTemplate.from_template(
                 template=self.role.template,
                 template_format=self.role.format,
             ).format(**(role_variables or {}))
-            template_parts.append(role_prompt)
+            rendered_template_parts.append(role_prompt)
         if self.context is not None:
             context_prompt = langchain_core.prompts.PromptTemplate.from_template(
                 template=self.context.template,
                 template_format=self.context.format,
             ).format(**(context_variables or {}))
-            template_parts.append(context_prompt)
+            rendered_template_parts.append(context_prompt)
         if include_examples and self.examples:
             if self.examples_block_template:
                 examples_block_template = self.examples_block_template
@@ -232,18 +231,13 @@ class PromptConfig(pydantic.BaseModel):
             examples_str = self.get_examples_as_text(target_examples=target_examples)
             examples_block_variables["examples_str"] = examples_str
             examples_block_prompt = examples_block_template.format(**examples_block_variables)
-            template_parts.append(examples_block_prompt)
-        question_prompt = langchain_core.prompts.PromptTemplate.from_template(
-            template=self.question.template,
+            rendered_template_parts.append(examples_block_prompt)
+        # all template parts that might have been created so far are fully rendered ones
+        complete_template = langchain_core.prompts.PromptTemplate.from_template(
+            template=self.template_block_separator.join([*rendered_template_parts, self.question.template]),
             template_format=self.question.format,
-        )  # for template validation + to get input variables list for combined prompt below
-        template_parts.append(question_prompt.template)
-        complete_template = self.template_block_separator.join(template_parts)
-        combined_prompt = langchain_core.prompts.PromptTemplate(
-            template=complete_template,
-            input_variables=question_prompt.input_variables,
         )
-        return combined_prompt
+        return complete_template
 
     def render_prompt(
         self,
@@ -342,142 +336,3 @@ class VersionedPromptConfig(pydantic.BaseModel):
     def get_default(self) -> PromptConfig:
         """Get the default prompt configuration."""
         return self.versions[self.default_version]
-
-
-class PromptManager:
-    """Manager for loading and working with YAML-based prompt configuration files."""
-
-    def __init__(
-        self,
-        package_name: str = "pyine.prompts",
-        prompts_subdir: str = "templates",
-    ):
-        """Initialize the prompt manager.
-
-        Args:
-            package_name: Name of the package containing prompt files.
-            prompts_subdir: Subdirectory within the package containing prompts.
-        """
-        self.package_name = package_name
-        self.prompts_subdir = prompts_subdir
-        self._cache: dict[str, PromptConfig] = {}
-
-    def _get_prompt_path(
-        self,
-        prompt_name: str,
-    ) -> pathlib.Path:
-        """Get the path to a prompt file within the package resources."""
-        return pathlib.Path(self.prompts_subdir) / f"{prompt_name}.yaml"
-
-    def _load_prompt_config(
-        self,
-        prompt_name: str,
-        version: str | None = None,
-    ) -> PromptConfig:
-        """Load and parse a prompt configuration from YAML.
-
-        Args:
-            prompt_name: Name of the prompt to load (without .yaml extension)
-            version: Specific version to load, or None for the default version
-
-        Returns:
-            The parsed prompt configuration for the requested version.
-        """
-        prompt_path = self._get_prompt_path(prompt_name)
-        try:
-            package_files = importlib.resources.files(self.package_name)
-            prompt_file = package_files / str(prompt_path)
-            if not prompt_file.is_file():
-                raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-            versioned_config = VersionedPromptConfig.from_yaml(prompt_file)  # noqa
-            if version is not None:
-                if version not in versioned_config.versions:
-                    available_versions = ", ".join(versioned_config.versions.keys())
-                    raise ValueError(
-                        f"Version '{version}' not found for prompt '{prompt_name}'. "
-                        f"Available versions: {available_versions}"
-                    )
-                return versioned_config.versions[version]
-            else:
-                return versioned_config.get_default()
-        except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML in {prompt_path}: {e}") from e
-        except pydantic.ValidationError as e:
-            raise ValueError(f"Invalid prompt schema in {prompt_path}: {e}") from e
-
-    @functools.lru_cache(maxsize=128)
-    def get_prompt_config(
-        self,
-        prompt_name: str,
-        version: str | None = None,
-    ) -> PromptConfig:
-        """Get a prompt configuration with caching.
-
-        Args:
-            prompt_name: Name of the prompt to retrieve.
-            version: Specific version to retrieve, or `None` for the default version.
-
-        Returns:
-            The prompt configuration for the requested version.
-        """
-        cache_key = f"{prompt_name}:{version}" if version else prompt_name
-        if cache_key not in self._cache:
-            self._cache[cache_key] = self._load_prompt_config(prompt_name, version)
-        return self._cache[cache_key]
-
-    def list_prompts(self) -> list[str]:
-        """Returns a list of all available prompts in the package (as names without extension)."""
-        package_files = importlib.resources.files(self.package_name)
-        prompts_dir = package_files / self.prompts_subdir
-        if not prompts_dir.is_dir():
-            return []
-        prompt_names = [
-            file.name[:-5]  # remove .yaml extension
-            for file in prompts_dir.iterdir()
-            if file.is_file() and file.name.lower().endswith(".yaml")
-        ]
-        return sorted(prompt_names)
-
-    def list_prompt_versions(self, prompt_name: str) -> list[str]:
-        """List all available versions for a specific prompt."""
-        prompt_path = self._get_prompt_path(prompt_name)
-        package_files = importlib.resources.files(self.package_name)
-        prompt_file = package_files / str(prompt_path)
-        if not prompt_file.is_file():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-        versioned_config = VersionedPromptConfig.from_yaml(prompt_file)  # noqa
-        return list(versioned_config.versions.keys())
-
-    def clear_cache(self) -> None:
-        """Clear the internal prompt cache."""
-        self._cache.clear()
-        self.get_prompt_config.cache_clear()
-
-
-_default_prompt_manager: PromptManager | None = None
-"""Singleton instance of the framework's default prompt manager."""
-
-
-def get_framework_prompt_manager() -> PromptManager:
-    """Get the default prompt manager instance for the pyine framework (singleton)."""
-    global _default_prompt_manager
-    if _default_prompt_manager is None:
-        _default_prompt_manager = PromptManager()
-    return _default_prompt_manager
-
-
-def get_prompt_config(
-    prompt_name: str,
-    version: str | None = None,
-) -> PromptConfig:
-    """Convenience function to get a prompt config using the default manager.
-
-    Args:
-        prompt_name: Name of the prompt to retrieve
-        version: Specific version to retrieve, or None for the default version
-
-    Returns:
-        The prompt configuration for the requested version
-    """
-    manager = get_framework_prompt_manager()
-    return manager.get_prompt_config(prompt_name, version)

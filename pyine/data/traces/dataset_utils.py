@@ -12,7 +12,7 @@ import tqdm
 import yaml
 
 import pyine.data.utils.lmdb_io
-import pyine.prompts.code_analysis
+import pyine.prompts.configs.code_analysis
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
 import pyine.utils.code.validation
@@ -212,7 +212,7 @@ class Solution(pydantic.BaseModel):
     """Code string for this solution."""
     analysis_errors: list[str] | None
     """Errors (if any) that were encountered during analysis of this solution."""
-    analysis_results: pyine.prompts.code_analysis.CodeAnalysisResponse
+    analysis_results: pyine.prompts.configs.code_analysis.CodeAnalysisResponse
     """Advanced code analysis results for this solution's code."""
     is_banned: bool
     """Whether this solution is banned from being traced (due to a data/processing issue)."""
@@ -404,7 +404,7 @@ class CodingProblemIterator:
                     )
                     solution_ids.append(solution_id)
                     analysis_errors = solution.get("validation_errors", None)
-                    analysis_results = pyine.prompts.code_analysis.CodeAnalysisResponse.model_validate(
+                    analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
                         solution["analysis_outputs"][-1],  # take the latest analysis result
                     )
                     solutions.append(

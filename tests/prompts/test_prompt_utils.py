@@ -4,7 +4,7 @@ import tempfile
 import pytest
 import yaml
 
-import pyine.prompts.prompt_utils as prompt_utils
+import pyine.prompts.utils as prompt_utils
 
 
 class TestPromptConfig:

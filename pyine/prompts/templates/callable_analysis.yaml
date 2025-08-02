@@ -32,7 +32,6 @@ v1.0:
   question:
     template: |
       Here is the code snippet you must now analyze:
-
       ```python
       {{code.rstrip("\n")}}
       ```
@@ -60,7 +59,7 @@ v1.0:
 
               def romanToDecimal(self, S):
                   # code here
-      output: !pyine.prompts.callable_analysis.CallableAnalysisResponse
+      output: !pyine.prompts.configs.callable_analysis.CallableAnalysisResponse
         entrypoint_function_name: romanToDecimal
         entrypoint_function_arg_names: ["S"]
         parent_class_name: Solution
@@ -70,7 +69,7 @@ v1.0:
           # USER CODE TEMPLATE v0.1
           def sum_two_numbers(a, b):
               # SOLUTION HERE
-      output: !pyine.prompts.callable_analysis.CallableAnalysisResponse
+      output: !pyine.prompts.configs.callable_analysis.CallableAnalysisResponse
         entrypoint_function_name: sum_two_numbers
         entrypoint_function_arg_names: ["a", "b"]
         parent_class_name: ""
