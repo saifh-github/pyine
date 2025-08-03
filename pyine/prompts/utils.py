@@ -14,6 +14,8 @@ DEFAULT_PROMPT_VERSION_KEY = "__default__"
 If the config files does NOT contain this key to define the default prompt version to use, the last
 prompt version in the file will be used as the default.
 """
+INTERNAL_DEFINES_KEY = "__defines__"
+"""Key used to store internal defines in YAML files (will be skipped by the YAML parser)."""
 
 PromptTemplateFormat = langchain_core.prompts.string.PromptTemplateFormat
 """Supported formats for prompt templates (provided by LangChain).
@@ -310,6 +312,8 @@ class VersionedPromptConfig(pydantic.BaseModel):
         for version, config_data in raw_data.items():
             if version == DEFAULT_PROMPT_VERSION_KEY:
                 continue  # we'll take care of this one below
+            if version == INTERNAL_DEFINES_KEY:
+                continue  # this block contains variable definitions (aliases), skip it
             assert isinstance(config_data, dict), "each prompt version must be mapped to a config a dictionary"
             # if the version information is not already in the config data, add it here before validation
             if "metadata" not in config_data:
