@@ -38,13 +38,24 @@ logger = logging.getLogger(__name__)
 class PromptTemplate(pydantic.BaseModel):
     """Model for prompt templates."""
 
-    model_config = pydantic.ConfigDict(frozen=True)
-    """Pydantic model configuration (freezes the dataclass)."""
-
     template: str
     """The prompt template string."""
     format: PromptTemplateFormat = "f-string"
     """The format of the prompt template (f-string or jinja2; f-string is preferred for security)."""
+    partial_variables: dict[str, typing.Any] | None = None
+    """Optional dictionary of partial variables to be used in the template."""
+
+    def get_partially_rendered_prompt(self) -> langchain_core.prompts.PromptTemplate:
+        """Return a LangChain prompt template with partial variables filled in."""
+        return langchain_core.prompts.PromptTemplate.from_template(
+            template=self.template,
+            template_format=self.format,
+            partial_variables=self.partial_variables,
+        )
+
+    def render_prompt(self, **kwargs) -> str:
+        """Render the prompt template with the provided + internal (partial) variables."""
+        return self.get_partially_rendered_prompt().format(**kwargs)
 
 
 DefaultExamplesBlockTemplate = PromptTemplate(
@@ -155,10 +166,7 @@ class PromptConfig(pydantic.BaseModel):
         assert self.example_template is not None, "example template must be specified to format examples"
         formatted_examples = []
         for idx, example in enumerate(examples, 1):
-            prompt_template = langchain_core.prompts.PromptTemplate.from_template(
-                template=self.example_template.template,
-                template_format=self.example_template.format,
-            )
+            prompt_template = self.example_template.get_partially_rendered_prompt()
             assert (
                 EXAMPLE_OUTPUT_KEY in prompt_template.input_variables
             ), f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
@@ -207,26 +215,17 @@ class PromptConfig(pydantic.BaseModel):
         """
         rendered_template_parts = []
         if self.role is not None:
-            role_prompt = langchain_core.prompts.PromptTemplate.from_template(
-                template=self.role.template,
-                template_format=self.role.format,
-            ).format(**(role_variables or {}))
+            role_prompt = self.role.render_prompt(**(role_variables or {}))
             rendered_template_parts.append(role_prompt)
         if self.context is not None:
-            context_prompt = langchain_core.prompts.PromptTemplate.from_template(
-                template=self.context.template,
-                template_format=self.context.format,
-            ).format(**(context_variables or {}))
+            context_prompt = self.context.render_prompt(**(context_variables or {}))
             rendered_template_parts.append(context_prompt)
         if include_examples and self.examples:
             if self.examples_block_template:
                 examples_block_template = self.examples_block_template
             else:
                 examples_block_template = DefaultExamplesBlockTemplate
-            examples_block_template = langchain_core.prompts.PromptTemplate.from_template(
-                template=examples_block_template.template,
-                template_format=examples_block_template.format,
-            )
+            examples_block_template = examples_block_template.get_partially_rendered_prompt()
             assert (
                 "examples_str" in examples_block_template.input_variables
             ), "examples block template must include 'examples_str' variable"
@@ -240,6 +239,7 @@ class PromptConfig(pydantic.BaseModel):
         complete_template = langchain_core.prompts.PromptTemplate.from_template(
             template=self.template_block_separator.join([*rendered_template_parts, self.question.template]),
             template_format=self.question.format,
+            partial_variables=self.question.partial_variables,
         )
         return complete_template
 
