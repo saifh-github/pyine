@@ -1,8 +1,7 @@
 import enum
-import functools
 
 import langchain_core.output_parsers
-import langchain_core.runnables
+import langchain_core.prompts
 import pydantic
 
 import pyine.prompts.manager
@@ -127,11 +126,27 @@ def get_prompt_config(
     )
 
 
-get_prompt_template = functools.partial(
-    pyine.prompts.manager.get_prompt_template,
-    prompt_name="code_analysis",
-    role_variables=None,
-    context_variables=dict(expected_output_format=expected_output_format_str),
-    examples_block_variables=None,
-)
-"""Specialized version of `get_prompt_template` for the code analysis prompt."""
+def get_prompt_template(
+    version: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+) -> langchain_core.prompts.PromptTemplate:
+    """Return the prompt template for the code analysis prompt.
+
+    Note: this implementation appropriately fills in all relevant partial variables, if any.
+
+    Args:
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+    """
+    prompt_config = get_prompt_config(version=version)
+    return prompt_config.create_prompt_template(
+        include_examples=include_examples,
+        target_examples=target_examples,
+        role_variables=None,
+        context_variables=dict(expected_output_format=expected_output_format_str),
+        examples_block_variables=None,
+    )
