@@ -171,7 +171,7 @@ class PromptConfig(pydantic.BaseModel):
         assert self.example_template is not None, "example template must be specified to format examples"
         formatted_examples = []
         for idx, example in enumerate(examples, 1):
-            prompt_template = self.example_template.get_partially_rendered_prompt(**extra_variables)
+            prompt_template = self.example_template.get_partially_rendered_prompt(**(extra_variables or {}))
             assert (
                 EXAMPLE_OUTPUT_KEY in prompt_template.input_variables
             ), f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
