@@ -9,6 +9,8 @@ ______________________________________________________________________
 
 ## **Installation**
 
+This framework is designed for Python 3.12+.
+
 To get started with the PyINE benchmark and dataset, we recommend using a virtual environment.
 Below are instructions for both the fast, modern `uv` tool and the standard `pip` with `venv`.
 

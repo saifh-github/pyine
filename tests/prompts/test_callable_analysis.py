@@ -1,7 +1,40 @@
 import langchain_core.prompts
+import pytest
 
 import pyine.prompts.configs.callable_analysis as callable_analysis
 import pyine.prompts.utils
+
+
+def test_callable_analysis_response_validation():
+    response = callable_analysis.CallableAnalysisResponse(
+        entrypoint_function_name="test_func",
+        entrypoint_function_arg_names=[],
+        parent_class_name=None,
+        parent_class_arg_names=None,
+    )
+    assert response.entrypoint_function_name == "test_func"
+    assert len(response.entrypoint_function_arg_names) == 0
+    response = callable_analysis.CallableAnalysisResponse(
+        entrypoint_function_name="test_func",
+        entrypoint_function_arg_names=["arg1", "arg2"],
+        parent_class_name=None,
+        parent_class_arg_names=None,
+    )
+    assert len(response.entrypoint_function_arg_names) == 2
+    response = callable_analysis.CallableAnalysisResponse(
+        entrypoint_function_name="test_func",
+        entrypoint_function_arg_names=["arg1", "arg2"],
+        parent_class_name="Algo",
+        parent_class_arg_names=[],
+    )
+    assert response.parent_class_name == "Algo"
+    with pytest.raises(ValueError):
+        callable_analysis.CallableAnalysisResponse(
+            entrypoint_function_name="",
+            entrypoint_function_arg_names=[],
+            parent_class_name="TestClass",
+            parent_class_arg_names=[],
+        )
 
 
 def test_get_config_and_template():

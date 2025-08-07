@@ -10,8 +10,8 @@ def test_dump_and_load_yaml(tmp_path):
         model=registered_models[expected_tag_name](
             entrypoint_function_name="sum_two_numbers",
             entrypoint_function_arg_names=["a", "b"],
-            parent_class_name="",
-            parent_class_arg_names=[],
+            parent_class_name=None,
+            parent_class_arg_names=None,
         )
     )
 

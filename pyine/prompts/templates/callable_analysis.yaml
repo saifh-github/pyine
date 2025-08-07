@@ -72,5 +72,5 @@ v1.0:
       output: !pyine.prompts.configs.callable_analysis.CallableAnalysisResponse
         entrypoint_function_name: sum_two_numbers
         entrypoint_function_arg_names: ["a", "b"]
-        parent_class_name: ""
-        parent_class_arg_names: []
+        parent_class_name:
+        parent_class_arg_names:

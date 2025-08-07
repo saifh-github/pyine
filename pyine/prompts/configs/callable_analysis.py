@@ -1,3 +1,5 @@
+import typing
+
 import langchain_core.output_parsers
 import langchain_core.prompts
 import pydantic
@@ -7,6 +9,12 @@ import pyine.prompts.utils
 import pyine.utils.llm_providers
 import pyine.utils.pydantic_loader
 
+python_def_pattern = r"^[A-Za-z_][A-Za-z0-9_]*$"
+"""Regex pattern to use to identify any variable/function/method/class name definition."""
+
+type PythonDefType = typing.Annotated[pydantic.StrictStr, pydantic.Field(pattern=python_def_pattern)]
+"""Type annotation for a Python variable/function/method/class name definition."""
+
 
 class CallableAnalysisResponse(pydantic.BaseModel):
     """Response model for callable entrypoint analysis.
@@ -15,33 +23,36 @@ class CallableAnalysisResponse(pydantic.BaseModel):
     entrypoint of a Python program. See the corresponding template YAML file for more details.
     """
 
-    model_config = pydantic.ConfigDict(frozen=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
-    entrypoint_function_name: str = pydantic.Field(
+    entrypoint_function_name: PythonDefType = pydantic.Field(
         description=(
-            "Specifies the name of the entrypoint function; if the function is inside "
-            "a class, this field should ONLY be the name of the function inside that class."
+            "Specifies the name of the entrypoint function/method; if a class is meant to be used, "
+            "this field should ONLY be the name of the method inside that class."
         ),
     )
-    entrypoint_function_arg_names: list[str] = pydantic.Field(
+    # noinspection PyTypeHints
+    entrypoint_function_arg_names: list[PythonDefType] = pydantic.Field(
         description=(
             "Specifies the names of the arguments that the entrypoint function takes; "
             "if the function takes no arguments, this field should be an empty list."
         ),
     )
-    parent_class_name: str = pydantic.Field(
+    parent_class_name: PythonDefType | None = pydantic.Field(
+        default=None,
         description=(
-            "Specifies the name of the parent class of the entrypoint function; this is only "
-            "relevant if the entrypoint function is inside a class; if it is not, this field "
-            "should be an empty string."
+            "Specifies the name of the parent class of the entrypoint; this is only relevant "
+            "if the entrypoint is a class method; if it is not, this field should be unassigned."
         ),
     )
-    parent_class_arg_names: list[str] = pydantic.Field(
+    # noinspection PyTypeHints
+    parent_class_arg_names: list[PythonDefType] | None = pydantic.Field(
+        default=None,
         description=(
-            "Specifies the names of the arguments that the parent class of the entrypoint "
-            "function requires in order to be instantiated; if the class constructor takes "
-            "no arguments, this field should be an empty list; this field is only relevant "
-            "if the targeted entrypoint function is inside a class."
+            "Specifies the names of the arguments that the parent class of the entrypoint method "
+            "requires in order to be instantiated; if the class constructor takes no arguments, "
+            "this field should be an empty list. This field is only relevant if the targeted "
+            "entrypoint is inside a class; if it is not, this field should be unassigned."
         ),
     )
 
