@@ -45,12 +45,15 @@ class PromptTemplate(pydantic.BaseModel):
     partial_variables: dict[str, typing.Any] | None = None
     """Optional dictionary of partial variables to be used in the template."""
 
-    def get_partially_rendered_prompt(self) -> langchain_core.prompts.PromptTemplate:
+    def get_partially_rendered_prompt(
+        self,
+        **kwargs,  # extra partial variables (if any are needed)
+    ) -> langchain_core.prompts.PromptTemplate:
         """Return a LangChain prompt template with partial variables filled in."""
         return langchain_core.prompts.PromptTemplate.from_template(
             template=self.template,
             template_format=self.format,
-            partial_variables=self.partial_variables,
+            partial_variables=dict(**(self.partial_variables or {}), **kwargs),
         )
 
     def render_prompt(self, **kwargs) -> str:
@@ -141,6 +144,7 @@ class PromptConfig(pydantic.BaseModel):
     def get_examples_as_text(
         self,
         target_examples: int | list[int] | None = None,
+        extra_variables: dict[str, typing.Any] | None = None,
     ) -> str:
         """Formats examples as text for inclusion in prompts.
 
@@ -148,6 +152,7 @@ class PromptConfig(pydantic.BaseModel):
             target_examples: List of examples to target when rendering the prompt. Can pass in
                 a list of example indices, or an integer that specifies the number of samples to
                 pick randomly. If `None` is provided instead, all examples are included.
+            extra_variables: Extra variables to substitute in the example templates.
 
         Returns:
             A string containing the formatted examples (with no more processing needed).
@@ -166,7 +171,7 @@ class PromptConfig(pydantic.BaseModel):
         assert self.example_template is not None, "example template must be specified to format examples"
         formatted_examples = []
         for idx, example in enumerate(examples, 1):
-            prompt_template = self.example_template.get_partially_rendered_prompt()
+            prompt_template = self.example_template.get_partially_rendered_prompt(**extra_variables)
             assert (
                 EXAMPLE_OUTPUT_KEY in prompt_template.input_variables
             ), f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
@@ -231,7 +236,10 @@ class PromptConfig(pydantic.BaseModel):
             ), "examples block template must include 'examples_str' variable"
             examples_block_variables = examples_block_variables or {}
             assert "examples_str" not in examples_block_variables, "overlap between input/output variable names"
-            examples_str = self.get_examples_as_text(target_examples=target_examples)
+            examples_str = self.get_examples_as_text(
+                target_examples=target_examples,
+                extra_variables=examples_block_variables,
+            )
             examples_block_variables["examples_str"] = examples_str
             examples_block_prompt = examples_block_template.format(**examples_block_variables)
             rendered_template_parts.append(examples_block_prompt)
