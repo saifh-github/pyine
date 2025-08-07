@@ -1,7 +1,8 @@
 import difflib
+import html
 import logging
-import typing
 
+import IPython.display
 import unidiff
 
 logger = logging.getLogger(__name__)
@@ -83,3 +84,27 @@ def apply_patch(
         # any error during parsing or applying means failure
         logger.error(f"error applying patch: {e}")
         return text, False
+
+
+def show_colored_diff(
+    diff: str,
+) -> None:
+    """Display a colored unified diff in a Jupyter notebook.
+
+    Args:
+        diff: The unified diff to display.
+    """
+    styled_lines: list[str] = []
+    for line in diff.splitlines(keepends=True):
+        escaped = html.escape(line.rstrip("\n"))
+        if line.startswith("+") and not line.startswith("+++"):
+            color = "#22863a"  # green
+        elif line.startswith("-") and not line.startswith("---"):
+            color = "#b31d28"  # red
+        elif line.startswith("@@"):
+            color = "#8250df"  # purple
+        else:
+            color = "#6a737d"  # grey
+        styled_lines.append(f'<span style="color:{color}; white-space:pre">{escaped}</span>')
+    html_content = "<br>".join(styled_lines)
+    IPython.display.display(IPython.display.HTML(html_content))
