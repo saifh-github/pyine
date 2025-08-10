@@ -317,6 +317,7 @@ class CodingProblemIterator:
         dataset_name: str,
         root_data_path: pathlib.Path | str,
         reformat_code_strings: bool = True,
+        validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
         show_progress: bool = False,
     ):
@@ -331,6 +332,7 @@ class CodingProblemIterator:
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
         self.reformat_code_strings = reformat_code_strings
+        self.validate_code_strings = validate_code_strings
         if allow_banned_samples:
             logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
             self.banned = self._BannedData()  # will be initialized w/ empty maps
@@ -447,13 +449,21 @@ class CodingProblemIterator:
                         solution_idx=solution_idx,
                     )
                     solution_ids.append(solution_id)
-                    analysis_errors = solution.get("validation_errors", None)
+                    analysis_errors = solution.get("validation_errors", [])
                     analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
                         solution["analysis_outputs"][-1],  # take the latest analysis result
                     )
                     solution_code = solution["code"]
                     if self.reformat_code_strings:
-                        solution_code = pyine.utils.code.formatting.format_code(solution_code)
+                        try:
+                            solution_code = pyine.utils.code.formatting.format_code(solution_code)
+                        except Exception as e:
+                            analysis_errors.append(str(e))
+                    if self.validate_code_strings:
+                        try:
+                            pyine.utils.code.validation.validate_code(solution_code)
+                        except Exception as e:
+                            analysis_errors.append(str(e))
                     solutions.append(
                         Solution(
                             parent_id=problem_id,
