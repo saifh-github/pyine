@@ -125,6 +125,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Allows banned source dataset samples to be included in the dataset. If False, banned samples are skipped.",
         ),
     ]
+    allow_imperfect_solutions: typing.Annotated[
+        pydantic.StrictBool,
+        pydantic.Field(
+            default=False,
+            description="Allows imperfect solutions to be included in the dataset, i.e. solutions that do not pass all tests.",
+        ),
+    ]
     generate_obfuscated_solutions: typing.Annotated[
         pydantic.StrictBool,
         pydantic.Field(
@@ -294,9 +301,9 @@ def _get_traces_to_write(
     to_trace: list[_CodeToTrace],
     all_must_succeed: bool,  # useful when tracing the original code, i.e. we want all tests to succeed
     config: TraceDatasetWriterConfig,
+    log_fn: typing.Callable,
 ) -> dict[str, dict]:  # str(TraceId) -> trace results dump, for writing to disk
     """Traces an array of code snippets with a specific test tuple and returns the results."""
-    logger.debug(f"tracing {len(to_trace)} code snippets...")
     # we actually run all traces in parallel (using a shared pool not to over-burden the system)
     results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
@@ -315,17 +322,17 @@ def _get_traces_to_write(
     for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
         code_to_trace = to_trace[trace_idx]
         if run_error is not None:
-            logger.debug(f"{code_to_trace.trace_id}: failed execution: {run_error}")
+            log_fn(f"{code_to_trace.trace_id}: failed execution: {run_error}")
         else:
             trace_result, test_result = run_result
             if not test_result:
-                logger.debug(f"{code_to_trace.trace_id}: failed output check (reason={test_result.reason})")
+                log_fn(f"{code_to_trace.trace_id}: failed output check (reason={test_result.reason})")
                 # TODO: add a failed test result logger (to disk) here? (might be useful for later investigations)
             else:
                 assert str(code_to_trace.trace_id) == trace_result.identifier, "trace identifier mismatch"
                 successful_traces[str(trace_result.identifier)] = trace_result.model_dump()
     if all_must_succeed and len(successful_traces) != len(to_trace):
-        logger.debug(f"discarding {len(successful_traces)} traces due to some failure(s) in batch")
+        log_fn(f"discarding {len(successful_traces)} traces due to some failure(s) in batch")
         return {}  # do not return any of the traces, it's unclear if the solution was any good
     return successful_traces
 
@@ -608,14 +615,15 @@ async def write_dataset(
                 )
                 for test_tuple in test_tuples
             ]
-            log(f"{solution}: running orig code with {len(orig_code_to_trace)} tests...")
+            log(f"{solution}: tracing orig code with {len(orig_code_to_trace)} tests...")
             traces_to_write = _get_traces_to_write(
                 to_trace=orig_code_to_trace,
-                all_must_succeed=True,
+                all_must_succeed=not config.allow_imperfect_solutions,
                 config=config,
+                log_fn=log,
             )
             if not traces_to_write:
-                log(f"{solution}: skipping solution since original code exec failed at least one test")
+                log(f"{solution}: skipping solution since original code exec test(s) failed")
                 continue
             # if all test cases passed for the original solution, do the required 'augmentations' now
             augmented_code_to_trace = await _generate_augmented_code_to_trace(
@@ -626,11 +634,12 @@ async def write_dataset(
                 config=config,
             )
             if augmented_code_to_trace:
-                log(f"{solution}: running augmented code with {len(augmented_code_to_trace)} tests...")
+                log(f"{solution}: tracing augmented code with {len(augmented_code_to_trace)} tests...")
                 new_traces_to_write = _get_traces_to_write(
                     to_trace=augmented_code_to_trace,
                     all_must_succeed=False,
                     config=config,
+                    log_fn=log,
                 )
                 assert not any([k in traces_to_write for k in new_traces_to_write])
                 traces_to_write.update(new_traces_to_write)
@@ -723,6 +732,7 @@ if __name__ == "__main__":
             min_solution_dissimilarity=0.1,
             execution_timeout_seconds=10,
             allow_banned_samples=False,
+            allow_imperfect_solutions=False,
             generate_obfuscated_solutions=True,
             # generate_doc_hinted_solutions=1,
             # generate_test_hinted_solutions=1,
