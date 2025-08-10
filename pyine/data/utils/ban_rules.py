@@ -37,6 +37,28 @@ def build_ban_predicate_from_rule(
 
     Returns:
       A predicate function(tags) -> bool that returns True if the sample should be banned.
+
+    Examples:
+      # Require a source tag, and forbid any 'graph:*' tag or '*:hard' suffix
+      >>> ban = build_ban_predicate_from_rule("+source:* -graph:* -*:hard")
+      >>> ban(["dp:easy", "source:leetcode"])
+      ... False
+      >>> ban(["graph:trees", "source:leetcode"])
+      ... True
+
+      # Case-insensitive: require either 'dp:*' or 'graph:*' and forbid tags starting with 'wip:'
+      >>> ban = build_ban_predicate_from_rule("+{dp:*|graph:*} -re:/^wip:/", case_sensitive=False)
+      >>> ban(["DP:medium"])
+      ... False
+      >>> ban(["array:easy", "WIP:review"])
+      ... True
+
+      # Forbid by regex group: either tags starting with 'wip:' or ending with ':experimental'
+      >>> ban = build_ban_predicate_from_rule("-re:{^wip:|:experimental$}")
+      >>> ban(["algo:experimental"])
+      ... True
+      >>> ban(["algo:beta"])
+      ... False
     """
 
     def _norm(s: str) -> str:
