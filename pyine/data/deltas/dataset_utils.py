@@ -517,7 +517,7 @@ def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
     deltas_root = pyine.utils.filesystem.get_data_root_path() / "deltas" / source_dataset_name
     assert deltas_root.exists() and deltas_root.is_dir(), f"invalid deltas dataset path: {deltas_root}"
-    dataset_paths = list(deltas_root.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v*.lmdb/"))
+    dataset_paths = list(deltas_root.glob("*.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].lmdb/"))
     if not dataset_paths:
         raise FileNotFoundError(f"No deltas datasets found in {deltas_root}")
     latest_dataset = max(dataset_paths)
@@ -526,14 +526,15 @@ def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
 
 def get_new_dataset_path(
     source_dataset_name: str,
-    dataset_version: int = 1,
+    dataset_name_tag: str = "v01",
 ) -> pathlib.Path:
     """Returns the path where a new deltas dataset should be saved, for a specific source dataset.
 
-    Will be named based on today's date and version number.
+    Will be named based on today's date and using the provided tag (which is like a version).
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    assert dataset_name_tag, "dataset name tag cannot be empty"
     deltas_root = pyine.utils.filesystem.get_data_root_path() / "deltas" / source_dataset_name
     today = datetime.date.today()
-    dataset_name = f"{today.strftime('%Y-%m-%d')}-v{dataset_version:02d}.lmdb"
+    dataset_name = f"{dataset_name_tag}.{today.strftime('%Y-%m-%d')}.lmdb"
     return deltas_root / dataset_name

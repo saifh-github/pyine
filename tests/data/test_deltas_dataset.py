@@ -44,8 +44,8 @@ def test_dataset_paths(
     """Ensure *get_new_dataset_path* always returns a non-existing, unique path."""
     # monkey-patch the root path used by the utils module to the temp dir
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
-    path_a = pyine.data.deltas.dataset_utils.get_new_dataset_path("TACO", dataset_version=1)
-    path_b = pyine.data.deltas.dataset_utils.get_new_dataset_path("TACO", dataset_version=2)
+    path_a = pyine.data.deltas.dataset_utils.get_new_dataset_path("TACO", "v01")
+    path_b = pyine.data.deltas.dataset_utils.get_new_dataset_path("TACO", "v02")
     assert path_a != path_b
     assert not path_a.exists() and not path_b.exists()
     path_a.mkdir(parents=True)
@@ -212,8 +212,8 @@ def test_mini_taco_deltas_dataset(
     pyine.data.traces.dataset_writer.write_dataset_from_taco(
         output_dataset_path=traces_dataset_path,
         max_output_traces=10,
-        max_valid_solutions_per_problem=2,
-        max_traces_per_solution=1,
+        max_solutions_per_problem=2,
+        max_tests_per_solution=1,
         minimum_solution_dissimilarity=0.1,
         verbose=True,
     )
