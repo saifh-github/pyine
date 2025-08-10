@@ -6,6 +6,7 @@ dataset format. See also the demo notebook (in the project's root `notebooks` di
 for an example of how to use this dataset reader.
 """
 
+import functools
 import pathlib
 import typing
 
@@ -45,9 +46,14 @@ class DatasetReader(torch.utils.data.Dataset):
         )
         assert len(self.problem_indices) > 0, "no problem data found in the dataset"
         assert len(self.problem_indices) == len(self.problem_keys)
+        self._init_trace_maps()
+
+    def _init_trace_maps(self) -> None:
+        """Initializes the trace index maps according to requested filtering rules."""
         # note: the indices kept in the lists below are INTERNAL ones that map to the lmdb content
-        self.trace_indices, self.trace_keys = [], []
-        self.trace_idx_to_problem_idx = {}
+        self.trace_indices: list[int] = []
+        self.trace_keys: list[str] = []
+        self.trace_idx_to_problem_idx: dict[int, int] = {}
         for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
             assert problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)
             problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
@@ -104,6 +110,7 @@ class DatasetReader(torch.utils.data.Dataset):
         trace = pyine.utils.code.execution.TraceResult.model_validate(trace_data)
         return trace
 
+    @functools.lru_cache(maxsize=512)
     def get_problem_data(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.CodingProblem:
         """
         Fetches the problem data associated with a trace by external index or key.
@@ -111,7 +118,6 @@ class DatasetReader(torch.utils.data.Dataset):
         Args:
             index_or_key: Index or key of the trace for which to retrieve parent problem data.
         """
-        # TODO: @@@@ might want to use a problem data cache here
         if isinstance(index_or_key, int):
             assert 0 <= index_or_key < len(self), f"index {index_or_key} out of range"
             problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[index_or_key]]

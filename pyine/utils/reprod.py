@@ -12,8 +12,6 @@ import typing
 import dotenv
 import numpy as np
 
-import pyine.utils.logging
-
 logger = logging.getLogger(__name__)
 
 
@@ -178,10 +176,11 @@ def entrypoint_setup(
     log_to_file: bool = False,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
-    import pyine.utils.pydantic_loader
-
     # use a sentinel object to track first execution
     if not hasattr(entrypoint_setup, "_executed"):
+        import pyine.utils.logging
+        import pyine.utils.pydantic_loader
+
         dotenv.load_dotenv()
         pyine.utils.logging.setup_logging(
             level=log_level,

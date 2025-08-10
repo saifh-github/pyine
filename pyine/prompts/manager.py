@@ -87,7 +87,6 @@ class PromptManager:
         except pydantic.ValidationError as e:
             raise ValueError(f"Invalid prompt schema in {prompt_path}: {e}") from e
 
-    @functools.lru_cache(maxsize=128)
     def get_prompt_config(
         self,
         prompt_name: str,
@@ -139,7 +138,6 @@ class PromptManager:
     def clear_cache(self) -> None:
         """Clear the internal prompt cache."""
         self._cache.clear()
-        self.get_prompt_config.cache_clear()
 
 
 _default_prompt_manager: PromptManager | None = None

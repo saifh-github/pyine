@@ -20,7 +20,10 @@ def obfuscate_code(
     a model) should be similar or more difficult to the original due to the lack of informative
     shortcuts.
 
-    Note: the output code might need reformatting (using e.g. black).
+    Note: the output code might need reformatting (using e.g. black); this is done automatically
+    by default. Note also that the output code will NEVER contain comments, as python_minifier
+    runs code through the AST parser, which strips all comments unconditionally (we do not have
+    any control over this behavior).
 
     Args:
         code_string: the string of Python code to obfuscate.
@@ -85,6 +88,6 @@ instance.my_method(5)
 my_function(3, 4)
 """
     print(f"original code:\n```\n{_sample_code}\n```")
-    _obfuscated_code = obfuscate_code(_sample_code)
+    _obfuscated_code = obfuscate_code(_sample_code, remove_docstrings_and_literals=False)
     print("\n------\n")
     print(f"obfuscated code (default settings):\n```\n{_obfuscated_code}\n```")
