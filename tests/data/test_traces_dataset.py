@@ -92,4 +92,45 @@ def test_mini_taco_traces_dataset(
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
     assert reader.get_metadata()["source_dataset"]["source_dataset_name"] == "TACO"
-    assert len(reader) == wanted_trace_count
+    assert len(reader) >= wanted_trace_count
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    tests.data.utils.dataset_checks.TACO_DATASET_MISSING,
+    reason="TACO dataset is missing, cannot create mini traces dataset",
+)
+def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
+    tmp_path: pathlib.Path,
+) -> None:
+    output_dataset_path = tmp_path / "mini_taco_traces_dataset_w_obfusc"
+    assert not output_dataset_path.exists()
+    wanted_trace_count = 1
+    asyncio.run(
+        dataset_writer.write_dataset_from_taco(
+            output_dataset_path=output_dataset_path,
+            banned_problem_tags_rule="+{difficulty:easy|difficulty:EASY}",
+            max_output_traces=wanted_trace_count,
+            max_solutions_per_problem=1,
+            max_tests_per_solution=2,
+            min_solution_line_count=10,
+            min_solution_dissimilarity=0.1,
+            generate_obfuscated_solutions=True,
+            verbose=True,
+        )
+    )
+    assert output_dataset_path.exists()
+    reader = dataset_reader.DatasetReader(output_dataset_path)
+    assert reader.get_metadata()["source_dataset"]["source_dataset_name"] == "TACO"
+    assert len(reader) >= wanted_trace_count
+    # check written traces to make sure we do have some augments
+    assert len(reader.augment_key_to_parent_trace_key) > 0
+    for augm_key, parent_trace_key in reader.augment_key_to_parent_trace_key.items():
+        assert "obfuscated" in str(augm_key)
+    # check that all written traces are EASY ones
+    for trace_idx in range(len(reader)):
+        problem_data = reader.get_problem_data(trace_idx)
+        assert any(["EASY" in t for t in problem_data.problem_tags])
+
+
+# @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
