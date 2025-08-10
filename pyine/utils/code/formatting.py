@@ -32,6 +32,8 @@ def format_code(
     except black.NothingChanged:
         # if the code is already formatted, return the original string
         return code_string
+    except black.InvalidInput as e:
+        raise ValueError(f"error formatting code: {e}") from e
 
 
 if __name__ == "__main__":
