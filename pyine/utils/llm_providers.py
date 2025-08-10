@@ -1,80 +1,67 @@
 import os
 
 import langchain_core.prompts
+import langchain_core.rate_limiters
 import langchain_core.runnables
 import langchain_deepseek
 import langchain_openai
 import pydantic
 
+LLMType = langchain_openai.ChatOpenAI  # just to make typing easier elsewhere
+
 
 def get_llm_from_provider(
+    provider: str,
+    rate_limiter_config: dict | None = None,
+    with_retry_config: dict | None = None,
     **kwargs,
-) -> langchain_openai.ChatOpenAI:
+) -> LLMType:
     """Get a default LLM from a provider for quick prototyping and testing.
 
     Currently supports DeepSeek and OpenAI.
     """
-    provider = kwargs.get("provider", "deepseek")
+    rate_limiter = None
+    if rate_limiter_config is not None:
+        rate_limiter = langchain_core.rate_limiters.InMemoryRateLimiter(
+            **rate_limiter_config,
+        )
     if provider == "deepseek":
-        llm = langchain_deepseek.ChatDeepSeek(
-            model=kwargs.get("model", "deepseek-chat"),
-            temperature=kwargs.get("temperature", 0.0),  # recommended setting for coding/math
-            max_tokens=kwargs.get("max_tokens", 1024),
-            timeout=kwargs.get("timeout", None),
-            max_retries=kwargs.get("max_retries", 50),
-            api_key=os.environ.get("DEEPSEEK_API_KEY"),
-            base_url=os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1"),
-        )
+        if "api_key" not in kwargs:
+            kwargs.update({"api_key": os.environ.get("DEEPSEEK_API_KEY")})
+        if "base_url" not in kwargs:
+            kwargs.update({"base_url": os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1")})
+        llm = langchain_deepseek.ChatDeepSeek(rate_limiter=rate_limiter, **kwargs)
     elif provider == "openai":
-        llm = langchain_openai.ChatOpenAI(
-            model=kwargs.get("model", "gpt-4o"),
-            temperature=kwargs.get("temperature", 0.0),
-            max_tokens=kwargs.get("max_tokens", 1024),
-            timeout=kwargs.get("timeout", None),
-            max_retries=kwargs.get("max_retries", 50),
-            api_key=os.environ.get("OPENAI_API_KEY"),
-            base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        )
+        if "api_key" not in kwargs:
+            kwargs.update({"api_key": os.environ.get("OPENAI_API_KEY")})
+        if "base_url" not in kwargs:
+            kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
+        llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **kwargs)
     else:
         raise ValueError(f"Invalid provider: {provider}")
+    if with_retry_config is not None:
+        llm = llm.with_retries(**with_retry_config)  # if you want to e.g. customize the retry backoff
     return llm
 
 
 def get_chain(
     prompt_template: langchain_core.prompts.PromptTemplate,
-    **llm_provider_kwargs,
+    llm: LLMType,
+    pydantic_model: pydantic.BaseModel | None = None,
 ) -> langchain_core.runnables.Runnable:
     """Get an inference chain based on a given prompt template.
 
+    If a pydantic model is provided, the chain will be configured to parse the LLM output.
+
     Args:
         prompt_template: Prompt template to use for the inference chain.
-        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
+        llm: LLM to use for the inference chain.
+        pydantic_model: Pydantic model to use for parsing the LLM output (if any).
     """
-    llm = get_llm_from_provider(**llm_provider_kwargs)
-    # Create a partial chain that injects the examples
+    if pydantic_model is not None:
+        llm = llm.with_structured_output(pydantic_model)
     code_execution_chain = langchain_core.runnables.RunnableSequence(
         prompt_template,
         llm,
     )
     return code_execution_chain
-
-
-def get_structured_output_chain(
-    prompt_template: langchain_core.prompts.PromptTemplate,
-    pydantic_model: pydantic.BaseModel,
-    **llm_provider_kwargs,
-) -> langchain_core.runnables.Runnable:
-    """Get a structured output inference chain based on a given prompt template and pydantic model.
-
-    Args:
-        prompt_template: Prompt template to use for the inference chain.
-        pydantic_model: Pydantic model to use for parsing the LLM output.
-        llm_provider_kwargs: Keyword arguments to pass to the LLM provider getter.
-    """
-    llm = get_llm_from_provider(**llm_provider_kwargs)
-    llm_with_structured_output = llm.with_structured_output(pydantic_model)
-    chain = langchain_core.runnables.RunnableSequence(
-        prompt_template,
-        llm_with_structured_output,
-    )
-    return chain

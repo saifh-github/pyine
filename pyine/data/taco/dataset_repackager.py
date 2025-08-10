@@ -46,7 +46,17 @@ async def reprocess_code_samples(
     )
     prompt_token_count = _count_tokens(example_prompt_text)
     print(f"basic prompt token count (estimate): {prompt_token_count}")
-    code_analysis_chain = pyine.utils.llm_providers.get_chain(code_analysis_prompt, provider="deepseek")
+    llm = pyine.utils.llm_providers.get_llm_from_provider(
+        provider="deepseek",
+        model="deepseek-chat",
+        temperature=0.0,  # recommended setting for coding/math
+        max_tokens=1024,
+    )
+    code_analysis_chain = pyine.utils.llm_providers.get_chain(
+        code_analysis_prompt,
+        llm=llm,
+        pydantic_model=pyine.prompts.configs.code_analysis.CodeAnalysisResponse,
+    )
     total_samples = len(dataset_reader)
     print(f"samples in dataset: {total_samples}")
     for batch_start in range(0, total_samples, batch_size):

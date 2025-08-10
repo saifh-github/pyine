@@ -6,7 +6,6 @@ import pydantic
 
 import pyine.prompts.manager
 import pyine.prompts.utils
-import pyine.utils.llm_providers
 import pyine.utils.pydantic_loader
 
 python_def_pattern = r"^[A-Za-z_][A-Za-z0-9_]*$"
