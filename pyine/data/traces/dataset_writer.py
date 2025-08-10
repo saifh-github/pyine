@@ -23,6 +23,7 @@ import pyine.prompts.manager
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
 import pyine.utils.code.obfuscation
+import pyine.utils.code.output_compare
 import pyine.utils.code.validation
 import pyine.utils.concurrency
 import pyine.utils.filesystem
@@ -32,6 +33,12 @@ import pyine.utils.portability
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "TraceDatasetWriterConfig",
+    "write_dataset",
+    "write_dataset_from_taco",
+]
 
 
 class TraceDatasetWriterConfig(pydantic.BaseModel):
@@ -111,14 +118,6 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Timeout in seconds for each execution attempt. If exceeded, solution is skipped.",
         ),
     ]
-    llm_runnable_timeout_seconds: typing.Annotated[
-        float,
-        pydantic.Field(
-            default=60.0,
-            gt=0.0,
-            description="Timeout in seconds for each LLM runnable invocation. If exceeded, test is skipped.",
-        ),
-    ]
     allow_banned_samples: typing.Annotated[
         pydantic.StrictBool,
         pydantic.Field(
@@ -147,6 +146,14 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Specifies the number of 'runtime-test-hinted' augmented solutions to generate, for each valid solution.",
         ),
     ]
+    llm_runnable_timeout_seconds: typing.Annotated[
+        float,
+        pydantic.Field(
+            default=60.0,
+            gt=0.0,
+            description="Timeout in seconds for each LLM runnable invocation. If exceeded, test is skipped.",
+        ),
+    ]
     llm_provider_kwargs: typing.Annotated[
         dict[str, typing.Any] | None,
         pydantic.Field(
@@ -154,9 +161,16 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Keyword arguments to pass to the LLM provider pipeline when generating hinted solutions.",
         ),
     ]
+    test_output_compare_options: typing.Annotated[
+        pyine.utils.code.output_compare.CompareOptions,
+        pydantic.Field(
+            default=pyine.utils.code.output_compare.CompareOptions(),
+            description="Options to use for comparing the output of a test with the expected output.",
+        ),
+    ]
 
 
-class CodeAugmentationOptions(enum.StrEnum):
+class _CodeAugmentationOptions(enum.StrEnum):
     """Code augmentation options for editing a code string from a given solution."""
 
     NOOP = "noop"
@@ -303,12 +317,13 @@ def _get_traces_to_write(
         if run_error is not None:
             logger.debug(f"{code_to_trace.trace_id}: failed execution: {run_error}")
         else:
-            trace_results, test_success = run_result
-            if not test_success:
-                logger.debug(f"{code_to_trace.trace_id}: failed expected output check")
+            trace_result, test_result = run_result
+            if not test_result:
+                logger.debug(f"{code_to_trace.trace_id}: failed output check (reason={test_result.reason})")
+                # TODO: add a failed test result logger (to disk) here? (might be useful for later investigations)
             else:
-                assert str(code_to_trace.trace_id) == trace_results.identifier, "trace identifier mismatch"
-                successful_traces[str(trace_results.identifier)] = trace_results.model_dump()
+                assert str(code_to_trace.trace_id) == trace_result.identifier, "trace identifier mismatch"
+                successful_traces[str(trace_result.identifier)] = trace_result.model_dump()
     if all_must_succeed and len(successful_traces) != len(to_trace):
         logger.debug(f"discarding {len(successful_traces)} traces due to some failure(s) in batch")
         return {}  # do not return any of the traces, it's unclear if the solution was any good
@@ -318,7 +333,7 @@ def _get_traces_to_write(
 def _trace_code_snippet(
     code_snippet: _CodeToTrace,
     config: TraceDatasetWriterConfig,
-) -> tuple[pyine.utils.code.execution.TraceResult, bool]:  # trace_result, test_success
+) -> tuple[pyine.utils.code.execution.TraceResult, pyine.utils.code.output_compare.CompareResult]:
     """Traces a (potentially augmented) solution with a specific input and returns the result."""
     test_inputs, test_outputs = code_snippet.test_inputs, code_snippet.test_outputs
     if (
@@ -333,7 +348,7 @@ def _trace_code_snippet(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # no need to capture warnings related to traced code
         pyine.utils.code.validation.validate_code(code_snippet.code_string)  # last check before tracing
-        trace_results = pyine.utils.code.execution.execute_and_trace_code(
+        trace_result = pyine.utils.code.execution.execute_and_trace_code(
             code_string=code_snippet.code_string,
             inputs=test_inputs,
             identifier=str(code_snippet.trace_id),
@@ -342,61 +357,57 @@ def _trace_code_snippet(
             max_events_per_line=config.max_trace_events_per_line,
             timeout_seconds=config.execution_timeout_seconds,
         )
-
-        # @@@@@@@@@ push changes, and check the comparison stuff
-
-        if trace_results.exception is not None:
-            # the exec raised an exception; the only way this was a 'success' is if we also expected one
-            test_success = str(trace_results.exception) == str(test_outputs)
-            if test_success:
-                return trace_results, test_success  # we're done, we can leave already
-            if trace_results.exception.type == SystemExit.__name__:
-                # that was likely called on purpose, i.e. the program finished and produced something
-                # ...maybe it's the exit code itself?
-                test_success = (
-                    trace_results.exception.message == test_outputs or trace_results.return_value == test_outputs
-                )
-                if test_success:  # bingo, the exit code was caught as the return value
-                    return trace_results, test_success
-                # maybe something was printed before exiting? (will jump to more logic below)
-            else:
-                # other kinds of exception are probably unexpected, and did not match the expected output
-                return trace_results, False
-        if code_snippet.entrypoint_name is not None:
-            # the exec only prepared a function that was then called; the return value should be it
-            # TODO @@@@@ cleanup output check! (w/ proper float comps)
-            test_success = trace_results.return_value == test_outputs
-            # nothing else to check? this should be it
-            return trace_results, test_success
-        # otherwise, assume the returned value to check is a printed output
-        # TODO @@@@@ really, all the comparisons below are dirty and should be done in a special class
-        # (might also want to check return value if stdout is empty? some programs exit code as output...)
-        return_value = trace_results.stdout.strip()
-        if isinstance(test_outputs, str):
-            test_success = pyine.data.traces.dataset_utils.compare_result_strings(return_value, test_outputs)
-        elif isinstance(test_outputs, list):
-            return_value = return_value.split("\n")
-            if len(return_value) != len(test_outputs):
-                test_success = False
-            else:
-                test_success = all(
-                    [
-                        pyine.data.traces.dataset_utils.compare_result_strings(
-                            return_value[i],
-                            test_outputs[i],
-                        )
-                        for i in range(len(return_value))
-                    ]
-                )
-        else:  # use default comparator
-            test_success = return_value == test_outputs
-    return trace_results, test_success
+    comp = functools.partial(
+        pyine.utils.code.output_compare.compare,
+        options=config.test_output_compare_options,
+    )
+    default_test_result = None  # will store the most useful test result (across all comparison cases)
+    if trace_result.exception is not None:
+        # the exec raised an exception; the only way this was a 'success' is if we also expected one
+        exception_test_result = comp(str(trace_result.exception), str(test_outputs))
+        if exception_test_result:
+            return trace_result, exception_test_result  # we're done, we can leave already
+        if trace_result.exception.type == SystemExit.__name__:
+            # that was likely called on purpose, i.e. the program finished and produced something
+            # ...maybe it's the exit code or exception message itself we need to match?
+            exception_msg_test_result = comp(trace_result.exception.message, test_outputs)
+            if exception_msg_test_result:
+                return trace_result, exception_msg_test_result
+            exception_exit_code_test_result = comp(trace_result.return_value, test_outputs)
+            if exception_exit_code_test_result:
+                return trace_result, exception_exit_code_test_result
+            # if we get here, checks failed, maybe something was printed before exiting?
+            # (will jump to stdout checking logic below)
+            default_test_result = exception_test_result
+        else:
+            # other kinds of exception are probably unexpected, and did not match the expected output
+            return trace_result, exception_test_result  # return the results immediately, pass or fail
+    if code_snippet.entrypoint_name is not None or trace_result.return_value is not None:
+        # the executed code returned a value that SHOULD be the expected one
+        # (if the code had a specific entrypoint, this is the only possible outcome)
+        return_val_test_result = comp(trace_result.return_value, test_outputs)
+        if return_val_test_result:
+            return trace_result, return_val_test_result
+        if default_test_result is None:
+            default_test_result = return_val_test_result
+    # last chance: if we get here, assume the value we need to check is a printed output (in stdout)
+    stdout_test_result = comp(trace_result.stdout, test_outputs)
+    if stdout_test_result:
+        return trace_result, stdout_test_result
+    # if the expected outputs are a list of strings, last-last fix attempt: merge them into a string
+    if isinstance(test_outputs, list) and all([isinstance(s, str) for s in test_outputs]):
+        stdout_test_result = comp(trace_result.stdout, "\n".join(test_outputs))
+        if stdout_test_result:
+            return trace_result, stdout_test_result
+    if default_test_result is None:
+        default_test_result = stdout_test_result
+    return trace_result, default_test_result
 
 
 async def _generate_augmented_code_to_trace(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    llm: pyine.utils.llm_providers.LLMType | None,
+    llm: pyine.utils.llm_providers.LLMType | None,  # noqa
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
 ) -> list[_CodeToTrace]:
@@ -409,6 +420,8 @@ async def _generate_augmented_code_to_trace(
             solution.code,  # obfuscate the original code snippet directly
             remove_docstrings_and_literals=False,  # keep docstrings (those are nice hints)
             reformat_output=True,  # always reformat the result to get more consistent traces
+            preserved_local_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
+            preserve_global_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
         )
         augmented_code_to_trace.extend(
             [
@@ -417,7 +430,7 @@ async def _generate_augmented_code_to_trace(
                     trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                         **vars(solution.solution_id),
                         test_idx=test_tuple.test_idx,
-                        augment_category=CodeAugmentationOptions.OBFUSCATED,
+                        augment_category=_CodeAugmentationOptions.OBFUSCATED,
                         augment_idx=0,  # obfuscation is unique, so always augment idx = 0
                     ),
                     entrypoint_name=problem.entrypoint_name,
@@ -433,7 +446,7 @@ async def _generate_augmented_code_to_trace(
 
     def _prep_runnable_jobs(
         prompt_template_name: str,
-        augment_category: CodeAugmentationOptions,
+        augment_category: _CodeAugmentationOptions,
         augment_count: int,
     ) -> None:
         # helper function that avoids code duplication for doc-hints and test-hints augments
@@ -467,13 +480,13 @@ async def _generate_augmented_code_to_trace(
     if config.generate_doc_hinted_solutions:
         _prep_runnable_jobs(
             prompt_template_name="hints/docs",
-            augment_category=CodeAugmentationOptions.DOC_HINTED,
+            augment_category=_CodeAugmentationOptions.DOC_HINTED,
             augment_count=config.generate_doc_hinted_solutions,
         )
     if config.generate_test_hinted_solutions:
         _prep_runnable_jobs(
             prompt_template_name="hints/tests",
-            augment_category=CodeAugmentationOptions.TESTS_HINTED,
+            augment_category=_CodeAugmentationOptions.TESTS_HINTED,
             augment_count=config.generate_test_hinted_solutions,
         )
 
@@ -595,7 +608,7 @@ async def write_dataset(
                 )
                 for test_tuple in test_tuples
             ]
-            log(f"{solution}: running orig code with {len(test_tuples)} tests...")
+            log(f"{solution}: running orig code with {len(orig_code_to_trace)} tests...")
             traces_to_write = _get_traces_to_write(
                 to_trace=orig_code_to_trace,
                 all_must_succeed=True,
@@ -613,6 +626,7 @@ async def write_dataset(
                 config=config,
             )
             if augmented_code_to_trace:
+                log(f"{solution}: running augmented code with {len(augmented_code_to_trace)} tests...")
                 new_traces_to_write = _get_traces_to_write(
                     to_trace=augmented_code_to_trace,
                     all_must_succeed=False,
@@ -700,10 +714,19 @@ if __name__ == "__main__":
     asyncio.run(
         write_dataset_from_taco(
             # create a dummy dataset for quick prototyping
+            banned_problem_tags_rule=None,
             max_output_traces=100,
             max_solutions_per_problem=2,
             max_tests_per_solution=4,
+            max_trace_events_per_line=None,
+            min_solution_line_count=3,
             min_solution_dissimilarity=0.1,
+            execution_timeout_seconds=10,
+            allow_banned_samples=False,
+            generate_obfuscated_solutions=True,
+            # generate_doc_hinted_solutions=1,
+            # generate_test_hinted_solutions=1,
+            llm_runnable_timeout_seconds=60,
             llm_provider_kwargs=dict(
                 provider="openai",
                 model="gpt-5-mini",
@@ -717,6 +740,10 @@ if __name__ == "__main__":
                     check_every_n_seconds=0.1,
                     max_bucket_size=5,
                 ),
+            ),
+            test_output_compare_options=dict(
+                rel_tol="auto",
+                abs_tol="auto",
             ),
             verbose=True,
         )
