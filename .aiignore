@@ -1,3 +1,6 @@
+# An .aiignore file follows the same syntax as a .gitignore file.
+# .gitignore documentation: https://git-scm.com/docs/gitignore
+
 # Project data / results directories
 /data/
 /datasets/
@@ -22,7 +25,6 @@ venv/
 
 # IDE specific files
 .idea/
-.junie/
 .vscode/
 *.swp
 *.swo
