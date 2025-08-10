@@ -21,11 +21,13 @@ import pyine.utils.portability
 import pyine.utils.reprod
 
 PROBLEM_DATA_SUFFIX = "/metadata"
-"""Suffix for entries that correspond to coding problems in the LMDB dataset."""
+"""Suffix for entries that correspond to coding problem metadata in the LMDB dataset."""
 PROBLEM_DATA_PATTERN = "*" + PROBLEM_DATA_SUFFIX
 """Pattern for matching coding problem entries in the LMDB dataset."""
 TRACE_DATA_SUFFIX = "/s*/t*"
 """Suffix for entries that correspond to execution traces in the LMDB dataset."""
+AUGM_TRACE_DATA_SUFFIX = "/s*/t*/a*"
+"""Suffix for entries that correspond to execution traces of augmented code in the LMDB dataset."""
 SUPPORTED_SOURCE_DATASETS = [
     "TACO",
     # add more supported datasets here
@@ -115,27 +117,52 @@ class SolutionIdentifier(CodingProblemIdentifier):
 
 @dataclasses.dataclass(frozen=True)
 class TraceIdentifier(SolutionIdentifier):
-    """Frozen tuple used for identifying a specific trace to a coding problem."""
+    """Frozen tuple used for identifying a specific trace to a coding problem.
+
+    In contrast with previous (parent) identifiers, this one includes the test index and an optional
+    part, i.e. the augmentation category and index. This is used to identify specific traces that
+    are based on "augmented" code derived from dataset solutions.
+    """
 
     test_idx: int
     """Index identifying the test values used to create this trace (within the source dataset)."""
+    augment_category: str | None = None
+    """Category of augmentation used to create the code behind this trace (if any)."""
+    augment_idx: int | None = None
+    """Index identifying the augmented instance used to create this trace (if any)."""
 
     def __repr__(self):
         """Returns a string representation of this identifier."""
-        return f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
+        out = f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
+        if self.augment_category is not None or self.augment_idx is not None:
+            assert self.augment_category is not None and self.augment_idx is not None
+            out += f"/a:{self.augment_category}:{self.augment_idx:03d}"
+        return out
 
     def get_parent_identifier(self) -> SolutionIdentifier:
         """Returns the parent identifier of this object (i.e., a solution identifier)."""
-        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name != "test_idx"}
+        local_vars = ["text_idx", "augment_category", "augment_idx"]
+        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name not in local_vars}
         return SolutionIdentifier(**parent_vars)
 
     @staticmethod
     def from_string(identifier_str: str) -> "TraceIdentifier":
         """Creates an identifier object from a string representation."""
         assert isinstance(identifier_str, str), "identifier must be a string"
-        parent_str, test_idx_str = identifier_str.rsplit("/t", maxsplit=1)
+        parent_str, trace_id_str = identifier_str.rsplit("/t", maxsplit=1)
         parent_id = SolutionIdentifier.from_string(parent_str)
-        return TraceIdentifier(**vars(parent_id), test_idx=int(test_idx_str))
+        test_idx_str, augment_id = trace_id_str.split("/a:", maxsplit=1)
+        if augment_id != "":
+            augment_category, augment_idx_str = augment_id.split(":", maxsplit=1)
+            augment_idx = int(augment_idx_str)
+        else:
+            augment_category, augment_idx = None, None
+        return TraceIdentifier(
+            **vars(parent_id),
+            test_idx=int(test_idx_str),
+            augment_category=augment_category,
+            augment_idx=augment_idx,
+        )
 
 
 class CodingProblem(pydantic.BaseModel):
@@ -222,6 +249,11 @@ class Solution(pydantic.BaseModel):
         return str(self.solution_id)
 
     @property
+    def code_line_count(self):
+        """Returns the number of lines in this solution's code."""
+        return len(self.code.splitlines())
+
+    @property
     def is_fishy(self):
         """Returns whether this solution is 'fishy' (i.e., contains potentially insecure code)."""
         return (
@@ -282,6 +314,7 @@ class CodingProblemIterator:
         self,
         dataset_name: str,
         root_data_path: pathlib.Path | str,
+        reformat_code_strings: bool = True,
         allow_banned_samples: bool = False,
         show_progress: bool = False,
     ):
@@ -295,6 +328,7 @@ class CodingProblemIterator:
             raise NotADirectoryError(f"{root_data_path} is not a directory")
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
+        self.reformat_code_strings = reformat_code_strings
         if allow_banned_samples:
             logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
             self.banned = self._BannedData()  # will be initialized w/ empty maps
@@ -385,9 +419,17 @@ class CodingProblemIterator:
             assert len(inputs_array) == len(outputs_array)
             test_inout_pairs = [(inputs, outputs) for inputs, outputs in zip(inputs_array, outputs_array)]
             entrypoint_name = problem_data["input_output"].get("fn_name", None)
-            tags = [problem_data["source"], problem_data["difficulty"]]
+
+            def _tag_cleaner(x):
+                return x.replace(" ", "")
+
+            tags = [
+                f"source:{_tag_cleaner(problem_data['source'])}",
+                f"difficulty:{_tag_cleaner(problem_data['difficulty'])}",
+                f"subset:{_tag_cleaner(problem_data['subset'])}",
+            ]
             for tag_group in ["raw_tags", "tags", "skill_types"]:
-                tags.extend(problem_data.get(tag_group, []))
+                tags.extend([f"{tag_group}:{_tag_cleaner(tag)}" for tag in problem_data.get(tag_group, [])])
             solutions, solution_ids = [], []
             if "solutions" not in problem_data or not problem_data["solutions"]:
                 parsing_errors.append("no solutions found")
@@ -407,11 +449,14 @@ class CodingProblemIterator:
                     analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
                         solution["analysis_outputs"][-1],  # take the latest analysis result
                     )
+                    solution_code = solution["code"]
+                    if self.reformat_code_strings:
+                        solution_code = pyine.utils.code.formatting.format_code(solution_code)
                     solutions.append(
                         Solution(
                             parent_id=problem_id,
                             solution_id=solution_id,
-                            code=solution["code"],
+                            code=solution_code,
                             analysis_errors=analysis_errors if analysis_errors else None,
                             analysis_results=analysis_results,
                             is_banned=solution_id.solution_idx in banned_solution_idxs,
@@ -483,23 +528,24 @@ def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
     traces_root = pyine.utils.filesystem.get_data_root_path() / "traces" / source_dataset_name
     assert traces_root.exists() and traces_root.is_dir(), f"invalid traces dataset path: {traces_root}"
-    dataset_paths = list(traces_root.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v*.lmdb/"))
+    dataset_paths = list(traces_root.glob("*.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].lmdb/"))
     if not dataset_paths:
         raise FileNotFoundError(f"No trace datasets found in {traces_root}")
-    latest_dataset = max(dataset_paths)
+    latest_dataset = max(sorted(dataset_paths))
     return pathlib.Path(latest_dataset)
 
 
 def get_new_dataset_path(
     source_dataset_name: str,
-    dataset_version: int = 1,
+    dataset_name_tag: str = "v01",
 ) -> pathlib.Path:
     """Returns the path where a new trace dataset should be saved, for a specific source dataset.
 
-    Will be named based on today's date and version number.
+    Will be named based on today's date and using the provided tag (which is like a version).
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    assert dataset_name_tag, "dataset name tag cannot be empty"
     traces_root = pyine.utils.filesystem.get_data_root_path() / "traces" / source_dataset_name
     today = datetime.date.today()
-    dataset_name = f"{today.strftime('%Y-%m-%d')}-v{dataset_version:02d}.lmdb"
+    dataset_name = f"{dataset_name_tag}.{today.strftime('%Y-%m-%d')}.lmdb"
     return traces_root / dataset_name
