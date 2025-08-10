@@ -396,7 +396,7 @@ def _trace_code_snippet(
 async def _generate_augmented_code_to_trace(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    llm: pyine.utils.llm_providers.LLMType,
+    llm: pyine.utils.llm_providers.LLMType | None,
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
 ) -> list[_CodeToTrace]:
@@ -437,6 +437,7 @@ async def _generate_augmented_code_to_trace(
         augment_count: int,
     ) -> None:
         # helper function that avoids code duplication for doc-hints and test-hints augments
+        assert llm is not None, "runnable augmentation requires an LLM to be provided/configured"
         llm_chain = pyine.utils.llm_providers.get_chain(
             prompt_template=pyine.prompts.manager.get_prompt_template(prompt_template_name),
             llm=llm,
@@ -535,7 +536,10 @@ async def write_dataset(
     )
     assert len(problem_data_iter) > 0, f"no problems found in {config.source_dataset_name} source dataset"
     log(f"found {len(problem_data_iter)} problems in {config.source_dataset_name} source dataset")
-    llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
+    if config.llm_provider_kwargs:
+        llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
+    else:
+        llm = None
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
     log(f"creating LMDB dataset at: {output_dataset_path}...")
     writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)

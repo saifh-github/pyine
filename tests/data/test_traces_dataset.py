@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 
 import pytest
@@ -78,13 +79,15 @@ def test_mini_taco_traces_dataset(
     output_dataset_path = tmp_path / "mini_taco_traces_dataset"
     assert not output_dataset_path.exists()
     wanted_trace_count = 10
-    dataset_writer.write_dataset_from_taco(
-        output_dataset_path=output_dataset_path,
-        max_output_traces=wanted_trace_count,
-        max_solutions_per_problem=2,
-        max_tests_per_solution=1,
-        minimum_solution_dissimilarity=0.1,
-        verbose=True,
+    asyncio.run(
+        dataset_writer.write_dataset_from_taco(
+            output_dataset_path=output_dataset_path,
+            max_output_traces=wanted_trace_count,
+            max_solutions_per_problem=2,
+            max_tests_per_solution=1,
+            min_solution_dissimilarity=0.1,
+            verbose=True,
+        )
     )
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
