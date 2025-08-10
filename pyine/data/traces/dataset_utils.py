@@ -141,7 +141,7 @@ class TraceIdentifier(SolutionIdentifier):
 
     def get_parent_identifier(self) -> SolutionIdentifier:
         """Returns the parent identifier of this object (i.e., a solution identifier)."""
-        local_vars = ["text_idx", "augment_category", "augment_idx"]
+        local_vars = ["test_idx", "augment_category", "augment_idx"]
         parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name not in local_vars}
         return SolutionIdentifier(**parent_vars)
 
