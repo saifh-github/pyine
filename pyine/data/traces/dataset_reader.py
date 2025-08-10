@@ -54,6 +54,7 @@ class DatasetReader(torch.utils.data.Dataset):
         self.trace_indices: list[int] = []
         self.trace_keys: list[str] = []
         self.trace_idx_to_problem_idx: dict[int, int] = {}
+        # @@@@@@ TODO do augments map
         for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
             assert problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)
             problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]

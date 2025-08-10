@@ -151,12 +151,14 @@ class TraceIdentifier(SolutionIdentifier):
         assert isinstance(identifier_str, str), "identifier must be a string"
         parent_str, trace_id_str = identifier_str.rsplit("/t", maxsplit=1)
         parent_id = SolutionIdentifier.from_string(parent_str)
-        test_idx_str, augment_id = trace_id_str.split("/a:", maxsplit=1)
-        if augment_id != "":
+        has_augm_split = "/a:" in trace_id_str
+        if has_augm_split:
+            test_idx_str, augment_id = trace_id_str.split("/a:", maxsplit=1)
             augment_category, augment_idx_str = augment_id.split(":", maxsplit=1)
             augment_idx = int(augment_idx_str)
         else:
             augment_category, augment_idx = None, None
+            test_idx_str = trace_id_str
         return TraceIdentifier(
             **vars(parent_id),
             test_idx=int(test_idx_str),
