@@ -6,6 +6,7 @@ dataset format. See also the demo notebook (in the project's root `notebooks` di
 for an example of how to use this dataset reader.
 """
 
+import fnmatch
 import functools
 import pathlib
 import typing
@@ -54,11 +55,14 @@ class DatasetReader(torch.utils.data.Dataset):
         self.trace_indices: list[int] = []
         self.trace_keys: list[str] = []
         self.trace_idx_to_problem_idx: dict[int, int] = {}
-        # @@@@@@ TODO do augments map
+        self.trace_key_to_problem_key: dict[str, str] = {}
+        self.augment_idx_to_parent_trace_idx: dict[int, int] = {}
+        self.augment_key_to_parent_trace_key: dict[str, str] = {}
         for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
             assert problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)
             problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
             curr_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
+            curr_augm_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
             curr_trace_indices, curr_trace_keys = self.reader.get_indices(
                 pattern=curr_trace_data_pattern,
                 return_keys=True,
@@ -67,8 +71,23 @@ class DatasetReader(torch.utils.data.Dataset):
             assert len(curr_trace_indices) == len(curr_trace_keys)
             self.trace_indices.extend(curr_trace_indices)
             self.trace_keys.extend(curr_trace_keys)
-            for trace_idx in curr_trace_indices:
+            curr_augm_key_to_parent_key: dict[str, str] = {}
+            for trace_idx, trace_key in zip(curr_trace_indices, curr_trace_keys):
                 self.trace_idx_to_problem_idx[trace_idx] = problem_idx
+                self.trace_key_to_problem_key[trace_key] = problem_key
+                if fnmatch.fnmatch(trace_key, curr_augm_trace_data_pattern):
+                    augm_trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_key)
+                    parent_trace_id = pyine.data.traces.dataset_utils.TraceIdentifier(
+                        **vars(augm_trace_id.get_parent_identifier()),
+                        test_idx=augm_trace_id.test_idx,
+                    )
+                    curr_augm_key_to_parent_key[trace_key] = str(parent_trace_id)
+            for augm_key, parent_key in curr_augm_key_to_parent_key.items():
+                assert parent_key in self.trace_keys, f"parent trace key {parent_key} not found in dataset"
+                augm_idx = self.trace_indices[self.trace_keys.index(augm_key)]
+                parent_idx = self.trace_indices[self.trace_keys.index(parent_key)]
+                self.augment_idx_to_parent_trace_idx[augm_idx] = parent_idx
+            self.augment_key_to_parent_trace_key.update(curr_augm_key_to_parent_key)
 
     def __len__(self) -> int:
         """
