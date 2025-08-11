@@ -135,6 +135,7 @@ class LMDBWriter:
         self._next_internal_key = 0
         self.key_map: dict[str, bytes] = {}  # external-to-internal key map
         self.max_encoded_value_length: int = 0  # in bytes
+        self._reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
 
     def __enter__(self) -> "LMDBWriter":
         """Context manager entry point; returns the LMDBWriter instance."""
@@ -217,7 +218,7 @@ class LMDBWriter:
             self._write_metadata_value(txn, "key_map", self.key_map)
             self._write_metadata_value(txn, "serialization", self.serialization.value)
             self._write_metadata_value(txn, "max_encoded_value_length", self.max_encoded_value_length)
-            for key, val in pyine.utils.reprod.get_reprod_metadata().items():
+            for key, val in self._reprod_metadata.items():
                 self._write_metadata_value(txn, key, val)
 
     def _write_metadata_value(self, txn: lmdb.Transaction, field_name: str, value: typing.Any):

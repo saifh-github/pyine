@@ -86,7 +86,9 @@ def write_dataset(
             if problem_data.problem_id not in seen_problem_ids:
                 # store problem data first, but only if this is a problem we have never seen yet
                 seen_problem_ids.append(problem_data.problem_id)
-                problem_metadata_key = str(problem_data) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
+                problem_metadata_key = (
+                    str(problem_data.problem_id) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
+                )
                 writer.put(key=problem_metadata_key, value=problem_data.model_dump())
             # now store trace + deltas using the correct keys
             trace_output_key = str(trace_id)
