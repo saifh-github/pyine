@@ -277,7 +277,9 @@ def _check_must_skip_solution(
             # @@@@ TODO: might be able to fix these w/ callable analysis results
             return f"{solution}: skipped due to missing entrypoint with callable input/output"
     try:
-        pyine.utils.code.validation.validate_code(solution.code)  # last check before running
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # no need to capture warnings related to validated code
+            pyine.utils.code.validation.validate_code(solution.code)  # last check before running
     except Exception as e:
         return f"{solution}: skipped due to new validation error: {e}"
     return None  # no issue found
@@ -724,15 +726,15 @@ if __name__ == "__main__":
         write_dataset_from_taco(
             # create a dummy dataset for quick prototyping
             banned_problem_tags_rule=None,
-            max_output_traces=100,
-            max_solutions_per_problem=2,
-            max_tests_per_solution=4,
+            max_output_traces=10_000,
+            max_solutions_per_problem=10,
+            max_tests_per_solution=10,
             max_trace_events_per_line=None,
             min_solution_line_count=3,
             min_solution_dissimilarity=0.1,
             execution_timeout_seconds=10,
             allow_banned_samples=False,
-            allow_imperfect_solutions=False,
+            allow_imperfect_solutions=True,
             generate_obfuscated_solutions=True,
             # generate_doc_hinted_solutions=1,
             # generate_test_hinted_solutions=1,
@@ -754,6 +756,7 @@ if __name__ == "__main__":
             test_output_compare_options=dict(
                 rel_tol="auto",
                 abs_tol="auto",
+                array_type_matters=False,
             ),
             verbose=True,
         )

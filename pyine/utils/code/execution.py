@@ -124,7 +124,7 @@ class TraceResult(pydantic.BaseModel):
     """The original code string that was executed."""
     code_blocks: dict[int, pyine.utils.code.blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
-    inputs: int | float | str | list[int | float | str]
+    inputs: pydantic.JsonValue  # noqa
     """The inputs that were available to the code during execution."""
     max_events_per_line: int | None
     """The maximum number of events to record per line (if needed)."""
@@ -197,6 +197,7 @@ def trace_context(
 class MockInput:
     """Mock class for sys.stdin.readline() and input() to read from a provided list of inputs."""
 
+    # noinspection PyUnreachableCode
     def __init__(self, inputs: str = ""):
         """Initialize the MockInput instance with an input string to be read from.
 

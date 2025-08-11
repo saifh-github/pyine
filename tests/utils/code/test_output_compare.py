@@ -200,3 +200,22 @@ def test_text_token_structure_diff():
     r = compare(a, b)
     assert not r.equal
     assert "Token structure differs" in r.reason
+
+
+# ---------------- list/tuple type agnostic option ----------------
+
+
+def test_list_tuple_type_agnostic_equality():
+    assert eq([1, 2, 3], (1, 2, 3), array_type_matters=False)
+
+
+def test_list_tuple_type_agnostic_nested():
+    a = [1, (2, 3), [4, 5]]
+    b = (1, [2, 3], (4, 5))
+    assert eq(a, b, array_type_matters=False)
+
+
+def test_list_tuple_type_agnostic_length_mismatch():
+    r = compare([1, 2, 3], (1, 2), CompareOptions(array_type_matters=False))
+    assert not r.equal
+    assert "Length differs" in r.reason

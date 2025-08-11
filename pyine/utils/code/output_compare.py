@@ -48,6 +48,8 @@ class CompareOptions(pydantic.BaseModel):
     """Whether list element order matters."""
     tuple_order_matters: bool = True
     """Whether tuple element order matters."""
+    array_type_matters: bool = True
+    """Whether list vs tuple type must match. If False, lists and tuples are compared as sequences regardless of type."""
     # note: dict and set are order-insensitive by definition; nested lists/tuples obey above flags
     nan_equal: bool = True
     """If True, NaN is considered equal to NaN."""
@@ -273,6 +275,12 @@ def _compare_objects(
     if a is None or b is None:
         return _ok() if a is b else _fail_path(path, f"None differs: {a} != {b}")
     if type(a) is not type(b):
+        # allow comparing lists and tuples when configured to ignore array type differences.
+        if not opt.array_type_matters and isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+            order_a = opt.list_order_matters if isinstance(a, list) else opt.tuple_order_matters
+            order_b = opt.list_order_matters if isinstance(b, list) else opt.tuple_order_matters
+            order_matters = order_a and order_b
+            return _compare_sequences(a, b, opt, path, order_matters=order_matters)
         return _fail_path(path, f"Type differs: {type(a).__name__} != {type(b).__name__}")
     if isinstance(a, list):
         return _compare_sequences(a, b, opt, path, order_matters=opt.list_order_matters)
