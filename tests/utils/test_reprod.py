@@ -47,6 +47,16 @@ def test_get_framework_version_not_installed(monkeypatch) -> None:
         reprod.get_framework_version()
 
 
+def test_get_framework_version_real() -> None:
+    """Test that get_framework_version returns the real package version."""
+    real_version = reprod.get_framework_version()
+    ver_major, ver_minor, ver_patch = real_version.split(".")
+    assert int(ver_major) >= 0
+    assert int(ver_minor) >= 0
+    assert int(ver_patch) >= 0
+    assert any([ver_major, ver_minor, ver_patch])
+
+
 def test_get_git_revision_hash_unknown_repo(monkeypatch) -> None:
     """Test that get_git_revision_hash returns unknown when repo can't be found."""
     # create dummy git module with Repo raising InvalidGitRepositoryError
