@@ -205,7 +205,7 @@ def _compare_text_with_numeric_tolerance(a: str, b: str, opt: CompareOptions) ->
         return _fail(f"Token structure differs: {len(a_parts)} tokens vs {len(b_parts)} tokens")
     for idx, (ak, av), (bk, bv) in zip(range(len(a_parts)), a_parts, b_parts):
         if ak != bk:
-            return _fail(f"Token kind mismatch at token {idx}: {ak} vs {bk}")
+            return _fail(f"Token kind mismatch at token {idx}: {ak} vs {bk}, i.e. {av!r} vs {bv!r}")
         if ak == "text":
             if av != bv:
                 return _fail(f"Text segment differs at token {idx}: {av!r} != {bv!r}")
