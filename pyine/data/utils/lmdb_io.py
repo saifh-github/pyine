@@ -130,7 +130,7 @@ class LMDBWriter:
     def __init__(
         self,
         path: pathlib.Path | typing.AnyStr,
-        map_size: int = 1 * 1024 * 1024 * 1024 * 1024,  # 1TB default size (1 * 1024^4)
+        map_size: int = 1 * (1024**4),  # 1TB default size; good for large datasets (what we want)
         max_readers: int = 126,  # typical default max readers for LMDB
         max_allowed_value_length: int = 2 * (1024**3),  # 2GB by default
         serialization_config: SerializationConfig = SerializationConfig(),
@@ -139,7 +139,8 @@ class LMDBWriter:
 
         Args:
             path: Path where the LMDB will be stored.
-            map_size: Maximum size database may grow to; default 1TB (1 * 1024^4 bytes).
+            map_size: Maximum size database may grow to; defaults to 1TB (1 * 1024^4 bytes), which
+                is good for large datasets, i.e. what we intend to create in this framework.
             max_readers: Maximum number of simultaneous readers (126 by default, typical for LMDB).
             serialization_config: Configuration specifying method to serialize objects.
         """
