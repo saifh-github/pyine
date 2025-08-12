@@ -624,6 +624,7 @@ async def write_dataset(
     contains_banned_tags = pyine.data.utils.ban_rules.build_ban_predicate_from_rule(
         rule=config.banned_problem_tags_rule or "",
     )
+    trace_event_counts = []
     written_outputs = 0  # total number of traces that we will have written
     # iterate over each problem statement (and its proposed solutions) in the target dataset
     for problem, solutions in problem_data_iter:
@@ -700,6 +701,8 @@ async def write_dataset(
                 writer.put(key=problem_metadata_key, value=problem.model_dump())
             # write all valid execution traces for the current solution, since it is valid
             writer.put_batch(traces_to_write, show_progress=False)
+            for trace_dump in traces_to_write.values():
+                trace_event_counts.append(trace_dump["tracing_steps"])
             written_outputs += len(traces_to_write)
             written_solutions += 1
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
@@ -711,8 +714,11 @@ async def write_dataset(
         if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
             break  # if we already reached our target output dataset size, we're done
     log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")
-    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
     writer.close()
+    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+    if trace_event_counts:
+        avg_event_count = sum(trace_event_counts) / len(trace_event_counts)
+        log(f"\t(event count avg={avg_event_count:.1f}, min={min(trace_event_counts)}, max={max(trace_event_counts)})")
     return writer
 
 
