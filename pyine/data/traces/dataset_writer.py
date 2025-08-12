@@ -348,7 +348,7 @@ def _get_traces_to_write(
             )
             for code_snippet in to_trace
         ],
-        use_processes=True,
+        use_processes=False,
         use_shared_pool=True,  # by default, shared pool has machine-specific worker count
     )
     assert len(results) == len(errors) == len(to_trace), "unexpected number of results/errors"
@@ -400,6 +400,7 @@ def _trace_code_snippet(
             trace_only_inside_code_string=True,
             max_events_per_line=config.max_trace_events_per_line,
             timeout_seconds=config.execution_timeout_seconds,
+            use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
         )
     if config.max_trace_events_total is not None and trace_result.tracing_steps > config.max_trace_events_total:
         raise ValueError(
