@@ -269,9 +269,11 @@ class LMDBWriter:
         """Writes a single metadata value to the database."""
         # note: for metadata, we always write data using msgspec only
         key_bytes = _create_metadata_key(field_name)
-        assert 0 < len(key_bytes) < self.env.max_key_size(), "metadata key length error"
+        if not (0 < len(key_bytes) < self.env.max_key_size()):
+            raise ValueError("metadata key length error")
         encoded_value = msgspec.msgpack.encode(value)
-        assert 0 < len(encoded_value) < self.max_allowed_value_length, "metadata value length error"
+        if not (0 < len(encoded_value) < self.max_allowed_value_length):
+            raise ValueError("metadata value length error")
         txn.put(key_bytes, encoded_value, overwrite=True)
 
     def get_size_on_disk(self) -> int:
@@ -303,15 +305,18 @@ class LMDBWriter:
         if key in self.key_map:
             raise ValueError(f"key '{key}' already exists in the database")
         internal_key = _create_sample_key(self._next_internal_key)
-        assert 0 < len(internal_key) < self.env.max_key_size(), "internal key length error"
+        if not (0 < len(internal_key) < self.env.max_key_size()):
+            raise RuntimeError("internal key length error")
         self.key_map[key] = internal_key
         self._next_internal_key += 1
         with self.env.begin(write=True) as txn:
             encoded_value = self._serialize(value)
-            assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
+            if not (0 < len(encoded_value) < self.max_allowed_value_length):
+                raise ValueError("encoded value length error")
             self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
             ret = txn.put(internal_key, encoded_value, overwrite=True)
-            assert ret, "internal key collision"
+            if not ret:
+                raise RuntimeError("internal key collision")
         return internal_key
 
     def put_batch(
@@ -343,14 +348,17 @@ class LMDBWriter:
                 if key in self.key_map:
                     raise ValueError(f"key '{key}' already exists in the database")
                 internal_key = _create_sample_key(self._next_internal_key)
-                assert 0 < len(internal_key) < self.env.max_key_size(), "internal key length error"
+                if not (0 < len(internal_key) < self.env.max_key_size()):
+                    raise RuntimeError("internal key length error")
                 self.key_map[key] = internal_key
                 self._next_internal_key += 1
                 encoded_value = self._serialize(value)
-                assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
+                if not (0 < len(encoded_value) < self.max_allowed_value_length):
+                    raise ValueError("encoded value length error")
                 self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
                 ret = txn.put(internal_key, encoded_value, overwrite=True)
-                assert ret, "internal key collision"
+                if not ret:
+                    raise RuntimeError("internal key collision")
                 generated_interal_keys.append(internal_key)
             return generated_interal_keys
 
@@ -453,7 +461,8 @@ class LMDBReader:
             max_encoded_value_length_bytes = txn.get(_create_metadata_key("max_encoded_value_length"))
             self.max_encoded_value_length: int = msgspec.msgpack.decode(max_encoded_value_length_bytes)
             self.key_map: dict[str, bytes] = msgspec.msgpack.decode(txn.get(_create_metadata_key("key_map")))
-            assert len(self.key_map) == self.sample_count, "key_map length does not match sample_count"
+            if len(self.key_map) != self.sample_count:
+                raise RuntimeError("key_map length does not match sample_count")
 
     def __enter__(self):
         return self
@@ -488,7 +497,8 @@ class LMDBReader:
                 if key is None or not key.startswith(METADATA_PREFIX):
                     break
                 metadata_field_name = _decode_metadata_key(key)
-                assert metadata_field_name not in results, f"duplicate metadata field: {metadata_field_name}"
+                if metadata_field_name in results:
+                    raise RuntimeError(f"duplicate metadata field: {metadata_field_name}")
                 metadata_value_encoded = cursor.value()
                 results[metadata_field_name] = msgspec.msgpack.decode(metadata_value_encoded)
                 found = cursor.next()
@@ -532,7 +542,8 @@ class LMDBReader:
             If `return_keys` is False: List of sample indices (integers) of matched keys, sorted in ascending order.
             If `return_keys` is True: Tuple of (indices, keys) where both lists are sorted by index order.
         """
-        assert isinstance(pattern, str), "pattern must be a string"
+        if not isinstance(pattern, str):
+            raise TypeError("pattern must be a string")
         matched_keys = fnmatch.filter(self.key_map.keys(), pattern)
         index_key_pairs = [((_decode_sample_key(self.key_map[key])), key) for key in matched_keys]
         index_key_pairs.sort()
@@ -548,11 +559,15 @@ class LMDBReader:
         end_idx: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         """Iterate through items starting from a specific index, yielding values sequentially."""
-        assert isinstance(start_idx, int), "start_idx must be an integer"
-        assert start_idx >= 0, "start_idx must be non-negative"
+        if not isinstance(start_idx, int):
+            raise TypeError("start_idx must be an integer")
+        if start_idx < 0:
+            raise ValueError("start_idx must be non-negative")
         if end_idx is not None:
-            assert isinstance(end_idx, int), "end_idx must be an integer or None"
-            assert end_idx >= start_idx, "end_idx must be greater than or equal to start_idx"
+            if not isinstance(end_idx, int):
+                raise TypeError("end_idx must be an integer or None")
+            if end_idx < start_idx:
+                raise ValueError("end_idx must be greater than or equal to start_idx")
         start_key = _create_sample_key(start_idx)
         with self.env.begin() as txn:
             cursor = txn.cursor()

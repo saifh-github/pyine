@@ -45,8 +45,10 @@ class DatasetReader(torch.utils.data.Dataset):
             pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
             return_keys=True,
         )
-        assert len(self.problem_indices) > 0, "no problem data found in the dataset"
-        assert len(self.problem_indices) == len(self.problem_keys)
+        if len(self.problem_indices) == 0:
+            raise ValueError("no problem data found in the dataset")
+        if len(self.problem_indices) != len(self.problem_keys):
+            raise RuntimeError("problem indices/keys length mismatch")
         self._init_trace_maps()
 
     def _init_trace_maps(self) -> None:
@@ -59,7 +61,8 @@ class DatasetReader(torch.utils.data.Dataset):
         self.augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
         for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
-            assert problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)
+            if not problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX):
+                raise ValueError(f"malformed problem key: {problem_key}")
             problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
             curr_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
             curr_augm_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
@@ -67,8 +70,10 @@ class DatasetReader(torch.utils.data.Dataset):
                 pattern=curr_trace_data_pattern,
                 return_keys=True,
             )
-            assert len(curr_trace_indices) > 0, f"no trace data found for problem: {problem_key}"
-            assert len(curr_trace_indices) == len(curr_trace_keys)
+            if len(curr_trace_indices) == 0:
+                raise ValueError(f"no trace data found for problem: {problem_key}")
+            if len(curr_trace_indices) != len(curr_trace_keys):
+                raise RuntimeError("trace indices/keys length mismatch")
             self.trace_indices.extend(curr_trace_indices)
             self.trace_keys.extend(curr_trace_keys)
             curr_augm_key_to_parent_key: dict[str, str] = {}
@@ -83,7 +88,8 @@ class DatasetReader(torch.utils.data.Dataset):
                     )
                     curr_augm_key_to_parent_key[trace_key] = str(parent_trace_id)
             for augm_key, parent_key in curr_augm_key_to_parent_key.items():
-                assert parent_key in self.trace_keys, f"parent trace key {parent_key} not found in dataset"
+                if parent_key not in self.trace_keys:
+                    raise KeyError(f"parent trace key {parent_key} not found in dataset")
                 augm_idx = self.trace_indices[self.trace_keys.index(augm_key)]
                 parent_idx = self.trace_indices[self.trace_keys.index(parent_key)]
                 self.augment_idx_to_parent_trace_idx[augm_idx] = parent_idx
@@ -122,7 +128,8 @@ class DatasetReader(torch.utils.data.Dataset):
             if not (0 <= index_or_key < len(self)):
                 raise IndexError(f"index {index_or_key} out of range")
         elif isinstance(index_or_key, str):
-            assert index_or_key in self.trace_keys, f"key {index_or_key} not found in dataset"
+            if index_or_key not in self.trace_keys:
+                raise KeyError(f"key {index_or_key} not found in dataset")
             index_or_key = self.trace_keys.index(index_or_key)
         else:
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
@@ -139,10 +146,12 @@ class DatasetReader(torch.utils.data.Dataset):
             index_or_key: Index or key of the trace for which to retrieve parent problem data.
         """
         if isinstance(index_or_key, int):
-            assert 0 <= index_or_key < len(self), f"index {index_or_key} out of range"
+            if not (0 <= index_or_key < len(self)):
+                raise IndexError(f"index {index_or_key} out of range")
             problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[index_or_key]]
         elif isinstance(index_or_key, str):
-            assert index_or_key in self.trace_keys, f"key {index_or_key} not found in dataset"
+            if index_or_key not in self.trace_keys:
+                raise KeyError(f"key {index_or_key} not found in dataset")
             internal_trace_idx = self.trace_indices[self.trace_keys.index(index_or_key)]
             problem_idx = self.trace_idx_to_problem_idx[internal_trace_idx]
         else:

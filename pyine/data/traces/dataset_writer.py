@@ -266,10 +266,14 @@ def _check_must_skip_problem(
     contains_banned_tags: typing.Callable,
 ) -> str | None:
     """Checks if a problem should be skipped due to banned tags or other conditions."""
-    assert isinstance(problem, pyine.data.traces.dataset_utils.CodingProblem)
-    assert isinstance(solutions, list)
-    assert all([isinstance(s, pyine.data.traces.dataset_utils.Solution) for s in solutions])
-    assert problem.potential_solution_ids == [s.solution_id for s in solutions]
+    if not isinstance(problem, pyine.data.traces.dataset_utils.CodingProblem):
+        raise TypeError("problem must be a CodingProblem instance")
+    if not isinstance(solutions, list):
+        raise TypeError("solutions must be a list")
+    if not all(isinstance(s, pyine.data.traces.dataset_utils.Solution) for s in solutions):
+        raise TypeError("solutions must contain only Solution instances")
+    if problem.potential_solution_ids != [s.solution_id for s in solutions]:
+        raise ValueError("mismatch between problem.potential_solution_ids and provided solutions")
     if problem.parsing_errors:
         return f"{problem}: skipping due to parsing errors: {problem.parsing_errors}"
     if not solutions:
@@ -289,7 +293,8 @@ def _check_must_skip_solution(
     config: TraceDatasetWriterConfig,
 ) -> str | None:
     """Checks if a solution should be skipped due to any condition."""
-    assert problem.problem_id == solution.parent_id
+    if problem.problem_id != solution.parent_id:
+        raise ValueError("solution parent_id does not match problem.problem_id")
     # get rid of solutions that failed prior analyses, that are banned, or that contain hard-to-handle code
     if solution.analysis_errors:
         return f"{solution}: skipped due to prior analysis errors: {set(solution.analysis_errors)}"
@@ -324,7 +329,8 @@ def _get_test_tuples(
     """Gets a list of test tuples to use for tracing/verifying solutions for a coding problem."""
     max_test_count = min((config.max_tests_per_solution or problem.test_count), problem.test_count)
     test_tuples = list(enumerate(itertools.islice(problem.test_inout_pairs, max_test_count)))
-    assert len(test_tuples) > 0, f"no test cases found for problem: {problem}"
+    if len(test_tuples) == 0:
+        raise ValueError(f"no test cases found for problem: {problem}")
     return [
         _TestTuple(test_idx=test_idx, inputs=test_inputs, outputs=test_outputs)
         for test_idx, (test_inputs, test_outputs) in test_tuples
@@ -351,7 +357,8 @@ def _get_traces_to_write(
         use_processes=False,
         use_shared_pool=True,  # by default, shared pool has machine-specific worker count
     )
-    assert len(results) == len(errors) == len(to_trace), "unexpected number of results/errors"
+    if not (len(results) == len(errors) == len(to_trace)):
+        raise RuntimeError("unexpected number of results/errors")
     successful_traces = {}
     for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
         code_to_trace = to_trace[trace_idx]
@@ -366,7 +373,8 @@ def _get_traces_to_write(
                 log_fn(f"{code_to_trace.trace_id}: failed output check (reason={test_result.reason})")
                 # TODO: add a failed test result logger (to disk) here? (might be useful for later investigations)
             else:
-                assert str(code_to_trace.trace_id) == trace_result.identifier, "trace identifier mismatch"
+                if str(code_to_trace.trace_id) != trace_result.identifier:
+                    raise RuntimeError("trace identifier mismatch")
                 successful_traces[str(trace_result.identifier)] = trace_result.model_dump()
     if all_must_succeed and len(successful_traces) != len(to_trace):
         log_fn(f"discarding {len(successful_traces)} traces due to some failure(s) in batch")
@@ -502,7 +510,8 @@ async def _generate_augmented_code_to_trace(
         augment_count: int,
     ) -> None:
         # helper function that avoids code duplication for doc-hints and test-hints augments
-        assert llm is not None, "runnable augmentation requires an LLM to be provided/configured"
+        if llm is None:
+            raise ValueError("runnable augmentation requires an LLM to be provided/configured")
         llm_chain = pyine.utils.llm_providers.get_chain(
             prompt_template=pyine.prompts.manager.get_prompt_template(prompt_template_name),
             llm=llm,
@@ -600,7 +609,8 @@ async def write_dataset(
         allow_banned_samples=config.allow_banned_samples,
         show_progress=verbose,
     )
-    assert len(problem_data_iter) > 0, f"no problems found in {config.source_dataset_name} source dataset"
+    if len(problem_data_iter) == 0:
+        raise ValueError(f"no problems found in {config.source_dataset_name} source dataset")
     log(f"found {len(problem_data_iter)} problems in {config.source_dataset_name} source dataset")
     if config.llm_provider_kwargs:
         llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
@@ -692,7 +702,8 @@ async def write_dataset(
                     config=config,
                     log_fn=log,
                 )
-                assert not any([k in traces_to_write for k in new_traces_to_write])
+                if any(k in traces_to_write for k in new_traces_to_write):
+                    raise RuntimeError("duplicate trace keys when merging augmented traces")
                 traces_to_write.update(new_traces_to_write)
 
             log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
