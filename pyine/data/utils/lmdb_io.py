@@ -500,17 +500,19 @@ class LMDBReader:
         # noinspection PyUnreachableCode
         if isinstance(key_or_idx, str):
             if key_or_idx not in self.key_map:
-                raise ValueError(f"key '{key_or_idx}' not found in the database")
+                raise KeyError(f"key '{key_or_idx}' not found in the database")
             key = self.key_map[key_or_idx]
         elif isinstance(key_or_idx, int):
+            if not (0 <= key_or_idx < len(self)):
+                raise IndexError(f"index {key_or_idx} out of range (0 <= index < {len(self)})")
             key = _create_sample_key(key_or_idx)
         else:
-            raise ValueError(f"key_or_idx must be a string or integer, but got: {type(key_or_idx)}")
+            raise TypeError(f"key_or_idx must be a string or integer, but got: {type(key_or_idx)}")
         with self.env.begin() as txn:
-            value_bytes = txn.get(key)
-            if value_bytes is not None:
-                return self._deserialize(value_bytes)
-            return None
+            output = txn.get(key)
+            if output is not None:
+                output = self._deserialize(output)
+            return output
 
     def get_indices(
         self,
