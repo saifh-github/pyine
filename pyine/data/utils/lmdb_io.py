@@ -108,7 +108,8 @@ class LMDBWriter:
         self,
         path: pathlib.Path | typing.AnyStr,
         map_size: int = 1 * 1024 * 1024 * 1024 * 1024,  # 1TB default size (1 * 1024^4)
-        max_readers: int = 126,  # Typical default max readers for LMDB
+        max_readers: int = 126,  # typical default max readers for LMDB
+        max_allowed_value_length: int = 2 * (1024**3),  # 2GB by default
         serialization: SerializationMethod = SerializationMethod.PICKLE,
     ) -> None:
         """Initialize the LMDB database.
@@ -129,12 +130,12 @@ class LMDBWriter:
             max_readers=self.max_readers,
             readonly=False,
         )
-        if not isinstance(serialization, SerializationMethod):
-            raise ValueError(f"serialization must be an instance of: {list(SerializationMethod)}")
+        assert isinstance(serialization, SerializationMethod), f"method must be in: {list(SerializationMethod)}"
         self.serialization = serialization
         self._next_internal_key = 0
         self.key_map: dict[str, bytes] = {}  # external-to-internal key map
-        self.max_encoded_value_length: int = 0  # in bytes
+        self.max_encoded_value_length: int = 0  # in bytes; will be tracked as we write the dataset
+        self.max_allowed_value_length: int = max_allowed_value_length  # in bytes
         self._reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
 
     def __enter__(self) -> "LMDBWriter":
@@ -182,6 +183,7 @@ class LMDBWriter:
         if self.serialization == SerializationMethod.JSON_LZ4:
             json_data = json.dumps(obj).encode("utf-8")
             return lz4.frame.compress(json_data)
+        # noinspection PyUnreachableCode
         raise ValueError(f"invalid serialization method: {self.serialization}")
 
     def write_metadata(
@@ -212,7 +214,7 @@ class LMDBWriter:
         """Writes metadata to the database."""
         with self.env.begin(write=True) as txn:
             # store the next internal key for continuity (if needed)
-            txn.put(_NEXT_INTERNAL_KEY, struct.pack(">Q", self._next_internal_key))
+            txn.put(_NEXT_INTERNAL_KEY, struct.pack(">Q", self._next_internal_key), overwrite=True)
             self._write_metadata_value(txn, "map_size", self.map_size)
             self._write_metadata_value(txn, "sample_count", len(self.key_map))
             self._write_metadata_value(txn, "key_map", self.key_map)
@@ -225,7 +227,10 @@ class LMDBWriter:
         """Writes a single metadata value to the database."""
         # note: for metadata, we always write data using pickle only
         key_bytes = _create_metadata_key(field_name)
-        txn.put(key_bytes, pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+        assert 0 < len(key_bytes) < self.env.max_key_size(), "metadata key length error"
+        encoded_value = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        assert 0 < len(encoded_value) < self.max_allowed_value_length, "metadata value length error"
+        txn.put(key_bytes, encoded_value, overwrite=False)
 
     def get_size_on_disk(self) -> int:
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
@@ -250,15 +255,18 @@ class LMDBWriter:
         Returns:
             The internal key used to store the value in the database.
         """
+        # noinspection PyUnreachableCode
         if not isinstance(key, str):
             raise ValueError(f"key must be a string, but got: {type(key)}")
         if key in self.key_map:
             raise ValueError(f"key '{key}' already exists in the database")
         internal_key = _create_sample_key(self._next_internal_key)
+        assert 0 < len(internal_key) < self.env.max_key_size(), "internal key length error"
         self.key_map[key] = internal_key
         self._next_internal_key += 1
         with self.env.begin(write=True) as txn:
             encoded_value = self._serialize(value)
+            assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
             self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
             ret = txn.put(internal_key, encoded_value, overwrite=False)
             assert ret, "internal key collision"
@@ -287,14 +295,17 @@ class LMDBWriter:
         items_iterator = tqdm.tqdm(items.items(), desc="Writing to database") if show_progress else items.items()
         with self.env.begin(write=True) as txn:
             for key, value in items_iterator:
+                # noinspection PyUnreachableCode
                 if not isinstance(key, str):
                     raise ValueError(f"key must be a string, but got: {type(key)}")
                 if key in self.key_map:
                     raise ValueError(f"key '{key}' already exists in the database")
                 internal_key = _create_sample_key(self._next_internal_key)
+                assert 0 < len(internal_key) < self.env.max_key_size(), "internal key length error"
                 self.key_map[key] = internal_key
                 self._next_internal_key += 1
                 encoded_value = self._serialize(value)
+                assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
                 self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
                 ret = txn.put(internal_key, encoded_value, overwrite=False)
                 assert ret, "internal key collision"
@@ -308,8 +319,8 @@ class LMDBReader:
     Examples:
         Basic usage to read a value by key or index:
         >>> reader = LMDBReader("path/to/db")
-        >>> value = reader.get("key1")  # get by key
-        >>> value = reader.get(0)       # get by index
+        >>> value_by_key = reader.get("key1")  # get by key
+        >>> value_by_index = reader.get(0)       # get by index
         >>> reader.close()
 
         Reading metadata:
@@ -374,6 +385,7 @@ class LMDBReader:
         if self.serialization == SerializationMethod.JSON_LZ4:
             decompressed_data = lz4.frame.decompress(data)
             return json.loads(decompressed_data.decode("utf-8"))
+        # noinspection PyUnreachableCode
         raise ValueError(f"invalid serialization method: {self.serialization}")
 
     def _load_metadata(self):
@@ -435,6 +447,7 @@ class LMDBReader:
 
     def get(self, key_or_idx: int | str) -> typing.Any:
         """Get a value by its key or dataset index."""
+        # noinspection PyUnreachableCode
         if isinstance(key_or_idx, str):
             if key_or_idx not in self.key_map:
                 raise ValueError(f"key '{key_or_idx}' not found in the database")

@@ -1,9 +1,11 @@
 import dataclasses
 import datetime
+import fnmatch
 import importlib.resources as pkg_resources
 import json
 import logging
 import pathlib
+import re
 import typing
 
 import numpy as np
@@ -273,7 +275,7 @@ class Solution(pydantic.BaseModel):
 
     @property
     def has_standard_io(self):
-        """Returns whether this solution uses standard and easy-touse input/output."""
+        """Returns whether this solution uses standard and easy-to-use input/output."""
         return self.analysis_results.input_type in [
             "stdin",
             "no-input",
@@ -291,37 +293,60 @@ class Solution(pydantic.BaseModel):
         )
 
 
+@dataclasses.dataclass
+class _BannedData:
+    """Data class containing banned data information."""
+
+    metadata: dict = dataclasses.field(default_factory=dict)
+    """Dataset-dependent map of banned metadata; allows some stuff to be entirely avoided."""
+    problems: dict[str, list[int]] = dataclasses.field(default_factory=dict)
+    """Generic banned problems indices map.
+
+    For each data subset (e.g. 'train', 'valid', ...), provides a list of banned problem indices.
+    """
+    solutions: dict[str, dict[int, list[int]]] = dataclasses.field(default_factory=dict)
+    """Generic banned solutions indices map.
+
+    For each data subset (e.g. 'train', 'valid', ...), provides a dictionary pairing problem
+    indices with a list of banned solution indices.
+    """
+
+
+class ProblemIdPattern(pydantic.BaseModel):
+    """Data class containing problem identifier pattern matching information."""
+
+    pattern: str
+    """Problem identifier pattern to match with; can be a regex or glob pattern."""
+    is_regex: bool
+    """Whether the problem identifier pattern is a regex."""
+
+
 class CodingProblemIterator:
     """Iterator class for iterating over coding problem data from a source dataset."""
-
-    @dataclasses.dataclass
-    class _BannedData:
-        """Data class containing banned data information."""
-
-        metadata: dict = dataclasses.field(default_factory=dict)
-        """Dataset-dependent map of banned metadata; allows some stuff to be entirely avoided."""
-        problems: dict[str, list[int]] = dataclasses.field(default_factory=dict)
-        """Generic banned problems indices map.
-
-        For each data subset (e.g. 'train', 'valid', ...), provides a list of banned problem indices.
-        """
-        solutions: dict[str, dict[int, list[int]]] = dataclasses.field(default_factory=dict)
-        """Generic banned solutions indices map.
-
-        For each data subset (e.g. 'train', 'valid', ...), provides a dictionary pairing problem
-        indices with a list of banned solution indices.
-        """
 
     def __init__(
         self,
         dataset_name: str,
         root_data_path: pathlib.Path | str,
+        target_problem_pattern: ProblemIdPattern | None = None,
         reformat_code_strings: bool = True,
         validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
         show_progress: bool = False,
     ):
-        """Initialize the iterator, validating source dataset name/path."""
+        """Initialize the iterator, validating source dataset name/path.
+
+        Args:
+            dataset_name: Name of the source dataset to load problems from.
+            root_data_path: Path to the root directory containing the source dataset files.
+            target_problem_pattern: Optional pattern to filter problems by their identifier.
+            reformat_code_strings: Whether to apply code formatting to parsed solution code strings.
+            validate_code_strings: Whether to validate solution code strings before using them.
+            allow_banned_samples: Whether to allow loading of banned problems/solutions. Banned
+                samples are problems/solutions that are likely to cause errors during parsing or
+                execution, and that have been manually identified in `banned_samples.yaml`.
+            show_progress: Whether to show a progress bar while iterating.
+        """
         if dataset_name not in SUPPORTED_SOURCE_DATASETS:
             raise ValueError(f"unsupported source dataset: {dataset_name}")
         root_data_path = pathlib.Path(root_data_path)
@@ -331,11 +356,12 @@ class CodingProblemIterator:
             raise NotADirectoryError(f"{root_data_path} is not a directory")
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
+        self._target_pattern = target_problem_pattern
         self.reformat_code_strings = reformat_code_strings
         self.validate_code_strings = validate_code_strings
         if allow_banned_samples:
             logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
-            self.banned = self._BannedData()  # will be initialized w/ empty maps
+            self.banned = _BannedData()  # will be initialized w/ empty maps
         else:
             self.banned = self._load_banned_data()
         self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
@@ -346,17 +372,26 @@ class CodingProblemIterator:
     def _prepare_problem_metadata(self) -> list:
         """Prepares problem metadata for the iterator, loading high-level source data."""
         if self.dataset_name in JSON_BASED_SOURCE_DATASETS:
-            # if we're loading jsons, the 'problem metadata' will be json paths to parse later
+            # if we're loading JSONs, the 'problem metadata' will be JSONs paths to parse later
             json_file_paths = list(self.root_data_path.glob("*.json"))
             output_paths = []
             # we actually need to pop the files open and check which ones contain any data
-            # (repackaging might have resulted in empty jsons with only an error code)
+            # (repackaging might have resulted in empty JSONs with only an error code)
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
                 if json_file_path.name in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
-                # note: if too slow, open the jsons with a binary reader and parse byte-by-byte
+                # optionally filter by a target pattern
+                if self._target_pattern is not None:
+                    if self._target_pattern.is_regex and not re.fullmatch(
+                        self._target_pattern.pattern, json_file_path.name
+                    ):
+                        continue
+                    elif not self._target_pattern.is_regex and not fnmatch.fnmatch(
+                        json_file_path.name, self._target_pattern.pattern
+                    ):
+                        continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     json_data = json.load(fd)
                     assert isinstance(json_data, dict)
@@ -380,7 +415,7 @@ class CodingProblemIterator:
         target_banned_metadata = banned_metadata_all.get(self.dataset_name, {})
         target_banned_problems = banned_problems_all.get(self.dataset_name, {})
         target_banned_solutions = banned_solutions_all.get(self.dataset_name, {})
-        return self._BannedData(
+        return _BannedData(
             metadata=target_banned_metadata,
             problems=target_banned_problems,
             solutions=target_banned_solutions,
@@ -503,7 +538,7 @@ class CodingProblemIterator:
         return self
 
     def __next__(self) -> tuple[CodingProblem, list[Solution]]:
-        """Returns the next coding problem + solutions object tuple."""
+        """Returns the next coding problem and solutions object tuple."""
         if self._current_idx >= len(self.problems_metadata):
             if self._progress_bar is not None:
                 self._progress_bar.close()
@@ -524,7 +559,7 @@ class CodingProblemIterator:
             self._progress_bar = None
 
     def __getitem__(self, idx: int) -> tuple[CodingProblem, list[Solution]]:
-        """Returns a coding problem + solutions object tuple for the specified index."""
+        """Returns a coding problem and solutions object tuple for the specified index."""
         if not (0 <= idx < len(self)):
             raise IndexError(f"index {idx} out of range")
         raw_problem_data = self._load_problem_data(self.problems_metadata[idx])

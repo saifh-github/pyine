@@ -93,6 +93,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum number of trace events per solution code line. If None, no maximum.",
         ),
     ]
+    max_trace_events_total: typing.Annotated[
+        pydantic.PositiveInt | None,
+        pydantic.Field(
+            default=None,
+            description="Maximum total number of trace events allowed per trace. If None, no maximum.",
+        ),
+    ]
     min_solution_line_count: typing.Annotated[
         pydantic.PositiveInt,
         pydantic.Field(
@@ -116,6 +123,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             default=10.0,
             gt=0.0,
             description="Timeout in seconds for each execution attempt. If exceeded, solution is skipped.",
+        ),
+    ]
+    target_problem_pattern: typing.Annotated[
+        pyine.data.traces.dataset_utils.ProblemIdPattern | None,
+        pydantic.Field(
+            default=None,
+            description="Regular expression pattern to use for filtering problems. If None, no filtering.",
         ),
     ]
     allow_banned_samples: typing.Annotated[
@@ -260,7 +274,7 @@ def _check_must_skip_solution(
     assert problem.problem_id == solution.parent_id
     # get rid of solutions that failed prior analyses, that are banned, or that contain hard-to-handle code
     if solution.analysis_errors:
-        return f"{solution}: skipped due to prior analysis errors: {solution.analysis_errors}"
+        return f"{solution}: skipped due to prior analysis errors: {set(solution.analysis_errors)}"
     if solution.should_discard():
         return f"{solution}: skipped due to banned, fishy, or hard-to-fix solution"
     if solution_idx not in retained_solution_indices:
@@ -366,6 +380,10 @@ def _trace_code_snippet(
             max_events_per_line=config.max_trace_events_per_line,
             timeout_seconds=config.execution_timeout_seconds,
         )
+    if config.max_trace_events_total is not None and trace_result.tracing_steps > config.max_trace_events_total:
+        raise ValueError(
+            f"maximum trace event count exceeded (got {trace_result.tracing_steps}, expected {config.max_trace_events_total})"
+        )
     comp = functools.partial(
         pyine.utils.code.output_compare.compare,
         options=config.test_output_compare_options,
@@ -376,6 +394,7 @@ def _trace_code_snippet(
         exception_test_result = comp(str(trace_result.exception), str(test_outputs))
         if exception_test_result:
             return trace_result, exception_test_result  # we're done, we can leave already
+        exception_test_result.reason = f"execution raised unexpected exception: {trace_result.exception}"
         if trace_result.exception.type == SystemExit.__name__:
             # that was likely called on purpose, i.e. the program finished and produced something
             # ...maybe it's the exit code or exception message itself we need to match?
@@ -398,6 +417,7 @@ def _trace_code_snippet(
         if return_val_test_result:
             return trace_result, return_val_test_result
         if default_test_result is None:
+            return_val_test_result.reason = f"unexpected entrypoint return value: {return_val_test_result.reason}"
             default_test_result = return_val_test_result
     # last chance: if we get here, assume the value we need to check is a printed output (in stdout)
     stdout_test_result = comp(trace_result.stdout, test_outputs)
@@ -409,6 +429,7 @@ def _trace_code_snippet(
         if stdout_test_result:
             return trace_result, stdout_test_result
     if default_test_result is None:
+        stdout_test_result.reason = f"unexpected stdout output: {stdout_test_result.reason}"
         default_test_result = stdout_test_result
     return trace_result, default_test_result
 
@@ -552,6 +573,7 @@ async def write_dataset(
     problem_data_iter = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name=config.source_dataset_name,
         root_data_path=root_dataset_path,
+        target_problem_pattern=config.target_problem_pattern,
         reformat_code_strings=True,
         allow_banned_samples=config.allow_banned_samples,
         show_progress=verbose,
@@ -730,9 +752,14 @@ if __name__ == "__main__":
             max_solutions_per_problem=10,
             max_tests_per_solution=10,
             max_trace_events_per_line=None,
+            max_trace_events_total=100_000,
             min_solution_line_count=3,
             min_solution_dissimilarity=0.1,
-            execution_timeout_seconds=10,
+            execution_timeout_seconds=5,
+            # target_problem_pattern=dict(  # use this to target specific problems (for debugging)
+            #     pattern="001234.*",
+            #     is_regex=False,
+            # ),
             allow_banned_samples=False,
             allow_imperfect_solutions=True,
             generate_obfuscated_solutions=True,
