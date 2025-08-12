@@ -177,18 +177,35 @@ class LMDBWriter:
             exc_val: Exception value if an exception was raised.
             exc_tb: Exception traceback if an exception was raised.
         """
-        self.close()
+        self.close(write_metadata=True)
 
     def __del__(self) -> None:
-        """Destructor invoked when the object is garbage collected."""
-        self.close()
+        """Destructor invoked when the object is garbage collected.
 
-    def close(self) -> None:
-        """Close the LMDB environment."""
+        Note: avoid performing I/O (metadata writes) here as interpreter shutdown
+        order is undefined. As a safety net, we try to close the environment only.
+        """
+        try:
+            self.close(write_metadata=False)
+        except Exception:
+            # swallow all exceptions during GC; best-effort resource release only.
+            pass
+
+    def close(self, write_metadata: bool = True) -> None:
+        """Close the LMDB environment.
+
+        Args:
+            write_metadata: When True (default), write internal metadata before closing.
+                Set to False in contexts where writes are unsafe (e.g., __del__).
+        """
         if hasattr(self, "env") and self.env is not None:
-            self._write_internal_metadata()
-            self.env.close()
-            self.env = None
+            try:
+                if write_metadata:
+                    self._write_internal_metadata()
+            finally:
+                # always attempt to close the environment even if metadata write fails
+                self.env.close()
+                self.env = None
 
     def _serialize(
         self,
@@ -212,7 +229,7 @@ class LMDBWriter:
             json_data = orjson.dumps(obj)
             return zstd_compressor.compress(json_data)
         # noinspection PyUnreachableCode
-        raise ValueError(f"invalid serialization method: {self.serialization.method}")
+        raise NotImplementedError
 
     def write_metadata(self, metadata: dict[str, typing.Any], overwrite: bool = False) -> dict[str, bytes]:
         """Write arbitrary metadata to the database.
@@ -416,7 +433,7 @@ class LMDBReader:
             decompressed_data = zstd_decompressor.decompress(data)
             return orjson.loads(decompressed_data)
         # noinspection PyUnreachableCode
-        raise ValueError(f"invalid serialization method: {self.serialization.method}")
+        raise NotImplementedError
 
     def _load_metadata(self):
         """Load metadata from the database."""

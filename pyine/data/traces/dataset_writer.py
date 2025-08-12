@@ -712,6 +712,7 @@ async def write_dataset(
             break  # if we already reached our target output dataset size, we're done
     log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")
     log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+    writer.close()
     return writer
 
 
