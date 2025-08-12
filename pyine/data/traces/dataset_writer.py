@@ -597,7 +597,8 @@ async def write_dataset(
         verbose: Toggles verbose output/logging.
 
     Returns:
-        The LMDBWriter object that was used to write the traces (once writing is complete).
+        The LMDBWriter object that was used to write the traces (once writing is complete). This
+        object should have already been closed, and can be used to read attributes from the dataset.
     """
     log = logger.info if verbose else logger.debug
     log(f"parsing problem metadata for {config.source_dataset_name} source dataset...")
@@ -753,7 +754,8 @@ async def write_dataset_from_taco(
         kwargs: all kwargs will be forwarded to the `write_dataset` function (see that doc for info).
 
     Returns:
-        The LMDBWriter object that was used to write the traces (once writing is complete).
+        The LMDBWriter object that was used to write the traces (once writing is complete). This
+        object should have already been closed, and can be used to read attributes from the dataset.
     """
     import pyine.data.taco.dataset_utils
 

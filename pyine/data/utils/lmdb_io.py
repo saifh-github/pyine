@@ -338,7 +338,7 @@ class LMDBWriter:
         Returns:
             The list of internal keys used to store the values in the database.
         """
-        generated_interal_keys = []
+        generated_internal_keys = []
         items_iterator = tqdm.tqdm(items.items(), desc="Writing to database") if show_progress else items.items()
         with self.env.begin(write=True) as txn:
             for key, value in items_iterator:
@@ -359,8 +359,8 @@ class LMDBWriter:
                 ret = txn.put(internal_key, encoded_value, overwrite=True)
                 if not ret:
                     raise RuntimeError("internal key collision")
-                generated_interal_keys.append(internal_key)
-            return generated_interal_keys
+                generated_internal_keys.append(internal_key)
+            return generated_internal_keys
 
 
 class LMDBReader:

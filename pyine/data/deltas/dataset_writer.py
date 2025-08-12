@@ -41,12 +41,13 @@ def write_dataset(
 
     Args:
         traces_dataset_name_or_path: Name or path of the traces dataset to read from.
-        output_dataset_path: Path to the output dataset to write the traces to (LMDB format).
+        output_dataset_path: Path to the output dataset to write the deltas to (LMDB format).
         delta_generator: Type of delta generator to use.
         verbose: Toggles verbose output/logging.
 
     Returns:
-        The LMDBWriter object that was used to write the traces (once writing is complete).
+        The LMDBWriter object that was used to write the deltas (once writing is complete). This
+        object should have already been closed, and can be used to read attributes from the dataset.
     """
     log = logger.info if verbose else logger.debug
     if traces_dataset_name_or_path in pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS:
