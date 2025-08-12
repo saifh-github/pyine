@@ -30,11 +30,17 @@ logger = logging.getLogger(__name__)
 EXEC_TRACE_FILE_NAME = "<string>"
 """Name used to identify code lines that were executed and traced in the code string itself."""
 
+EXEC_BLOCK_OBJ_NAME = "<block>"
+"""Name used to identify code blocks that can be executed in the code string itself."""
+
 EXEC_PARENT_FILE_NAME = "<parent>"
 """Name used to identify the parent file executing the code string itself via exec."""
 
 REL_PATH_FROM_ROOT = pyine.utils.filesystem.get_relative_path_to_root(__file__)
 """Relative path from the root of the package to the current file."""
+
+TraceKeyReprType = str
+"""Helper type for representing a TraceKey in a string representation (for json dumps)."""
 
 
 class TraceKey(typing.NamedTuple):
@@ -48,9 +54,16 @@ class TraceKey(typing.NamedTuple):
     line: int
     """The number of the code line that was executed."""
 
-    def __repr__(self):
+    def __repr__(self) -> TraceKeyReprType:
         """Returns a string representation of the trace key."""
         return f"{self.file}:{self.object}:L{self.line:04d}"
+
+    @classmethod
+    def from_string(cls, str_repr: str) -> "TraceKey":
+        """Creates a TraceKey instance from a string representation."""
+        file, object_name, line_str = str_repr.split(":")
+        line = int(line_str.lstrip("L"))
+        return cls(file, object_name, line)
 
 
 class TraceEventType(enum.StrEnum):
@@ -122,7 +135,7 @@ class TraceResult(pydantic.BaseModel):
     """An identifier for this trace (used for printing/logging purposes only)."""
     code_string: str
     """The original code string that was executed."""
-    code_blocks: dict[int, pyine.utils.code.blocks.CodeBlock]
+    code_blocks: dict[TraceKeyReprType, pyine.utils.code.blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
     inputs: pydantic.JsonValue  # noqa
     """The inputs that were available to the code during execution."""
@@ -136,10 +149,10 @@ class TraceResult(pydantic.BaseModel):
     determine which line an event occurred on, see the `TraceKey` attribute of each event, or the
     `traced_steps_map` dictionary below.
     """
-    traced_steps_map: dict[TraceKey, list[int]]
+    traced_steps_map: dict[TraceKeyReprType, list[int]]
     """A dictionary containing the indices of each traced step for each line of executed code.
 
-    In this dictionary, keys are `TraceKey` instances (combining file, object, and line info)
+    In this dictionary, keys are `TraceKey` representations (combining file, object, and line info)
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
     list. If a line has more than `max_events_per_line` events, its corresponding indices list will
     still contain all trace step indices, but some events in `traced_steps` will be substituted with
@@ -445,11 +458,15 @@ def _execute_and_trace_code(
     """
     try:
         code_blocks = pyine.utils.code.blocks.identify_code_blocks(code_string)
+        code_blocks = {
+            TraceKey(EXEC_TRACE_FILE_NAME, EXEC_BLOCK_OBJ_NAME, code_block_line): code_block_data
+            for code_block_line, code_block_data in code_blocks.items()
+        }
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
         raise Exception(f"error while analyzing and compiling code: {e}")
     traced_steps: list[TraceEvent | None] = []
-    traced_steps_map: dict[TraceKey, list[int]] = {}
+    traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
     stdout_capture, stderr_capture = io.StringIO(), io.StringIO()
     stdout_buffer, stderr_buffer = "", ""
@@ -487,9 +504,10 @@ def _execute_and_trace_code(
         must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
         if event == "call" and must_skip:
             return_trace_callback = None  # do not trace that function, skip over it
-        if trace_key not in traced_steps_map:
-            traced_steps_map[trace_key] = []
-        max_event_capped = max_events_per_line and len(traced_steps_map[trace_key]) >= max_events_per_line
+        trace_key_repr = str(trace_key)
+        if trace_key_repr not in traced_steps_map:
+            traced_steps_map[trace_key_repr] = []
+        max_event_capped = max_events_per_line and len(traced_steps_map[trace_key_repr]) >= max_events_per_line
         if max_event_capped or must_skip:
             # if we have reached the trace limit or a blacklisted event, append `None` instead of event
             trace_event = None
@@ -546,7 +564,7 @@ def _execute_and_trace_code(
                 trace_key=trace_key,
             )
         traced_steps.append(trace_event)
-        traced_steps_map[trace_key].append(last_trace_step_idx)
+        traced_steps_map[trace_key_repr].append(last_trace_step_idx)
         last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
         return return_trace_callback
 
@@ -590,7 +608,7 @@ def _execute_and_trace_code(
         trace_result = TraceResult(
             identifier=identifier,
             code_string=code_string,
-            code_blocks=code_blocks,
+            code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
             inputs=inputs,
             max_events_per_line=max_events_per_line,
             traced_steps=traced_steps,
@@ -660,11 +678,11 @@ def format_traced_code_execution(
     result = ["Code Execution Trace:", "=====================", ""]
     for line_number, line in enumerate(code_lines, 1):
         result.append(f"Line {line_number}: {line}")
-        relevant_events = [
-            (key, trace_result.traced_steps_map[key])
-            for key in trace_result.traced_steps_map
-            if key.line == line_number
-        ]
+        relevant_events = []
+        for trace_key_repr, step in trace_result.traced_steps_map.items():
+            trace_key = TraceKey.from_string(trace_key_repr)
+            if trace_key.line == line_number:
+                relevant_events.append((trace_key, step))
         for trace_key, event_indices in relevant_events:
             result.append(f"  {trace_key}")
             for event_number, trace_step_idx in enumerate(event_indices, 1):

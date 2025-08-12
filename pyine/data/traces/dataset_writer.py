@@ -100,6 +100,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum total number of trace events allowed per trace. If None, no maximum.",
         ),
     ]
+    max_trace_results_blob_size: typing.Annotated[
+        pydantic.PositiveInt,
+        pydantic.Field(
+            default=2 * (1024**3),  # 2GB by default
+            description="Maximum size of trace result blobs, in bytes.",
+        ),
+    ]
     min_solution_line_count: typing.Annotated[
         pydantic.PositiveInt,
         pydantic.Field(
@@ -187,6 +194,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         pydantic.Field(
             default=pyine.utils.code.output_compare.CompareOptions(),
             description="Options to use for comparing the output of a test with the expected output.",
+        ),
+    ]
+    writer_serialization_config: typing.Annotated[
+        pyine.data.utils.lmdb_io.SerializationConfig,
+        pydantic.Field(
+            default=pyine.data.utils.lmdb_io.SerializationConfig(),
+            description="Configuration to use for serializing in the dataset writer.",
         ),
     ]
 
@@ -338,7 +352,10 @@ def _get_traces_to_write(
     for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
         code_to_trace = to_trace[trace_idx]
         if run_error:
-            log_fn(f"{code_to_trace.trace_id}: failed execution ({type(run_error).__name__}): {run_error}")
+            if isinstance(run_error, KeyboardInterrupt):
+                raise run_error  # user likely wants to stop the process, raise again
+            full_error_msg = f"({type(run_error).__name__})" + (f": {str(run_error)}" if str(run_error) else "")
+            log_fn(f"{code_to_trace.trace_id}: failed execution {full_error_msg}")
         else:
             trace_result, test_result = run_result
             if not test_result:
@@ -586,7 +603,11 @@ async def write_dataset(
         llm = None
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
     log(f"creating LMDB dataset at: {output_dataset_path}...")
-    writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
+    writer = pyine.data.utils.lmdb_io.LMDBWriter(
+        path=output_dataset_path,
+        max_allowed_value_length=config.max_trace_results_blob_size,
+        serialization_config=config.writer_serialization_config,
+    )
     writer.write_metadata(  # start by writing metadata (creation hyperparams) to disk
         dict(
             source_dataset=dict(
@@ -752,7 +773,8 @@ if __name__ == "__main__":
             max_solutions_per_problem=10,
             max_tests_per_solution=10,
             max_trace_events_per_line=None,
-            max_trace_events_total=100_000,
+            max_trace_events_total=50_000,
+            max_trace_results_blob_size=1024**3,  # 1GB
             min_solution_line_count=3,
             min_solution_dissimilarity=0.1,
             execution_timeout_seconds=5,
@@ -784,6 +806,13 @@ if __name__ == "__main__":
                 rel_tol="auto",
                 abs_tol="auto",
                 array_type_matters=False,
+            ),
+            writer_serialization_config=dict(
+                method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+                compression_kwargs=dict(
+                    level=3,
+                    enable_long_distance_matching=True,
+                ),
             ),
             verbose=True,
         )
