@@ -337,7 +337,7 @@ def _get_traces_to_write(
     successful_traces = {}
     for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
         code_to_trace = to_trace[trace_idx]
-        if run_error is not None:
+        if run_error:
             log_fn(f"{code_to_trace.trace_id}: failed execution: {run_error}")
         else:
             trace_result, test_result = run_result
