@@ -482,13 +482,16 @@ class LMDBReader:
         results = {}
         with self.env.begin(write=False) as txn:
             cursor = txn.cursor()
-            cursor.set_range(METADATA_PREFIX)
-            while cursor.key().startswith(METADATA_PREFIX):
-                metadata_field_name = _decode_metadata_key(cursor.key())
+            found = cursor.set_range(METADATA_PREFIX)
+            while found:
+                key = cursor.key()
+                if key is None or not key.startswith(METADATA_PREFIX):
+                    break
+                metadata_field_name = _decode_metadata_key(key)
                 assert metadata_field_name not in results, f"duplicate metadata field: {metadata_field_name}"
                 metadata_value_encoded = cursor.value()
                 results[metadata_field_name] = msgspec.msgpack.decode(metadata_value_encoded)
-                cursor.next()
+                found = cursor.next()
         return results
 
     def get_size_on_disk(self) -> int:
