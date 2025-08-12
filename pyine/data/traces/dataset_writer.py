@@ -382,7 +382,7 @@ def _trace_code_snippet(
         )
     if config.max_trace_events_total is not None and trace_result.tracing_steps > config.max_trace_events_total:
         raise ValueError(
-            f"maximum trace event count exceeded (got {trace_result.tracing_steps}, expected {config.max_trace_events_total})"
+            f"max trace event count exceeded ({trace_result.tracing_steps} exceeds {config.max_trace_events_total})"
         )
     comp = functools.partial(
         pyine.utils.code.output_compare.compare,

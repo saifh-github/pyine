@@ -325,7 +325,7 @@ def _execute_in_subprocess(
         result_queue.put(("returned", result))
         return
     except Exception as e:
-        result_queue.put(("raised", e, traceback.format_exc()))
+        result_queue.put(("raised", e))
         return
 
 
