@@ -60,3 +60,11 @@ totally independently inside a module, define the tests in a class for each one 
 possible, reuse common definitions and objects across the tests of a class using fixtures. Inside
 test modules, no need for extensive docstrings or comments: only document or comment the stuff
 that is really not so obvious to understand.
+
+## Code linting and testing
+
+To check whether linters find issues in proposed code, run `make check` (the necessary environment
+should have already been setup).
+
+To check whether all unit tests pass, run `make test-all` (this will include slow tests that require
+datasets or heavy processing).
