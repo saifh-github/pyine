@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 import pickle
 import shutil
@@ -59,16 +60,27 @@ def benchmark_serialization_methods(
     num_samples: int = 100,
     use_random_data: bool = False,
 ):
-    methods = [
-        lmdb_io.SerializationMethod.PICKLE,
-        lmdb_io.SerializationMethod.PICKLE_LZ4,
-        lmdb_io.SerializationMethod.JSON,
-        lmdb_io.SerializationMethod.JSON_LZ4,
-    ]
+    compression_configs = {
+        "pickle": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.PICKLE),
+        "pickle_lz4": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.PICKLE_LZ4),
+        "msgspec": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.MSGSPEC),
+        "orjson": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.JSON),
+        "orjson_lz4": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.JSON_LZ4),
+        "orjson_zstd": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.JSON_ZSTD),
+        "orjson_zstd_l3": lmdb_io.SerializationConfig(
+            method=lmdb_io.SerializationMethod.JSON_ZSTD,
+            compression_kwargs={"level": 3},
+        ),
+        "orjson_zstd_l3_long": lmdb_io.SerializationConfig(
+            method=lmdb_io.SerializationMethod.JSON_ZSTD,
+            compression_kwargs={"level": 3, "enable_long_distance_matching": True},
+        ),
+    }
     results = {}
     tmp_path = pathlib.Path("./.tmp-benchmark")
     tmp_path.mkdir(exist_ok=True)
 
+    entries = None
     if use_random_data:
         print("preparing write data...")
         sample_size_mean: int = 1_000_000  # in chars
@@ -77,7 +89,7 @@ def benchmark_serialization_methods(
             np.random.normal(sample_size_mean, sample_size_stdev, size=num_samples).astype(int),
             1,
         )
-        entries = {f"key{i}": _generate_dummy_dict(max_size_bytes=sample_sizes[i]) for i in range(num_samples)}
+        entries = {f"key{i}": _generate_dummy_dict(max_size_bytes=int(sample_sizes[i])) for i in range(num_samples)}
         data_size = sys.getsizeof(pickle.dumps(obj=entries, protocol=pickle.HIGHEST_PROTOCOL))
         # IMPORTANT NOTE: since the data is RANDOM, this might be worse-case for compression!
         # (so don't look at compression ratio, just look at the speed, and even then, with grain of salt)
@@ -88,19 +100,21 @@ def benchmark_serialization_methods(
 
     print("running write + read ops...")
     try:
-        for method in methods:
-            database_path = tmp_path / f"test_lmdb_{method.value}"
+        for cfg_name, cfg in compression_configs.items():
+            database_path = tmp_path / f"test_lmdb_{cfg_name}"
             if use_random_data:
                 writer = lmdb_io.LMDBWriter(
                     path=database_path,
                     map_size=1024**3,
-                    serialization=method,
+                    serialization_config=cfg,
                 )
                 writer.put_batch(items=entries)
             else:
-                writer = dataset_writer.write_dataset_from_taco(
-                    output_dataset_path=database_path,
-                    max_output_traces=num_samples,
+                writer = asyncio.run(
+                    dataset_writer.write_dataset_from_taco(
+                        output_dataset_path=database_path,
+                        max_output_traces=num_samples,
+                    )
                 )
             writer.close()
             database_size = writer.get_size_on_disk()
@@ -111,11 +125,12 @@ def benchmark_serialization_methods(
                 globals={"reader": reader},
                 number=10,
             )
-            results[method] = (database_size, time_taken)
+            results[cfg_name] = (database_size, time_taken)
             reader.close()
             shutil.rmtree(database_path)
     finally:
         shutil.rmtree(tmp_path)
+    # noinspection PyUnreachableCode
     for method, (database_size, time_taken) in results.items():
         speed_mbps = (database_size / (1024 * 1024)) / time_taken
         print(f"{method}: {database_size / (1024 * 1024):.2f} MB, {time_taken:.4f} seconds (={speed_mbps} MB/s)")

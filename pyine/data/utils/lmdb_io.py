@@ -1,6 +1,5 @@
 import enum
 import fnmatch
-import json
 import pathlib
 import pickle
 import struct
@@ -8,7 +7,11 @@ import typing
 
 import lmdb
 import lz4.frame
+import msgspec
+import orjson
+import pydantic
 import tqdm
+import zstandard
 
 import pyine.utils.reprod
 
@@ -17,9 +20,26 @@ class SerializationMethod(enum.StrEnum):
     """Supported serialization methods for LMDBWriter."""
 
     PICKLE = enum.auto()
+    """Use Python's built-in pickle module (note: not recommended due to safety concerns)."""
     PICKLE_LZ4 = enum.auto()
+    """Use Python's built-in pickle module with LZ4 compression (note: not recommended due to safety concerns)."""
+    MSGSPEC = enum.auto()
+    """Use the msgspec module for serialization."""
     JSON = enum.auto()
+    """Use the orjson module for serialization (it's faster than the regular stdlib implementation)."""
     JSON_LZ4 = enum.auto()
+    """Use the orjson module for serialization with LZ4 compression."""
+    JSON_ZSTD = enum.auto()
+    """Use the orjson module for serialization with ZSTD compression."""
+
+
+class SerializationConfig(pydantic.BaseModel):
+    """Serialization configuration for LMDBWriter."""
+
+    method: SerializationMethod | str = SerializationMethod.MSGSPEC
+    """Serialization method to use."""
+    compression_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    """Compression arguments to pass to the compression method (unused if not compressing)."""
 
 
 SAMPLE_PREFIX = b"sample/"
@@ -81,7 +101,10 @@ class LMDBWriter:
         Writing with different serialization methods:
         >>> writer = LMDBWriter(
         ...     "path/to/db",
-        ...     serialization=SerializationMethod.JSON_LZ4
+        ...     serialization_config=SerializationConfig(
+        ...         SerializationConfig.JSON_ZSTD,
+        ...         compression_kwargs={"level": 3},
+        ...     ),
         ... )
         >>> writer.put("key1", {"data": "value1"})
         >>> writer.close()
@@ -110,7 +133,7 @@ class LMDBWriter:
         map_size: int = 1 * 1024 * 1024 * 1024 * 1024,  # 1TB default size (1 * 1024^4)
         max_readers: int = 126,  # typical default max readers for LMDB
         max_allowed_value_length: int = 2 * (1024**3),  # 2GB by default
-        serialization: SerializationMethod = SerializationMethod.PICKLE,
+        serialization_config: SerializationConfig = SerializationConfig(),
     ) -> None:
         """Initialize the LMDB database.
 
@@ -118,7 +141,7 @@ class LMDBWriter:
             path: Path where the LMDB will be stored.
             map_size: Maximum size database may grow to; default 1TB (1 * 1024^4 bytes).
             max_readers: Maximum number of simultaneous readers (126 by default, typical for LMDB).
-            serialization: Method to serialize objects (default: pickle).
+            serialization_config: Configuration specifying method to serialize objects.
         """
         self.path: pathlib.Path = pathlib.Path(path)
         self.map_size: int = map_size
@@ -130,8 +153,7 @@ class LMDBWriter:
             max_readers=self.max_readers,
             readonly=False,
         )
-        assert isinstance(serialization, SerializationMethod), f"method must be in: {list(SerializationMethod)}"
-        self.serialization = serialization
+        self.serialization = serialization_config
         self._next_internal_key = 0
         self.key_map: dict[str, bytes] = {}  # external-to-internal key map
         self.max_encoded_value_length: int = 0  # in bytes; will be tracked as we write the dataset
@@ -173,25 +195,27 @@ class LMDBWriter:
         obj: typing.Any,
     ) -> bytes:
         """Serialize an object to bytes."""
-        if self.serialization == SerializationMethod.PICKLE:
+        if self.serialization.method == SerializationMethod.PICKLE:
             return pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-        if self.serialization == SerializationMethod.PICKLE_LZ4:
+        if self.serialization.method == SerializationMethod.PICKLE_LZ4:
             pickled_data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-            return lz4.frame.compress(pickled_data)
-        if self.serialization == SerializationMethod.JSON:
-            return json.dumps(obj).encode("utf-8")
-        if self.serialization == SerializationMethod.JSON_LZ4:
-            json_data = json.dumps(obj).encode("utf-8")
-            return lz4.frame.compress(json_data)
+            return lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)
+        if self.serialization.method == SerializationMethod.MSGSPEC:
+            return msgspec.msgpack.encode(obj)
+        if self.serialization.method == SerializationMethod.JSON:
+            return orjson.dumps(obj)
+        if self.serialization.method == SerializationMethod.JSON_LZ4:
+            json_data = orjson.dumps(obj)
+            return lz4.frame.compress(json_data, **self.serialization.compression_kwargs)
+        if self.serialization.method == SerializationMethod.JSON_ZSTD:
+            zstd_compressor = zstandard.ZstdCompressor(**self.serialization.compression_kwargs)
+            json_data = orjson.dumps(obj)
+            return zstd_compressor.compress(json_data)
         # noinspection PyUnreachableCode
-        raise ValueError(f"invalid serialization method: {self.serialization}")
+        raise ValueError(f"invalid serialization method: {self.serialization.method}")
 
-    def write_metadata(
-        self,
-        metadata: dict[str, typing.Any],
-        overwrite: bool = False,
-    ):
-        """Write arbitrary metadata to the database, with optional overwrite protection.
+    def write_metadata(self, metadata: dict[str, typing.Any], overwrite: bool = False) -> dict[str, bytes]:
+        """Write arbitrary metadata to the database.
 
         Args:
             metadata: Dictionary of metadata to write.
@@ -200,7 +224,7 @@ class LMDBWriter:
         Returns:
             A dictionary mapping metadata fields to the internal keys used to store them.
         """
-        output_keys = {}
+        output_keys: dict[str, bytes] = {}
         with self.env.begin(write=True) as txn:
             for key, value in metadata.items():
                 key_bytes = _create_metadata_key(key)
@@ -218,19 +242,19 @@ class LMDBWriter:
             self._write_metadata_value(txn, "map_size", self.map_size)
             self._write_metadata_value(txn, "sample_count", len(self.key_map))
             self._write_metadata_value(txn, "key_map", self.key_map)
-            self._write_metadata_value(txn, "serialization", self.serialization.value)
+            self._write_metadata_value(txn, "serialization", self.serialization.model_dump())
             self._write_metadata_value(txn, "max_encoded_value_length", self.max_encoded_value_length)
             for key, val in self._reprod_metadata.items():
                 self._write_metadata_value(txn, key, val)
 
     def _write_metadata_value(self, txn: lmdb.Transaction, field_name: str, value: typing.Any):
         """Writes a single metadata value to the database."""
-        # note: for metadata, we always write data using pickle only
+        # note: for metadata, we always write data using msgspec only
         key_bytes = _create_metadata_key(field_name)
         assert 0 < len(key_bytes) < self.env.max_key_size(), "metadata key length error"
-        encoded_value = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        encoded_value = msgspec.msgpack.encode(value)
         assert 0 < len(encoded_value) < self.max_allowed_value_length, "metadata value length error"
-        txn.put(key_bytes, encoded_value, overwrite=False)
+        txn.put(key_bytes, encoded_value, overwrite=True)
 
     def get_size_on_disk(self) -> int:
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
@@ -268,7 +292,7 @@ class LMDBWriter:
             encoded_value = self._serialize(value)
             assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
             self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
-            ret = txn.put(internal_key, encoded_value, overwrite=False)
+            ret = txn.put(internal_key, encoded_value, overwrite=True)
             assert ret, "internal key collision"
         return internal_key
 
@@ -307,7 +331,7 @@ class LMDBWriter:
                 encoded_value = self._serialize(value)
                 assert 0 < len(encoded_value) < self.max_allowed_value_length, "encoded value length error"
                 self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
-                ret = txn.put(internal_key, encoded_value, overwrite=False)
+                ret = txn.put(internal_key, encoded_value, overwrite=True)
                 assert ret, "internal key collision"
                 generated_interal_keys.append(internal_key)
             return generated_interal_keys
@@ -320,7 +344,7 @@ class LMDBReader:
         Basic usage to read a value by key or index:
         >>> reader = LMDBReader("path/to/db")
         >>> value_by_key = reader.get("key1")  # get by key
-        >>> value_by_index = reader.get(0)       # get by index
+        >>> value_by_index = reader.get(0)     # get by index
         >>> reader.close()
 
         Reading metadata:
@@ -375,35 +399,42 @@ class LMDBReader:
 
     def _deserialize(self, data: bytes) -> typing.Any:
         """Deserialize bytes into an object."""
-        if self.serialization == SerializationMethod.PICKLE:
+        if self.serialization.method == SerializationMethod.PICKLE:
             return pickle.loads(data)
-        if self.serialization == SerializationMethod.PICKLE_LZ4:
+        if self.serialization.method == SerializationMethod.PICKLE_LZ4:
             decompressed_data = lz4.frame.decompress(data)
             return pickle.loads(decompressed_data)
-        if self.serialization == SerializationMethod.JSON:
-            return json.loads(data.decode("utf-8"))
-        if self.serialization == SerializationMethod.JSON_LZ4:
+        if self.serialization.method == SerializationMethod.MSGSPEC:
+            return msgspec.msgpack.decode(data)
+        if self.serialization.method == SerializationMethod.JSON:
+            return orjson.loads(data)
+        if self.serialization.method == SerializationMethod.JSON_LZ4:
             decompressed_data = lz4.frame.decompress(data)
-            return json.loads(decompressed_data.decode("utf-8"))
+            return orjson.loads(decompressed_data)
+        if self.serialization.method == SerializationMethod.JSON_ZSTD:
+            zstd_decompressor = zstandard.ZstdDecompressor()
+            decompressed_data = zstd_decompressor.decompress(data)
+            return orjson.loads(decompressed_data)
         # noinspection PyUnreachableCode
-        raise ValueError(f"invalid serialization method: {self.serialization}")
+        raise ValueError(f"invalid serialization method: {self.serialization.method}")
 
     def _load_metadata(self):
         """Load metadata from the database."""
+        # note: for metadata, we always store stuff with msgspec
         with self.env.begin() as txn:
             next_internal_key_bytes = txn.get(_NEXT_INTERNAL_KEY)
             if next_internal_key_bytes is None:
                 raise ValueError("database does not contain next_internal_key; did writing closure fail?")
             self._next_internal_key: int = struct.unpack(">Q", next_internal_key_bytes)[0]
             map_size_bytes = txn.get(_create_metadata_key("map_size"))
-            self.orig_map_size: int = pickle.loads(map_size_bytes)
+            self.orig_map_size: int = msgspec.msgpack.decode(map_size_bytes)
             sample_count_bytes = txn.get(_create_metadata_key("sample_count"))
-            self.sample_count: int = pickle.loads(sample_count_bytes)
+            self.sample_count: int = msgspec.msgpack.decode(sample_count_bytes)
             serialization_bytes = txn.get(_create_metadata_key("serialization"))
-            self.serialization = SerializationMethod(pickle.loads(serialization_bytes))
+            self.serialization = SerializationConfig(**msgspec.msgpack.decode(serialization_bytes))
             max_encoded_value_length_bytes = txn.get(_create_metadata_key("max_encoded_value_length"))
-            self.max_encoded_value_length: int = pickle.loads(max_encoded_value_length_bytes)
-            self.key_map: dict[str, bytes] = pickle.loads(txn.get(_create_metadata_key("key_map")))
+            self.max_encoded_value_length: int = msgspec.msgpack.decode(max_encoded_value_length_bytes)
+            self.key_map: dict[str, bytes] = msgspec.msgpack.decode(txn.get(_create_metadata_key("key_map")))
             assert len(self.key_map) == self.sample_count, "key_map length does not match sample_count"
 
     def __enter__(self):
@@ -429,6 +460,7 @@ class LMDBReader:
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Returns a dictionary of all metadata stored in the database."""
+        # note: for metadata, we always store stuff with msgspec
         results = {}
         with self.env.begin(write=False) as txn:
             cursor = txn.cursor()
@@ -437,7 +469,7 @@ class LMDBReader:
                 metadata_field_name = _decode_metadata_key(cursor.key())
                 assert metadata_field_name not in results, f"duplicate metadata field: {metadata_field_name}"
                 metadata_value_encoded = cursor.value()
-                results[metadata_field_name] = pickle.loads(metadata_value_encoded)
+                results[metadata_field_name] = msgspec.msgpack.decode(metadata_value_encoded)
                 cursor.next()
         return results
 

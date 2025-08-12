@@ -39,13 +39,13 @@ class TestLMDBWriteAndRead:
         path,
         map_size=10**6,
         max_readers=10,
-        serialization=lmdb_io.SerializationMethod.PICKLE,
+        serialization=lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.MSGSPEC),
     ):
         return lmdb_io.LMDBWriter(
             path=path,
             map_size=map_size,
             max_readers=max_readers,
-            serialization=serialization,
+            serialization_config=serialization,
         )
 
     def test_writer_init(self, mock_lmdb_env):
@@ -75,22 +75,18 @@ class TestLMDBWriteAndRead:
         assert metadata["key_map"] == {"key1": inserted_key}
         assert metadata["sample_count"] == 1
         assert metadata["max_encoded_value_length"] == len(encoded_value)
-        assert metadata["serialization"] == lmdb_io.SerializationMethod.PICKLE
+        assert metadata["serialization"]["method"] == lmdb_io.SerializationMethod.MSGSPEC
         result = reader.get("key1")
         assert result == value
         assert reader.get_size_on_disk() == size_bytes
 
     @pytest.mark.parametrize(
         "serialization_method",
-        [
-            lmdb_io.SerializationMethod.PICKLE,
-            lmdb_io.SerializationMethod.PICKLE_LZ4,
-            lmdb_io.SerializationMethod.JSON,
-            lmdb_io.SerializationMethod.JSON_LZ4,
-        ],
+        list(lmdb_io.SerializationMethod),
     )
     def test_writer_with_various_serialization_methods(self, mock_lmdb_env, serialization_method):
-        writer = self._get_writer(path=mock_lmdb_env.path(), serialization=serialization_method)
+        serialization_cfg = lmdb_io.SerializationConfig(method=serialization_method)
+        writer = self._get_writer(path=mock_lmdb_env.path(), serialization=serialization_cfg)
         key, value = "key1", {"test": 1}
         inserted_key = writer.put(key=key, value=value)
         assert isinstance(inserted_key, bytes)
@@ -98,7 +94,7 @@ class TestLMDBWriteAndRead:
 
         reader = lmdb_io.LMDBReader(path=writer.path)
         metadata = reader.get_metadata()
-        assert metadata["serialization"] == serialization_method
+        assert metadata["serialization"]["method"] == serialization_method
         result = reader.get("key1")
         assert result == value
 
@@ -122,7 +118,6 @@ class TestLMDBWriteAndRead:
         assert metadata["key_map"] == {k: kin for k, kin in zip(entries.keys(), inserted_keys)}
         assert metadata["sample_count"] == 2
         assert metadata["max_encoded_value_length"] == max(len(encoded_value1), len(encoded_value2))
-        assert metadata["serialization"] == lmdb_io.SerializationMethod.PICKLE
         found_vals = tuple(val for val in reader.iter_from())
         assert found_vals == tuple(entries.values())
         found_vals = tuple(v for vals in reader.iter_batched(batch_size=100) for v in vals)
