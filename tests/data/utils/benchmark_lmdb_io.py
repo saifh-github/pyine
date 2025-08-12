@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import pathlib
 import pickle
@@ -72,10 +73,6 @@ def benchmark_serialization_methods(
             method=lmdb_io.SerializationMethod.JSON_ZSTD,
             compression_kwargs={"level": 3},
         ),
-        "orjson_zstd_l3_long": lmdb_io.SerializationConfig(
-            method=lmdb_io.SerializationMethod.JSON_ZSTD,
-            compression_kwargs={"level": 3, "enable_long_distance_matching": True},
-        ),
     }
     results = {}
     tmp_path = pathlib.Path("./.tmp-benchmark")
@@ -103,6 +100,7 @@ def benchmark_serialization_methods(
     try:
         for cfg_name, cfg in compression_configs.items():
             database_path = tmp_path / f"test_lmdb_{cfg_name}"
+            prewrite_time = datetime.datetime.now()
             if use_random_data:
                 writer = lmdb_io.LMDBWriter(
                     path=database_path,
@@ -115,26 +113,39 @@ def benchmark_serialization_methods(
                     dataset_writer.write_dataset_from_taco(
                         output_dataset_path=database_path,
                         max_output_traces=num_samples,
+                        max_solutions_per_problem=2,
+                        max_tests_per_solution=2,
+                        max_trace_events_total=100_000,
+                        max_trace_results_blob_size=2 * 1024**3,
+                        allow_imperfect_solutions=True,
+                        writer_serialization_config=cfg,
                     )
                 )
             writer.close()
+            postwrite_time = datetime.datetime.now()
+            write_time_taken = (postwrite_time - prewrite_time).total_seconds()
             database_size = writer.get_size_on_disk()
-
             reader = lmdb_io.LMDBReader(path=database_path)
-            time_taken = timeit.timeit(
+            read_time_taken = timeit.timeit(
                 stmt="list(reader.iter_from())",
                 globals={"reader": reader},
                 number=10,
             )
-            results[cfg_name] = (database_size, time_taken)
+            results[cfg_name] = (database_size, write_time_taken, read_time_taken)
             reader.close()
             shutil.rmtree(database_path)
     finally:
         shutil.rmtree(tmp_path)
     # noinspection PyUnreachableCode
-    for method, (database_size, time_taken) in results.items():
-        speed_mbps = (database_size / (1024 * 1024)) / time_taken
-        print(f"{method}: {database_size / (1024 * 1024):.2f} MB, {time_taken:.4f} seconds (={speed_mbps} MB/s)")
+    for method, (database_size, write_time, read_time) in results.items():
+        write_speed_mbps = (database_size / (1024 * 1024)) / write_time
+        read_speed_mbps = (database_size / (1024 * 1024)) / read_time
+        print(f"{method}:")
+        print(f"\tdataset size: {database_size / (1024 * 1024):.2f} MB")
+        print(f"\twrite_time_taken: {write_time:.2f} s")
+        print(f"\twrite_speed_mbps: {write_speed_mbps:.2f} MB/s")
+        print(f"\tread_time_taken: {read_time:.2f} s")
+        print(f"\tread_speed_mbps: {read_speed_mbps:.2f} MB/s")
 
 
 if __name__ == "__main__":

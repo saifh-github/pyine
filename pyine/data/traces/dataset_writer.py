@@ -192,7 +192,11 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     test_output_compare_options: typing.Annotated[
         pyine.utils.code.output_compare.CompareOptions,
         pydantic.Field(
-            default=pyine.utils.code.output_compare.CompareOptions(),
+            default=pyine.utils.code.output_compare.CompareOptions(
+                rel_tol="auto",
+                abs_tol="auto",
+                array_type_matters=False,
+            ),
             description="Options to use for comparing the output of a test with the expected output.",
         ),
     ]
@@ -802,17 +806,9 @@ if __name__ == "__main__":
                     max_bucket_size=5,
                 ),
             ),
-            test_output_compare_options=dict(
-                rel_tol="auto",
-                abs_tol="auto",
-                array_type_matters=False,
-            ),
             writer_serialization_config=dict(
                 method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
-                compression_kwargs=dict(
-                    level=3,
-                    enable_long_distance_matching=True,
-                ),
+                compression_kwargs=dict(level=3),
             ),
             verbose=True,
         )
