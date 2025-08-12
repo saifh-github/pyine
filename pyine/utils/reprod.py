@@ -31,11 +31,17 @@ def get_timestamp() -> str:
 
 
 def get_framework_version() -> str:
-    """Returns the version of the benchmark framework (in MAJOR.MINOR.PATCH format, e.g. 1.2.3)."""
+    """Returns the version of the benchmark framework (MAJOR.MINOR.PATCH).
+
+    Falls back to a safe sentinel when the package is not installed so that developer workflows
+    (editable installs, direct source runs) do not break.
+    """
     try:
         package_version = importlib.metadata.version("pyine")
     except importlib.metadata.PackageNotFoundError:
-        raise ValueError("Package 'pyine' not installed; cannot determine framework version!")
+        # in dev environments or when running from source without an installed package,
+        # return a safe sentinel instead of raising to avoid hard dependency during metadata collection
+        return "0.0.0-unknown"
     return package_version
 
 

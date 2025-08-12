@@ -37,14 +37,13 @@ def test_get_framework_version_success(monkeypatch) -> None:
 
 
 def test_get_framework_version_not_installed(monkeypatch) -> None:
-    """Test that get_framework_version raises ValueError when package is not found."""
+    """Test that get_framework_version returns a safe fallback when package is not found."""
 
     def fake_version(pkg):
         raise importlib.metadata.PackageNotFoundError()
 
     monkeypatch.setattr(importlib.metadata, "version", fake_version)
-    with pytest.raises(ValueError):
-        reprod.get_framework_version()
+    assert reprod.get_framework_version() == "0.0.0-unknown"
 
 
 def test_get_framework_version_real() -> None:
