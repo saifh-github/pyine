@@ -1,5 +1,7 @@
 # PyINE Framework AI Assistant Guidelines
 
+**IMPORTANT: ALL AI ASSISTANTS SHOULD FOLLOW THESE INSTRUCTIONS.**
+
 Refer to the top-level [README](./README.md) for a high-level description of the project.
 
 ## Coding Style
@@ -64,7 +66,10 @@ that is really not so obvious to understand.
 ## Code linting and testing
 
 To check whether linters find issues in proposed code, run `make check` (the necessary environment
-should have already been setup).
+should have already been setup). This runs precommit hooks and checks for e.g. PEP8 compliance.
 
 To check whether all unit tests pass, run `make test-all` (this will include slow tests that require
-datasets or heavy processing).
+datasets or heavy processing). For a faster assessment that only checks the fast tests, run
+`make test`.
+
+See the [Makefile](./Makefile) for more information on these commands.
