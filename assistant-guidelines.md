@@ -27,7 +27,7 @@ import pyine.anothersubpkg.something_else
 ```
 
 Sort imports the way isort would, i.e. standard packages first, then a separate block for 3rd party
-pacakges, and then another block for local (project) imports.
+packages, and then another block for local (project) imports.
 
 Use the google doctstring format inside generated docstrings.
 

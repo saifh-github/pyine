@@ -253,7 +253,7 @@ class LMDBWriter:
         return output_keys
 
     def _write_internal_metadata(self):
-        """Writes metadata to the database."""
+        """Writes fixed metadata fields as well as reproducibility tags to the database."""
         with self.env.begin(write=True) as txn:
             # store the next internal key for continuity (if needed)
             txn.put(_NEXT_INTERNAL_KEY, struct.pack(">Q", self._next_internal_key), overwrite=True)
