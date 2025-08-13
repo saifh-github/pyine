@@ -35,15 +35,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "flake8>=7.0.0,<8.0.0",
-    "isort>=5.0.0,<6.1.0",
+    "flake8>=7.3.0",
+    "isort>=6.0.1",
     "ipython>=8.0.0,<9.0.0",
     "ipywidgets>=8.1.0,<9.0.0",
-    "notebook>=7.3.0,<7.4.0",
-    "pre-commit>=4.0.0,<4.3.0",
-    "pytest>=7.0.0,<8.0.0",
-    "pytest-asyncio>=1.1.0,<1.2.0",
+    "notebook>=7.3.0,<8.0.0",
+    "pre-commit>=4.3.0,<5.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=1.1.0",
     "pytest-mock>=3.14",
+    "pytest-cov>=6.2.0",
+    "coverage[toml]>=7.10.0",
 ]
 
 [build-system]
@@ -60,3 +62,28 @@ packages = ["pyine"]
 markers = [
     "slow: marks tests as slow to run due to data/compute (deselect with '-m \"not slow\"')",
 ]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = ["pyine"]
+data_file = "logs/coverage/.coverage"
+omit = [
+  "tests/*",
+  "**/__init__.py",
+]
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  'if __name__ == "__main__":',
+  "raise NotImplementedError",
+]
+
+[tool.coverage.html]
+directory = "logs/coverage/html"
+
+[tool.coverage.xml]
+output = "logs/coverage/coverage.xml"

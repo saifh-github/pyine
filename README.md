@@ -37,7 +37,7 @@ Then, to install the project and its dependencies, use:
 uv pip install -e .
 
 # to include development tools (flake8, pytest, etc.), instead use:
-uv pip install -e .[dev]
+uv pip install -e ".[dev]"
 ```
 
 ### **Option 2: Using `pip` and `venv`**
@@ -60,7 +60,7 @@ Then, to install the project and its dependencies, use:
 pip install -e .
 
 # to include development tools (flake8, pytest, etc.), instead use:
-pip install -e .[dev]
+pip install -e ".[dev]"
 
 ```
 
