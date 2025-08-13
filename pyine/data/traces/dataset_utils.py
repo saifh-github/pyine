@@ -22,6 +22,20 @@ import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
 
+__all__ = [
+    "CodingProblemIdentifier",
+    "SolutionIdentifier",
+    "TraceIdentifier",
+    "CodingProblem",
+    "Solution",
+    "ProblemIdPattern",
+    "CodingProblemIterator",
+    "get_latest_dataset_path",
+    "get_new_dataset_path",
+    "compare_result_strings",
+    "is_float",
+]
+
 PROBLEM_DATA_SUFFIX = "/metadata"
 """Suffix for entries that correspond to coding problem metadata in the LMDB dataset."""
 PROBLEM_DATA_PATTERN = "*" + PROBLEM_DATA_SUFFIX

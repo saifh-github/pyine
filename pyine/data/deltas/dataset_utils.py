@@ -14,6 +14,17 @@ import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
 
+__all__ = [
+    "EventRelationship",
+    "TraceDelta",
+    "DeltaGeneratorType",
+    "TraceDeltaList",
+    "simple_delta_generator",
+    "get_deltas_from_trace_steps",
+    "get_latest_dataset_path",
+    "get_new_dataset_path",
+]
+
 SUPPORTED_SOURCE_DATASETS = pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS
 """The deltas datasets support the same source datasets as the traces datasets."""
 DELTAS_SUFFIX = "/deltas"

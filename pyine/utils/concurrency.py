@@ -5,6 +5,15 @@ import dataclasses
 import threading
 import typing
 
+__all__ = [
+    "SupportsAInvoke",
+    "Job",
+    "JobResult",
+    "get_shared_executor",
+    "run_in_parallel",
+    "run_independent",
+]
+
 T = typing.TypeVar("T")
 
 # module-level shared executors (lazy-initialized)

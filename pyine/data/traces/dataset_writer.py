@@ -32,13 +32,13 @@ import pyine.utils.logging
 import pyine.utils.portability
 import pyine.utils.reprod
 
-logger = logging.getLogger(__name__)
-
 __all__ = [
     "TraceDatasetWriterConfig",
     "write_dataset",
     "write_dataset_from_taco",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class TraceDatasetWriterConfig(pydantic.BaseModel):
@@ -266,8 +266,10 @@ def _check_must_skip_problem(
     contains_banned_tags: typing.Callable,
 ) -> str | None:
     """Checks if a problem should be skipped due to banned tags or other conditions."""
+    # noinspection PyUnreachableCode
     if not isinstance(problem, pyine.data.traces.dataset_utils.CodingProblem):
         raise TypeError("problem must be a CodingProblem instance")
+    # noinspection PyUnreachableCode
     if not isinstance(solutions, list):
         raise TypeError("solutions must be a list")
     if not all(isinstance(s, pyine.data.traces.dataset_utils.Solution) for s in solutions):

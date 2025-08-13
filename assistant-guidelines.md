@@ -22,8 +22,9 @@ import numpy as np  # it's fine to use the `import x as y` syntax
 import torch
 import torch.nn  # it's fine to import subpackages as needed
 
-import pyine.subpackage.something
-import pyine.anothersubpkg.something_else
+import pyine.data.utils.lmdb_io
+import pyine.data.traces.dataset_writer as trace_dataset_writer
+import pyine.utils.reprod
 ```
 
 Sort imports the way isort would, i.e. standard packages first, then a separate block for 3rd party

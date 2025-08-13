@@ -22,6 +22,22 @@ import pyine.utils.portability
 import pyine.utils.reprod
 import pyine.utils.timers
 
+__all__ = [
+    "EXEC_TRACE_FILE_NAME",
+    "EXEC_BLOCK_OBJ_NAME",
+    "EXEC_PARENT_FILE_NAME",
+    "TraceKey",
+    "TraceEventType",
+    "TraceException",
+    "TraceEvent",
+    "TraceResult",
+    "trace_context",
+    "MockInput",
+    "MockInputContext",
+    "execute_and_trace_code",
+    "format_traced_code_execution",
+]
+
 portable_repr = pyine.utils.portability.get_portable_representation
 _orig_stdin = sys.stdin
 logger = logging.getLogger(__name__)
