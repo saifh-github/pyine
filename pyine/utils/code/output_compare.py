@@ -33,9 +33,9 @@ class CompareOptions(pydantic.BaseModel):
     """Options that control how outputs are compared."""
 
     rel_tol: float | auto = 1e-9
-    """Relative tolerance for float comparisons."""
+    """Relative tolerance for float comparisons. If "auto", auto-estimates tolerance based on heuristics."""
     abs_tol: float | auto = 0.0
-    """Absolute tolerance for float comparisons."""
+    """Absolute tolerance for float comparisons. If "auto", auto-estimates tolerance based on heuristics."""
     normalize_whitespace: bool = True
     """Normalize internal whitespace and line endings when comparing text."""
     strip: bool = True
