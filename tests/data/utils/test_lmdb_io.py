@@ -103,21 +103,32 @@ class TestLMDBWriteAndRead:
         entries = {"key1": b"value1", "key2": b"value2"}
         inserted_keys = writer.put_batch(items=entries)
         assert len(inserted_keys) == 2
-        assert all([isinstance(v, bytes) for v in inserted_keys])
+        assert all([isinstance(v, bytes) for v in inserted_keys.values()])
         with writer.env.begin() as txn:
-            encoded_value1 = txn.get(inserted_keys[0])
+            encoded_value1 = txn.get(inserted_keys["key1"])
             assert encoded_value1 is not None
-            encoded_value2 = txn.get(inserted_keys[1])
+            encoded_value2 = txn.get(inserted_keys["key2"])
             assert encoded_value2 is not None
+        some_bad_entries = {"key3": b"value3", "key2": "value2"}  # contains a duplicate
+        inserted_keys2, errored_keys = writer.put_batch(items=some_bad_entries, raise_on_error=False)
+        assert len(inserted_keys2) == 1 and "key3" in inserted_keys2
+        assert len(errored_keys) == 1 and "key2" in errored_keys
+        assert isinstance(errored_keys["key2"], ValueError)
+        inserted_keys.update(inserted_keys2)
+        with writer.env.begin() as txn:
+            encoded_value3 = txn.get(inserted_keys["key3"])
+            assert encoded_value3 is not None
         writer.close()  # to make sure we write everything, including metadata
+        entries = {**entries, "key3": some_bad_entries["key3"]}
 
         reader = lmdb_io.LMDBReader(path=writer.path)
         metadata = reader.get_metadata()
         assert metadata is not None
         assert metadata["map_size"] == writer.map_size
-        assert metadata["key_map"] == {k: kin for k, kin in zip(entries.keys(), inserted_keys)}
-        assert metadata["sample_count"] == 2
-        assert metadata["max_encoded_value_length"] == max(len(encoded_value1), len(encoded_value2))
+        assert metadata["key_map"] == inserted_keys
+        assert metadata["sample_count"] == 3
+        max_encoded_val = max(len(encoded_value1), len(encoded_value2), len(encoded_value3))
+        assert metadata["max_encoded_value_length"] == max_encoded_val
         found_vals = tuple(val for val in reader.iter_from())
         assert found_vals == tuple(entries.values())
         found_vals = tuple(v for vals in reader.iter_batched(batch_size=100) for v in vals)

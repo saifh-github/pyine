@@ -710,15 +710,20 @@ async def write_dataset(
                 traces_to_write.update(new_traces_to_write)
 
             log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
-            if written_solutions == 0:  # no solution written so far for current problem
-                # write parent problem data (we found at least one valid solution for it)
+            written_traces, errored_traces = writer.put_batch(
+                traces_to_write,
+                show_progress=False,
+                raise_on_error=False,
+            )
+            for errored_trace_id, error in errored_traces.items():
+                logger.warning(f"{errored_trace_id} skipped, error writing trace: {error}")
+            for written_trace_id in written_traces.keys():
+                trace_event_counts.append(traces_to_write[written_trace_id]["tracing_steps"])
+            if written_solutions == 0 and written_traces:  # no traces written so far for current problem
+                # write parent problem data (we found at least one valid trace for it)
                 problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
-                writer.put(key=problem_metadata_key, value=problem.model_dump())
-            # write all valid execution traces for the current solution, since it is valid
-            writer.put_batch(traces_to_write, show_progress=False)
-            for trace_dump in traces_to_write.values():
-                trace_event_counts.append(trace_dump["tracing_steps"])
-            written_outputs += len(traces_to_write)
+                writer.put(key=problem_metadata_key, value=problem.model_dump())  # will raise on error
+            written_outputs += len(written_traces)
             written_solutions += 1
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
                 break
@@ -796,7 +801,7 @@ if __name__ == "__main__":
         write_dataset_from_taco(
             # create a dummy dataset for quick prototyping
             banned_problem_tags_rule=None,
-            max_output_traces=10_000,
+            max_output_traces=100_000,
             max_solutions_per_problem=10,
             max_tests_per_solution=10,
             max_trace_events_per_line=None,

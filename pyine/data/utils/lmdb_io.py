@@ -294,7 +294,9 @@ class LMDBWriter:
     ) -> bytes:
         """Insert a key-value pair into the database.
 
-        A value at the specified key should NOT already exist in the database.
+        A value at the specified key should NOT exist in the database. If anything goes wrong
+        when preparing the write operation, an exception will be raised, and the database will
+        remain intact.
 
         Note: we will use the internal key iterator to generate the REAL key to store this
         value, but will keep track of the original key for lookup purposes.
@@ -314,26 +316,34 @@ class LMDBWriter:
         internal_key = _create_sample_key(self._next_internal_key)
         if not (0 < len(internal_key) < self.env.max_key_size()):
             raise RuntimeError("internal key length error")
-        self.key_map[key] = internal_key
-        self._next_internal_key += 1
         with self.env.begin(write=True) as txn:
-            encoded_value = self._serialize(value)
+            try:
+                encoded_value = self._serialize(value)
+            except Exception as e:
+                raise RuntimeError(f"failed to serialize value for key: {key}") from e
             if not (0 < len(encoded_value) < self.max_allowed_value_length):
                 raise ValueError("encoded value length error")
-            self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
             ret = txn.put(internal_key, encoded_value, overwrite=True)
             if not ret:
                 raise RuntimeError("internal key collision")
+        self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
+        self.key_map[key] = internal_key
+        self._next_internal_key += 1
         return internal_key
 
     def put_batch(
         self,
         items: dict[str, typing.Any],
         show_progress: bool = True,
-    ) -> list[bytes]:
+        raise_on_error: bool = True,
+    ) -> dict[str, bytes] | tuple[dict[str, bytes], dict[str, Exception]]:
         """Insert multiple key-value pairs into the database.
 
-        Values at the specified keys should NOT already exist in the database.
+        Values at the specified keys should NOT exist in the database. If anything goes wrong
+        when preparing the write operations, an exception will be raised or the operation will be
+        skipped (depending on `raise_on_error`), keeping the database intact from that operation.
+        If `raise_on_error` is False, the operation will be skipped and the exceptions will be
+        returned alongside the generated internal keys.
 
         Note: we will use the internal key iterator to generate the REAL keys to store these
         value, but will keep track of the original keys for lookup purposes.
@@ -341,33 +351,50 @@ class LMDBWriter:
         Args:
             items: Dictionary of key-value pairs to store.
             show_progress: Whether to display a progress bar.
+            raise_on_error: Whether to raise an exception if an error occurs during writing. If
+                True, the return value should only be a dictionary mapping all successfully
+                inserted keys. If False, the return value will be a tuple of maps containing keys
+                that were successfully inserted and exceptions that occurred during writing.
 
         Returns:
-            The list of internal keys used to store the values in the database.
+            A map containing successfully inserted keys, and if `raise_on_error` is True, another
+            map containing exceptions that occurred during writing.
         """
-        generated_internal_keys = []
+        generated_internal_keys: dict[str, bytes] = {}  # input key to internal key mapping
+        encountered_errors: dict[str, Exception] = {}  # (failed) input key to exception mapping
         items_iterator = tqdm.tqdm(items.items(), desc="Writing to database") if show_progress else items.items()
         with self.env.begin(write=True) as txn:
             for key, value in items_iterator:
                 # noinspection PyUnreachableCode
-                if not isinstance(key, str):
-                    raise ValueError(f"key must be a string, but got: {type(key)}")
-                if key in self.key_map:
-                    raise ValueError(f"key '{key}' already exists in the database")
-                internal_key = _create_sample_key(self._next_internal_key)
-                if not (0 < len(internal_key) < self.env.max_key_size()):
-                    raise RuntimeError("internal key length error")
+                try:
+                    if not isinstance(key, str):
+                        raise ValueError(f"key must be a string, but got: {type(key)}")
+                    if key in self.key_map:
+                        raise ValueError(f"key '{key}' already exists in the database")
+                    internal_key = _create_sample_key(self._next_internal_key)
+                    if not (0 < len(internal_key) < self.env.max_key_size()):
+                        raise RuntimeError("internal key length error")
+                    try:
+                        encoded_value = self._serialize(value)
+                    except Exception as e:
+                        raise RuntimeError(f"failed to serialize value for key: {key}") from e
+                    if not (0 < len(encoded_value) < self.max_allowed_value_length):
+                        raise ValueError("encoded value length error")
+                    ret = txn.put(internal_key, encoded_value, overwrite=True)
+                    if not ret:
+                        raise RuntimeError("internal key collision")
+                except Exception as e:
+                    if raise_on_error:
+                        raise RuntimeError(f"failed to write value for key: {key}") from e
+                    encountered_errors[key] = e
+                    continue
                 self.key_map[key] = internal_key
                 self._next_internal_key += 1
-                encoded_value = self._serialize(value)
-                if not (0 < len(encoded_value) < self.max_allowed_value_length):
-                    raise ValueError("encoded value length error")
                 self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
-                ret = txn.put(internal_key, encoded_value, overwrite=True)
-                if not ret:
-                    raise RuntimeError("internal key collision")
-                generated_internal_keys.append(internal_key)
-            return generated_internal_keys
+                generated_internal_keys[key] = internal_key
+            if raise_on_error:
+                return generated_internal_keys
+            return generated_internal_keys, encountered_errors
 
 
 class LMDBReader:
