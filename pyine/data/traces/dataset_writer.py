@@ -628,11 +628,13 @@ async def write_dataset(
     )
     writer.write_metadata(  # start by writing metadata (creation hyperparams) to disk
         dict(
-            source_dataset=dict(
-                root_dataset_path=str(root_dataset_path),
-                source_problem_count=len(problem_data_iter),
-                **config.model_dump(),
+            parent_dataset=dict(
+                dataset_name=config.source_dataset_name,
+                dataset_path=str(root_dataset_path),
+                dataset_hash=pyine.utils.reprod.compute_hash(root_dataset_path),
+                problem_count=len(problem_data_iter),
             ),
+            **config.model_dump(),
         ),
     )
     contains_banned_tags = pyine.data.utils.ban_rules.build_ban_predicate_from_rule(

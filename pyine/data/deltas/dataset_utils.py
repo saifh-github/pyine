@@ -27,7 +27,7 @@ __all__ = [
 
 SUPPORTED_SOURCE_DATASETS = pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS
 """The deltas datasets support the same source datasets as the traces datasets."""
-DELTAS_SUFFIX = "/deltas"
+DELTAS_SUFFIX = pyine.data.traces.dataset_utils.DELTAS_SUFFIX
 """Suffix for entries that correspond to trace deltas in the LMDB dataset."""
 
 logger = logging.getLogger(__name__)

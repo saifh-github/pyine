@@ -62,11 +62,14 @@ def write_dataset(
     writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
         dict(
-            source_dataset=dict(
-                source_dataset_name=trace_reader.get_source_dataset_name(),
-                traces_dataset_path=str(traces_dataset_name_or_path),
-                delta_generator=delta_generator.value,
-            )
+            parent_dataset=dict(
+                dataset_name=trace_reader.get_parent_dataset_name(),
+                dataset_path=str(traces_dataset_name_or_path),
+                dataset_hash=trace_reader.get_hash(),
+                dataset_metadata=trace_reader.get_metadata(),
+                trace_count=len(trace_reader),
+            ),
+            delta_generator=delta_generator.value,
         )
     )
     delta_counts = []

@@ -70,6 +70,15 @@ class DatasetReader(torch.utils.data.Dataset):
                 pattern=curr_trace_data_pattern,
                 return_keys=True,
             )
+            assert len(curr_trace_indices) == len(curr_trace_keys)
+            # for 'forward-compatibility' with deltas datasets, remove any elements with the deltas suffix
+            curr_trace_indices, curr_trace_keys = zip(
+                *[
+                    (idx, key)
+                    for idx, key in zip(curr_trace_indices, curr_trace_keys)
+                    if not key.endswith(pyine.data.traces.dataset_utils.DELTAS_SUFFIX)
+                ]
+            )
             if len(curr_trace_indices) == 0:
                 raise ValueError(f"no trace data found for problem: {problem_key}")
             if len(curr_trace_indices) != len(curr_trace_keys):
@@ -113,9 +122,13 @@ class DatasetReader(torch.utils.data.Dataset):
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
         return self.reader.get_size_on_disk()
 
-    def get_source_dataset_name(self) -> str:
-        """Returns the name of the source dataset used to create this dataset."""
-        return self.reader.get_metadata()["source_dataset"]["source_dataset_name"]
+    def get_hash(self) -> str:
+        """Returns the hash of this dataset (computed from all files on disk)."""
+        return pyine.utils.reprod.compute_hash(self.reader.path)
+
+    def get_parent_dataset_name(self) -> str:
+        """Returns the name of the parent dataset used to create this dataset."""
+        return self.reader.get_metadata()["parent_dataset"]["dataset_name"]
 
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
         """

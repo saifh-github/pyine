@@ -91,7 +91,7 @@ def test_mini_taco_traces_dataset(
     )
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
-    assert reader.get_metadata()["source_dataset"]["source_dataset_name"] == "TACO"
+    assert reader.get_metadata()["parent_dataset"]["dataset_name"] == "TACO"
     assert len(reader) >= wanted_trace_count
 
 
@@ -121,7 +121,7 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
     )
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
-    assert reader.get_metadata()["source_dataset"]["source_dataset_name"] == "TACO"
+    assert reader.get_metadata()["parent_dataset"]["dataset_name"] == "TACO"
     assert len(reader) >= wanted_trace_count
     # check written traces to make sure we do have some augments
     assert len(reader.augment_key_to_parent_trace_key) > 0

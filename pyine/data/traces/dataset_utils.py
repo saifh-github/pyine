@@ -44,6 +44,8 @@ TRACE_DATA_SUFFIX = "/s*/t*"
 """Suffix for entries that correspond to execution traces in the LMDB dataset."""
 AUGM_TRACE_DATA_SUFFIX = "/s*/t*/a*"
 """Suffix for entries that correspond to execution traces of augmented code in the LMDB dataset."""
+DELTAS_SUFFIX = "/deltas"
+"""Suffix for entries that correspond to trace deltas in the LMDB dataset (for future-proofing)."""
 SUPPORTED_SOURCE_DATASETS = [
     "TACO",
     # add more supported datasets here
