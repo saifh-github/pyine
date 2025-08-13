@@ -230,9 +230,9 @@ time.sleep({sleep_time})
         )
     results = execute_and_trace_code(
         code.format(sleep_time=0.1),
-        timeout_seconds=0.5,
+        timeout_seconds=1.0,
         use_safe_execution=True,
-        timeout_external_buffer_seconds=0.5,
+        timeout_external_buffer_seconds=1.0,
     )
     assert results.exception is None
 

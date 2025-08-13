@@ -1,4 +1,3 @@
-import functools
 import importlib.resources
 import logging
 import pathlib
@@ -154,6 +153,18 @@ def get_framework_prompt_manager() -> PromptManager:
         pydantic_loader.PydanticYAMLLoader.register_models_from_package("pyine")
         _default_prompt_manager = PromptManager()
     return _default_prompt_manager
+
+
+def list_prompts() -> list[str]:
+    """Convenience function to list all available prompts in the package."""
+    manager = get_framework_prompt_manager()
+    return manager.list_prompts()
+
+
+def list_prompt_versions(prompt_name: str) -> list[str]:
+    """Convenience function to list all available versions for a specific prompt."""
+    manager = get_framework_prompt_manager()
+    return manager.list_prompt_versions(prompt_name)
 
 
 def get_prompt_config(
