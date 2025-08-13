@@ -336,7 +336,8 @@ class VersionedPromptConfig(pydantic.BaseModel):
             raise ValueError("no valid prompt versions found in YAML file")
         if DEFAULT_PROMPT_VERSION_KEY in raw_data:
             default_version = raw_data[DEFAULT_PROMPT_VERSION_KEY]
-            assert isinstance(default_version, str) and default_version in versions, "default version does not exist"
+            if not (isinstance(default_version, str) and default_version in versions):
+                raise ValueError("default version does not exist")
         else:
             # set the default version to be the latest one by default if nothing is specified (i.e. last in file)
             default_version = next(reversed(versions))

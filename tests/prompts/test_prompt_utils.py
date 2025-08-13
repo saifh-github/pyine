@@ -246,7 +246,7 @@ __default__: "v2.0.0"
             f.write(yaml_content)
             temp_path = pathlib.Path(f.name)
         try:
-            with pytest.raises(AssertionError, match="default version does not exist"):
+            with pytest.raises(ValueError, match="default version does not exist"):
                 prompt_utils.VersionedPromptConfig.from_yaml(temp_path)
         finally:
             temp_path.unlink()

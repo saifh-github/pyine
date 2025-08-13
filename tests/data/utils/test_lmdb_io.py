@@ -196,7 +196,7 @@ class TestLMDBWriteAndRead:
         assert len(indices) == 0
         assert len(keys) == 0
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(TypeError):
             reader.get_indices(123)  # noqa; should be string
 
         reader.close()
