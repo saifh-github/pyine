@@ -1,3 +1,4 @@
+import importlib
 import inspect
 import re
 import typing
@@ -291,3 +292,32 @@ def estimate_tolerance(value_str: str) -> tuple[float, float]:
         rtol = max(rtol, 1e-15)
         rtol = min(rtol, 1e-5)
     return rtol, atol
+
+
+def import_from_dotted_path(
+    dotted_path: str,
+) -> typing.Any:
+    """Import and return an attribute given a dotted path like 'pkg.mod.Class'.
+
+    Args:
+        dotted_path: Dotted import path.
+
+    Returns:
+        Imported attribute.
+    """
+    if not isinstance(dotted_path, str) or not dotted_path:
+        raise ValueError("dotted_path must be a non-empty string")
+    module_path, _, attr_name = dotted_path.rpartition(".")
+    if not module_path:
+        # assume the entire dotted path is a module name without any package path
+        module_path = attr_name
+        attr_name = None
+    module = importlib.import_module(module_path)
+    if not attr_name:
+        # no need to return any attribute, just return the module
+        return module
+    try:
+        # get the attribute from the module
+        return getattr(module, attr_name)
+    except AttributeError as err:
+        raise ValueError(f"Attribute {attr_name!r} not found in {module_path!r}") from err

@@ -1,5 +1,4 @@
 import builtins
-import types
 
 import numpy as np
 import pandas as pd
@@ -212,3 +211,26 @@ def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
     portability.print_code_with_numbered_lines(code, prefixed_tabs=0, logger=None)
     assert len(printed) == 2 and printed[0].startswith("L0001:   ")
+
+
+class TestImportFromDottedPath:
+
+    def test_import_builtin_module(self):
+        module = portability.import_from_dotted_path("math")
+        assert module.__name__ == "math"
+
+    def test_import_custom_path(self):
+        module = portability.import_from_dotted_path("pyine.utils.portability")
+        assert module.__name__ == "pyine.utils.portability"
+
+    def test_import_function_from_custom_module(self):
+        func = portability.import_from_dotted_path("pyine.utils.portability.get_portable_representation")
+        assert func.__name__ == "get_portable_representation"
+
+    def test_import_nonexistent_module(self):
+        with pytest.raises(ImportError):
+            portability.import_from_dotted_path("nonexistent.module")
+
+    def test_import_invalid_path(self):
+        with pytest.raises(ValueError):
+            portability.import_from_dotted_path("")
