@@ -213,6 +213,26 @@ def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
     assert len(printed) == 2 and printed[0].startswith("L0001:   ")
 
 
+class TestGetFullyQualifiedName:
+
+    def test_local_function(self):
+        def foo():
+            pass
+
+        name = portability.get_fully_qualified_name(foo)
+        assert name.endswith("TestGetFullyQualifiedName.test_local_function.<locals>.foo")
+
+    def test_builtin_type(self):
+        name = portability.get_fully_qualified_name(list)
+        assert name == "list"
+
+    def test_3rd_party_class(self):
+        import torch.utils.data as data_utils
+
+        name = portability.get_fully_qualified_name(data_utils.DataLoader)
+        assert name == "torch.utils.data.dataloader.DataLoader"
+
+
 class TestImportFromDottedPath:
 
     def test_import_builtin_module(self):

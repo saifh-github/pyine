@@ -321,3 +321,12 @@ def import_from_dotted_path(
         return getattr(module, attr_name)
     except AttributeError as err:
         raise ValueError(f"Attribute {attr_name!r} not found in {module_path!r}") from err
+
+
+def get_fully_qualified_name(type_or_func: type | typing.Callable) -> str:
+    """Get the fully qualified name of a type or function."""
+    mod = getattr(type_or_func, "__module__", None) or ""
+    qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", repr(type_or_func)))
+    if mod == "builtins":
+        return qual
+    return f"{mod}.{qual}"
