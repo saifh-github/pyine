@@ -7,6 +7,8 @@ import typing
 import pydantic
 import yaml
 
+import pyine.utils.portability
+
 logger = logging.getLogger(__name__)
 
 
@@ -222,3 +224,54 @@ def dump_yaml_with_pydantic_support(
         with open(file_path, "w", encoding="utf-8") as file:
             file.write(yaml_str)
     return yaml_str
+
+
+BaseT = typing.TypeVar("BaseT")
+"""Base type for classes that can be resolved and instantiated from pydantic configs."""
+
+
+class ClassImportSpec(
+    pydantic.BaseModel,
+    typing.Generic[BaseT],
+):
+    """Generic configuration to import a class by path and instantiate it.
+
+    Attributes:
+        class_path: Dotted import path to the concrete class, e.g. "pkg.mod.MyImpl".
+        base_class_path: Dotted import path to the required base class. The resolved class
+            must be a subclass of this base.
+        params: Keyword arguments passed to the class constructor.
+    """
+
+    class_path: str
+    base_class_path: str
+    params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+
+    def resolve(
+        self,
+    ) -> type[BaseT]:
+        """Resolve and validate the target class.
+
+        Returns:
+            type[BaseT]: The resolved class.
+        """
+        resolved_class = pyine.utils.portability.import_from_dotted_path(self.class_path)
+        if not isinstance(resolved_class, type):
+            raise TypeError(f"{resolved_class!r} is not a class")
+        resolved_base = pyine.utils.portability.import_from_dotted_path(self.base_class_path)
+        if not isinstance(resolved_base, type):
+            raise TypeError(f"{resolved_base!r} is not a class")
+        if not issubclass(resolved_class, resolved_base):
+            raise TypeError(f"{resolved_class.__name__} is not a subclass of {resolved_base.__name__}")
+        return typing.cast(type[BaseT], resolved_class)
+
+    def instantiate(
+        self,
+    ) -> BaseT:
+        """Instantiate the resolved class with configured params.
+
+        Returns:
+            BaseT: An instance of the resolved class.
+        """
+        cls = self.resolve()
+        return typing.cast(BaseT, cls(**self.params))

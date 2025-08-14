@@ -1,12 +1,11 @@
-import importlib
 import pathlib
-import types
 import typing
 
 import pydantic
 import pytest
 import yaml
 
+import pyine.utils.portability as portability
 import pyine.utils.pydantic_loader as pyl
 
 
@@ -93,3 +92,199 @@ def test_loader_file_errors(tmp_path: pathlib.Path):
     inv.write_text(":\n -\n", encoding="utf-8")
     with pytest.raises(yaml.YAMLError):
         _ = pyl.load_yaml_with_pydantic_support(inv)
+
+
+class DummyBase:
+    pass
+
+
+class DummySub(DummyBase):
+    def __init__(
+        self,
+        a: int = 0,
+        b: typing.Any | None = None,
+    ) -> None:
+        self.a = a
+        self.b = b
+
+
+class DummyUnrelated:
+    pass
+
+
+@pytest.fixture(name="install_fake_import")
+def fixture_install_fake_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> typing.Callable[[dict[str, typing.Any]], None]:
+    """Install a fake dotted-path importer for the portability layer.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture.
+
+    Returns:
+        A function that, when called with a mapping, replaces
+        pyine.utils.portability.import_from_dotted_path to return objects from
+        the mapping or raise ImportError. If a mapping value is an Exception,
+        it is raised as-is.
+    """
+
+    def _install(
+        mapping: dict[str, typing.Any],
+    ) -> None:
+        def fake_import(
+            path: str,
+        ) -> typing.Any:
+            if path in mapping:
+                value = mapping[path]
+                if isinstance(value, Exception):
+                    raise value
+                return value
+            raise ImportError(f"Cannot import '{path}'")
+
+        monkeypatch.setattr(
+            portability,
+            "import_from_dotted_path",
+            fake_import,
+            raising=True,
+        )
+
+    return _install
+
+
+class TestClassImportSpec:
+
+    def test_resolve_success(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.DummySub",
+            base_class_path="pkg.module.DummyBase",
+        )
+        resolved = spec.resolve()
+        assert resolved is DummySub
+        assert issubclass(resolved, DummyBase)
+
+    def test_resolve_raises_if_class_not_type(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        not_a_class: typing.Any = object()
+        install_fake_import(
+            {
+                "pkg.module.NotAClass": not_a_class,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.NotAClass",
+            base_class_path="pkg.module.DummyBase",
+        )
+        with pytest.raises(TypeError) as exc_info:
+            spec.resolve()
+        assert "is not a class" in str(exc_info.value)
+
+    def test_resolve_raises_if_base_not_type(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        not_a_class: typing.Any = 123
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.NotAClass": not_a_class,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.DummySub",
+            base_class_path="pkg.module.NotAClass",
+        )
+        with pytest.raises(TypeError) as exc_info:
+            spec.resolve()
+        assert "is not a class" in str(exc_info.value)
+
+    def test_resolve_raises_if_not_subclass(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummyUnrelated": DummyUnrelated,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.DummyUnrelated",
+            base_class_path="pkg.module.DummyBase",
+        )
+        with pytest.raises(TypeError) as exc_info:
+            spec.resolve()
+        assert "is not a subclass of" in str(exc_info.value)
+
+    def test_instantiate_success_with_params(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.DummySub",
+            base_class_path="pkg.module.DummyBase",
+            params={"a": 7, "b": {"k": "v"}},
+        )
+        instance = spec.instantiate()
+        assert isinstance(instance, DummySub)
+        assert instance.a == 7
+        assert instance.b == {"k": "v"}
+
+    def test_instantiate_propagates_constructor_error(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        class FailingCtor(DummyBase):
+            def __init__(
+                self,
+                *,
+                must: int,
+            ) -> None:
+                self.must = must
+
+        install_fake_import(
+            {
+                "pkg.module.FailingCtor": FailingCtor,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.FailingCtor",
+            base_class_path="pkg.module.DummyBase",
+            params={},  # missing required keyword-only arg 'must'
+        )
+        with pytest.raises(TypeError):
+            spec.instantiate()
+
+    def test_resolve_propagates_import_error_for_missing_class(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyl.ClassImportSpec(
+            class_path="pkg.module.Missing",
+            base_class_path="pkg.module.DummyBase",
+        )
+        with pytest.raises(ImportError):
+            spec.resolve()
