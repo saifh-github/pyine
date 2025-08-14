@@ -100,10 +100,36 @@ class TraceException(typing.NamedTuple):
     """The type of exception that occurred."""
     message: str
     """The message of the exception that occurred."""
+    origin: TraceKey | None
+    """Location where the exception originated (file, object, and line), if available."""
+    traceback: str | None
+    """Formatted traceback string, if available."""
 
     def __repr__(self):
         """Returns a string representation of the trace exception."""
+        # note: when we expect an exception to be produced in a traced run, this is what gets compared
         return f"{self.type}({self.message})"
+
+    @classmethod
+    def from_exception(
+        cls,
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_tb: types.TracebackType | None,
+    ) -> "TraceException":
+        """Build a TraceException from exception triplet, capturing origin and formatted traceback."""
+        origin = None
+        if exc_tb is not None:
+            tb_frames = traceback.extract_tb(exc_tb)
+            if tb_frames:
+                last = tb_frames[-1]
+                origin = TraceKey(
+                    file=_get_clean_filename(last.filename),
+                    object=last.name,
+                    line=last.lineno,
+                )
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb)) if exc_tb is not None else None
+        return cls(exc_type.__name__, str(exc_value), origin, tb_str)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -562,10 +588,7 @@ def _execute_and_trace_code(
                 exec_return_value = portable_repr(arg)
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
-                exception = TraceException(
-                    type=exc_type.__name__,
-                    message=str(exc_value),
-                )
+                exception = TraceException.from_exception(exc_type, exc_value, exc_traceback)
             trace_event = TraceEvent(
                 event_type=TraceEventType(event),
                 stack_trace=stack_trace,
@@ -633,9 +656,10 @@ def _execute_and_trace_code(
             entrypoint_step_idx=entrypoint_step_idx,
             return_value=return_value,
             exception=(
-                TraceException(
-                    type=caught_exception.__class__.__name__,
-                    message=str(caught_exception),
+                TraceException.from_exception(
+                    caught_exception.__class__,
+                    caught_exception,
+                    caught_exception.__traceback__,
                 )
                 if caught_exception
                 else None

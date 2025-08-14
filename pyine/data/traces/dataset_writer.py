@@ -11,6 +11,7 @@ import functools
 import itertools
 import logging
 import pathlib
+import traceback
 import typing
 import warnings
 
@@ -39,6 +40,20 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+DONT_CATCH_EXCEPTIONS = (
+    KeyboardInterrupt,
+    GeneratorExit,
+    MemoryError,
+    asyncio.CancelledError,
+)
+"""Exceptions that should not be caught when tracing, and that should rise to the top process."""
+
+
+class RemoteTraceback(Exception):
+    """Exception wrapper class that wraps another exception and adds a remote traceback."""
+
+    pass
 
 
 class TraceDatasetWriterConfig(pydantic.BaseModel):
@@ -321,6 +336,8 @@ def _check_must_skip_solution(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # no need to capture warnings related to validated code
             pyine.utils.code.validation.validate_code(solution.code)  # last check before running
+    except DONT_CATCH_EXCEPTIONS as e:
+        raise e
     except Exception as e:
         return f"{solution}: skipped due to new validation error: {e}"
     return None  # no issue found
@@ -367,10 +384,18 @@ def _get_traces_to_write(
     for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
         code_to_trace = to_trace[trace_idx]
         if run_error:
-            if isinstance(run_error, KeyboardInterrupt):
-                raise run_error  # user likely wants to stop the process, raise again
-            full_error_msg = f"({type(run_error).__name__})" + (f": {str(run_error)}" if str(run_error) else "")
-            log_fn(f"{code_to_trace.trace_id}: failed execution {full_error_msg}")
+            if isinstance(run_error, DONT_CATCH_EXCEPTIONS):
+                raise run_error  # main process likely needs to stop, so raise again
+            exception_origin = traceback.extract_tb(run_error.__traceback__)[-1]
+            exception_origin_msg = (
+                f"file={exception_origin.filename}, "
+                f"line={exception_origin.lineno}, "
+                f"func={exception_origin.name}, "
+                f"code={exception_origin.line}"
+            )
+            exception_msg = (f", '{str(run_error)}'" if str(run_error) else "") + ", origin: " + exception_origin_msg
+            full_error_msg = f"({type(run_error).__name__})" + exception_msg
+            log_fn(f"{code_to_trace.trace_id}: failed to execute: {full_error_msg}")
         else:
             trace_result, test_result = run_result
             if not test_result:
@@ -424,7 +449,20 @@ def _trace_code_snippet(
     )
     default_test_result = None  # will store the most useful test result (across all comparison cases)
     if trace_result.exception is not None:
-        # the exec raised an exception; the only way this was a 'success' is if we also expected one
+        # make sure the exception is not one that we are never meant to catch here
+        dont_catch_exceptions = {str(t.__name__): t for t in DONT_CATCH_EXCEPTIONS}
+        if trace_result.exception.type in dont_catch_exceptions:
+            exc = dont_catch_exceptions[trace_result.exception.type](trace_result.exception.message)
+            if trace_result.exception.origin:
+                origin_note = f"origin: {trace_result.exception.origin!r}"
+            else:
+                origin_note = "origin: <unknown>"
+            exc.add_note(origin_note)
+            if trace_result.exception.traceback:
+                exc.add_note("remote traceback:\n" + trace_result.exception.traceback)
+                raise exc from RemoteTraceback(trace_result.exception.traceback)
+            raise exc
+        # the exec raised a catchable exception; the only way this was a 'success' is if we also expected one
         exception_test_result = comp(str(trace_result.exception), str(test_outputs))
         if exception_test_result:
             return trace_result, exception_test_result  # we're done, we can leave already
@@ -573,7 +611,9 @@ async def _generate_augmented_code_to_trace(
                         test_outputs=test_tuples[job_result.job_id.test_idx].outputs,
                     )
                 )
-
+            elif isinstance(job_result.error, DONT_CATCH_EXCEPTIONS):
+                # main process likely needs to stop, so raise again
+                raise job_result.error
     return augmented_code_to_trace
 
 
