@@ -160,14 +160,13 @@ def compute_hash(
 def set_seed(
     seed: int | None = None,
     workers: bool = False,
-    verbose: bool = True,
+    verbose: bool = False,
 ) -> None:
     """Sets the seed for all potentially relevant RNGs through lightning.
 
     For more information, refer to:
     https://lightning.ai/docs/fabric/stable/api/utilities.html#lightning.fabric.utilities.seed.seed_everything
     """
-    lightning.fabric.utilities.seed.pl_worker_init_function
     lightning.fabric.utilities.seed.seed_everything(
         seed=seed,
         workers=workers,
@@ -189,6 +188,7 @@ def get_reprod_metadata() -> dict[str, typing.Any]:
 
 def entrypoint_setup(
     seed: int | None = None,
+    seed_workers: bool = False,
     log_level: int = logging.INFO,
     log_to_file: bool = False,
 ) -> None:
@@ -207,5 +207,5 @@ def entrypoint_setup(
         entrypoint_setup._executed = True
     # no matter what execution this is, re-seed if needed
     if seed is not None:
-        set_seed(seed)
+        set_seed(seed=seed, workers=seed_workers)
     logger.info(f"set up entrypoint (seed={seed})")
