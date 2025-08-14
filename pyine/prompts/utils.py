@@ -6,7 +6,7 @@ import typing
 import langchain_core.prompts
 import pydantic
 
-import pyine.utils.pydantic_loader
+import pyine.utils.pydantic
 
 DEFAULT_PROMPT_VERSION_KEY = "__default__"
 """Key used in config files to identify the default prompt version to use if none is specified.
@@ -316,7 +316,7 @@ class VersionedPromptConfig(pydantic.BaseModel):
     @classmethod
     def from_yaml(cls, yaml_file_path: pathlib.Path | str) -> "VersionedPromptConfig":
         """Parse YAML file content into a VersionedPromptConfig object."""
-        raw_data = pyine.utils.pydantic_loader.load_yaml_with_pydantic_support(yaml_file_path)
+        raw_data = pyine.utils.pydantic.load_yaml_with_pydantic_support(yaml_file_path)
         versions = {}
         # note: we do not enforce a version pattern since versions might be named after targeted LLMs/APIs
         for version, config_data in raw_data.items():

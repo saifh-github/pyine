@@ -125,7 +125,7 @@ __default__: "v1.0-universal"  # optional, prompt version to use by default when
 - The YAML loader supports Pydantic tags (e.g., `!pyine.prompts.configs.code_analysis.CodeAnalysisResponse`),
   as long as the module containing the model is registered with the framework manager. This manager
   automatically registers all Pydantic models found under the pyine package for YAML tag resolution.
-  You can also register models manually with `pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_module`.
+  You can also register models manually with `pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_module`.
 - Template formatting supports both f-string and jinja2. Prefer f-string for safety; use jinja2 only
   when you control input.
 

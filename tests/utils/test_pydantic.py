@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 import pyine.utils.portability as portability
-import pyine.utils.pydantic_loader as pyl
+import pyine.utils.pydantic as pyd
 
 
 class MyModel(pydantic.BaseModel):
@@ -15,54 +15,54 @@ class MyModel(pydantic.BaseModel):
 
 
 def setup_function(_fn):  # ensure registry clean before each test file function
-    pyl.PydanticYAMLLoader.clear_registry()
+    pyd.PydanticYAMLLoader.clear_registry()
 
 
 def test_register_model_and_lookup(monkeypatch: pytest.MonkeyPatch):
     # invalid model type
     with pytest.raises(ValueError):
-        pyl.PydanticYAMLLoader.register_model("bad", typing.cast(type, int))  # type: ignore[arg-type,assignment]
+        pyd.PydanticYAMLLoader.register_model("bad", typing.cast(type, int))  # type: ignore[arg-type,assignment]
 
     # proper registration and idempotency
-    pyl.PydanticYAMLLoader.register_model("mymodel", MyModel)
-    pyl.PydanticYAMLLoader.register_model("mymodel", MyModel)  # should be no-op
-    reg = pyl.PydanticYAMLLoader.get_registered_models()
+    pyd.PydanticYAMLLoader.register_model("mymodel", MyModel)
+    pyd.PydanticYAMLLoader.register_model("mymodel", MyModel)  # should be no-op
+    reg = pyd.PydanticYAMLLoader.get_registered_models()
     assert "mymodel" in reg and reg["mymodel"] is MyModel
-    assert pyl.PydanticYAMLLoader.get_model_tag_by_class(MyModel) == "mymodel"
+    assert pyd.PydanticYAMLLoader.get_model_tag_by_class(MyModel) == "mymodel"
 
 
 def test_register_models_from_module_success_and_failure(monkeypatch: pytest.MonkeyPatch):
     # success on current module
-    pyl.PydanticYAMLLoader.register_models_from_module(__name__)
+    pyd.PydanticYAMLLoader.register_models_from_module(__name__)
     tag = f"{__name__}.MyModel"
-    assert tag in pyl.PydanticYAMLLoader.get_registered_models()
+    assert tag in pyd.PydanticYAMLLoader.get_registered_models()
 
     # failure path: import error -> ValueError
     def boom(name):
         raise ImportError("boom")
 
-    monkeypatch.setattr(pyl.importlib, "import_module", boom, raising=True)
+    monkeypatch.setattr(pyd.importlib, "import_module", boom, raising=True)
     with pytest.raises(ValueError):
-        pyl.PydanticYAMLLoader.register_models_from_module("does.not.exist")
+        pyd.PydanticYAMLLoader.register_models_from_module("does.not.exist")
 
 
 def test_register_models_from_package_failure():
     # non existent package -> ValueError
     with pytest.raises(ValueError):
-        pyl.PydanticYAMLLoader.register_models_from_package("does.not.exist.pkg")
+        pyd.PydanticYAMLLoader.register_models_from_package("does.not.exist.pkg")
 
 
 def test_yaml_dump_and_load_roundtrip(tmp_path: pathlib.Path):
     # register the fully-qualified tag for MyModel
     tag = f"{__name__}.MyModel"
-    pyl.PydanticYAMLLoader.register_model(tag, MyModel)
+    pyd.PydanticYAMLLoader.register_model(tag, MyModel)
     # create instance and dump to file
     inst = MyModel(a=3, b="x")
     yaml_path = tmp_path / "model.yaml"
-    dumped = pyl.dump_yaml_with_pydantic_support(inst, file_path=yaml_path)
+    dumped = pyd.dump_yaml_with_pydantic_support(inst, file_path=yaml_path)
     assert yaml_path.exists() and dumped.strip().startswith(f"!{tag}")
     # load back using file loader
-    loaded = pyl.load_yaml_with_pydantic_support(yaml_path)
+    loaded = pyd.load_yaml_with_pydantic_support(yaml_path)
     assert isinstance(loaded, MyModel) and loaded == inst
 
 
@@ -71,27 +71,27 @@ def test_yaml_unknown_tag_and_validation_error(tmp_path: pathlib.Path):
     bad = tmp_path / "bad.yaml"
     bad.write_text("!unknown.tag\na: 1\n", encoding="utf-8")
     with pytest.raises(ValueError):
-        _ = pyl.load_yaml_with_pydantic_support(bad)
+        _ = pyd.load_yaml_with_pydantic_support(bad)
 
     # register model but provide invalid content to trigger validation error
     tag = f"{__name__}.MyModel"
-    pyl.PydanticYAMLLoader.register_model(tag, MyModel)
+    pyd.PydanticYAMLLoader.register_model(tag, MyModel)
     bad_val = tmp_path / "bad_val.yaml"
     bad_val.write_text(f"!{tag}\na: 'not-int'\n", encoding="utf-8")
     with pytest.raises(ValueError):
-        _ = pyl.load_yaml_with_pydantic_support(bad_val)
+        _ = pyd.load_yaml_with_pydantic_support(bad_val)
 
 
 def test_loader_file_errors(tmp_path: pathlib.Path):
     # missing file
     with pytest.raises(FileNotFoundError):
-        _ = pyl.load_yaml_with_pydantic_support(tmp_path / "missing.yaml")
+        _ = pyd.load_yaml_with_pydantic_support(tmp_path / "missing.yaml")
 
     # invalid YAML content should raise yaml.YAMLError
     inv = tmp_path / "invalid.yaml"
     inv.write_text(":\n -\n", encoding="utf-8")
     with pytest.raises(yaml.YAMLError):
-        _ = pyl.load_yaml_with_pydantic_support(inv)
+        _ = pyd.load_yaml_with_pydantic_support(inv)
 
 
 class DummyBase:
@@ -163,7 +163,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.DummySub",
             base_class_path="pkg.module.DummyBase",
         )
@@ -182,7 +182,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.NotAClass",
             base_class_path="pkg.module.DummyBase",
         )
@@ -201,7 +201,7 @@ class TestClassImportSpec:
                 "pkg.module.NotAClass": not_a_class,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.DummySub",
             base_class_path="pkg.module.NotAClass",
         )
@@ -219,7 +219,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.DummyUnrelated",
             base_class_path="pkg.module.DummyBase",
         )
@@ -237,7 +237,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.DummySub",
             base_class_path="pkg.module.DummyBase",
             params={"a": 7, "b": {"k": "v"}},
@@ -265,7 +265,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.FailingCtor",
             base_class_path="pkg.module.DummyBase",
             params={},  # missing required keyword-only arg 'must'
@@ -282,7 +282,7 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyl.ClassImportSpec(
+        spec = pyd.ClassImportSpec(
             class_path="pkg.module.Missing",
             base_class_path="pkg.module.DummyBase",
         )

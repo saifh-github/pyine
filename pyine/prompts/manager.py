@@ -147,10 +147,10 @@ def get_framework_prompt_manager() -> PromptManager:
     """Get the default prompt manager instance for the pyine framework (singleton)."""
     global _default_prompt_manager
     if _default_prompt_manager is None:
-        import pyine.utils.pydantic_loader as pydantic_loader
+        import pyine.utils.pydantic
 
         # if the default framework manager is not created, make sure models are all registered too
-        pydantic_loader.PydanticYAMLLoader.register_models_from_package("pyine")
+        pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_package("pyine")
         _default_prompt_manager = PromptManager()
     return _default_prompt_manager
 

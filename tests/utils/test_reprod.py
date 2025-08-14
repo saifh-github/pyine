@@ -127,7 +127,7 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
     calls = {"setup_logging": 0, "register_models": 0}
 
     import pyine.utils.logging as real_log_mod
-    import pyine.utils.pydantic_loader as real_loader_mod
+    import pyine.utils.pydantic as real_pyd_mod
 
     def fake_setup_logging(level, log_to_file):  # noqa: ARG002
         calls["setup_logging"] += 1
@@ -137,7 +137,7 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(real_log_mod, "setup_logging", fake_setup_logging, raising=True)
     monkeypatch.setattr(
-        real_loader_mod.PydanticYAMLLoader,
+        real_pyd_mod.PydanticYAMLLoader,
         "register_models_from_package",
         classmethod(lambda cls, pkg: fake_register_models_from_package(pkg)),
         raising=True,

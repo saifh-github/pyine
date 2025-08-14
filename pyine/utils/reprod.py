@@ -196,14 +196,14 @@ def entrypoint_setup(
     # use a sentinel object to track first execution
     if not hasattr(entrypoint_setup, "_executed"):
         import pyine.utils.logging
-        import pyine.utils.pydantic_loader
+        import pyine.utils.pydantic
 
         dotenv.load_dotenv()
         pyine.utils.logging.setup_logging(
             level=log_level,
             log_to_file=log_to_file,
         )
-        pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_package("pyine")
+        pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_package("pyine")
         entrypoint_setup._executed = True
     # no matter what execution this is, re-seed if needed
     if seed is not None:

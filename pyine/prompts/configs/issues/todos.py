@@ -2,7 +2,6 @@ import langchain_core.prompts
 
 import pyine.prompts.manager
 import pyine.prompts.utils
-import pyine.utils.pydantic_loader
 
 # @@@@ TODO: if we figure out that we want to work with udiffs, impl something here
 

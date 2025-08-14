@@ -6,7 +6,7 @@ import pydantic
 
 import pyine.prompts.manager
 import pyine.prompts.utils
-import pyine.utils.pydantic_loader
+import pyine.utils.pydantic
 
 python_def_pattern = r"^[A-Za-z_][A-Za-z0-9_]*$"
 """Regex pattern to use to identify any variable/function/method/class name definition."""
@@ -71,7 +71,7 @@ def get_prompt_config(
         version: The version of the prompt to retrieve. If None, the default version is returned.
     """
     # first, make sure the pydantic loader has already registered this class
-    pyine.utils.pydantic_loader.PydanticYAMLLoader.register_models_from_module(__name__)
+    pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_module(__name__)
     # note: this will be cached by the prompt manager
     return pyine.prompts.manager.get_prompt_config(
         prompt_name="callable_analysis",
