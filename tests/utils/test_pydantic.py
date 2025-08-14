@@ -95,7 +95,11 @@ def test_loader_file_errors(tmp_path: pathlib.Path):
 
 
 class DummyBase:
-    pass
+    def __init__(
+        self,
+        a: int,
+    ) -> None:
+        self.a = a
 
 
 class DummySub(DummyBase):
@@ -104,12 +108,13 @@ class DummySub(DummyBase):
         a: int = 0,
         b: typing.Any | None = None,
     ) -> None:
-        self.a = a
+        super().__init__(a)
         self.b = b
 
 
 class DummyUnrelated:
-    pass
+    def __init__(self, c: str) -> None:
+        self.c = c
 
 
 @pytest.fixture(name="install_fake_import")
@@ -163,13 +168,10 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyd.ClassImportSpec(
+        _ = pyd.ClassImportSpec(
             class_path="pkg.module.DummySub",
             base_class_path="pkg.module.DummyBase",
         )
-        resolved = spec.resolve()
-        assert resolved is DummySub
-        assert issubclass(resolved, DummyBase)
 
     def test_resolve_raises_if_class_not_type(
         self,
@@ -182,12 +184,11 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyd.ClassImportSpec(
-            class_path="pkg.module.NotAClass",
-            base_class_path="pkg.module.DummyBase",
-        )
         with pytest.raises(TypeError) as exc_info:
-            spec.resolve()
+            _ = pyd.ClassImportSpec(
+                class_path="pkg.module.NotAClass",
+                base_class_path="pkg.module.DummyBase",
+            )
         assert "is not a class" in str(exc_info.value)
 
     def test_resolve_raises_if_base_not_type(
@@ -201,12 +202,11 @@ class TestClassImportSpec:
                 "pkg.module.NotAClass": not_a_class,
             },
         )
-        spec = pyd.ClassImportSpec(
-            class_path="pkg.module.DummySub",
-            base_class_path="pkg.module.NotAClass",
-        )
         with pytest.raises(TypeError) as exc_info:
-            spec.resolve()
+            _ = pyd.ClassImportSpec(
+                class_path="pkg.module.DummySub",
+                base_class_path="pkg.module.NotAClass",
+            )
         assert "is not a class" in str(exc_info.value)
 
     def test_resolve_raises_if_not_subclass(
@@ -219,13 +219,31 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyd.ClassImportSpec(
-            class_path="pkg.module.DummyUnrelated",
-            base_class_path="pkg.module.DummyBase",
+        with pytest.raises(TypeError) as exc_info:
+            _ = pyd.ClassImportSpec(
+                class_path="pkg.module.DummyUnrelated",
+                base_class_path="pkg.module.DummyBase",
+            )
+        assert "is not a subclass of" in str(exc_info.value)
+
+    def test_resolve_raises_if_bad_generic_base(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.DummyBase": DummyBase,
+                "pkg.module.DummyUnrelated": DummyUnrelated,
+            },
         )
         with pytest.raises(TypeError) as exc_info:
-            spec.resolve()
-        assert "is not a subclass of" in str(exc_info.value)
+            _ = pyd.ClassImportSpec[DummyUnrelated](
+                class_path="pkg.module.DummySub",
+                base_class_path="pkg.module.DummyBase",
+                params={"a": 7, "b": {"k": "v"}},
+            )
+        assert "not compatible with expected" in str(exc_info.value)
 
     def test_instantiate_success_with_params(
         self,
@@ -257,7 +275,7 @@ class TestClassImportSpec:
                 *,
                 must: int,
             ) -> None:
-                self.must = must
+                super().__init__(a=must)
 
         install_fake_import(
             {
@@ -265,13 +283,14 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyd.ClassImportSpec(
-            class_path="pkg.module.FailingCtor",
-            base_class_path="pkg.module.DummyBase",
-            params={},  # missing required keyword-only arg 'must'
-        )
-        with pytest.raises(TypeError):
-            spec.instantiate()
+        with pytest.raises(TypeError) as exc_info:
+            _ = pyd.ClassImportSpec(
+                class_path="pkg.module.FailingCtor",
+                base_class_path="pkg.module.DummyBase",
+                params={},  # missing required keyword-only arg 'must'
+            )
+        assert "missing required parameter(s)" in str(exc_info.value)
+        assert "must" in str(exc_info.value)
 
     def test_resolve_propagates_import_error_for_missing_class(
         self,
@@ -282,9 +301,8 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        spec = pyd.ClassImportSpec(
-            class_path="pkg.module.Missing",
-            base_class_path="pkg.module.DummyBase",
-        )
         with pytest.raises(ImportError):
-            spec.resolve()
+            _ = pyd.ClassImportSpec(
+                class_path="pkg.module.Missing",
+                base_class_path="pkg.module.DummyBase",
+            )

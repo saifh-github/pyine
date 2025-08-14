@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import logging
 import pathlib
 import pkgutil
@@ -234,44 +235,112 @@ class ClassImportSpec(
     pydantic.BaseModel,
     typing.Generic[BaseT],
 ):
-    """Generic configuration to import a class by path and instantiate it.
+    """Generic configuration to import a class by path and instantiate it."""
 
-    Attributes:
-        class_path: Dotted import path to the concrete class, e.g. "pkg.mod.MyImpl".
-        base_class_path: Dotted import path to the required base class. The resolved class
-            must be a subclass of this base.
-        params: Keyword arguments passed to the class constructor.
-    """
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (frozen, no extras)."""
 
-    class_path: str
-    base_class_path: str
-    params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    class_path: typing.Annotated[
+        pydantic.StrictStr,
+        pydantic.Field(
+            min_length=1,
+            description="Dotted import path to the target class, e.g. 'pkg.mod.MyImpl'.",
+        ),
+    ]
+    base_class_path: typing.Annotated[
+        pydantic.StrictStr,
+        pydantic.Field(
+            min_length=1,
+            description=("Dotted import path to the required base class of the target class."),
+        ),
+    ]
+    params: dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict, description="Keyword arguments passed to the target class constructor."
+    )
 
-    def resolve(
-        self,
-    ) -> type[BaseT]:
-        """Resolve and validate the target class.
+    def instantiate(self) -> BaseT:
+        """Instantiates the resolved class with the parameters held inside the config."""
+        assert self._resolved_class is not None, "model must be validated before use"
+        return self._resolved_class(**self.params)
 
-        Returns:
-            type[BaseT]: The resolved class.
-        """
+    # ----------------- below is private stuff that does not affect serialization -----------------
+
+    # cache resolved types so we don't re-resolve them in instantiate()
+    _resolved_class: type | None = pydantic.PrivateAttr(default=None)
+    _resolved_base: type | None = pydantic.PrivateAttr(default=None)
+
+    @property
+    def _generic_base_class_type(self) -> type | None:
+        """Returns the generic base class type (if this is a generic class)."""
+        meta = getattr(self.__class__, "__pydantic_generic_metadata__", None)
+        if meta and meta.get("args"):
+            return meta["args"][0]
+        return None
+
+    @pydantic.model_validator(mode="after")
+    def _validate_and_resolve(self) -> "ClassImportSpec":
+        """Validates and resolves the class and base class paths."""
         resolved_class = pyine.utils.portability.import_from_dotted_path(self.class_path)
-        if not isinstance(resolved_class, type):
-            raise TypeError(f"{resolved_class!r} is not a class")
+        if not isinstance(resolved_class, type) or not callable(resolved_class):
+            raise TypeError(f'"{self.class_path}" resolved to {resolved_class!r}, which is not a class')
         resolved_base = pyine.utils.portability.import_from_dotted_path(self.base_class_path)
         if not isinstance(resolved_base, type):
-            raise TypeError(f"{resolved_base!r} is not a class")
+            raise TypeError(f'"{self.base_class_path}" resolved to {resolved_base!r}, which is not a class')
+        expected_base = self._generic_base_class_type
+        if expected_base:  # will work only when we have a concrete runtime type
+            assert isinstance(expected_base, type), "expected base class must be a type"
+            if resolved_base is not expected_base and not issubclass(resolved_base, expected_base):
+                raise TypeError(
+                    f"resolved base {resolved_base.__name__} is not compatible with expected {expected_base.__name__}"
+                )
         if not issubclass(resolved_class, resolved_base):
             raise TypeError(f"{resolved_class.__name__} is not a subclass of {resolved_base.__name__}")
-        return typing.cast(type[BaseT], resolved_class)
+        self._validate_params_against_constructor(resolved_class, self.params)
+        self._resolved_class = resolved_class
+        self._resolved_base = resolved_base
+        return self
 
-    def instantiate(
-        self,
-    ) -> BaseT:
-        """Instantiate the resolved class with configured params.
-
-        Returns:
-            BaseT: An instance of the resolved class.
-        """
-        cls = self.resolve()
-        return typing.cast(BaseT, cls(**self.params))
+    @staticmethod
+    def _validate_params_against_constructor(cls: type, params: dict[str, typing.Any]) -> None:
+        """Validates that the provided params match the constructor signature of the class."""
+        sig = inspect.signature(cls)
+        parameters = list(sig.parameters.values())
+        # fail fast if there are required positional-only params (cannot pass via kwargs)
+        pos_only_required = [
+            p
+            for p in parameters
+            if p.kind is inspect.Parameter.POSITIONAL_ONLY and p.default is inspect.Parameter.empty
+        ]
+        if pos_only_required:
+            names = ", ".join(p.name for p in pos_only_required)
+            raise TypeError(
+                f"{cls.__name__}.__init__ has required positional-only parameters ({names}); "
+                f"cannot instantiate with keyword-only params"
+            )
+        accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
+        acceptable_names = {p.name for p in parameters if p.kind is not inspect.Parameter.POSITIONAL_ONLY}
+        # unknown params (only an error if the constructor doesn't accept **kwargs)
+        if not accepts_kwargs:
+            unknown = set(params) - acceptable_names
+            if unknown:
+                raise TypeError(
+                    f"unexpected parameter(s) for {cls.__name__}: {sorted(unknown)}; "
+                    f"accepted: {sorted(acceptable_names)}"
+                )
+        # ensure required keywordable parameters are present
+        required_missing = [
+            p.name
+            for p in parameters
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            and p.default is inspect.Parameter.empty
+            and p.name not in params
+        ]
+        if required_missing:
+            raise TypeError(f"missing required parameter(s) for {cls.__name__}: {sorted(required_missing)}")
+        # optional: try binding (catches some edge-cases like duplicate/ambiguous)
+        try:
+            # binding with provided kwargs (ignores extra if **kwargs present)
+            to_bind = {k: v for k, v in params.items() if k in acceptable_names or accepts_kwargs}
+            sig.bind_partial(**to_bind)
+        except TypeError as exc:
+            raise TypeError(f"invalid parameters for {cls.__name__}: {exc}") from exc
