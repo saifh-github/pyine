@@ -102,8 +102,9 @@ class DeltaGeneratorType(enum.StrEnum):
 class TraceDeltaList(pydantic.BaseModel):
     """Dataclass used to store a list of trace deltas."""
 
-    model_config = pydantic.ConfigDict(frozen=True)
+    model_config = pydantic.ConfigDict(frozen=True, use_enum_values=True)
     """Pydantic model configuration (freezes the dataclass)."""
+
     trace_id: str
     """Unique identifier for the parent trace."""
     deltas: list[TraceDelta]

@@ -53,6 +53,7 @@ def timeit(
     By default, logs to stdout via print(); pass in a Logger to redirect.
     """
 
+    @contextlib.contextmanager
     def _ctx(label: str) -> typing.Iterator[None]:
         start = time.perf_counter()
         try:
@@ -82,7 +83,7 @@ def timeit(
 
     # otherwise, return decorator or context-manager factory
     if _func is None:
-        return contextlib.contextmanager(lambda: _ctx(name or "block"))()
+        return _ctx(name or "block")
 
     raise TypeError(f"invalid func argument: {_func}")
 

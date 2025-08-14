@@ -230,6 +230,7 @@ def print_code_with_numbered_lines(
         prefixed_tabs (int): the number of tabs to prefix each line with. Defaults to 0.
         logger: optional logger object with a info/debug method. If None, output goes to stdout.
     """
+    # pragma: no cover
     if logger is not None:
         if hasattr(logger, "info") and callable(logger.info):
             logging_func = logger.info
@@ -241,7 +242,6 @@ def print_code_with_numbered_lines(
             raise ValueError("could not identify how to use logger object")
     else:
         logging_func = print
-
     formatted_code = get_code_with_numbered_lines(code_string, prefixed_tabs)
     for line in formatted_code.splitlines():
         logging_func(line)

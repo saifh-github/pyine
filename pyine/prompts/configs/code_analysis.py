@@ -65,8 +65,9 @@ class CodeAnalysisResponse(pydantic.BaseModel):
     See the corresponding template YAML file for more details.
     """
 
-    model_config = pydantic.ConfigDict(frozen=True)
+    model_config = pydantic.ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
+
     is_deterministic: bool = pydantic.Field(
         description="Specifies whether the code is deterministic",
     )

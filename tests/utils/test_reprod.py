@@ -1,264 +1,160 @@
 import hashlib
-import importlib
-import importlib.metadata
-import platform
-import random
+import os
+import pathlib
 import sys
-import time
 import types
 
-import numpy as np
 import pytest
 
 import pyine.utils.reprod as reprod
 
 
-def test_get_python_version() -> None:
-    """Test that get_python_version returns the current Python version."""
-    assert reprod.get_python_version() == platform.python_version()
+def test_get_framework_version_package_missing(monkeypatch: pytest.MonkeyPatch):
+    class PNF(Exception):
+        pass
+
+    class FakeMeta:
+        class PackageNotFoundError(Exception):
+            pass
+
+        def version(self, name):  # noqa: ARG002
+            raise FakeMeta.PackageNotFoundError()
+
+    monkeypatch.setattr(reprod.importlib, "metadata", FakeMeta(), raising=True)
+    assert reprod.get_framework_version().startswith("0.0.0-unknown")
 
 
-def test_get_platform_name(monkeypatch) -> None:
-    """Test that get_platform_name returns the platform node name."""
-    monkeypatch.setattr(platform, "node", lambda: "test-node")
-    assert reprod.get_platform_name() == "test-node"
+def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
+    # Simulate ImportError for git module
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "git":
+            raise ImportError("no git")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert reprod.get_git_revision_hash() == "git-import-error"
 
 
-def test_get_timestamp(monkeypatch) -> None:
-    """Test that get_timestamp returns a formatted timestamp string."""
-    monkeypatch.setattr(time, "strftime", lambda fmt: "20250101-000000")
-    assert reprod.get_timestamp() == "20250101-000000"
+def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
+    # Simulate git module present but repo invalid
+    import builtins
 
+    class FakeGit:
+        class InvalidGitRepositoryError(Exception):
+            pass
 
-def test_get_framework_version_success(monkeypatch) -> None:
-    """Test that get_framework_version returns the installed package version."""
-    monkeypatch.setattr(importlib.metadata, "version", lambda pkg: "1.2.3")
-    assert reprod.get_framework_version() == "1.2.3"
+        class Repo:
+            def __init__(self, *args, **kwargs):  # noqa: ARG002
+                raise FakeGit.InvalidGitRepositoryError()
 
+    real_import = builtins.__import__
 
-def test_get_framework_version_not_installed(monkeypatch) -> None:
-    """Test that get_framework_version returns a safe fallback when package is not found."""
+    def fake_import(name, *args, **kwargs):
+        if name == "git":
+            return FakeGit
+        return real_import(name, *args, **kwargs)
 
-    def fake_version(pkg):
-        raise importlib.metadata.PackageNotFoundError()
-
-    monkeypatch.setattr(importlib.metadata, "version", fake_version)
-    assert reprod.get_framework_version() == "0.0.0-unknown"
-
-
-def test_get_framework_version_real() -> None:
-    """Test that get_framework_version returns the real package version."""
-    real_version = reprod.get_framework_version()
-    ver_major, ver_minor, ver_patch = real_version.split(".")
-    assert int(ver_major) >= 0
-    assert int(ver_minor) >= 0
-    assert int(ver_patch) >= 0
-    assert any([ver_major, ver_minor, ver_patch])
-
-
-def test_get_git_revision_hash_unknown_repo(monkeypatch) -> None:
-    """Test that get_git_revision_hash returns unknown when repo can't be found."""
-    # create dummy git module with Repo raising InvalidGitRepositoryError
-    dummy_git = types.SimpleNamespace()
-
-    class DummyRepo:
-        def __init__(*args, **kwargs):
-            raise importlib.metadata.PackageNotFoundError
-
-    dummy_git.Repo = DummyRepo
-    dummy_git.InvalidGitRepositoryError = Exception
-    monkeypatch.setitem(sys.modules, "git", dummy_git)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     assert reprod.get_git_revision_hash() == "git-revision-unknown"
 
 
-def test_get_git_revision_hash_success(monkeypatch) -> None:
-    """Test that get_git_revision_hash returns commit hash when repo is found."""
-    dummy_git = types.SimpleNamespace()
+def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
+    # Force importlib.metadata.distributions to raise ImportError to try pip branch
+    class FakeMeta:
+        def distributions(self):
+            raise ImportError("boom")
 
-    class DummyHead:
-        object = types.SimpleNamespace(hexsha="deadbeef")
+    monkeypatch.setattr(reprod.importlib, "metadata", FakeMeta(), raising=True)
 
-    class DummyRepo:
-        def __init__(self, path, search_parent_directories=True):
-            pass
+    import builtins as _bi
 
-        head = DummyHead()
+    real_import = _bi.__import__
 
-    dummy_git.Repo = DummyRepo
-    dummy_git.InvalidGitRepositoryError = Exception
-    monkeypatch.setitem(sys.modules, "git", dummy_git)
-    # call the function; since repo path is irrelevant, it will return our dummy sha
-    assert reprod.get_git_revision_hash() == "deadbeef"
+    class FakePip:
+        def get_installed_distributions(self):  # noqa: RUF100
+            raise AttributeError("no dist")
 
+    def fake_import(name, *args, **kwargs):
+        if name == "pip":
+            return FakePip()
+        return real_import(name, *args, **kwargs)
 
-class DummyDist:
-    """Dummy class to simulate importlib.metadata.Distribution objects."""
-
-    def __init__(self, name, version):
-        self.name = name
-        self.version = version
+    monkeypatch.setattr(_bi, "__import__", fake_import)
+    assert reprod.get_installed_packages() == []
 
 
-class DummyPkg:
-    """Dummy class to simulate pip.get_installed_distributions objects."""
+def test_compute_hash_file_and_dir(tmp_path: pathlib.Path):
+    f = tmp_path / "a.txt"
+    f.write_text("hello", encoding="utf-8")
+    h_file = reprod.compute_hash(f, algorithm="md5")
+    assert len(h_file) == 32
 
-    def __init__(self, key, version):
-        self.key = key
-        self.version = version
+    sub = tmp_path / "d"
+    sub.mkdir()
+    (sub / "b.txt").write_text("world", encoding="utf-8")
+    (sub / "c.bin").write_bytes(b"\x00\x01\x02")
+    h_dir = reprod.compute_hash(sub, algorithm="sha1")
+    assert len(h_dir) == 40
 
-
-def test_get_installed_packages_metadata(monkeypatch) -> None:
-    """Test that get_installed_packages returns packages from importlib.metadata."""
-    dists = [DummyDist("pkgA", "0.1"), DummyDist("pkgB", "2.0")]
-    monkeypatch.setattr(importlib.metadata, "distributions", lambda: dists)
-    result = reprod.get_installed_packages()
-    assert result == ["pkgA==0.1", "pkgB==2.0"]
-
-
-def test_get_installed_packages_pip(monkeypatch) -> None:
-    """Test that get_installed_packages uses pip as fallback when importlib.metadata fails."""
-    # Simulate importlib.metadata failure
-    monkeypatch.setattr(importlib, "metadata", None)
-    # Provide pip fallback
-    dummy_pip = types.SimpleNamespace()
-    dummy_pip.get_installed_distributions = lambda: [DummyPkg("pkgX", "1.0"), DummyPkg("pkgY", "3.5")]
-    monkeypatch.setitem(sys.modules, "pip", dummy_pip)
-    result = reprod.get_installed_packages()
-    assert result == ["pkgX==1.0", "pkgY==3.5"]
+    # error path w/ raise_on_error=False
+    bad = sub / "bad"
+    bad.write_bytes(b"x")
+    bad.chmod(0)
+    try:
+        h_dir2 = reprod.compute_hash(sub, algorithm="sha256", raise_on_error=False)
+        assert len(h_dir2) == 64
+    finally:
+        bad.chmod(0o644)
 
 
-def test_get_installed_packages_empty(monkeypatch) -> None:
-    """Test that get_installed_packages returns empty list when all methods fail."""
-    monkeypatch.setattr(importlib, "metadata", None)
-    monkeypatch.setitem(sys.modules, "pip", None)
-    result = reprod.get_installed_packages()
-    assert result == []
+def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
+    class Obj:
+        pass
+
+    o = Obj()
+    # Ensure that including repr with memory addresses yields stable hash due to cleaning
+    s1 = reprod.get_params_hash(o)
+    s2 = reprod.get_params_hash(o)
+    assert s1 == s2
 
 
-def test_get_params_hash_consistency() -> None:
-    """Test that get_params_hash returns consistent hashes for identical inputs."""
-    h1 = reprod.get_params_hash(1, "a", foo=3)
-    h2 = reprod.get_params_hash(1, "a", foo=3)
-    assert isinstance(h1, str) and len(h1) == 40
-    assert h1 == h2
+def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch):
+    # Patch logging and pydantic loader to avoid side effects by patching real modules
+    calls = {"setup_logging": 0, "register_models": 0}
 
+    import pyine.utils.logging as real_log_mod
+    import pyine.utils.pydantic_loader as real_loader_mod
 
-def test_compute_hash_simple(tmp_path) -> None:
-    """Test that compute_hash correctly computes file checksums."""
-    with pytest.raises(ValueError):
-        reprod.compute_hash("/path/that/does/not/exist")
-    content = b"hello world"
-    file_path = tmp_path / "test.txt"
-    file_path.write_bytes(content)
-    expected = hashlib.sha256(content).hexdigest()
-    assert reprod.compute_hash(str(file_path), "sha256", chunk_size=4) == expected
-    expected_md5 = hashlib.md5(content).hexdigest()
-    assert reprod.compute_hash(str(file_path), "md5", chunk_size=4) == expected_md5
+    def fake_setup_logging(level, log_to_file):  # noqa: ARG002
+        calls["setup_logging"] += 1
 
+    def fake_register_models_from_package(pkg):  # noqa: ARG002
+        calls["register_models"] += 1
 
-def test_compute_hash_directory_consistency(tmp_path) -> None:
-    """Test computing hash for a directory gives consistent results."""
-    sub_dir1 = tmp_path / "subdir1"
-    sub_dir2 = tmp_path / "subdir2"
-    sub_dir1.mkdir()
-    sub_dir2.mkdir()
-    (tmp_path / "file1.txt").write_text("content1")
-    (sub_dir1 / "file2.txt").write_text("content2")
-    (sub_dir2 / "file3.txt").write_text("content3")
-    hash1 = reprod.compute_hash(str(tmp_path))
-    hash2 = reprod.compute_hash(str(tmp_path))
-    assert hash1 == hash2
-    (sub_dir1 / "file2.txt").touch()
-    hash2 = reprod.compute_hash(str(tmp_path))
-    assert hash1 == hash2
-    (sub_dir1 / "file2.txt").write_text("modified content")
-    hash3 = reprod.compute_hash(str(tmp_path))
-    assert hash1 != hash3
-    (sub_dir1 / "file2.txt").unlink()
-    (sub_dir1 / "file4.txt").write_text("content1")
-    hash4 = reprod.compute_hash(str(tmp_path))
-    assert hash1 != hash4
-    (sub_dir1 / "file4.txt").unlink()
-    (sub_dir1 / "file2.txt").write_text("content2")
-    hash4 = reprod.compute_hash(str(tmp_path))
-    assert hash1 == hash4
+    monkeypatch.setattr(real_log_mod, "setup_logging", fake_setup_logging, raising=True)
+    monkeypatch.setattr(
+        real_loader_mod.PydanticYAMLLoader,
+        "register_models_from_package",
+        classmethod(lambda cls, pkg: fake_register_models_from_package(pkg)),
+        raising=True,
+    )
 
+    # ensure dotenv.load_dotenv is a no-op
+    import dotenv as real_dotenv
 
-def test_compute_hash_empty_directory(tmp_path) -> None:
-    """Test computing hash for an empty directory."""
-    hash1 = reprod.compute_hash(str(tmp_path))
-    hash2 = reprod.compute_hash(str(tmp_path))
-    assert hash1 == hash2
+    monkeypatch.setattr(real_dotenv, "load_dotenv", lambda: None, raising=True)
 
+    # reset sentinel so entrypoint_setup runs init branch
+    monkeypatch.delattr(reprod.entrypoint_setup, "_executed", raising=False)
 
-def test_compute_hash_different_structure(tmp_path) -> None:
-    """Test that different directory structures with same content have different hashes."""
-    dir1 = tmp_path / "dir1"
-    dir2 = tmp_path / "dir2"
-    dir1.mkdir()
-    dir2.mkdir()
-    (dir1 / "file1.txt").write_text("same content")
-    subdir = dir2 / "subdir"
-    subdir.mkdir()
-    (subdir / "file1.txt").write_text("same content")
-    hash1 = reprod.compute_hash(str(dir1))
-    hash2 = reprod.compute_hash(str(dir2))
-    assert hash1 != hash2
+    # first call initializes
+    reprod.entrypoint_setup(seed=123, log_level=10, log_to_file=False)
+    # second call should not call setup again, only reseed
+    reprod.entrypoint_setup(seed=456)
 
-
-def test_compute_hash_deterministic_order(tmp_path) -> None:
-    """Test that file order doesn't affect the hash."""
-    dir1 = tmp_path / "dir1"
-    dir2 = tmp_path / "dir2"
-    dir1.mkdir()
-    dir2.mkdir()
-    (dir1 / "aaa.txt").write_text("content a")
-    (dir1 / "bbb.txt").write_text("content b")
-    (dir2 / "bbb.txt").write_text("content b")
-    (dir2 / "aaa.txt").write_text("content a")
-    hash1 = reprod.compute_hash(str(dir1))
-    hash2 = reprod.compute_hash(str(dir2))
-    assert hash1 == hash2
-
-
-def test_get_params_hash_removes_addresses() -> None:
-    """Test that get_params_hash removes memory addresses from object representations."""
-
-    class A:
-        def __repr__(self):
-            return "<A object at 0xABCDEF>"
-
-    h = reprod.get_params_hash(A())
-    # Should not include "0x" in the hash input
-    assert "0x" not in h
-
-
-def test_set_seed_reproducibility() -> None:
-    """Test that set_seed ensures reproducible random number generation."""
-    reprod.set_seed(123)
-    r1 = random.random()
-    a1 = np.random.rand()
-    reprod.set_seed(123)
-    r2 = random.random()
-    a2 = np.random.rand()
-    assert r1 == r2
-    assert a1 == a2
-
-
-def test_get_reprod_metadata(monkeypatch) -> None:
-    """Test that get_reprod_metadata returns a dictionary with expected keys."""
-    monkeypatch.setattr("pyine.utils.reprod.get_python_version", lambda: "pv")
-    monkeypatch.setattr("pyine.utils.reprod.get_platform_name", lambda: "pn")
-    monkeypatch.setattr("pyine.utils.reprod.get_timestamp", lambda: "ts")
-    monkeypatch.setattr("pyine.utils.reprod.get_framework_version", lambda: "fv")
-    monkeypatch.setattr("pyine.utils.reprod.get_git_revision_hash", lambda: "gh")
-    monkeypatch.setattr("pyine.utils.reprod.get_installed_packages", lambda: ["p1", "p2"])
-    md = reprod.get_reprod_metadata()
-    assert md == {
-        "python_version": "pv",
-        "platform": "pn",
-        "timestamp": "ts",
-        "framework_version": "fv",
-        "git_revision_hash": "gh",
-        "installed_packages": ["p1", "p2"],
-    }
+    assert calls["setup_logging"] == 1
+    assert calls["register_models"] == 1

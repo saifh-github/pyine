@@ -22,7 +22,7 @@ class CallableAnalysisResponse(pydantic.BaseModel):
     entrypoint of a Python program. See the corresponding template YAML file for more details.
     """
 
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
     entrypoint_function_name: PythonDefType = pydantic.Field(
         description=(

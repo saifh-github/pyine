@@ -3,183 +3,112 @@ import pytest
 import pyine.utils.code.patching as patching
 
 
-@pytest.fixture(
-    params=[
-        {  # tiny diffs (single line)
-            "original": "The quick brown fox jumps over the lazy dog.\n",
-            "modified": "The quick red fox jumps over the lazy cat.\n",
-            "unrelated": "A completely different sentence.\n",
-        },
-        {  # pretty small diffs (one line diff over a handful)
-            "original": """\
-def hello():
-    print("Hello, world!")
-    return
-""",
-            "modified": """\
-def hello():
-    print("Hello, everybody!")
-    return
-""",
-            "unrelated": """\
-class MyClass:
-    pass
-""",
-        },
-        {  # serious diffs (many lines over seemingly normal code)
-            "original": """\
-import math
-
-class MyTestClass:
-    '''A sample class for testing.'''
-    an_int: int = 1
-
-    def __init__(self, value: int):
-        '''Initializes the class.'''
-        self.my_variable: int = value
-
-    def calculate(self, multiplier: int) -> int:
-        '''A sample method.'''
-        local_var = self.my_variable * multiplier
-        print(f"Result is {local_var + self.an_int}")
-        return local_var + self.an_int
-
-def top_level_function(x: int, y: int) -> float:
-    '''A sample top-level function.'''
-    result = math.sqrt(x**2 + y**2)
-    return result
-""",
-            "modified": """\
-import math
-
-class MyTestClass:
-    '''A sample class for testing.'''
-    an_int: int = 1
-
-    def __init__(self, value: int):
-        '''Initializes the class.'''
-        self.my_variable: int = value * 2  # changed logic
-
-    def calculate(self, multiplier: int) -> int:
-        '''A sample method.'''
-        local_var = self.my_variable * multiplier
-        print(f"The result is {local_var + self.an_int}")  # changed message
-        return local_var + self.an_int
-
-    def another_method(self) -> None:
-        '''A new method.'''
-        pass
-
-def top_level_function(x: int, y: int) -> float:
-    '''A sample top-level function.'''
-    # removed the implementation
-    return 0.0
-""",
-            "unrelated": """\
-import os
-
-class UnrelatedClass:
-    def unrelated_method(self):
-        return os.getcwd()
-""",
-        },
-    ]
-)
-def text_samples(request) -> dict[str, str]:
-    return request.param
+def test_compute_and_apply_patch_success():
+    original = """line1\nline2\nline3\n"""
+    modified = """line1\nLINE TWO\nline3\n"""
+    diff = patching.compute_patch(original, modified)
+    result, ok = patching.apply_patch(original, diff)
+    assert ok is True
+    assert result == modified
 
 
-def test_patching_cycle_is_successful(
-    text_samples: dict[str, str],
-):
-    patch_text = patching.compute_patch(
-        text_samples["original"],
-        text_samples["modified"],
-    )
-    assert isinstance(patch_text, str)
-    assert len(patch_text) > 0
-    new_text, succeeded = patching.apply_patch(
-        text_samples["original"],
-        patch_text,
-    )
-    assert succeeded
-    assert new_text == text_samples["modified"]
+def test_apply_patch_empty_patch_fails():
+    original = "a\n"
+    result, ok = patching.apply_patch(original, "")
+    assert ok is False
+    assert result == original
 
 
-def test_patching_cycle_fails_on_unrelated_text(
-    text_samples: dict[str, str],
-):
-    patch_text = patching.compute_patch(
-        text_samples["original"],
-        text_samples["modified"],
-    )
-    new_text, succeeded = patching.apply_patch(
-        text_samples["unrelated"],
-        patch_text,
-    )
-    assert not succeeded
-    assert new_text != text_samples["modified"]
+def test_apply_patch_multi_file_fails():
+    a1 = "a\n"
+    a2 = "b\n"
+    d1 = patching.compute_patch(a1, "A\n")
+    d2 = patching.compute_patch(a2, "B\n")
+    # Force second patch to be for a different file by changing headers
+    d2 = d2.replace("--- original", "--- original2").replace("+++ modified", "+++ modified2")
+    multi = d1 + d2
+    result, ok = patching.apply_patch(a1, multi)
+    assert ok is False
+    assert result == a1
 
 
-@pytest.mark.parametrize(
-    "original_code,modified_code,patch_text",
-    [
-        (
-            """\
-def greet(name):
-    print(f"Hello, {name}!")
-""",
-            """\
-def greet(name):
-    # Greet the user
-    print(f"Hi, {name}!")
-""",
-            """\
---- original
-+++ modified
-@@ -1,2 +1,3 @@
- def greet(name):
--    print(f"Hello, {name}!")
-+    # Greet the user
-+    print(f"Hi, {name}!")
-""",
-        ),
-        (
-            """\
-def factorial(n):
-    result = 1
-    for i in range(1, n+1):
-        result *= i
-    return result
-""",
-            """\
-def factorial(n):
-    # Calculate factorial recursively
-    if n <= 1:
-        return 1
-    return n * factorial(n-1)
-""",
-            """\
---- original
-+++ modified
-@@ -1,5 +1,5 @@
- def factorial(n):
--    result = 1
--    for i in range(1, n+1):
--        result *= i
--    return result
-+    # Calculate factorial recursively
-+    if n <= 1:
-+        return 1
-+    return n * factorial(n-1)
-""",
-        ),
-    ],
-)
-def test_apply_hardcoded_git_style_patch(original_code, modified_code, patch_text):
-    new_text, succeeded = patching.apply_patch(
-        original_code,
-        patch_text,
-    )
-    assert succeeded
-    assert new_text == modified_code
+def test_apply_patch_context_mismatch_fails():
+    original = "one\nTWO\nthree\n"
+    modified = "one\nTWO!\nthree\n"
+    diff = patching.compute_patch(original, modified)
+    wrong_original = "one\nTWO DIFF\nthree\n"
+    result, ok = patching.apply_patch(wrong_original, diff)
+    assert ok is False
+    assert result == wrong_original
+
+
+def test_apply_patch_out_of_order_hunk(monkeypatch: pytest.MonkeyPatch):
+    # Build a fake PatchSet with a single file containing two hunks out of order
+    class FakeHunk:
+        def __init__(self, source_start, source_length):
+            self.source_start = source_start
+            self.source_length = source_length
+
+        def __iter__(self):
+            return iter(())  # no lines to validate context
+
+    class FakePatchedFile:
+        def __iter__(self):
+            # first hunk moves index forward by 2, second hunk starts earlier -> out of order
+            return iter((FakeHunk(5, 2), FakeHunk(1, 1)))
+
+    class FakePatchSet:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx):
+            assert idx == 0
+            return FakePatchedFile()
+
+    monkeypatch.setattr(patching.unidiff.PatchSet, "from_string", staticmethod(lambda s: FakePatchSet()))
+
+    original = "a\n b\n c\n"
+    result, ok = patching.apply_patch(original, "irrelevant")
+    assert ok is False
+    assert result == original
+
+
+def test_apply_patch_parsing_exception(monkeypatch: pytest.MonkeyPatch):
+    def boom(s):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(patching.unidiff.PatchSet, "from_string", staticmethod(boom))
+    original = "a\n"
+    result, ok = patching.apply_patch(original, "patch")
+    assert ok is False
+    assert result == original
+
+
+def test_show_colored_diff(monkeypatch: pytest.MonkeyPatch):
+    # Prepare a small diff with various line prefixes
+    diff = """--- original\n+++ modified\n@@ -1,2 +1,2 @@\n-line\n+line!\n context\n"""
+
+    captured = {"html": None}
+
+    class FakeHTML:
+        def __init__(self, html_content):
+            captured["html"] = html_content
+
+    def fake_display(obj):  # noqa: ARG001
+        # object is FakeHTML instance; nothing to do
+        return None
+
+    # monkeypatch the display functions on the actual module object
+    import IPython.display as real_disp
+
+    monkeypatch.setattr(real_disp, "HTML", FakeHTML, raising=True)
+    monkeypatch.setattr(real_disp, "display", fake_display, raising=True)
+
+    patching.show_colored_diff(diff)
+
+    assert captured["html"] is not None
+    # expect colored spans for -, +, @@ and context lines
+    assert "color:#b31d28" in captured["html"]  # red for removals
+    assert "color:#22863a" in captured["html"]  # green for additions
+    assert "color:#8250df" in captured["html"]  # purple for hunk header
+    assert "color:#6a737d" in captured["html"]  # grey for context

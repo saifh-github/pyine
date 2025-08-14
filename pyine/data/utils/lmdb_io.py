@@ -43,6 +43,9 @@ class SerializationMethod(enum.StrEnum):
 class SerializationConfig(pydantic.BaseModel):
     """Serialization configuration for LMDBWriter."""
 
+    model_config = pydantic.ConfigDict(frozen=True, use_enum_values=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
     method: SerializationMethod | str = SerializationMethod.MSGSPEC
     """Serialization method to use."""
     compression_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)

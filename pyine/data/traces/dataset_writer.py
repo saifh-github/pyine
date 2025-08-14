@@ -49,7 +49,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     detail.
     """
 
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
     source_dataset_name: typing.Annotated[
         pydantic.StrictStr,
@@ -197,6 +197,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
                 abs_tol="auto",
                 array_type_matters=False,
             ),
+            validate_default=True,
             description="Options to use for comparing the output of a test with the expected output.",
         ),
     ]
@@ -204,6 +205,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         pyine.data.utils.lmdb_io.SerializationConfig,
         pydantic.Field(
             default=pyine.data.utils.lmdb_io.SerializationConfig(),
+            validate_default=True,
             description="Configuration to use for serializing in the dataset writer.",
         ),
     ]

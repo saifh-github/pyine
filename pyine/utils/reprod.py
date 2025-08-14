@@ -4,13 +4,12 @@ import logging
 import os
 import pathlib
 import platform
-import random
 import re
 import time
 import typing
 
 import dotenv
-import numpy as np
+import lightning.fabric.utilities.seed
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +157,22 @@ def compute_hash(
         raise ValueError(f"path does not exist: {path}")
 
 
-def set_seed(seed: int) -> None:
-    """Sets the seed for the random and numpy.random modules."""
-    random.seed(seed)
-    np.random.seed(seed)
+def set_seed(
+    seed: int | None = None,
+    workers: bool = False,
+    verbose: bool = True,
+) -> None:
+    """Sets the seed for all potentially relevant RNGs through lightning.
+
+    For more information, refer to:
+    https://lightning.ai/docs/fabric/stable/api/utilities.html#lightning.fabric.utilities.seed.seed_everything
+    """
+    lightning.fabric.utilities.seed.pl_worker_init_function
+    lightning.fabric.utilities.seed.seed_everything(
+        seed=seed,
+        workers=workers,
+        verbose=verbose,
+    )
 
 
 def get_reprod_metadata() -> dict[str, typing.Any]:
