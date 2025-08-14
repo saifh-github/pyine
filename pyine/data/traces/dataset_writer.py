@@ -617,6 +617,12 @@ async def _generate_augmented_code_to_trace(
     return augmented_code_to_trace
 
 
+async def _cooperative_yield():
+    """Helper used to yield control so cancellations (SIGINT -> CancelledError) are observed."""
+    # use a very short sleep to give the loop a chance to deliver cancellation
+    await asyncio.sleep(0)
+
+
 async def write_dataset(
     root_dataset_path: pathlib.Path,
     output_dataset_path: pathlib.Path,
@@ -657,133 +663,148 @@ async def write_dataset(
     if len(problem_data_iter) == 0:
         raise ValueError(f"no problems found in {config.source_dataset_name} source dataset")
     log(f"found {len(problem_data_iter)} problems in {config.source_dataset_name} source dataset")
+    await _cooperative_yield()
     if config.llm_provider_kwargs:
         llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
     else:
         llm = None
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
+    trace_event_counts = []
+    written_outputs = 0  # total number of traces that we will have written
     log(f"creating LMDB dataset at: {output_dataset_path}...")
     writer = pyine.data.utils.lmdb_io.LMDBWriter(
         path=output_dataset_path,
         max_allowed_value_length=config.max_trace_results_blob_size,
         serialization_config=config.writer_serialization_config,
     )
-    writer.write_metadata(  # start by writing metadata (creation hyperparams) to disk
-        dict(
-            parent_dataset=dict(
-                dataset_name=config.source_dataset_name,
-                dataset_path=str(root_dataset_path),
-                dataset_hash=pyine.utils.reprod.compute_hash(root_dataset_path),
-                problem_count=len(problem_data_iter),
+    try:
+        writer.write_metadata(  # start by writing metadata (creation hyperparams) to disk
+            dict(
+                parent_dataset=dict(
+                    dataset_name=config.source_dataset_name,
+                    dataset_path=str(root_dataset_path),
+                    dataset_hash=pyine.utils.reprod.compute_hash(root_dataset_path),
+                    problem_count=len(problem_data_iter),
+                ),
+                **config.model_dump(),
             ),
-            **config.model_dump(),
-        ),
-    )
-    contains_banned_tags = pyine.data.utils.ban_rules.build_ban_predicate_from_rule(
-        rule=config.banned_problem_tags_rule or "",
-    )
-    trace_event_counts = []
-    written_outputs = 0  # total number of traces that we will have written
-    # iterate over each problem statement (and its proposed solutions) in the target dataset
-    for problem, solutions in problem_data_iter:
-        # first, make sure the problem is valid and we can use its solutions for tracing
-        err_msg = _check_must_skip_problem(problem, solutions, config, contains_banned_tags)
-        if err_msg is not None:
-            log(err_msg)
-            continue
-        # identify which solutions are near-duplicates by clustering, and keep one solution per cluster
-        code_dupe_clusters = pyine.utils.code.validation.find_near_duplicate_code_clusters(
-            code_strings=[s.code for s in solutions],
-            threshold=config.min_solution_dissimilarity,
         )
-        retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
-        # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs)
-        test_tuples = _get_test_tuples(problem=problem, config=config)
-        written_solutions = 0  # total number of valid solutions found for the current coding problem
-        # iterate over solutions for the current coding problem, and trace each one with all available inputs/outputs
-        for solution_idx, solution in enumerate(solutions):
-            # reformat the code string (for cleanliness in tracing results)
-            err_msg = _check_must_skip_solution(problem, solution, solution_idx, retained_solution_indices, config)
+        await _cooperative_yield()
+        contains_banned_tags = pyine.data.utils.ban_rules.build_ban_predicate_from_rule(
+            rule=config.banned_problem_tags_rule or "",
+        )
+        # iterate over each problem statement (and its proposed solutions) in the target dataset
+        for problem, solutions in problem_data_iter:
+            await _cooperative_yield()  # yield regularly so cancellations can be handled
+            # first, make sure the problem is valid and we can use its solutions for tracing
+            err_msg = _check_must_skip_problem(problem, solutions, config, contains_banned_tags)
             if err_msg is not None:
                 log(err_msg)
                 continue
-            # first step: for all test cases, run the ORIGINAL SOLUTION CODE, and see which test succeeds/fails
-            orig_code_to_trace = [
-                _CodeToTrace(
-                    code_string=solution.code,  # original code snippet (reformatted but otherwise intact)
-                    trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
-                        **vars(solution.solution_id),
-                        test_idx=test_tuple.test_idx,
-                        augment_category=None,  # original code = no augmentation applied
-                        augment_idx=None,  # no augmentation applied = no index to provide
-                    ),
-                    entrypoint_name=problem.entrypoint_name,
-                    test_inputs=test_tuple.inputs,
-                    test_outputs=test_tuple.outputs,
-                )
-                for test_tuple in test_tuples
-            ]
-            log(f"{solution}: tracing orig code with {len(orig_code_to_trace)} tests...")
-            traces_to_write = _get_traces_to_write(
-                to_trace=orig_code_to_trace,
-                all_must_succeed=not config.allow_imperfect_solutions,
-                config=config,
-                log_fn=log,
+            # identify which solutions are near-duplicates by clustering, and keep one solution per cluster
+            code_dupe_clusters = pyine.utils.code.validation.find_near_duplicate_code_clusters(
+                code_strings=[s.code for s in solutions],
+                threshold=config.min_solution_dissimilarity,
             )
-            if not traces_to_write:
-                log(f"{solution}: skipping solution since original code exec test(s) failed")
-                continue
-            # if all test cases passed for the original solution, do the required 'augmentations' now
-            augmented_code_to_trace = await _generate_augmented_code_to_trace(
-                problem=problem,
-                solution=solution,
-                llm=llm,
-                test_tuples=test_tuples,
-                config=config,
-            )
-            if augmented_code_to_trace:
-                log(f"{solution}: tracing augmented code with {len(augmented_code_to_trace)} tests...")
-                new_traces_to_write = _get_traces_to_write(
-                    to_trace=augmented_code_to_trace,
-                    all_must_succeed=False,
+            retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
+            # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs)
+            test_tuples = _get_test_tuples(problem=problem, config=config)
+            written_solutions = 0  # total number of valid solutions found for the current coding problem
+            # iterate over solutions for the current coding problem, and trace each one with all available inputs/outputs
+            for solution_idx, solution in enumerate(solutions):
+                await _cooperative_yield()  # yield regularly so cancellations can be handled
+                # reformat the code string (for cleanliness in tracing results)
+                err_msg = _check_must_skip_solution(problem, solution, solution_idx, retained_solution_indices, config)
+                if err_msg is not None:
+                    log(err_msg)
+                    continue
+                # first step: for all test cases, run the ORIGINAL SOLUTION CODE, and see which test succeeds/fails
+                orig_code_to_trace = [
+                    _CodeToTrace(
+                        code_string=solution.code,  # original code snippet (reformatted but otherwise intact)
+                        trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
+                            **vars(solution.solution_id),
+                            test_idx=test_tuple.test_idx,
+                            augment_category=None,  # original code = no augmentation applied
+                            augment_idx=None,  # no augmentation applied = no index to provide
+                        ),
+                        entrypoint_name=problem.entrypoint_name,
+                        test_inputs=test_tuple.inputs,
+                        test_outputs=test_tuple.outputs,
+                    )
+                    for test_tuple in test_tuples
+                ]
+                log(f"{solution}: tracing orig code with {len(orig_code_to_trace)} tests...")
+                traces_to_write = _get_traces_to_write(
+                    to_trace=orig_code_to_trace,
+                    all_must_succeed=not config.allow_imperfect_solutions,
                     config=config,
                     log_fn=log,
                 )
-                if any(k in traces_to_write for k in new_traces_to_write):
-                    raise RuntimeError("duplicate trace keys when merging augmented traces")
-                traces_to_write.update(new_traces_to_write)
+                if not traces_to_write:
+                    log(f"{solution}: skipping solution since original code exec test(s) failed")
+                    continue
+                # if all test cases passed for the original solution, do the required 'augmentations' now
+                augmented_code_to_trace = await _generate_augmented_code_to_trace(
+                    problem=problem,
+                    solution=solution,
+                    llm=llm,
+                    test_tuples=test_tuples,
+                    config=config,
+                )
+                await _cooperative_yield()  # yield regularly so cancellations can be handled
+                if augmented_code_to_trace:
+                    log(f"{solution}: tracing augmented code with {len(augmented_code_to_trace)} tests...")
+                    new_traces_to_write = _get_traces_to_write(
+                        to_trace=augmented_code_to_trace,
+                        all_must_succeed=False,
+                        config=config,
+                        log_fn=log,
+                    )
+                    if any(k in traces_to_write for k in new_traces_to_write):
+                        raise RuntimeError("duplicate trace keys when merging augmented traces")
+                    traces_to_write.update(new_traces_to_write)
 
-            log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
-            written_traces, errored_traces = writer.put_batch(
-                traces_to_write,
-                show_progress=False,
-                raise_on_error=False,
-            )
-            for errored_trace_id, error in errored_traces.items():
-                logger.warning(f"{errored_trace_id} skipped, error writing trace: {error}")
-            for written_trace_id in written_traces.keys():
-                trace_event_counts.append(traces_to_write[written_trace_id]["tracing_steps"])
-            if written_solutions == 0 and written_traces:  # no traces written so far for current problem
-                # write parent problem data (we found at least one valid trace for it)
-                problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
-                writer.put(key=problem_metadata_key, value=problem.model_dump())  # will raise on error
-            written_outputs += len(written_traces)
-            written_solutions += 1
+                log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
+                written_traces, errored_traces = writer.put_batch(
+                    traces_to_write,
+                    show_progress=False,
+                    raise_on_error=False,
+                )
+                for errored_trace_id, error in errored_traces.items():
+                    logger.warning(f"{errored_trace_id} skipped, error writing trace: {error}")
+                for written_trace_id in written_traces.keys():
+                    trace_event_counts.append(traces_to_write[written_trace_id]["tracing_steps"])
+                if written_solutions == 0 and written_traces:  # no traces written so far for current problem
+                    # write parent problem data (we found at least one valid trace for it)
+                    problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
+                    writer.put(key=problem_metadata_key, value=problem.model_dump())  # will raise on error
+                written_outputs += len(written_traces)
+                written_solutions += 1
+                if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
+                    break
+                if (
+                    config.max_solutions_per_problem is not None
+                    and written_solutions >= config.max_solutions_per_problem
+                ):
+                    break
+            if written_solutions == 0:
+                log(f"{problem}: no valid solution found")
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
-                break
-            if config.max_solutions_per_problem is not None and written_solutions >= config.max_solutions_per_problem:
-                break
-        if written_solutions == 0:
-            log(f"{problem}: no valid solution found")
-        if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
-            break  # if we already reached our target output dataset size, we're done
-    log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")
-    writer.close()
-    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
-    if trace_event_counts:
-        avg_event_count = sum(trace_event_counts) / len(trace_event_counts)
-        log(f"\t(event count avg={avg_event_count:.1f}, min={min(trace_event_counts)}, max={max(trace_event_counts)})")
-    return writer
+                break  # if we already reached our target output dataset size, we're done
+        return writer
+    except DONT_CATCH_EXCEPTIONS as e:
+        logging.warning("writing process interrupted")
+        raise e
+    finally:
+        log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")
+        writer.close()
+        log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+        if trace_event_counts:
+            avg_event_count = sum(trace_event_counts) / len(trace_event_counts)
+            log(
+                f"\t(event count avg={avg_event_count:.1f}, min={min(trace_event_counts)}, max={max(trace_event_counts)})"
+            )
 
 
 async def write_dataset_from_taco(
