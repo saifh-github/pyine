@@ -64,6 +64,8 @@ possible, reuse common definitions and objects across the tests of a class using
 test modules, no need for extensive docstrings or comments: only document or comment the stuff
 that is really not so obvious to understand.
 
+When writing pydantic-related code, use the pydantic v2 conventions.
+
 ## Code linting and testing
 
 To check whether linters find issues in proposed code, run `make check` (the necessary environment
