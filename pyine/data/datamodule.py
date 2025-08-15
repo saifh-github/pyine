@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 SubsetNameType = str
-"""Type used to represent a subset name (e.g. 'train', 'valid', 'test')."""
+"""Type used to represent a data subset name (e.g. 'train', 'valid', 'test')."""
+LoaderNameType = str
+"""Type used to represent a data loader name (e.g. 'train', 'valid', 'test')."""
 BaseDataParserType = torch.utils.data.Dataset
 """Default base class used for data parsers."""
 BaseDataLoaderType = torch.utils.data.DataLoader
@@ -150,7 +152,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         ),
     ]
     dataloader_config_overrides: typing.Annotated[
-        dict[SubsetNameType, dict[str, typing.Any]],
+        dict[LoaderNameType, dict[str, typing.Any]],
         pydantic.Field(
             default_factory=dict,  # no overrides by default, meaning all subsets will use the default config
             description="Data loader configuration dictionary with subset-specific default config overrides.",
@@ -159,6 +161,13 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
+    split_seed: typing.Annotated[
+        int,
+        pydantic.Field(
+            default=0,
+            description="Seed used to initialize internal RNGs for dataset splits.",
+        ),
+    ]
     subset_types: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
@@ -167,13 +176,14 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             description="List of data subsets that the module supports; derived impls can support more/fewer.",
         ),
     ]
-    split_seed: typing.Annotated[
-        int,
-        pydantic.Field(
-            default=0,
-            description="Seed used to initialize internal RNGs for dataset splits.",
-        ),
-    ]
+
+    @property
+    def loader_types(self) -> tuple[LoaderNameType, ...]:
+        """Types of data loaders that this particular implementation supports.
+
+        By default, we assume that these 'types' are the data subsets.
+        """
+        return self.subset_types
 
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
@@ -183,7 +193,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         parser = parser_config.instantiate(*args, **extra_kwargs)
         return parser
 
-    def instantiate_dataloader(self, loader_type: SubsetNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
+    def instantiate_dataloader(self, loader_type: LoaderNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
         """Instantiates a data loader object for the given loader type."""
         loader_config = self._resolved_dataloader_configs[loader_type]
         loader = loader_config.instantiate(*args, **extra_kwargs)
@@ -195,7 +205,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     _resolved_dataparser_configs: dict[SubsetNameType, BaseDataParserConfig] = pydantic.PrivateAttr(
         default_factory=dict
     )
-    _resolved_dataloader_configs: dict[SubsetNameType, BaseDataLoaderConfig] = pydantic.PrivateAttr(
+    _resolved_dataloader_configs: dict[LoaderNameType, BaseDataLoaderConfig] = pydantic.PrivateAttr(
         default_factory=dict
     )
 
@@ -215,27 +225,25 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     def _resolve_dataloader_config(
         self,
-        loader_type: SubsetNameType,
+        loader_type: LoaderNameType,
     ) -> BaseDataLoaderConfig:
-        """Returns the data loader configuration for the given subset type.
-
-        By default, we assume that dataloader types are linked to data subsets.
-        """
-        if loader_type not in self.subset_types:
-            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.subset_types}")
+        """Returns the data loader configuration for the given loader type."""
+        if loader_type not in self.loader_types:
+            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
         loader_config = self.default_dataloader_config
         if loader_type in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_type]:
-            subset_params = loader_config.model_dump()
-            subset_params.update(self.dataloader_config_overrides[loader_type])
-            loader_config = type(self.default_dataloader_config)(**subset_params)
+            loader_params = loader_config.model_dump()
+            loader_params.update(self.dataloader_config_overrides[loader_type])
+            loader_config = type(self.default_dataloader_config)(**loader_params)
         return loader_config
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "BaseDataModuleConfig":
-        """Validates and resolves the data parser and data loader configs for all subsets."""
-        for subset in self.subset_types:
-            self._resolved_dataparser_configs[subset] = self._resolve_dataparser_config(subset)
-            self._resolved_dataloader_configs[subset] = self._resolve_dataloader_config(subset)
+        """Validates and resolves the data parser and data loader configs."""
+        for subset_type in self.subset_types:
+            self._resolved_dataparser_configs[subset_type] = self._resolve_dataparser_config(subset_type)
+        for loader_type in self.loader_types:
+            self._resolved_dataloader_configs[loader_type] = self._resolve_dataloader_config(loader_type)
         return self
 
 
@@ -382,16 +390,13 @@ class BaseDataModule(pl.LightningDataModule):
         raise NotImplementedError
 
     @property
-    def dataloader_types(self) -> tuple[SubsetNameType, ...]:
-        """Types of dataloaders that this particular implementation supports.
-
-        Note: by default, we assume that these 'types' are the data subsets.
-        """
-        return self.config.subset_types
+    def dataloader_types(self) -> tuple[LoaderNameType, ...]:
+        """Types of dataloaders that this particular implementation supports."""
+        return self.config.loader_types
 
     def get_dataloader(
         self,
-        loader_type: SubsetNameType,
+        loader_type: LoaderNameType,
     ) -> pl_types.TRAIN_DATALOADERS | pl_types.EVAL_DATALOADERS:  # noqa
         """Returns a data loader object (or a collection of) for a given subset type.
 
@@ -400,8 +405,8 @@ class BaseDataModule(pl.LightningDataModule):
         types are linked to data subsets.
         """
         # pragma: no cover
-        if loader_type not in self.config.subset_types:
-            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.config.subset_types}")
+        if loader_type not in self.config.loader_types:
+            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.config.loader_types}")
         expected_getter_name = f"{loader_type}_dataloader"
         if not hasattr(self, expected_getter_name):
             raise ValueError(f"invalid loader type: {loader_type}, no such function: {expected_getter_name}")

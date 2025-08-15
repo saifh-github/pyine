@@ -105,16 +105,17 @@ class DummyDataModule(datamodule.BaseDataModule):
 
     def _make_parser(
         self,
-        subset: datamodule.SubsetNameType,
+        subset_type: datamodule.SubsetNameType,
     ) -> tud.Dataset:
-        return self.config.instantiate_parser(subset)
+        return self.config.instantiate_parser(subset_type)
 
     def _make_loader(
         self,
-        subset: datamodule.SubsetNameType,
+        loader_type: datamodule.LoaderNameType,
     ) -> tud.DataLoader:
-        parser = self._make_parser(subset)
-        return self.config.instantiate_dataloader(subset, dataset=parser)
+        # assumes loader types == subset types
+        parser = self._make_parser(loader_type)
+        return self.config.instantiate_dataloader(loader_type, dataset=parser)
 
     def train_dataloader(
         self,
@@ -138,6 +139,7 @@ class TestBaseDataModule:
         cfg = build_default_config()
         dm = DummyDataModule(cfg)
         assert dm.dataloader_types == cfg.subset_types
+        assert dm.dataloader_types == cfg.loader_types
 
     def test_valid_dataloader_redirect(self) -> None:
         class OnlyVal(datamodule.BaseDataModule):
