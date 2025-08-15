@@ -254,14 +254,18 @@ class ClassImportSpec(
             description=("Dotted import path to the required base class of the target class."),
         ),
     ]
-    params: dict[str, typing.Any] = pydantic.Field(
+    params: dict[str, typing.Any] | pydantic.BaseModel = pydantic.Field(
         default_factory=dict, description="Keyword arguments passed to the target class constructor."
     )
 
-    def instantiate(self) -> BaseT:
+    def instantiate(self, *args, **extra_kwargs) -> BaseT:
         """Instantiates the resolved class with the parameters held inside the config."""
         assert self._resolved_class is not None, "model must be validated before use"
-        return self._resolved_class(**self.params)
+        return self._resolved_class(*args, **self.get_params_dict(), **extra_kwargs)
+
+    def get_params_dict(self):
+        """Returns the parameters held inside the config as a dictionary."""
+        return self.params.model_dump() if isinstance(self.params, pydantic.BaseModel) else self.params.copy()
 
     # ----------------- below is private stuff that does not affect serialization -----------------
 
@@ -278,7 +282,7 @@ class ClassImportSpec(
         return None
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "ClassImportSpec":
+    def _validate_and_resolve(self) -> "ClassImportSpec[BaseT]":
         """Validates and resolves the class and base class paths."""
         resolved_class = pyine.utils.portability.import_from_dotted_path(self.class_path)
         if not isinstance(resolved_class, type) or not callable(resolved_class):
@@ -293,9 +297,9 @@ class ClassImportSpec(
                 raise TypeError(
                     f"resolved base {resolved_base.__name__} is not compatible with expected {expected_base.__name__}"
                 )
-        if not issubclass(resolved_class, resolved_base):
+        if resolved_class is not resolved_base and not issubclass(resolved_class, resolved_base):
             raise TypeError(f"{resolved_class.__name__} is not a subclass of {resolved_base.__name__}")
-        self._validate_params_against_constructor(resolved_class, self.params)
+        self._validate_params_against_constructor(resolved_class, self.get_params_dict())
         self._resolved_class = resolved_class
         self._resolved_base = resolved_base
         return self
@@ -303,44 +307,13 @@ class ClassImportSpec(
     @staticmethod
     def _validate_params_against_constructor(cls: type, params: dict[str, typing.Any]) -> None:
         """Validates that the provided params match the constructor signature of the class."""
+        # check that all provided params exist in the constructor
         sig = inspect.signature(cls)
-        parameters = list(sig.parameters.values())
-        # fail fast if there are required positional-only params (cannot pass via kwargs)
-        pos_only_required = [
-            p
-            for p in parameters
-            if p.kind is inspect.Parameter.POSITIONAL_ONLY and p.default is inspect.Parameter.empty
-        ]
-        if pos_only_required:
-            names = ", ".join(p.name for p in pos_only_required)
-            raise TypeError(
-                f"{cls.__name__}.__init__ has required positional-only parameters ({names}); "
-                f"cannot instantiate with keyword-only params"
-            )
-        accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
-        acceptable_names = {p.name for p in parameters if p.kind is not inspect.Parameter.POSITIONAL_ONLY}
-        # unknown params (only an error if the constructor doesn't accept **kwargs)
-        if not accepts_kwargs:
-            unknown = set(params) - acceptable_names
-            if unknown:
-                raise TypeError(
-                    f"unexpected parameter(s) for {cls.__name__}: {sorted(unknown)}; "
-                    f"accepted: {sorted(acceptable_names)}"
-                )
-        # ensure required keywordable parameters are present
-        required_missing = [
-            p.name
-            for p in parameters
-            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-            and p.default is inspect.Parameter.empty
-            and p.name not in params
-        ]
-        if required_missing:
-            raise TypeError(f"missing required parameter(s) for {cls.__name__}: {sorted(required_missing)}")
-        # optional: try binding (catches some edge-cases like duplicate/ambiguous)
+        invalid_params = set(params) - set(sig.parameters)
+        if invalid_params:
+            raise ValueError(f"invalid parameter(s) for {cls.__name__}: {invalid_params}")
+        # check if provided params can be bound to the constructor
         try:
-            # binding with provided kwargs (ignores extra if **kwargs present)
-            to_bind = {k: v for k, v in params.items() if k in acceptable_names or accepts_kwargs}
-            sig.bind_partial(**to_bind)
-        except TypeError as exc:
-            raise TypeError(f"invalid parameters for {cls.__name__}: {exc}") from exc
+            sig.bind_partial(**params)
+        except TypeError as e:
+            raise ValueError(f"cannot bind parameter(s) to {cls.__name__} constructor") from e

@@ -283,14 +283,26 @@ class TestClassImportSpec:
                 "pkg.module.DummyBase": DummyBase,
             },
         )
-        with pytest.raises(TypeError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             _ = pyd.ClassImportSpec(
                 class_path="pkg.module.FailingCtor",
                 base_class_path="pkg.module.DummyBase",
-                params={},  # missing required keyword-only arg 'must'
+                params={"extra": 1},  # this parameter does NOT exist
             )
-        assert "missing required parameter(s)" in str(exc_info.value)
-        assert "must" in str(exc_info.value)
+        assert "invalid parameter(s) for" in str(exc_info.value)
+        assert "extra" in str(exc_info.value)
+        # also make sure that if we don't pass the missing param ('must'), we can't instantiate
+        spec = pyd.ClassImportSpec(
+            class_path="pkg.module.FailingCtor",
+            base_class_path="pkg.module.DummyBase",
+        )
+        with pytest.raises(TypeError) as exc_info:
+            _ = spec.instantiate()
+        assert "missing 1 required" in str(exc_info.value)
+        # however, with the missing param, all is good
+        obj = spec.instantiate(must=13)
+        assert isinstance(obj, FailingCtor)
+        assert obj.a == 13
 
     def test_resolve_propagates_import_error_for_missing_class(
         self,
