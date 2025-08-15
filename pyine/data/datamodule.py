@@ -1,6 +1,5 @@
 """Contains utility functions and a base interface for lightning datamodules."""
 
-import collections.abc
 import logging
 import typing
 

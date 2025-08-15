@@ -690,7 +690,7 @@ async def write_dataset(
             ),
         )
         await _cooperative_yield()
-        contains_banned_tags = pyine.data.utils.ban_rules.build_ban_predicate_from_rule(
+        contains_banned_tags = pyine.data.utils.ban_rules.build_filter_from_rule(
             rule=config.banned_problem_tags_rule or "",
         )
         # iterate over each problem statement (and its proposed solutions) in the target dataset

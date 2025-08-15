@@ -2,11 +2,16 @@ import fnmatch
 import re
 import typing
 
+FilterInputType = typing.Iterable[str]
+"""Type of the input argument passed to a filter function."""
+FilterType = typing.Callable[[FilterInputType], bool]
+"""Type of a filter function that takes a list of tags and returns a bool (whether to ban or not)."""
 
-def build_ban_predicate_from_rule(
+
+def build_filter_from_rule(
     rule: str,
     case_sensitive: bool = True,
-) -> typing.Callable[[typing.Iterable[str]], bool]:
+) -> FilterType:
     """Compile a simple rule into a predicate that returns True if a sample should be banned.
 
     Assumes that the rule will be applied to a list of tags associated with a sample,
@@ -36,25 +41,25 @@ def build_ban_predicate_from_rule(
       case_sensitive: Whether matching is case sensitive for both glob and regex.
 
     Returns:
-      A predicate function(tags) -> bool that returns True if the sample should be banned.
+      A predicate `function(tags) -> bool` that returns True if the sample should be banned.
 
     Examples:
       # Require a source tag, and forbid any 'graph:*' tag or '*:hard' suffix
-      >>> ban = build_ban_predicate_from_rule("+source:* -graph:* -*:hard")
+      >>> ban = build_filter_from_rule("+source:* -graph:* -*:hard")
       >>> ban(["dp:easy", "source:leetcode"])
       ... False
       >>> ban(["graph:trees", "source:leetcode"])
       ... True
 
       # Case-insensitive: require either 'dp:*' or 'graph:*' and forbid tags starting with 'wip:'
-      >>> ban = build_ban_predicate_from_rule("+{dp:*|graph:*} -re:/^wip:/", case_sensitive=False)
+      >>> ban = build_filter_from_rule("+{dp:*|graph:*} -re:/^wip:/", case_sensitive=False)
       >>> ban(["DP:medium"])
       ... False
       >>> ban(["array:easy", "WIP:review"])
       ... True
 
       # Forbid by regex group: either tags starting with 'wip:' or ending with ':experimental'
-      >>> ban = build_ban_predicate_from_rule("-re:{^wip:|:experimental$}")
+      >>> ban = build_filter_from_rule("-re:{^wip:|:experimental$}")
       >>> ban(["algo:experimental"])
       ... True
       >>> ban(["algo:beta"])
@@ -150,16 +155,14 @@ def build_ban_predicate_from_rule(
 
 if __name__ == "__main__":
     # ban if it lacks a source tag OR has 'graph:*' OR ends with ':hard'
-    rule = "+source:* -graph:* -*:hard"
-    ban = build_ban_predicate_from_rule(rule)
+    ban = build_filter_from_rule("+source:* -graph:* -*:hard")
     assert not ban(["dp:easy", "source:leetcode"])
     assert ban(["graph:trees", "source:leetcode"])  # (forbidden graph)
     assert ban(["dp:hard", "source:leetcode"])  # (forbidden suffix)
     assert ban(["dp:easy"])  # (lacks required source)
 
     # require either 'dp:*' or 'graph:*' and forbid regex matching '^wip:'
-    rule2 = "+{dp:*|graph:*} -re:/^wip:/"
-    ban2 = build_ban_predicate_from_rule(rule2, case_sensitive=False)
+    ban2 = build_filter_from_rule("+{dp:*|graph:*} -re:/^wip:/", case_sensitive=False)
     assert not ban2(["DP:medium"])
     assert ban2(["array:easy", "wip:review"])
     assert not ban2(["dp:something", "graph:something"])
