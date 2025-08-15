@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import dataclasses
 import enum
@@ -58,6 +59,14 @@ REL_PATH_FROM_ROOT = pyine.utils.filesystem.get_relative_path_to_root(__file__)
 TraceKeyReprType = str
 """Helper type for representing a TraceKey in a string representation (for json dumps)."""
 
+DONT_CATCH_EXCEPTIONS = (
+    KeyboardInterrupt,
+    GeneratorExit,
+    MemoryError,
+    asyncio.CancelledError,
+)
+"""Exceptions that should not be caught when tracing, and that should rise to the top process."""
+
 
 class TraceKey(typing.NamedTuple):
     """NamedTuple for storing and exporting execution trace keys."""
@@ -91,6 +100,52 @@ class TraceEventType(enum.StrEnum):
     RETURN = "return"
     EXCEPTION = "exception"
     LINE = "line"
+
+
+class TraceTagType(enum.StrEnum):
+    """Identifies the type of trace outcome tags event."""
+
+    # TODO: refactor names to have prefixes first
+
+    HAS_EVENT_BLACKLISTED = "events:has_blacklisted"
+    HAS_EVENT_CAPPED = "events:has_capped"
+    HAS_EVENT_EXCEPTION = "events:has_exception"
+
+    HAS_EXEC_ENTRYPOINT = "exec:has_entrypoint"
+    HAS_EXEC_SYSEXIT = "exec:has_sysexit"
+
+    HAS_RETURN_EXCEPTION = "return:has_exception"
+    HAS_RETURN_VALUE = "return:has_value"
+    HAS_RETURN_STDOUT = "return:has_stdout"
+    HAS_RETURN_STDERR = "return:has_stderr"
+
+    HAS_INPUTS_EMPTY = "inputs:empty"
+
+    @classmethod
+    def get_step_count_tags(cls, traced_steps: list[typing.Any | None]) -> list[str]:
+        """Returns a list of tags for the number of traced steps."""
+        return [
+            f"total_steps:{cls._get_size_bucket(len(traced_steps))}",
+            f"valid_steps:{cls._get_size_bucket(len([s is not None for s in traced_steps]))}",
+        ]
+
+    @staticmethod
+    def _get_size_bucket(count: int) -> str:
+        """Returns a string for the size bucket of the traced steps."""
+        if count == 0:
+            return "0"
+        elif 0 < count <= 10:
+            return "1_10"
+        elif 10 < count <= 100:
+            return "10_100"
+        elif 100 < count <= 1000:
+            return "100_1k"
+        elif 1000 < count <= 10_000:
+            return "1k_10k"
+        elif 10_000 < count <= 100_000:
+            return "10k_100k"
+        else:  # > 100_000
+            return "100k_plus"
 
 
 class TraceException(typing.NamedTuple):
@@ -214,6 +269,8 @@ class TraceResult(pydantic.BaseModel):
     """The captured stderr output during execution (in full)."""
     metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
+    trace_tags: list[str]
+    """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""
 
     def __str__(self):
         """Returns a string representation of the trace result based on its identifier."""
@@ -300,16 +357,16 @@ class MockInput:
                 return wrapper
             else:
                 return stdin_attr
-        except AttributeError:
-            raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'")
+        except AttributeError as e:
+            raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'") from e
 
     def mock_input(self, _: str = "") -> str:
         """Read the next input from the iterator of inputs."""
         try:
             next_input = next(self._input_iter)
             return next_input
-        except StopIteration:
-            raise EOFError("Not enough input lines provided")
+        except StopIteration as e:
+            raise EOFError("not enough input lines provided") from e
 
 
 class MockInputContext(contextlib.AbstractContextManager):
@@ -366,7 +423,7 @@ def _execute_in_subprocess(
     identifier: str | None = None,
     timeout_seconds: float = 60,
     **kwargs,
-):
+) -> None:
     """Execute tracing in a separate process (used in the `_safe_execute_and_trace_code` impl)."""
     # note: this could not be a local define because it gets pickled for multiprocessing
     result_queue.put(("started", os.getpid()))
@@ -378,10 +435,8 @@ def _execute_in_subprocess(
             **kwargs,
         )
         result_queue.put(("returned", result))
-        return
-    except Exception as e:
+    except BaseException as e:  # catch all potential exception types to provide them to the parent
         result_queue.put(("raised", e))
-        return
 
 
 def _safe_execute_and_trace_code(
@@ -506,12 +561,13 @@ def _execute_and_trace_code(
         }
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
-        raise Exception(f"error while analyzing and compiling code: {e}")
+        raise Exception(f"error while analyzing and compiling code: {e}") from e
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
     stdout_capture, stderr_capture = io.StringIO(), io.StringIO()
     stdout_buffer, stderr_buffer = "", ""
+    trace_tags = []  # will be used to store the interesting outcome-related tags for this trace
 
     def _trace_callback(
         frame: types.FrameType,  # noqa
@@ -542,6 +598,8 @@ def _execute_and_trace_code(
         is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
             blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
         )
+        if is_blacklisted and TraceTagType.HAS_EVENT_BLACKLISTED not in trace_tags:
+            trace_tags.append(TraceTagType.HAS_EVENT_BLACKLISTED)
         is_inside_code_string = trace_key.file == EXEC_TRACE_FILE_NAME
         must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
         if event == "call" and must_skip:
@@ -550,6 +608,8 @@ def _execute_and_trace_code(
         if trace_key_repr not in traced_steps_map:
             traced_steps_map[trace_key_repr] = []
         max_event_capped = max_events_per_line and len(traced_steps_map[trace_key_repr]) >= max_events_per_line
+        if max_event_capped and TraceTagType.HAS_EVENT_CAPPED not in trace_tags:
+            trace_tags.append(TraceTagType.HAS_EVENT_CAPPED)
         if max_event_capped or must_skip:
             # if we have reached the trace limit or a blacklisted event, append `None` instead of event
             trace_event = None
@@ -589,6 +649,8 @@ def _execute_and_trace_code(
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
                 exception = TraceException.from_exception(exc_type, exc_value, exc_traceback)
+                if TraceTagType.HAS_EVENT_EXCEPTION not in trace_tags:
+                    trace_tags.append(TraceTagType.HAS_EVENT_EXCEPTION)
             trace_event = TraceEvent(
                 event_type=TraceEventType(event),
                 stack_trace=stack_trace,
@@ -611,6 +673,8 @@ def _execute_and_trace_code(
     entrypoint_step_idx = None  # only used if we call an entrypoint after exec
     pyine.utils.reprod.set_seed(seed)
     exec_namespace = {}
+    if not inputs:
+        trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
     try:
         with pyine.utils.timers.TimeLimit(timeout_seconds):
             with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
@@ -623,26 +687,39 @@ def _execute_and_trace_code(
                         entrypoint = exec_namespace[entrypoint_name]
                         with trace_context(_trace_callback):
                             return_value = entrypoint(inputs)
-
+                        trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
                 else:
                     with MockInputContext(inputs):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
-    except Exception as e:
-        if isinstance(e, TimeoutError):
-            # we'll let callers handle what happens when code tracing times out
-            raise e
-        # otherwise, if it's not a time out, store the exception as part of the results
-        caught_exception = e
+    except TimeoutError:
+        # we'll let callers handle what happens when code tracing times out
+        raise
+    except DONT_CATCH_EXCEPTIONS:
+        # process is probably being interrupted, raise immediately here as well
+        raise
     except SystemExit as e:
-        # some crazy people also return their outputs via sys.exit, so catch those correctly...
+        # some crazy people return their outputs via sys.exit, so catch those correctly...
         caught_exception = e
         return_value = e.code
+        trace_tags.append(TraceTagType.HAS_EXEC_SYSEXIT)
+    except Exception as e:
+        # otherwise, if it's not a timeout/dontcatch/sysexit, store the exception as part of the results
+        caught_exception = e
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
     reprod_metadata["initial_seed"] = seed
     reprod_metadata["max_events_per_line"] = max_events_per_line
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
     reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
+    if return_value is not None:
+        trace_tags.append(TraceTagType.HAS_RETURN_VALUE)
+    if caught_exception is not None:
+        trace_tags.append(TraceTagType.HAS_RETURN_EXCEPTION)
+    if stdout_buffer:
+        trace_tags.append(TraceTagType.HAS_RETURN_STDOUT)
+    if stderr_buffer:
+        trace_tags.append(TraceTagType.HAS_RETURN_STDERR)
+    trace_tags.extend(TraceTagType.get_step_count_tags(traced_steps))
     try:
         trace_result = TraceResult(
             identifier=identifier,
@@ -667,6 +744,7 @@ def _execute_and_trace_code(
             stdout=stdout_buffer,
             stderr=stderr_buffer,
             metadata=reprod_metadata,
+            trace_tags=trace_tags,
         )
     except pydantic.ValidationError as e:
         print(f"Error while creating TraceResult instance (unrelated to exec): {e}")
