@@ -22,6 +22,45 @@ def test_get_data_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp
     assert fs.get_data_root_path() == tmp_path / "data"
 
 
+def test_get_tmp_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+    # 1) TMP_DIR takes precedence
+    d1 = tmp_path / "tmp_dir_precedence"
+    d1.mkdir()
+    monkeypatch.setenv("TMP_DIR", str(d1))
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    assert str(fs.get_tmp_dir()).startswith(str(d1))
+
+    # 2) TMPDIR when TMP_DIR is not set
+    monkeypatch.delenv("TMP_DIR", raising=False)
+    d2 = tmp_path / "tmpdir_fallback"
+    d2.mkdir()
+    monkeypatch.setenv("TMPDIR", str(d2))
+    monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    assert str(fs.get_tmp_dir()).startswith(str(d2))
+
+    # 3) SLURM_TMPDIR when neither TMP_DIR nor TMPDIR is set
+    monkeypatch.delenv("TMP_DIR", raising=False)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    d3 = tmp_path / "slurm_tmpdir_fallback"
+    d3.mkdir()
+    monkeypatch.setenv("SLURM_TMPDIR", str(d3))
+    assert str(fs.get_tmp_dir()).startswith(str(d3))
+
+    # 4) default branch when none are set
+    monkeypatch.delenv("TMP_DIR", raising=False)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("SLURM_TMPDIR", raising=False)
+    default_dir = fs.get_tmp_dir()
+    assert default_dir.is_dir()
+
+    # confirm writability by creating a small file
+    probe = default_dir / "probe.txt"
+    probe.unlink(missing_ok=True)  # in case it already exists
+    probe.write_text("ok", encoding="utf-8")
+    assert probe.exists()
+
+
 def test_get_relative_path_to_root(tmp_path: pathlib.Path):
     proj = tmp_path
     module_path = proj / "src" / "pkg" / "mod.py"

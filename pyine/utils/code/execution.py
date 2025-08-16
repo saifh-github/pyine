@@ -168,7 +168,7 @@ class TraceException(typing.NamedTuple):
     @classmethod
     def from_exception(
         cls,
-        exc_type: type[BaseException],
+        exc_type: type[BaseException],  # noqa
         exc_value: BaseException,
         exc_tb: types.TracebackType | None,
     ) -> "TraceException":

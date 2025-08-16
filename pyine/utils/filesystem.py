@@ -1,8 +1,10 @@
+import getpass
 import logging
 import os
 import pathlib
 import re
 import shutil
+import tempfile
 
 import pyine
 
@@ -39,6 +41,43 @@ def get_data_root_path() -> pathlib.Path:
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'data' directory
     return get_project_root_path() / "data"
+
+
+def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
+    """Returns a user-specific temporary directory under the system temp root.
+
+    The returned path should be stable across processes, persist until the OS cleans temp
+    (often reboot or periodic cleanup), and it shoul respects TMPDIR/TEMP/TMP on all
+    platforms.
+
+    The default path can be overridden by setting the 'TMP_DIR', 'TMPDIR', or 'SLURM_TMPDIR'
+    environment variables (those will be checked in that order). If none of these variables are
+    the OS-specified temp dir specified via `tempfile.gettempdir()` will be used.
+    """
+    if os.getenv("TMP_DIR") is not None:
+        tmpdir_base = pathlib.Path(os.getenv("TMP_DIR"))
+    elif os.getenv("TMPDIR") is not None:
+        tmpdir_base = pathlib.Path(os.getenv("TMPDIR"))
+    elif os.getenv("SLURM_TMPDIR") is not None:
+        tmpdir_base = pathlib.Path(os.getenv("SLURM_TMPDIR"))
+    else:
+        tmpdir_base = pathlib.Path(tempfile.gettempdir())
+    if not tmpdir_base.is_dir():
+        raise ValueError(f"base temporary dir does not exist: {tmpdir_base}")
+    if not os.access(str(tmpdir_base), os.W_OK):
+        raise PermissionError(f"base temporary dir not writable: {tmpdir_base}")
+    # create per-user subdir to avoid collisions on multi-user machines
+    username = getpass.getuser() or "unknown"
+    tmpdir = pathlib.Path(tmpdir_base) / f"pyine-{username}"
+    tmpdir.mkdir(mode=mode, exist_ok=True)
+    try:
+        tmpdir.chmod(mode)
+    except PermissionError:
+        pass  # ignore if filesystem/OS doesn't support chmod
+    # final sanity check
+    if not os.access(str(tmpdir), os.W_OK):
+        raise PermissionError(f"temporary dir not writable: {tmpdir_base}")
+    return tmpdir
 
 
 def get_relative_path_to_root(
