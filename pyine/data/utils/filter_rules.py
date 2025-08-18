@@ -5,23 +5,23 @@ import typing
 FilterInputType = typing.Iterable[str]
 """Type of the input argument passed to a filter function."""
 FilterType = typing.Callable[[FilterInputType], bool]
-"""Type of a filter function that takes a list of tags and returns a bool (whether to ban or not)."""
+"""Type of a filter function that takes a list of tags and returns a bool (whether filtered or not)."""
 
 
 def build_filter_from_rule(
     rule: str,
     case_sensitive: bool = True,
 ) -> FilterType:
-    """Compile a simple rule into a predicate that returns True if a sample should be banned.
+    """Compile a simple rule into a predicate that returns True if a sample should be filtered.
 
     Assumes that the rule will be applied to a list of tags associated with a sample,
     e.g., `["graph:trees", "dp:medium"]`, and the rule can require/forbid any subset of these.
 
     Rule syntax (whitespace-separated tokens):
-      - +pattern        require at least one tag matches glob 'pattern' (ban if missing)
-      - -pattern        forbid any tag that matches glob 'pattern' (ban if present)
-      - +re:/regex/     require at least one tag matches the regex (ban if missing)
-      - -re:/regex/     forbid any tag that matches the regex (ban if present)
+      - +pattern        require at least one tag matches glob 'pattern' (filter if missing)
+      - -pattern        forbid any tag that matches glob 'pattern' (filter if present)
+      - +re:/regex/     require at least one tag matches the regex (filter if missing)
+      - -re:/regex/     forbid any tag that matches the regex (filter if present)
 
     Grouped alternatives:
       - +{p1|p2|p3}     require at least one of these glob patterns to match any tag
@@ -34,14 +34,14 @@ def build_filter_from_rule(
       - Regex tokens use Python syntax. Delimiters can be either /.../ or {...} when using
         the 're:' form (e.g., +re:/^graph:/ or +re:{^graph:}).
       - All tokens are combined with an implicit AND: if any required token fails, or any
-        forbidden token matches, the sample is banned.
+        forbidden token matches, the sample should be filtered out.
 
     Args:
       rule: Rule string describing required/forbidden patterns.
       case_sensitive: Whether matching is case sensitive for both glob and regex.
 
     Returns:
-      A predicate `function(tags) -> bool` that returns True if the sample should be banned.
+      A predicate `function(tags) -> bool` that returns True if the sample should be filtered out.
 
     Examples:
       # Require a source tag, and forbid any 'graph:*' tag or '*:hard' suffix

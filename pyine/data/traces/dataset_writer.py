@@ -18,7 +18,7 @@ import warnings
 import pydantic
 
 import pyine.data.traces.dataset_utils
-import pyine.data.utils.ban_rules
+import pyine.data.utils.filter_rules
 import pyine.data.utils.lmdb_io
 import pyine.prompts.manager
 import pyine.utils.code.execution
@@ -682,7 +682,7 @@ async def write_dataset(
             ),
         )
         await _cooperative_yield()
-        contains_banned_tags = pyine.data.utils.ban_rules.build_filter_from_rule(
+        contains_banned_tags = pyine.data.utils.filter_rules.build_filter_from_rule(
             rule=config.banned_problem_tags_rule or "",
         )
         # iterate over each problem statement (and its proposed solutions) in the target dataset
