@@ -9,38 +9,110 @@ import pandas as pd
 
 def get_portable_representation(
     obj: typing.Any,
+    max_length: int | None = None,
 ) -> str:
     """Convert any Python object to a portable, environment-independent representation.
 
-    Creates a structured dictionary representation of Python objects that is suitable
-    for tracing reproducibility across different environments/runs.
+    Produces a stable, parse-friendly string representation of Python objects suitable for
+    tracing reproducibility across different environments/runs.
 
-    Note: this function is NOT invertible, and if it encounters an unsupported object,
-    it will return a generic string representation of the object's type only.
+    Notes:
+      - This function is NOT invertible.
+      - For containers, full contents are included by default with a simple "header::body" format.
+      - If max_length is set and exceeded, the final string is truncated (with ellipsis when possible).
 
     Args:
         obj: Any Python object encountered during code tracing.
+        max_length: Optional maximum length for the returned string. If provided and the
+            generated representation exceeds this length, it will be truncated. For
+            max_length > 3 the truncation uses an ellipsis suffix "..."; otherwise it
+            simply slices the string.
 
     Returns:
-        Dict containing structured information about the object with stable identifiers.
+        A string containing structured information about the object with stable identifiers.
     """
+
+    def _truncate(s: str) -> str:
+        if max_length is None:
+            return s
+        if max_length < 0:
+            return s  # ignore negative
+        if len(s) <= max_length:
+            return s
+        if max_length <= 3:
+            return s[:max_length]
+        return s[: max_length - 3] + "..."
+
+    # Recursive element formatting without top-level truncation; truncate only once at the end.
+    def _repr_elem(x: typing.Any) -> str:
+        return get_portable_representation(x, None)
+
+    # Build standardized "header::body" strings for parseability.
+    def _fmt_list(seq: list[typing.Any]) -> str:
+        elems = ", ".join(_repr_elem(v) for v in seq)
+        return f"list[len={len(seq)}]::[{elems}]"
+
+    def _fmt_tuple(seq: tuple[typing.Any, ...]) -> str:
+        elems = ", ".join(_repr_elem(v) for v in seq)
+        return f"tuple[len={len(seq)}]::[{elems}]"
+
+    def _fmt_set(s: set[typing.Any]) -> str:
+        # Deterministic order by element representation.
+        elem_reprs = sorted(_repr_elem(v) for v in s)
+        elems = ", ".join(elem_reprs)
+        return f"set[len={len(s)}]::[{elems}]"
+
+    def _fmt_dict(d: dict[typing.Any, typing.Any]) -> str:
+        # Deterministic order by key representation.
+        items = []
+        for k_repr, k, v in sorted(((_repr_elem(k), k, v) for k, v in d.items()), key=lambda t: t[0]):
+            items.append(f"{k_repr} => {_repr_elem(v)}")
+        body = ", ".join(items)
+        return f"dict[len={len(d)}]::[{body}]"
+
+    def _fmt_ndarray(a: np.ndarray) -> str:
+        # Represent as nested lists for content, with explicit shape/dtype header.
+        try:
+            data_str = _repr_elem(a.tolist())
+        except Exception:
+            data_str = "<unavailable>"
+        return f"numpy.ndarray[shape={a.shape},dtype={a.dtype}]::{data_str}"
+
+    def _fmt_series(s: pd.Series) -> str:
+        name_part = f",name={s.name}" if getattr(s, "name", None) is not None else ""
+        values = _repr_elem(s.tolist())
+        return f"pandas.Series[len={len(s)},dtype={s.dtype}{name_part}]::{values}"
+
+    def _fmt_dataframe(df: pd.DataFrame) -> str:
+        try:
+            cols = _repr_elem(list(df.columns))
+            data = _repr_elem(df.values.tolist())
+            body = f"columns={cols},data={data}"
+        except Exception:
+            body = "columns=<unavailable>,data=<unavailable>"
+        return f"pandas.DataFrame[shape={df.shape}]::{{{body}}}"
+
+    # -------- base cases and containers --------
     if isinstance(obj, (int, float, bool, str, bytes)) or obj is None:
-        return f"{repr(obj)}"
+        return _truncate(f"{repr(obj)}")
     elif isinstance(obj, np.ndarray):
-        return f"numpy.ndarray(shape={obj.shape},dtype={obj.dtype})"
+        return _truncate(_fmt_ndarray(obj))
     elif isinstance(obj, pd.DataFrame):
-        return f"pandas.DataFrame(shape={obj.shape})"
+        return _truncate(_fmt_dataframe(obj))
     elif isinstance(obj, pd.Series):
-        return f"pandas.Series(len={len(obj)},dtype={obj.dtype},name={obj.name})"
-    elif isinstance(obj, (list, tuple, set)):
-        container_type = type(obj).__name__
-        return f"{container_type}(len={len(obj)})"
+        return _truncate(_fmt_series(obj))
+    elif isinstance(obj, list):
+        return _truncate(_fmt_list(obj))
+    elif isinstance(obj, tuple):
+        return _truncate(_fmt_tuple(obj))
+    elif isinstance(obj, set):
+        return _truncate(_fmt_set(obj))
     elif isinstance(obj, dict):
-        return f"dict(len={len(obj)})"
+        return _truncate(_fmt_dict(obj))
     elif inspect.ismodule(obj):
-        return f"module({obj.__name__})"
+        return _truncate(f"module({obj.__name__})")
     elif isinstance(obj, BaseException):
-        return f"{type(obj).__name__}({str(obj)})"
+        return _truncate(f"{type(obj).__name__}({str(obj)})")
     elif callable(obj):
         module = getattr(obj, "__module__", None)
         if hasattr(obj, "__qualname__"):
@@ -50,13 +122,13 @@ def get_portable_representation(
         else:
             name = f"anonymous({obj})"
         if module is not None:
-            return f"callable({module}.{name})"
+            return _truncate(f"callable({module}.{name})")
         else:
-            return f"callable({name})"
+            return _truncate(f"callable({name})")
     elif hasattr(obj, "__class__") and not isinstance(obj, type):
         class_name = obj.__class__.__name__
         module = obj.__class__.__module__
-        return f"instance({module}.{class_name})"
+        return _truncate(f"instance({module}.{class_name})")
     else:
         # fallback for any other objects
         # clean the default repr of memory addresses
@@ -65,9 +137,9 @@ def get_portable_representation(
             default_repr = repr(obj)
             cleaned_repr = re.sub(r" at 0x[0-9a-f]+", "", default_repr)  # remove pointers
             cleaned_repr = re.sub(r" from '.*?'", "", cleaned_repr)  # remove file paths
-            return cleaned_repr
+            return _truncate(cleaned_repr)
         except Exception:
-            return f"unprintable({type(obj).__name__})"
+            return _truncate(f"unprintable({type(obj).__name__})")
 
 
 def format_object_changes(

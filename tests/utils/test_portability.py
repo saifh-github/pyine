@@ -91,16 +91,42 @@ def test_get_portable_representation_various_types():
     assert portability.get_portable_representation(True) == "True"
     assert portability.get_portable_representation(None) == "None"
     assert portability.get_portable_representation(b"x") == "b'x'"
+
+    # numpy ndarray: header plus nested content
     arr = np.array([[1, 2], [3, 4]], dtype=np.int32)
-    assert portability.get_portable_representation(arr) == "numpy.ndarray(shape=(2, 2),dtype=int32)"
+    arr_repr = portability.get_portable_representation(arr)
+    assert arr_repr.startswith("numpy.ndarray[shape=(2, 2),dtype=int32]::")
+    assert "list[len=2]::" in arr_repr
+    assert "1" in arr_repr and "4" in arr_repr
+
+    # pandas DataFrame: shape header and columns/data markers
     df = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
-    assert portability.get_portable_representation(df) == "pandas.DataFrame(shape=(2, 2))"
+    df_repr = portability.get_portable_representation(df)
+    assert df_repr.startswith("pandas.DataFrame[shape=(2, 2)]::{")
+    assert "columns=" in df_repr and "data=" in df_repr
+
+    # pandas Series: header and list content
     ser = pd.Series([1, 2, 3], name="s")
-    assert portability.get_portable_representation(ser) == "pandas.Series(len=3,dtype=int64,name=s)"
-    assert portability.get_portable_representation([1, 2, 3]) == "list(len=3)"
-    assert portability.get_portable_representation((1, 2)) == "tuple(len=2)"
-    assert portability.get_portable_representation({1, 2}) == "set(len=2)"
-    assert portability.get_portable_representation({"a": 1, "b": 2}) == "dict(len=2)"
+    ser_repr = portability.get_portable_representation(ser)
+    assert ser_repr.startswith("pandas.Series[len=3,dtype=")
+    assert ",name=s]" in ser_repr
+    assert "::" in ser_repr and "list[len=3]::" in ser_repr
+
+    # list/tuple/set/dict: full contents with parse-friendly format
+    lst_repr = portability.get_portable_representation([1, 2, 3])
+    assert lst_repr.startswith("list[len=3]::[") and "1" in lst_repr and "3" in lst_repr
+
+    tup_repr = portability.get_portable_representation((1, 2))
+    assert tup_repr.startswith("tuple[len=2]::[") and "1" in tup_repr and "2" in tup_repr
+
+    set_repr = portability.get_portable_representation({1, 2})
+    assert set_repr.startswith("set[len=2]::[") and set_repr.endswith("]")
+    assert "1" in set_repr and "2" in set_repr
+
+    dict_repr = portability.get_portable_representation({"a": 1, "b": 2})
+    assert dict_repr.startswith("dict[len=2]::[")
+    assert "'a' => 1" in dict_repr and "'b' => 2" in dict_repr
+
     # module
     assert portability.get_portable_representation(np) == "module(numpy)"
     # exception instance
@@ -133,6 +159,13 @@ def test_get_portable_representation_various_types():
     # default repr cleanup
     cleaned = portability.get_portable_representation(object())
     assert "0x" not in cleaned
+
+
+def test_get_portable_representation_truncation():
+    # Ensure top-level truncation applies and uses ellipsis when possible
+    s = portability.get_portable_representation([1, 2, 3, 4, 5], max_length=20)
+    assert s.endswith("...")
+    assert len(s) <= 20
 
 
 def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
