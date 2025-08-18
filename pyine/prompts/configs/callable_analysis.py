@@ -81,15 +81,17 @@ def get_prompt_config(
 
 def get_prompt_template(
     version: str | None = None,
+    use_chat_template: bool = False,
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
-) -> langchain_core.prompts.PromptTemplate:
+) -> langchain_core.prompts.BasePromptTemplate:
     """Return the prompt template for the callable analysis prompt.
 
     Note: this implementation appropriately fills in all relevant partial variables, if any.
 
     Args:
         version: The version of the prompt to retrieve. If None, the default version is returned.
+        use_chat_template: Whether to return a chat prompt template or a regular prompt template.
         include_examples: Whether to include few-shot examples in the template.
         target_examples: List of examples to target when rendering the prompt. Can pass in
             a list of example indices, or an integer that specifies the number of samples to
@@ -97,6 +99,7 @@ def get_prompt_template(
     """
     prompt_config = get_prompt_config(version=version)
     return prompt_config.create_prompt_template(
+        use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
         role_variables=None,

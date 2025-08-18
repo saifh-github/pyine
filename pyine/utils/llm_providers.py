@@ -45,7 +45,7 @@ def get_llm_from_provider(
 
 
 def get_chain(
-    prompt_template: langchain_core.prompts.PromptTemplate,
+    prompt_template: langchain_core.prompts.BasePromptTemplate,
     llm: LLMType,
     pydantic_model: pydantic.BaseModel | None = None,
 ) -> langchain_core.runnables.Runnable:

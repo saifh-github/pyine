@@ -3,6 +3,7 @@ import pathlib
 import random
 import typing
 
+import langchain_core.messages
 import langchain_core.prompts
 import pydantic
 
@@ -165,7 +166,7 @@ class PromptConfig(pydantic.BaseModel):
             elif isinstance(target_examples, list):
                 examples = [self.examples[idx] for idx in target_examples]
             else:
-                raise ValueError(f"invalid target_examples: {target_examples}")
+                raise NotImplementedError(f"invalid target_examples: {target_examples}")
         else:
             examples = self.examples
         assert self.example_template is not None, "example template must be specified to format examples"
@@ -191,21 +192,23 @@ class PromptConfig(pydantic.BaseModel):
             formatted_examples.append(prompt_template.format(**example_vars))
         return self.template_block_separator.join(formatted_examples)
 
-    def create_prompt_template(
+    def get_system_message(
         self,
+        return_as_blocks: bool = False,
         include_examples: bool = True,
         target_examples: int | list[int] | None = None,
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
         examples_block_variables: dict[str, typing.Any] | None = None,
-    ) -> langchain_core.prompts.PromptTemplate:
-        """Create a LangChain prompt template from role, context, examples, and question templates.
+    ) -> str | list[str]:
+        """Get the system message for this prompt.
 
         Note: this implementation will fully render (format) all the role, context, and examples
         prompts, meaning all variables (arguments) for these prompts must have already been
         specified, or they must be specified via the corresponding dictionaries.
 
         Args:
+            return_as_blocks: Whether to return the system message as a list of message blocks.
             include_examples: Whether to include few-shot examples in the template.
             target_examples: List of examples to target when rendering the prompt. Can pass in
                 a list of example indices, or an integer that specifies the number of samples to
@@ -216,7 +219,7 @@ class PromptConfig(pydantic.BaseModel):
                 not include the 'examples_str' variable (will be added directly).
 
         Returns:
-            A `langchain_core.prompts.PromptTemplate` instance ready for use with LangChain.
+            The fully rendered system message as a string, or as a list of text blocks.
         """
         rendered_template_parts = []
         if self.role is not None:
@@ -243,41 +246,97 @@ class PromptConfig(pydantic.BaseModel):
             examples_block_variables["examples_str"] = examples_str
             examples_block_prompt = examples_block_template.format(**examples_block_variables)
             rendered_template_parts.append(examples_block_prompt)
-        # all template parts that might have been created so far are fully rendered ones
-        complete_template = langchain_core.prompts.PromptTemplate.from_template(
-            template=self.template_block_separator.join([*rendered_template_parts, self.question.template]),
-            template_format=self.question.format,
-            partial_variables=self.question.partial_variables,
-        )
-        return complete_template
+        if return_as_blocks:
+            return rendered_template_parts
+        return self.template_block_separator.join(rendered_template_parts)
 
-    def render_prompt(
+    def create_prompt_template(
         self,
+        use_chat_template: bool = False,
         include_examples: bool = True,
         target_examples: int | list[int] | None = None,
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
-        **question_variables,
-    ) -> str:
-        """Render a prompt template with the provided variables.
+        examples_block_variables: dict[str, typing.Any] | None = None,
+    ) -> langchain_core.prompts.BasePromptTemplate:
+        """Create a LangChain prompt template from role, context, examples, and question templates.
+
+        This function will try to fully render the system message along with the question, so all
+        required variables for the system prompt must be provided now.
 
         Args:
+            use_chat_template: Whether to return a chat prompt template or a regular prompt template.
             include_examples: Whether to include few-shot examples in the template.
             target_examples: List of examples to target when rendering the prompt. Can pass in
                 a list of example indices, or an integer that specifies the number of samples to
                 pick randomly. If `None` is provided instead, all examples are included.
             role_variables: Variables to substitute in the role template.
             context_variables: Variables to substitute in the context template.
+            examples_block_variables: Variables to substitute in the examples block template. Should
+                not include the 'examples_str' variable (will be added directly).
+
+        Returns:
+            A prompt template instance ready for use with LangChain.
+        """
+        system_msg = self.get_system_message(
+            return_as_blocks=not use_chat_template,
+            include_examples=include_examples,
+            target_examples=target_examples,
+            role_variables=role_variables,
+            context_variables=context_variables,
+            examples_block_variables=examples_block_variables,
+        )
+        if use_chat_template:
+            output_template = langchain_core.prompts.ChatPromptTemplate(
+                messages=[
+                    langchain_core.messages.SystemMessage(content=system_msg),
+                    langchain_core.messages.HumanMessage(content=self.question.template),
+                ],
+                template_format=self.question.format,
+                partial_variables=self.question.partial_variables or {},
+            )
+        else:
+            output_template = langchain_core.prompts.PromptTemplate.from_template(
+                template=self.template_block_separator.join([*system_msg, self.question.template]),
+                template_format=self.question.format,
+                partial_variables=self.question.partial_variables or {},
+            )
+        return output_template
+
+    def render_prompt(
+        self,
+        use_chat_template: bool = False,
+        include_examples: bool = True,
+        target_examples: int | list[int] | None = None,
+        role_variables: dict[str, typing.Any] | None = None,
+        context_variables: dict[str, typing.Any] | None = None,
+        examples_block_variables: dict[str, typing.Any] | None = None,
+        **question_variables,
+    ) -> str:
+        """Render a prompt template with the provided variables.
+
+        Args:
+            use_chat_template: Whether to return a chat prompt template or a regular prompt template.
+            include_examples: Whether to include few-shot examples in the template.
+            target_examples: List of examples to target when rendering the prompt. Can pass in
+                a list of example indices, or an integer that specifies the number of samples to
+                pick randomly. If `None` is provided instead, all examples are included.
+            role_variables: Variables to substitute in the role template.
+            context_variables: Variables to substitute in the context template.
+            examples_block_variables: Variables to substitute in the examples block template. Should
+                not include the 'examples_str' variable (will be added directly).
             **question_variables: Variables to substitute in the question template.
 
         Returns:
             A string containing the rendered prompt (with no more processing needed).
         """
         template = self.create_prompt_template(
+            use_chat_template=use_chat_template,
             include_examples=include_examples,
             target_examples=target_examples,
             role_variables=role_variables,
             context_variables=context_variables,
+            examples_block_variables=examples_block_variables,
         )
         return template.format(**question_variables)
 
