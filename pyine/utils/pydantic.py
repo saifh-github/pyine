@@ -251,7 +251,7 @@ class ClassImportSpec(
         pydantic.StrictStr,
         pydantic.Field(
             min_length=1,
-            description=("Dotted import path to the required base class of the target class."),
+            description="Dotted import path to the required base class of the target class.",
         ),
     ]
     params: dict[str, typing.Any] | pydantic.BaseModel = pydantic.Field(
@@ -261,7 +261,9 @@ class ClassImportSpec(
     def instantiate(self, *args, **extra_kwargs) -> BaseT:
         """Instantiates the resolved class with the parameters held inside the config."""
         assert self._resolved_class is not None, "model must be validated before use"
-        return self._resolved_class(*args, **self.get_params_dict(), **extra_kwargs)
+        constr_params = self.get_params_dict()
+        constr_params.update(extra_kwargs)
+        return self._resolved_class(*args, **constr_params)
 
     def get_params_dict(self):
         """Returns the parameters held inside the config as a dictionary."""
