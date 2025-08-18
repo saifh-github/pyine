@@ -415,3 +415,15 @@ class BaseDataModule(pl.LightningDataModule):
             raise ValueError(f"invalid {loader_type} getter type: {type(getter)}, expected callable")
         dataloader = getter()
         return dataloader
+
+    def get_parser(
+        self,
+        subset_type: SubsetNameType,
+    ) -> BaseDataParserType:
+        """Returns a data parser object for a given subset type.
+
+        This function exists for users that might not want to use dataloaders directly, and would prefer
+        using the data parsers directly instead (e.g. to provide specific transforms, or to use them
+        as part of a wider framework such as HuggingFace).
+        """
+        raise NotImplementedError
