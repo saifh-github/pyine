@@ -12,7 +12,7 @@ def build_filter_from_rule(
     rule: str,
     case_sensitive: bool = True,
 ) -> FilterType:
-    """Compile a simple rule into a predicate that returns True if a sample should be filtered.
+    """Compile a simple rule into a predicate that returns True if a sample should be filtered out.
 
     Assumes that the rule will be applied to a list of tags associated with a sample,
     e.g., `["graph:trees", "dp:medium"]`, and the rule can require/forbid any subset of these.
