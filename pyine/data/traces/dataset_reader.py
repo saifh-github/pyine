@@ -40,6 +40,7 @@ class DatasetReader(torch.utils.data.Dataset):
         lmdb_path: pathlib.Path | typing.AnyStr,
     ) -> None:
         super().__init__()
+        self.path = lmdb_path
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
         self.problem_indices, self.problem_keys = self.reader.get_indices(
             pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,

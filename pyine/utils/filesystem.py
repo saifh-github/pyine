@@ -47,8 +47,8 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     """Returns a user-specific temporary directory under the system temp root.
 
     The returned path should be stable across processes, persist until the OS cleans temp
-    (often reboot or periodic cleanup), and it shoul respects TMPDIR/TEMP/TMP on all
-    platforms.
+    (often reboot or periodic cleanup), and it should respect TMPDIR/TEMP/TMP on all
+    platforms. That path should also correspond to an already-created directory.
 
     The default path can be overridden by setting the 'TMP_DIR', 'TMPDIR', or 'SLURM_TMPDIR'
     environment variables (those will be checked in that order). If none of these variables are

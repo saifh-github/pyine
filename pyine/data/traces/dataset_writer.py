@@ -407,7 +407,11 @@ def _trace_code_snippet(
     code_snippet: _CodeToTrace,
     config: TraceDatasetWriterConfig,
 ) -> tuple[pyine.utils.code.execution.TraceResult, pyine.utils.code.output_compare.CompareResult]:
-    """Traces a (potentially augmented) solution with a specific input and returns the result."""
+    """Traces a (potentially augmented) solution with a specific input and returns the result.
+
+    Both tracing results and expected vs found output comparison results are returned. The latter
+    will be used to determine if the solution will be written to the dataset or discarded.
+    """
     test_inputs, test_outputs = code_snippet.test_inputs, code_snippet.test_outputs
     if (
         code_snippet.entrypoint_name is not None
@@ -423,7 +427,8 @@ def _trace_code_snippet(
         pyine.utils.code.validation.validate_code(code_snippet.code_string)  # last check before tracing
         trace_result = pyine.utils.code.execution.execute_and_trace_code(
             code_string=code_snippet.code_string,
-            inputs=test_inputs,
+            inputs=str(test_inputs),
+            expected_output=str(test_outputs),
             identifier=str(code_snippet.trace_id),
             entrypoint_name=code_snippet.entrypoint_name,
             trace_only_inside_code_string=True,

@@ -105,8 +105,6 @@ class TraceEventType(enum.StrEnum):
 class TraceTagType(enum.StrEnum):
     """Identifies the type of trace outcome tags event."""
 
-    # TODO: refactor names to have prefixes first
-
     HAS_EVENT_BLACKLISTED = "events:has_blacklisted"
     HAS_EVENT_CAPPED = "events:has_capped"
     HAS_EVENT_EXCEPTION = "events:has_exception"
@@ -234,8 +232,10 @@ class TraceResult(pydantic.BaseModel):
     """The original code string that was executed."""
     code_blocks: dict[TraceKeyReprType, pyine.utils.code.blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
-    inputs: pydantic.JsonValue  # noqa
+    inputs: str
     """The inputs that were available to the code during execution."""
+    expected_output: str
+    """The expected output of the code, if any; should be used for verification/predictions."""
     max_events_per_line: int | None
     """The maximum number of events to record per line (if needed)."""
     traced_steps: list[TraceEvent | None]
@@ -523,6 +523,7 @@ def _safe_execute_and_trace_code(
 def _execute_and_trace_code(
     code_string: str,
     inputs: str = "",
+    expected_output: str = "",
     identifier: str | None = None,
     entrypoint_name: str | None = None,
     blacklisted_modules: typing.Iterable[str] | None = None,
@@ -541,6 +542,8 @@ def _execute_and_trace_code(
         code_string: a string containing arbitrary Python code to execute and trace.
         inputs: a string containing individual lines to be used as input values
             (one line per input call).
+        expected_output: a string containing the expected output of the code execution. This output
+            will not be verified here, and is passed here for logging/serialization purposes.
         identifier: an identifier for this trace (used for printing/logging purposes).
         entrypoint_name: The name of the entrypoint function to execute.
         blacklisted_modules: A list of module names to exclude from tracing.
@@ -726,6 +729,7 @@ def _execute_and_trace_code(
             code_string=code_string,
             code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
             inputs=inputs,
+            expected_output=expected_output,
             max_events_per_line=max_events_per_line,
             traced_steps=traced_steps,
             traced_steps_map=traced_steps_map,
