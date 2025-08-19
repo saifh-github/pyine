@@ -39,7 +39,6 @@ __all__ = [
     "format_traced_code_execution",
 ]
 
-portable_repr = pyine.utils.portability.get_portable_representation
 _orig_stdin = sys.stdin
 logger = logging.getLogger(__name__)
 
@@ -66,6 +65,12 @@ DONT_CATCH_EXCEPTIONS = (
     asyncio.CancelledError,
 )
 """Exceptions that should not be caught when tracing, and that should rise to the top process."""
+
+
+class TracingCapException(Exception):
+    """Exception signaling that some traced attribute exceeded a predefined cap."""
+
+    pass
 
 
 class TraceKey(typing.NamedTuple):
@@ -106,7 +111,6 @@ class TraceTagType(enum.StrEnum):
     """Identifies the type of trace outcome tags event."""
 
     HAS_EVENT_BLACKLISTED = "events:has_blacklisted"
-    HAS_EVENT_CAPPED = "events:has_capped"
     HAS_EVENT_EXCEPTION = "events:has_exception"
 
     HAS_EXEC_ENTRYPOINT = "exec:has_entrypoint"
@@ -193,10 +197,10 @@ class TraceEvent:
     """The type of event that occurred (e.g., "call", "return", "exception")."""
     stack_trace: list[TraceKey]
     """A list of TraceKey instances representing the call stack at the time of the event."""
-    variables: dict[str, str]
-    """A dictionary containing the variables at the time of the event."""
-    internal_variables: dict[str, str]
-    """A dictionary containing internal variables at the time of the event."""
+    global_variables: dict[str, str]
+    """A dictionary containing the global variables at the time of the event."""
+    local_variables: dict[str, str]
+    """A dictionary containing the local variables at the time of the event."""
     arguments: dict[str, str] | None
     """A dictionary containing the arguments passed to the code object at the time of the event."""
     return_value: str | None
@@ -237,13 +241,15 @@ class TraceResult(pydantic.BaseModel):
     expected_output: str
     """The expected output of the code, if any; should be used for verification/predictions."""
     max_events_per_line: int | None
-    """The maximum number of events to record per line (if needed)."""
+    """The maximum number of events to record per line (if such a cap was used)."""
+    max_var_repr_length: int | None
+    """The maximum length of variable representations (if such a cap was used)."""
     traced_steps: list[TraceEvent | None]
     """A list of all traced steps, in order of execution.
 
-    The states correspond to variables at each line of code prior to execution. If a line has more
-    than `max_events_per_line` events, additional events are substituted by `None` in this list. To
-    determine which line an event occurred on, see the `TraceKey` attribute of each event, or the
+    The states correspond to variables at each line of code prior to execution. Steps that are
+    `None` should correspond to steps that occurred outside our tracing scope. To determine which
+    line a 'valid' (non-None) event occurred on, see the `TraceKey` attribute of that event, or the
     `traced_steps_map` dictionary below.
     """
     traced_steps_map: dict[TraceKeyReprType, list[int]]
@@ -251,9 +257,7 @@ class TraceResult(pydantic.BaseModel):
 
     In this dictionary, keys are `TraceKey` representations (combining file, object, and line info)
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
-    list. If a line has more than `max_events_per_line` events, its corresponding indices list will
-    still contain all trace step indices, but some events in `traced_steps` will be substituted with
-    `None`.
+    list.
     """
     tracing_steps: int
     """The total number of tracing steps taken during execution."""
@@ -530,6 +534,7 @@ def _execute_and_trace_code(
     blacklisted_objects: typing.Iterable[str] | None = None,
     trace_only_inside_code_string: bool = False,
     max_events_per_line: int | None = None,
+    max_var_repr_length: int | None = None,
     timeout_seconds: float = 60,
     seed: int | None = 42,
 ) -> TraceResult:
@@ -549,7 +554,10 @@ def _execute_and_trace_code(
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_objects: A list of object names to exclude from tracing.
         trace_only_inside_code_string: If True, only trace code inside the provided code_string.
-        max_events_per_line: The maximum number of events to record per line.
+        max_events_per_line: The maximum number of events allowed per line. If this cap is exceeded,
+            a `TracingCapException` will be raised.
+        max_var_repr_length: The maximum length (in chars) allowed for the representation of a
+            variable. Above this cap, a `TracingCapException` will be raised.
         timeout_seconds: The maximum number of seconds to allow for code execution.
         seed: The seed to use for random number generation. Defaults to 42.
 
@@ -611,10 +619,12 @@ def _execute_and_trace_code(
         if trace_key_repr not in traced_steps_map:
             traced_steps_map[trace_key_repr] = []
         max_event_capped = max_events_per_line and len(traced_steps_map[trace_key_repr]) >= max_events_per_line
-        if max_event_capped and TraceTagType.HAS_EVENT_CAPPED not in trace_tags:
-            trace_tags.append(TraceTagType.HAS_EVENT_CAPPED)
-        if max_event_capped or must_skip:
-            # if we have reached the trace limit or a blacklisted event, append `None` instead of event
+        if max_event_capped:
+            raise TracingCapException(
+                f"max events per line ({max_events_per_line}) exceeded for trace at key {trace_key_repr}"
+            )
+        if must_skip:
+            # if we have a blacklisted event, append `None` instead of the event data
             trace_event = None
         else:
             # gather the actual event data and create the corresponding object
@@ -632,23 +642,34 @@ def _execute_and_trace_code(
                     )
                 )
                 current_frame = current_frame.f_back
-            regular_vars = {
-                name: portable_repr(value)
+            banned_local_var_names = ["_trace_callback", "__builtins__"]
+            local_vars = {
+                name: pyine.utils.portability.get_portable_representation(value)
                 for name, value in frame.f_locals.items()
-                if not name.startswith("__") and name != "_trace_callback"
+                if name.startswith("__") and name not in banned_local_var_names
             }
-            internal_vars = {
-                name: portable_repr(value)
-                for name, value in frame.f_locals.items()
-                if name.startswith("__") and name != "__builtins__"
+            if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in local_vars.values()]):
+                raise TracingCapException(f"max locals repr len exceeded for trace at key {trace_key_repr}")
+            global_vars = {
+                name: pyine.utils.portability.get_portable_representation(value)
+                for name, value in frame.f_globals.items()
+                if not name.startswith("__")
             }
+            if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in global_vars.values()]):
+                raise TracingCapException(f"max globals repr len exceeded for trace at key {trace_key_repr}")
             arguments, exec_return_value, exception = None, None, None
             if event == "call":
                 arguments = {
-                    name: portable_repr(value) for name, value in frame.f_locals.items() if not name.startswith("__")
+                    name: pyine.utils.portability.get_portable_representation(value)
+                    for name, value in frame.f_locals.items()
+                    if not name.startswith("__")
                 }
+                if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in arguments.values()]):
+                    raise TracingCapException(f"max args repr len exceeded for trace at key {trace_key_repr}")
             elif event == "return":
-                exec_return_value = portable_repr(arg)
+                exec_return_value = pyine.utils.portability.get_portable_representation(arg)
+                if max_var_repr_length is not None and len(exec_return_value) > max_var_repr_length:
+                    raise TracingCapException(f"max return val repr len exceeded for trace at key {trace_key_repr}")
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
                 exception = TraceException.from_exception(exc_type, exc_value, exc_traceback)
@@ -657,8 +678,8 @@ def _execute_and_trace_code(
             trace_event = TraceEvent(
                 event_type=TraceEventType(event),
                 stack_trace=stack_trace,
-                variables=regular_vars,
-                internal_variables=internal_vars,
+                global_variables=global_vars,
+                local_variables=local_vars,
                 arguments=arguments,
                 return_value=exec_return_value,
                 stdout=new_stdout if new_stdout else None,
@@ -710,10 +731,14 @@ def _execute_and_trace_code(
         # otherwise, if it's not a timeout/dontcatch/sysexit, store the exception as part of the results
         caught_exception = e
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
-    reprod_metadata["initial_seed"] = seed
-    reprod_metadata["max_events_per_line"] = max_events_per_line
+    reprod_metadata["entrypoint_name"] = entrypoint_name
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
     reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
+    reprod_metadata["trace_only_inside_code_string"] = trace_only_inside_code_string
+    reprod_metadata["max_events_per_line"] = max_events_per_line
+    reprod_metadata["max_var_repr_length"] = max_var_repr_length
+    reprod_metadata["timeout_seconds"] = timeout_seconds
+    reprod_metadata["seed"] = seed
     if return_value is not None:
         trace_tags.append(TraceTagType.HAS_RETURN_VALUE)
     if caught_exception is not None:
@@ -731,6 +756,7 @@ def _execute_and_trace_code(
             inputs=inputs,
             expected_output=expected_output,
             max_events_per_line=max_events_per_line,
+            max_var_repr_length=max_var_repr_length,
             traced_steps=traced_steps,
             traced_steps_map=traced_steps_map,
             tracing_steps=last_trace_step_idx,
@@ -810,7 +836,7 @@ def format_traced_code_execution(
             for event_number, trace_step_idx in enumerate(event_indices, 1):
                 trace_event = trace_result.traced_steps[trace_step_idx]
                 if trace_event is None:
-                    result.append("  [Event skipped due to max_events_per_line limit]")
+                    result.append("  [Event skipped due to out-of-tracing-scope]")
                     continue
                 result.append(f"    Visit #{event_number} (step #{trace_event.trace_step_idx}):")
                 result.append(f"    Event Type: {trace_event.event_type}")
@@ -822,16 +848,16 @@ def format_traced_code_execution(
                             result.append(f"      {arg_name}: {pprint.pformat(arg_value)}")
                         except Exception:
                             result.append(f"      {arg_name}: <unable to display value>")
-                if trace_event.variables:
-                    result.append("    Variables:")
-                    for var_name, var_value in trace_event.variables.items():
+                if trace_event.global_variables:
+                    result.append("    Global Variables:")
+                    for var_name, var_value in trace_event.global_variables.items():
                         try:
                             result.append(f"      {var_name}: {pprint.pformat(var_value)}")
                         except Exception:
                             result.append(f"      {var_name}: <unable to display value>")
-                if trace_event.internal_variables:
-                    result.append("    Internal Variables:")
-                    for intern_name, intern_value in trace_event.internal_variables.items():
+                if trace_event.local_variables:
+                    result.append("    Local Variables:")
+                    for intern_name, intern_value in trace_event.local_variables.items():
                         try:
                             result.append(f"      {intern_name}: {pprint.pformat(intern_value)}")
                         except Exception:

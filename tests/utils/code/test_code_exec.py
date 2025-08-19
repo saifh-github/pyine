@@ -352,4 +352,5 @@ def func(b: str) -> int:
     for safe_step, unsafe_step in zip(valid_safe_steps, valid_unsafe_steps):
         assert safe_step.trace_key == unsafe_step.trace_key
         assert safe_step.event_type == unsafe_step.event_type
-        assert safe_step.variables == unsafe_step.variables
+        assert safe_step.global_variables == unsafe_step.global_variables
+        assert safe_step.local_variables == unsafe_step.local_variables

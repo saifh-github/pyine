@@ -100,6 +100,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum number of trace events per solution code line. If None, no maximum.",
         ),
     ]
+    max_trace_var_repr_length: typing.Annotated[
+        pydantic.PositiveInt | None,
+        pydantic.Field(
+            default=None,
+            description="Maximum length of variable representation strings, in characters.",
+        ),
+    ]
     max_trace_events_total: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
@@ -433,6 +440,7 @@ def _trace_code_snippet(
             entrypoint_name=code_snippet.entrypoint_name,
             trace_only_inside_code_string=True,
             max_events_per_line=config.max_trace_events_per_line,
+            max_var_repr_length=config.max_trace_var_repr_length,
             timeout_seconds=config.execution_timeout_seconds,
             use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
         )
@@ -863,10 +871,11 @@ if __name__ == "__main__":
         write_dataset_from_taco(
             # create a dummy dataset for quick prototyping
             banned_problem_tags_rule=None,
-            max_output_traces=100_000,
+            max_output_traces=1000,
             max_solutions_per_problem=10,
             max_tests_per_solution=10,
             max_trace_events_per_line=None,
+            max_trace_var_repr_length=10_000,  # chars
             max_trace_events_total=50_000,
             max_trace_results_blob_size=1024**3,  # 1GB
             min_solution_line_count=3,

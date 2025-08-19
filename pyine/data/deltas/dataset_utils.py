@@ -1,6 +1,7 @@
 import dataclasses
 import datetime
 import enum
+import functools
 import logging
 import pathlib
 import typing
@@ -130,6 +131,26 @@ class TraceDeltaList(pydantic.BaseModel):
         return self.deltas[index]
 
 
+def _wrapped_delta_generator(
+    curr: dict[str, str] | pyine.utils.code.execution.TraceEvent,
+    next: dict[str, str] | pyine.utils.code.execution.TraceEvent,
+    delta_generator_fn: typing.Callable[[dict[str, str], dict[str, str]], dict[str, str]],
+    include_global_vars: bool,
+) -> dict[str, str]:
+    """Extracts relevant variables from trace events (if needed) and forwards them to a delta generator."""
+    if isinstance(curr, pyine.utils.code.execution.TraceEvent):
+        if include_global_vars:
+            curr = {**curr.global_variables, **curr.local_variables}
+        else:
+            curr = curr.local_variables
+    if isinstance(next, pyine.utils.code.execution.TraceEvent):
+        if include_global_vars:
+            next = {**next.global_variables, **next.local_variables}
+        else:
+            next = next.local_variables
+    return delta_generator_fn(curr, next)
+
+
 def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[str, str]:
     """Compares two variable dicts and returns added/updated entries."""
     # note: we purposefully do NOT show missing/removed values in deltas to reduce useless spam/outputs
@@ -152,9 +173,13 @@ class _CallStack:
         object="<module>",
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        include_global_vars: bool,
+    ) -> None:
         """Initializes the call stack (it will be empty at first, until initialized)."""
         self._stack: list[tuple[pyine.utils.code.execution.TraceKey, dict[str, typing.Any]]] = []
+        self._incl_g = include_global_vars
 
     def is_initialized(self) -> bool:
         """Returns whether the call stack is initialized."""
@@ -191,7 +216,11 @@ class _CallStack:
     ) -> None:
         """Pushes a new (caller id, context vars) tuple to the call stack."""
         assert len(self._stack) > 0, "stack should be initialized before pushing a new element"
-        self._stack.append((curr_step.trace_key, curr_step.variables))
+        if self._incl_g:
+            variables = {**curr_step.global_variables, **curr_step.local_variables}
+        else:
+            variables = curr_step.local_variables
+        self._stack.append((curr_step.trace_key, variables))
 
     def _push_manually(
         self,
@@ -322,20 +351,25 @@ class _EventPairIterator:
 def get_deltas_from_trace_steps(
     trace_res: pyine.utils.code.execution.TraceResult,
     delta_generator: DeltaGeneratorType,
+    include_global_vars: bool = True,
     verbose: bool = False,
 ) -> TraceDeltaList:
     """Generates a list of deltas from a trace result."""
     assert trace_res.identifier is not None, "need identifier when generating deltas"
-    assert trace_res.max_events_per_line is None, "cannot generate deltas with capped events per line"
     log = logger.info if verbose else logger.debug
     assert delta_generator in DeltaGeneratorType
     if delta_generator == DeltaGeneratorType.SIMPLE:
         delta_generator_fn = simple_delta_generator
     else:
         delta_generator_fn = deepdiff.DeepDiff
+    delta_generator_fn = functools.partial(
+        _wrapped_delta_generator,
+        delta_generator_fn=delta_generator_fn,
+        include_global_vars=include_global_vars,
+    )
     output_deltas = []
     event_iterator = _EventPairIterator(trace_res)
-    call_stack = _CallStack()
+    call_stack = _CallStack(include_global_vars=include_global_vars)
     while event_iterator.has_next_event():  # as long as there are still event pairs to generate...
         curr_step, next_step, relationship = event_iterator.get_next_pair()
         # the kind of step delta(s) we create will depend on the relationship between the two steps
@@ -409,7 +443,7 @@ def get_deltas_from_trace_steps(
                 delta = dict(__return__=repr(next_step.return_value))
                 output_relationship = EventRelationship.STEP_OUT
             if caller_trace_key == _CallStack.orig_caller_trace_key:
-                delta.update(**delta_generator_fn(curr_step.variables, next_step.variables))
+                delta.update(**delta_generator_fn(curr_step, next_step))
             output_deltas.append(
                 TraceDelta(
                     curr_trace_key=next_step.trace_key,
@@ -465,7 +499,7 @@ def get_deltas_from_trace_steps(
                             next_trace_key=next_next_step.trace_key,
                             trace_step_idx=next_step.trace_step_idx,
                             exception=None,
-                            variables=delta_generator_fn(caller_vars, next_next_step.variables),
+                            variables=delta_generator_fn(caller_vars, next_next_step),
                             stdout=next_next_step.stdout,
                             stderr=next_next_step.stderr,
                             event_relationship=EventRelationship.STEP_OVER,
@@ -483,7 +517,7 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=raised_exception,
-                    variables=delta_generator_fn(curr_step.variables, next_step.variables),
+                    variables=delta_generator_fn(curr_step, next_step),
                     stdout=next_step.stdout,
                     stderr=next_step.stderr,
                     event_relationship=EventRelationship.STEP_OVER,

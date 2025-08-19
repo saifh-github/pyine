@@ -62,6 +62,7 @@ class FakeTraceDataConfig:
     augmented_per_solution: int = 0  # number of augmented variants per solution/test
     entrypoint_name: str | None = "solution"
     max_events_per_line: int | None = None
+    max_var_repr_length: int | None = None
     seed: int = 123
     code_kind: str = "function"  # "function" or "script"
     # note: for function kind, inputs will be passed as a single param to the entrypoint
@@ -162,15 +163,14 @@ class FakeTraceDatasetReader(_FakeBase):
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
 
     def _generate_data(self) -> None:
-        # Prepare problems
+        # prepare problems
         for p_idx in range(self._cfg.num_problems):
             cp = self._make_problem(p_idx)
             self._problems.append(cp)
             self.problem_indices.append(p_idx)
             pkey = f"{cp.problem_id}{traces_utils.PROBLEM_DATA_SUFFIX}"
             self.problem_keys.append(pkey)
-
-        # Generate traces per problem/solution/test (+augmentations)
+        # generate traces per problem/solution/test (+augmentations)
         for p_idx, problem in enumerate(self._problems):
             for s_idx in range(self._cfg.solutions_per_problem):
                 for t_idx in range(self._cfg.tests_per_problem):
@@ -263,6 +263,7 @@ class FakeTraceDatasetReader(_FakeBase):
             entrypoint_name=self._cfg.entrypoint_name,
             trace_only_inside_code_string=True,
             max_events_per_line=self._cfg.max_events_per_line,
+            max_var_repr_length=self._cfg.max_var_repr_length,
             use_safe_execution=False,
             seed=self._cfg.seed + hash((problem.problem_id.problem_idx, s_idx, t_idx, augment)) % 10000,
         )
@@ -339,7 +340,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
             elif index_or_key in self.trace_keys:
                 idx = self.trace_keys.index(index_or_key)
             else:
-                # Mirror real deltas reader behavior which asserts on invalid keys
+                # mirror real deltas reader behavior which asserts on invalid keys
                 raise AssertionError(f"key {index_or_key} not found in fake deltas dataset")
         else:  # pragma: no cover
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
@@ -352,17 +353,11 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
     # ---------------------------- internals ----------------------------
 
     def _make_deltas(self, trace_res: exec_utils.TraceResult) -> deltas_utils.TraceDeltaList:
-        # Some delta generators require max_events_per_line to be None to avoid capped events.
-        # Our fake traces may set this config for testing purposes; create a copy with None here.
-        try:
-            trace_res_for_deltas = trace_res.model_copy(update={"max_events_per_line": None})
-        except Exception:
-            # Fallback: rebuild from dump and force the field to None
-            data = trace_res.model_dump()
-            data["max_events_per_line"] = None
-            trace_res_for_deltas = exec_utils.TraceResult.model_validate(data)
         dlist = deltas_utils.get_deltas_from_trace_steps(
-            trace_res=trace_res_for_deltas, delta_generator=deltas_utils.DeltaGeneratorType.SIMPLE, verbose=False
+            trace_res=trace_res,
+            delta_generator=deltas_utils.DeltaGeneratorType.SIMPLE,
+            include_global_vars=True,
+            verbose=False,
         )
-        # Ensure the trace_id is a string so it mirrors real datasets
+        # ensure the trace_id is a string so it mirrors real datasets
         return deltas_utils.TraceDeltaList.model_validate(dlist.model_dump())
