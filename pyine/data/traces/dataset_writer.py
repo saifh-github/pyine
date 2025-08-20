@@ -228,9 +228,10 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         ),
     ]
     failed_test_log_dir: typing.Annotated[
-        str | None,
+        str | pathlib.Path | None,
         pydantic.Field(
-            default=str(pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"),
+            default=None,  # nothing here by default, so that tests and dirty scripts don't flood logs
+            exclude=True,  # we don't want this to actually be dumped or used to compute hashes
             description="Path to write failed test result details. If None, disk logging is disabled.",
         ),
     ]
@@ -985,6 +986,7 @@ if __name__ == "__main__":
                 method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
                 compression_kwargs=dict(level=3),
             ),
+            failed_test_log_dir=pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures",
             verbose=True,
         )
     )
