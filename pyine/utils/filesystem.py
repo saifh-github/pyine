@@ -43,6 +43,22 @@ def get_data_root_path() -> pathlib.Path:
     return get_project_root_path() / "data"
 
 
+def get_logs_root_path() -> pathlib.Path:
+    """Returns the root path for storing logs.
+
+    The path can be overridden by setting the 'LOGS_ROOT_PATH' environment variable.
+    If the variable is not set, it defaults to a 'logs' directory in the project root.
+
+    Returns:
+        pathlib.Path: The absolute, resolved path to the logs root directory.
+    """
+    env_path = os.environ.get("LOGS_ROOT_PATH", None)
+    if env_path:
+        return pathlib.Path(env_path).resolve()
+    # if the environment variable is not set, default to the 'logs' directory
+    return get_project_root_path() / "logs"
+
+
 def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     """Returns a user-specific temporary directory under the system temp root.
 

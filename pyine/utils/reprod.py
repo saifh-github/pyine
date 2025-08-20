@@ -83,7 +83,7 @@ def get_installed_packages() -> list[str]:
     return sorted(pkgs, key=str.casefold)  # noqa
 
 
-def get_params_hash(*args, **kwargs):
+def get_params_hash(*args, **kwargs) -> str:
     """Computes and returns the hash (md5 checksum) of a given set of parameters.
 
     Args:

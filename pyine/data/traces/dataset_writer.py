@@ -6,6 +6,7 @@ See the `write_dataset` function for more information.
 
 import asyncio
 import dataclasses
+import datetime
 import enum
 import functools
 import itertools
@@ -54,6 +55,9 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     This model encapsulates all arguments required to write a dataset of execution traces from a
     source dataset of coding problems and solutions. See the `write_dataset` function for more
     detail.
+
+    NOTE: since the fields of this config will be dumped in the LMDB dataset using msgspec, we must
+    keep the attribute types to be compatible with msgspec.
     """
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
@@ -223,6 +227,18 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Configuration to use for serializing in the dataset writer.",
         ),
     ]
+    failed_test_log_dir: typing.Annotated[
+        str | None,
+        pydantic.Field(
+            default=str(pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"),
+            description="Path to write failed test result details. If None, disk logging is disabled.",
+        ),
+    ]
+
+    def get_short_hash(self) -> str:
+        """Returns a short (16-char) hash of the configuration parameters in this config."""
+        # short means collisions are 'possible'; don't use this for anything too important!
+        return pyine.utils.reprod.get_params_hash(**self.model_dump())[:16]
 
 
 class _CodeAugmentationOptions(enum.StrEnum):
@@ -342,6 +358,41 @@ def _check_must_skip_solution(
     return None  # no issue found
 
 
+def _log_failed_test_to_disk(
+    code_to_trace: _CodeToTrace,
+    failure_type: str,
+    reason: str,
+    config: TraceDatasetWriterConfig,
+) -> None:
+    """Append a human-readable debug entry for a failed test comparison to disk.
+
+    The entry contains repr() of each _CodeToTrace attribute plus the failure reason.
+    If config.failed_test_log_path is None, the function is a no-op.
+    """
+    if not config.failed_test_log_dir:
+        return
+    dir_path = pathlib.Path(config.failed_test_log_dir)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    log_path = dir_path / f"{config.get_short_hash()}.log"
+    if not log_path.exists():
+        logger.debug(f"creating failed-test log file: {log_path}")
+    timestamp = datetime.datetime.now().isoformat(timespec="seconds") + "Z"
+    block = (
+        "=== TRACE TEST FAILURE ===\n"
+        f"time: {timestamp}\n"
+        f"trace_id: {code_to_trace.trace_id}\n"
+        f"failure_type: {failure_type}\n"
+        f"reason: {reason}\n"
+        f"entrypoint_name: {repr(code_to_trace.entrypoint_name)}\n"
+        f"inputs: {repr(code_to_trace.test_inputs)}\n"
+        f"expected_outputs: {repr(code_to_trace.test_outputs)}\n"
+        f"code_string: {repr(code_to_trace.code_string)}\n"
+        "==========================\n"
+    )
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(block)
+
+
 def _get_test_tuples(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: TraceDatasetWriterConfig,
@@ -395,11 +446,30 @@ def _get_traces_to_write(
             exception_msg = (f", '{str(run_error)}'" if str(run_error) else "") + ", origin: " + exception_origin_msg
             full_error_msg = f"({type(run_error).__name__})" + exception_msg
             log_fn(f"{code_to_trace.trace_id}: failed to execute: {full_error_msg}")
+            if not isinstance(run_error, (pyine.utils.code.execution.TracingCapException, TimeoutError)):
+                # don't log cap or timeout errors (those are config-adjustable and shouldn't really matter)
+                try:
+                    _log_failed_test_to_disk(
+                        code_to_trace=code_to_trace,
+                        failure_type="execution",
+                        reason=full_error_msg,
+                        config=config,
+                    )
+                except Exception as e:
+                    logger.debug(f"failed to write failed-test log: {e}")
         else:
             trace_result, test_result = run_result
             if not test_result:
-                log_fn(f"{code_to_trace.trace_id}: failed output check (reason={test_result.reason})")
-                # TODO: add a failed test result logger (to disk) here? (might be useful for later investigations)
+                log_fn(f"{code_to_trace.trace_id}: failed output check: {test_result.reason}")
+                try:
+                    _log_failed_test_to_disk(
+                        code_to_trace=code_to_trace,
+                        failure_type="output check",
+                        reason=test_result.reason,
+                        config=config,
+                    )
+                except Exception as e:
+                    logger.debug(f"failed to write failed-test log: {e}")
             else:
                 if str(code_to_trace.trace_id) != trace_result.identifier:
                     raise RuntimeError("trace identifier mismatch")
@@ -847,11 +917,14 @@ async def write_dataset_from_taco(
         source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
     else:
         source_dataset_path = pathlib.Path(source_dataset_path)
+    cfg = TraceDatasetWriterConfig(
+        source_dataset_name="TACO",
+        **config_kwargs,
+    )
     log(f"will attempt to read TACO dataset from: {source_dataset_path}")
     if output_dataset_path is None:
         if output_dataset_tag is None:
-            suffix_hash = pyine.utils.reprod.get_params_hash("TACO", **config_kwargs)
-            output_dataset_tag = str(suffix_hash[:16])
+            output_dataset_tag = cfg.get_short_hash()
         output_dataset_path = pyine.data.traces.dataset_utils.get_new_dataset_path(
             source_dataset_name="TACO",
             dataset_name_tag=output_dataset_tag,
@@ -862,10 +935,7 @@ async def write_dataset_from_taco(
     writer = await write_dataset(
         root_dataset_path=source_dataset_path,
         output_dataset_path=output_dataset_path,
-        config=TraceDatasetWriterConfig(
-            source_dataset_name="TACO",
-            **config_kwargs,
-        ),
+        config=cfg,
         verbose=verbose,
     )
     return writer
