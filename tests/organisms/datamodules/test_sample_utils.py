@@ -183,7 +183,7 @@ class TestSampleBuilderRealData:
             max_partial_trace_steps=100,
             min_partial_trace_steps=5,
             max_inputs_str_length=1000,
-            max_outputs_str_length=1000,
+            max_output_str_length=1000,
             output_type_prob_map={
                 "program output": 0.5,
                 "frame variables": 0.1,
@@ -197,4 +197,36 @@ class TestSampleBuilderRealData:
             traces=None,
             config=cfg,
         )
-        assert len(sb) == 1000
+        assert len(sb) == len(taco_reader)
+        for trace_idx in range(len(taco_reader)):
+            if trace_idx > 100:
+                break  # check up to 100 traces, that should be enough
+            trace_data = taco_reader[trace_idx]
+            sample = sb[trace_idx]
+            assert trace_data.identifier == sample.identifier
+            assert trace_data.code_string == sample.code
+            assert isinstance(sample.description, str)
+            code_lines = trace_data.code_string.splitlines()
+            if sample.output_type == "program output":
+                assert sample.first_line == 0
+                assert sample.last_line == len(code_lines)
+                assert sample.inputs == trace_data.inputs
+                assert sample.output == trace_data.expected_output
+                assert sample.trace_step_count == trace_data.valid_step_count
+            else:
+                assert isinstance(sample.inputs, str) and len(sample.inputs) <= cfg.max_inputs_str_length
+                assert isinstance(sample.output, str) and len(sample.output) <= cfg.max_output_str_length
+                assert sample.trace_step_count > 0
+                assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
+                if sample.output_type == "frame variables":
+                    assert 0 < sample.first_line < len(code_lines)
+                    assert 0 < sample.last_line < len(code_lines)
+                else:  # function return
+                    assert 0 < sample.first_line <= sample.last_line < len(code_lines)
+                    matched_code_blocks = [
+                        cb
+                        for cb in trace_data.code_blocks.values()
+                        if cb.start_line == sample.first_line and cb.end_line == sample.last_line
+                    ]
+                    if matched_code_blocks:
+                        assert any([cb.name in sample.description for cb in matched_code_blocks])

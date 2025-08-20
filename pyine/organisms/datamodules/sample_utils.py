@@ -190,7 +190,7 @@ class SampleTransformConfig(pydantic.BaseModel):
     been generated, and thus provides a 'soft rule' that will determine whether to fallback to the
     original 'full' sample (despite it potentially being too long according to other thresholds).
     """
-    max_outputs_str_length: int | None = pydantic.Field(default=1000, ge=0)
+    max_output_str_length: int | None = pydantic.Field(default=1000, ge=0)
     """Optional cap on expected outputs string length to use in partial samples (if any).
 
     Not used in decision, but passed to sample builder. This is verified after a partial sample has
@@ -271,7 +271,7 @@ class SampleBuilder(SampleDataReaderType):
             segment (at a specific line, or after a given number of steps).
           - If max_partial_trace_steps is set, functions exceeding this cap are ignored and segments
             are truncated to respect the cap.
-          - If for a generated candidate, max_inputs_str_length or max_outputs_str_length caps are
+          - If for a generated candidate, max_inputs_str_length or max_output_str_length caps are
             set and exceeded, returns None, i.e. drops that candidate entirely.
         """
         if not (0 <= idx < len(self)):
@@ -309,14 +309,14 @@ class SampleBuilder(SampleDataReaderType):
             inputs=trace_data.inputs,
             output=trace_data.expected_output,
             output_type="program output",
-            trace_step_count=len([s for s in trace_data.traced_steps if s is not None]),  # count valid steps only
+            trace_step_count=trace_data.valid_step_count,  # count valid steps only
         )
 
     def _satisfies_str_caps(self, inp: str, out: str) -> bool:
         """Returns whether inputs/output strings satisfy caps or not."""
         if self.config.max_inputs_str_length is not None and len(inp) > self.config.max_inputs_str_length:
             return False
-        if self.config.max_outputs_str_length is not None and len(out) > self.config.max_outputs_str_length:
+        if self.config.max_output_str_length is not None and len(out) > self.config.max_output_str_length:
             return False
         return True
 
@@ -467,7 +467,10 @@ class SampleBuilder(SampleDataReaderType):
         target_output_type: SampleOutputType,
     ) -> SampleData | None:
         """Returns a sample for a segment of the given trace."""
-        assert target_output_type in ["frame variables", "next step key"]
+        # note: we can get here with a 'function return' target output if this was a fallback call
+        assert target_output_type in ["function return", "frame variables", "next step key"]
+        if target_output_type == "function return":
+            target_output_type = "frame variables"  # override this now with something we can handle below
         if target_output_type == "next step key":
             raise NotImplementedError  # @@@@ TODO
         # TODO @@@@@: try to target specific blocks? (if/else blocks? loops?)
@@ -478,9 +481,6 @@ class SampleBuilder(SampleDataReaderType):
         while curr_event_idx < len(trace_data.traced_steps):
             curr_event: TraceEvent = trace_data.traced_steps[curr_event_idx]
             if curr_event is None:
-                assert (
-                    start_event is None
-                ), "how can we have a segment with skipped internal events? (should never happen)"
                 curr_event_idx += 1
                 continue  # skip invalid/external events
             if start_event is None:
