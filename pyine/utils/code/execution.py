@@ -555,7 +555,11 @@ def _unsafe_execute_and_trace_code(
     try:
         code_blocks = pyine.utils.code.blocks.identify_code_blocks(code_string)
         code_blocks = {
-            TraceKey(EXEC_TRACE_FILE_NAME, EXEC_BLOCK_OBJ_NAME, code_block_line): code_block_data
+            TraceKey(
+                file=EXEC_TRACE_FILE_NAME,
+                object=code_block_data.name if code_block_data.name else EXEC_BLOCK_OBJ_NAME,
+                line=code_block_line,
+            ): code_block_data
             for code_block_line, code_block_data in code_blocks.items()
         }
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
