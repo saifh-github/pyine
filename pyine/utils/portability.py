@@ -1,6 +1,10 @@
+import functools
 import importlib
 import inspect
+import os
 import re
+import site
+import types
 import typing
 
 import numpy as np
@@ -16,10 +20,8 @@ def get_portable_representation(
     Produces a stable, parse-friendly string representation of Python objects suitable for
     tracing reproducibility across different environments/runs.
 
-    Notes:
-      - This function is NOT invertible.
-      - For containers, full contents are included by default with a simple "header::body" format.
-      - If max_length is set and exceeded, the final string is truncated (with ellipsis when possible).
+    Notes: This function is NOT invertible. If max_length is set and exceeded, the final
+    string is truncated (with ellipsis when possible).
 
     Args:
         obj: Any Python object encountered during code tracing.
@@ -43,76 +45,33 @@ def get_portable_representation(
             return s[:max_length]
         return s[: max_length - 3] + "..."
 
-    def _fmt_ndarray(a: np.ndarray) -> str:
-        # represent as nested lists for content, with explicit shape/dtype header
-        try:
-            data_str = repr(a.tolist())
-        except Exception:
-            data_str = "<unavailable>"
-        return f"numpy.ndarray[shape={a.shape},dtype={a.dtype}]::{data_str}"
+    def _clean_lingering_addresses_and_paths(s: str) -> str:
+        s = re.sub(r" at 0x[0-9a-f]+", "", s)  # remove pointers
+        s = re.sub(r" from '.*?'", "", s)  # remove file paths
+        return s
 
-    def _fmt_series(s: pd.Series) -> str:
-        name_part = f",name={s.name}" if getattr(s, "name", None) is not None else ""
-        values = repr(s.tolist())
-        return f"pandas.Series[len={len(s)},dtype={s.dtype}{name_part}]::{values}"
-
-    def _fmt_dataframe(df: pd.DataFrame) -> str:
-        try:
-            cols = repr(list(df.columns))
-            data = repr(df.values.tolist())
-            body = f"columns={cols},data={data}"
-        except Exception:
-            body = "columns=<unavailable>,data=<unavailable>"
-        return f"pandas.DataFrame[shape={df.shape}]::{{{body}}}"
-
-    # -------- base cases and containers --------
-
-    if isinstance(obj, (int, float, bool, str, bytes)) or obj is None:
-        return _truncate(f"{repr(obj)}")
+    base_types = (int, float, bool, str, bytes, list, tuple, set, dict, BaseException)
+    if isinstance(obj, base_types) or obj is None:
+        return _truncate(repr(obj))  # all these base types need no special handling
     elif isinstance(obj, np.ndarray):
-        return _truncate(_fmt_ndarray(obj))
+        return _truncate(f"numpy.{repr(obj)}")  # prefix numpy package name before 'array'
     elif isinstance(obj, pd.DataFrame):
-        return _truncate(_fmt_dataframe(obj))
+        return _truncate(f"pandas.DataFrame({obj.to_json()})")  # get a serializable output
     elif isinstance(obj, pd.Series):
-        return _truncate(_fmt_series(obj))
-    elif isinstance(obj, list):
-        return _truncate(repr(obj))
-    elif isinstance(obj, tuple):
-        return _truncate(repr(obj))
-    elif isinstance(obj, set):
-        return _truncate(repr(obj))
-    elif isinstance(obj, dict):
-        return _truncate(repr(obj))
+        return _truncate(f"pandas.Series({obj.to_json()})")  # get a serializable output
     elif inspect.ismodule(obj):
-        return _truncate(f"module({obj.__name__})")
-    elif isinstance(obj, BaseException):
-        return _truncate(f"{type(obj).__name__}({str(obj)})")
+        return _truncate(f"<module '{obj.__name__}'>")
     elif callable(obj):
-        module = getattr(obj, "__module__", None)
-        if hasattr(obj, "__qualname__"):
-            name = obj.__qualname__
-        elif hasattr(obj, "__name__"):
-            name = obj.__name__
-        else:
-            name = f"anonymous({obj})"
-        if module is not None:
-            return _truncate(f"callable({module}.{name})")
-        else:
-            return _truncate(f"callable({name})")
+        return _truncate(f"<callable '{get_portable_function_name(obj)}'>")
     elif hasattr(obj, "__class__") and not isinstance(obj, type):
-        class_name = obj.__class__.__name__
-        module = obj.__class__.__module__
-        return _truncate(f"instance({module}.{class_name})")
+        return _truncate(f"<instance '{get_fully_qualified_name(obj)}'>")
     else:
-        # fallback for any other objects; clean the default repr of memory addresses
+        # fallback for any other object; clean the default repr of memory addresses
         # noinspection PyBroadException
         try:
-            default_repr = repr(obj)
-            cleaned_repr = re.sub(r" at 0x[0-9a-f]+", "", default_repr)  # remove pointers
-            cleaned_repr = re.sub(r" from '.*?'", "", cleaned_repr)  # remove file paths
-            return _truncate(cleaned_repr)
+            return _truncate(_clean_lingering_addresses_and_paths(repr(obj)))
         except Exception:
-            return _truncate(f"unprintable({type(obj).__name__})")
+            return _truncate(f"<unprintable '{type(obj).__name__}'>")
 
 
 def format_object_changes(
@@ -240,6 +199,65 @@ def format_object_changes(
         # unsupported type
         return None
     return changes
+
+
+def get_portable_filename(filename: str) -> str:
+    """Returns a cleaned up module/framework filename for portable logging purposes."""
+    import pyine.utils.code.execution
+    import pyine.utils.filesystem
+
+    if filename == pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
+        return filename  # nothing to do (special case for code execution from strings)
+    site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
+    for site_dir in site_pkgs:
+        if filename.startswith(site_dir):
+            return os.path.relpath(filename, site_dir)
+    stdlib_dir = os.path.dirname(os.__file__)
+    if filename.startswith(stdlib_dir):
+        return os.path.relpath(filename, stdlib_dir)
+    project_root = str(pyine.utils.filesystem.get_project_root_path())
+    if filename.startswith(project_root):
+        return os.path.relpath(filename, project_root)
+    return filename
+
+
+def get_portable_function_name(callabl: typing.Callable) -> str:
+    """Return a stable, address-free string for a callable."""
+
+    def _qual(module, qualname):
+        if module and module != "builtins":
+            return f"{module}.{qualname}"
+        return qualname
+
+    if isinstance(callabl, functools.partial):  # recursively get wrapped function names
+        return f"functools.partial({get_portable_function_name(callabl.func)})"
+    # noinspection PyUnreachableCode
+    if isinstance(callabl, types.MethodType):  # handle bound callables
+        func = callabl.__func__
+        module = getattr(func, "__module__", None)
+        qualname = getattr(func, "__qualname__", getattr(func, "__name__", "<?>"))
+        base = _qual(module, qualname)
+    elif (
+        # plain functions, including nested and class/staticmethod functions
+        isinstance(callable, (types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType))
+        or inspect.isbuiltin(callabl)
+    ):
+        module = getattr(callabl, "__module__", None)
+        qualname = getattr(callabl, "__qualname__", getattr(callabl, "__name__", "<?>"))
+        base = _qual(module, qualname)
+    elif isinstance(callabl, type):  # handle classes (constructors are callable)
+        module = getattr(callabl, "__module__", None)
+        qualname = getattr(callabl, "__qualname__", getattr(callabl, "__name__", "<?>"))
+        base = _qual(module, qualname)
+    elif callable(callabl):  # fallback for general callables
+        cls = callabl.__class__  # noqa
+        module = getattr(cls, "__module__", None)
+        qualname = getattr(cls, "__qualname__", getattr(cls, "__name__", "<?>"))
+        base = _qual(module, f"{qualname}.__call__")
+    else:
+        # pragma: no cover
+        raise TypeError("object is not callable")
+    return base
 
 
 def get_code_with_numbered_lines(
@@ -370,8 +388,23 @@ def import_from_dotted_path(
 
 def get_fully_qualified_name(type_or_func: type | typing.Callable) -> str:
     """Get the fully qualified name of a type or function."""
-    mod = getattr(type_or_func, "__module__", None) or ""
-    qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", repr(type_or_func)))
-    if mod == "builtins":
+    if isinstance(type_or_func, type):  # classes/types
+        mod = getattr(type_or_func, "__module__", "") or ""
+        qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", "<unknown>"))
+    else:  # functions/methods/builtins
+        mod = getattr(type_or_func, "__module__", "") or ""
+        qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", None))
+        if qual is None:
+            # noinspection PyUnreachableCode
+            if callable(type_or_func):
+                cls = type_or_func.__class__  # noqa
+                mod = getattr(cls, "__module__", "") or ""
+                qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<callable>")) + ".__call__"
+            else:
+                # non-callable fallback to class identity (shouldn't happen for declared types/callables)
+                cls = type_or_func.__class__  # noqa
+                mod = getattr(cls, "__module__", "") or ""
+                qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<object>"))
+    if mod == "builtins" or not mod:
         return qual
     return f"{mod}.{qual}"

@@ -92,55 +92,40 @@ def test_get_portable_representation_various_types():
     assert portability.get_portable_representation(None) == "None"
     assert portability.get_portable_representation(b"x") == "b'x'"
 
-    # numpy ndarray: header plus nested content
     arr = np.array([[1, 2], [3, 4]], dtype=np.int32)
     arr_repr = portability.get_portable_representation(arr)
-    assert arr_repr.startswith("numpy.ndarray[shape=(2, 2),dtype=int32]::")
-    assert "list[len=2]::" in arr_repr
-    assert "1" in arr_repr and "4" in arr_repr
+    assert arr_repr.startswith("numpy.array")
+    assert "[1, 2]" in arr_repr and "[3, 4]" in arr_repr
 
-    # pandas DataFrame: shape header and columns/data markers
     df = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
     df_repr = portability.get_portable_representation(df)
-    assert df_repr.startswith("pandas.DataFrame[shape=(2, 2)]::{")
-    assert "columns=" in df_repr and "data=" in df_repr
-
-    # pandas Series: header and list content
+    assert df_repr.startswith("pandas.DataFrame")
     ser = pd.Series([1, 2, 3], name="s")
     ser_repr = portability.get_portable_representation(ser)
-    assert ser_repr.startswith("pandas.Series[len=3,dtype=")
-    assert ",name=s]" in ser_repr
-    assert "::" in ser_repr and "list[len=3]::" in ser_repr
+    assert ser_repr.startswith("pandas.Series")
 
-    # list/tuple/set/dict: full contents with parse-friendly format
+    lst = [1, 2, 3]
     lst_repr = portability.get_portable_representation([1, 2, 3])
-    assert lst_repr.startswith("list[len=3]::[") and "1" in lst_repr and "3" in lst_repr
+    assert lst_repr == repr(lst)
+    tup_repr = portability.get_portable_representation(tuple(lst))
+    assert tup_repr == repr(tuple(lst))
+    dct = {"a": 1, "b": 2}
+    dict_repr = portability.get_portable_representation(dct)
+    assert dict_repr == repr(dct)
 
-    tup_repr = portability.get_portable_representation((1, 2))
-    assert tup_repr.startswith("tuple[len=2]::[") and "1" in tup_repr and "2" in tup_repr
+    assert "numpy" in portability.get_portable_representation(np)
 
-    set_repr = portability.get_portable_representation({1, 2})
-    assert set_repr.startswith("set[len=2]::[") and set_repr.endswith("]")
-    assert "1" in set_repr and "2" in set_repr
+    exc = ValueError("bad")
+    ex_repr = portability.get_portable_representation(exc)
+    assert ex_repr == repr(exc)
 
-    dict_repr = portability.get_portable_representation({"a": 1, "b": 2})
-    assert dict_repr.startswith("dict[len=2]::[")
-    assert "'a' => 1" in dict_repr and "'b' => 2" in dict_repr
-
-    # module
-    assert portability.get_portable_representation(np) == "module(numpy)"
-    # exception instance
-    ex_repr = portability.get_portable_representation(ValueError("bad"))
-    assert ex_repr.startswith("ValueError(")
-
-    # callable
     def foo(x):
         return x
 
     call_repr = portability.get_portable_representation(foo)
-    assert call_repr.startswith("callable(")
+    assert call_repr.startswith("<callable '")
+    assert call_repr.endswith("<locals>.foo'>")
 
-    # callable instance lacking module/name triggers anonymous path
     class CallableNoName:
         def __call__(self):
             return 0
@@ -148,24 +133,24 @@ def test_get_portable_representation_various_types():
     c = CallableNoName()
     setattr(c, "__module__", None)
     anon_repr = portability.get_portable_representation(c)
-    assert anon_repr.startswith("callable(anonymous(")
+    assert anon_repr == "<callable '<?>'>"
 
-    # instance
     class C:
         pass
 
     inst_repr = portability.get_portable_representation(C())
-    assert inst_repr.startswith("instance(")
-    # default repr cleanup
-    cleaned = portability.get_portable_representation(object())
-    assert "0x" not in cleaned
+    assert inst_repr.startswith("<instance '")
+    assert inst_repr.endswith("<locals>.C'>")
+
+    obj_repr = portability.get_portable_representation(object())
+    assert obj_repr == "<instance 'object'>"
 
 
 def test_get_portable_representation_truncation():
-    # Ensure top-level truncation applies and uses ellipsis when possible
-    s = portability.get_portable_representation([1, 2, 3, 4, 5], max_length=20)
+    lst = list(range(200))
+    s = portability.get_portable_representation(lst, max_length=20)
     assert s.endswith("...")
-    assert len(s) <= 20
+    assert len(s) == 20
 
 
 def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
@@ -221,6 +206,53 @@ def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
 
     # incompatible types
     assert portability.format_object_changes(1, "1") is None
+
+
+def test_get_portable_filename():
+    assert portability.get_portable_filename("<string>") == "<string>"
+    assert portability.get_portable_filename("foo.py") == "foo.py"
+    assert portability.get_portable_filename(np.__file__) == "numpy/__init__.py"
+    assert portability.get_portable_filename(__file__) == "tests/utils/test_portability.py"
+
+
+class SomeDummyClass:
+    def __init__(self, x):
+        self.x = x
+
+    @staticmethod
+    def some_static_fn():
+        pass
+
+    @classmethod
+    def some_class_method(cls):
+        pass
+
+    def some_instance_method(self):
+        pass
+
+
+def test_portable_function_name():
+    assert "lambda" in portability.get_portable_function_name(lambda x: x)
+    curr_test_name = "tests.utils.test_portability.test_portable_function_name"
+    assert portability.get_portable_function_name(test_portable_function_name) == curr_test_name
+
+    def _local_func():
+        pass
+
+    assert portability.get_portable_function_name(_local_func) == curr_test_name + ".<locals>._local_func"
+    expected_cls_name = "tests.utils.test_portability.SomeDummyClass"
+    assert portability.get_portable_function_name(SomeDummyClass) == expected_cls_name
+    assert (
+        portability.get_portable_function_name(SomeDummyClass.some_static_fn) == expected_cls_name + ".some_static_fn"
+    )
+    assert (
+        portability.get_portable_function_name(SomeDummyClass.some_class_method)
+        == expected_cls_name + ".some_class_method"
+    )
+    assert (
+        portability.get_portable_function_name(SomeDummyClass(1).some_instance_method)
+        == expected_cls_name + ".some_instance_method"
+    )
 
 
 def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
