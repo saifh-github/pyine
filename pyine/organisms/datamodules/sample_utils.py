@@ -1,12 +1,14 @@
-import collections
 import typing
 
 import numpy as np
 import pydantic
 import torch.utils.data
+import tqdm
 
 import pyine.data.datamodule
-import pyine.data.traces.dataset_reader as dataset_reader
+import pyine.data.traces.dataset_reader
+import pyine.data.traces.dataset_utils
+import pyine.data.utils.filter_rules
 import pyine.utils.code.blocks
 import pyine.utils.code.execution
 import pyine.utils.portability
@@ -28,6 +30,66 @@ class TraceMetadata(typing.NamedTuple):
     """Hash of the dataset that contains the trace."""
     tags: list[str]
     """List of tags associated with the trace (problem+exec+augments)."""
+
+
+def get_traces_metadata(
+    readers: list[pyine.data.traces.dataset_reader.DatasetReader] | pyine.data.traces.dataset_reader.DatasetReader,
+    base_filter: pyine.data.utils.filter_rules.FilterType | None = None,
+    verbose: bool = False,
+) -> list[TraceMetadata]:
+    """Returns a list of TraceMetadata objects for all traces in the provided dataset reader(s)."""
+    if not isinstance(readers, list):
+        readers = [readers]
+    readers_map = {  # hash-to-reader map to later re-identify the origin of individual traces
+        reader.get_hash(): reader for reader in readers
+    }
+    all_trace_keys = []
+    for reader in readers_map.values():
+        all_trace_keys.extend(reader.trace_keys)
+    # sanity check: there should not be any duplicates
+    assert len(set(all_trace_keys)) == len(all_trace_keys)
+    if verbose:
+        prog_bar = tqdm.tqdm(total=len(all_trace_keys), desc="Parsing traces metadata")
+    else:
+        prog_bar = None
+    base_traces_meta: list[TraceMetadata] = []
+    for reader_hash, reader in readers_map.items():
+        for trace_idx in range(len(reader)):
+            trace_data = reader[trace_idx]
+            assert trace_data.identifier is not None, "trace identifier is required"
+            problem_data = reader.get_problem_data(trace_idx)
+            tags = _get_tags_for_trace(trace_data, problem_data)
+            is_banned = base_filter(tags) if base_filter is not None else False
+            if not is_banned:
+                base_traces_meta.append(
+                    TraceMetadata(
+                        identifier=trace_data.identifier,
+                        index=trace_idx,
+                        parent_dataset_hash=reader_hash,
+                        tags=tags,
+                    ),
+                )
+            if prog_bar is not None:
+                prog_bar.update(1)
+    if prog_bar is not None:
+        prog_bar.close()
+    return base_traces_meta
+
+
+def _get_tags_for_trace(
+    trace_data: pyine.utils.code.execution.TraceResult,
+    problem_data: pyine.data.traces.dataset_utils.CodingProblem,
+) -> list[str]:
+    """Returns a list of tags for a given trace so that we can decide whether to filter it."""
+    # note: we combine problem tags, trace (exec) tags, and augmentation tags into a single list
+    assert trace_data.identifier is not None, "trace identifier is required"
+    trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_data.identifier)
+    output_tags = []
+    output_tags.extend(problem_data.problem_tags)
+    output_tags.extend(trace_data.tags)
+    if trace_id.augment_category is not None:
+        output_tags.append(f"augment:{trace_id.augment_category}")
+    return output_tags
 
 
 class TraceDatasetMetadata(pydantic.BaseModel):
@@ -109,11 +171,11 @@ class SampleTransformConfig(pydantic.BaseModel):
     - 'random': create partial samples with a fixed probability;
     - 'hybrid': create partial samples if too long, otherwise with the configured probability.
     """
-    min_total_steps_for_partial: int = pydantic.Field(default=10000, ge=1)
-    """Minimum total trace steps to treat a trace as 'too long'."""
-    min_valid_steps_for_partial: int = pydantic.Field(default=1000, ge=1)
+    too_long_total_steps_threshold: int = pydantic.Field(default=10000, ge=1)
+    """Minimum total trace steps threshold to treat a trace as 'too long'."""
+    too_long_valid_steps_threshold: int = pydantic.Field(default=1000, ge=1)
     """Minimum valid (code-string-related) steps to treat a trace as 'too long'."""
-    min_code_lines_for_partial: int = pydantic.Field(default=500, ge=1)
+    too_long_code_lines_threshold: int = pydantic.Field(default=500, ge=1)
     """Minimum code lines to treat a trace as 'too long' for 'if_too_long'/'hybrid'."""
     functions_fallback_to_segments: bool = False
     """Whether to fallback to segments when unable to target a function call as a partial sample."""
@@ -138,15 +200,15 @@ class SampleTransformConfig(pydantic.BaseModel):
     combine_local_and_global_vars_for_partial_samples: bool = True
     """Whether to combine local variables and global variables into a single set for partial samples."""
     output_type_prob_map: typing.Annotated[
-        typing.DefaultDict[
+        dict[
             SampleOutputType,
-            typing.Annotated[
+            typing.Annotated[  # noqa
                 pydantic.StrictFloat,
-                pydantic.Field(ge=0.0, le=1.0, default_factory=lambda: 0.0),
+                pydantic.Field(ge=0.0, le=1.0),
             ],
         ],
         pydantic.Field(
-            default_factory=lambda: collections.defaultdict(float),
+            default_factory=dict,
             description=(
                 "Probability map used to determine potential output types in random/hybrid strategies, "
                 "when generating a partial sample, as well as when to fallback to full traces."
@@ -156,22 +218,33 @@ class SampleTransformConfig(pydantic.BaseModel):
 
 
 class SampleBuilder(SampleDataReaderType):
-    """Wrapper around the LMDB dataset readers that returns sample data for withheld traces.
+    """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
     This wrapper will optionally transform raw traces into partial execution samples to make the
     prediction task easier in cases where e.g. traces are very long. How/when to do this must be
-    provided as a config.
+    specified via the transform config.
     """
 
     def __init__(
         self,
-        readers: list[dataset_reader.DatasetReader],
-        traces: list[TraceMetadata],
-        config: SampleTransformConfig,
+        readers: list[pyine.data.traces.dataset_reader.DatasetReader] | pyine.data.traces.dataset_reader.DatasetReader,
+        traces: list[TraceMetadata] | None = None,  # if `None`, will target all available traces
+        config: SampleTransformConfig | None = None,
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces."""
+        if config is None:
+            config = SampleTransformConfig()  # noqa
         self.config = config
+        if not isinstance(readers, list):
+            readers = [readers]
         self.readers_map = {r.get_hash(): r for r in readers}
+        if traces is None:
+            # create a list of metadata structs for ALL available traces
+            traces = pyine.organisms.datamodules.sample_utils.get_traces_metadata(
+                readers=readers,
+                base_filter=None,
+                verbose=False,
+            )
         self.traces = traces
         assert len(self.readers_map) > 0
         assert isinstance(self.traces, list)
@@ -276,9 +349,9 @@ class SampleBuilder(SampleDataReaderType):
                 total_trace_steps = len(trace_data.traced_steps)
                 valid_trace_steps = len([s for s in trace_data.traced_steps if s is not None])
                 is_too_long = (
-                    total_trace_steps >= self.config.min_total_steps_for_partial
-                    or valid_trace_steps >= self.config.min_valid_steps_for_partial
-                    or code_lines >= self.config.min_code_lines_for_partial
+                    total_trace_steps >= self.config.too_long_total_steps_threshold
+                    or valid_trace_steps >= self.config.too_long_valid_steps_threshold
+                    or code_lines >= self.config.too_long_code_lines_threshold
                 )
                 if is_too_long:  # if the trace is too long, always try to generate a partial sample
                     try_partial_sample = True

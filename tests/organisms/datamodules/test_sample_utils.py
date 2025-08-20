@@ -1,6 +1,10 @@
 import pytest
 
+import pyine.data.traces.dataset_reader
+import pyine.data.traces.dataset_utils
+import pyine.organisms.datamodules.sample_utils
 import pyine.utils.code.execution as exec_utils
+import tests.data.utils.dataset_checks
 from pyine.organisms.datamodules.sample_utils import (
     SampleBuilder,
     SampleTransformConfig,
@@ -43,11 +47,32 @@ def make_targets(reader: FakeTraceDatasetReader, indices: list[int]) -> list[Tra
     return targets
 
 
-def test_len_matches_targets(small_fake_reader: FakeTraceDatasetReader) -> None:
+def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
+    # first, check if we can indeed target specific traces
     targets = make_targets(small_fake_reader, [0, 1, 2])
-    cfg = SampleTransformConfig(partial_sample_decision_strategy="never")  # noqa
-    sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
+    sb = SampleBuilder(readers=[small_fake_reader], traces=targets)
     assert len(sb) == len(targets)
+    for t in sb.traces:
+        assert t.index in small_fake_reader.trace_indices
+        assert t.identifier in small_fake_reader.trace_keys
+        assert small_fake_reader.trace_keys.index(t.identifier) == t.index
+        assert t.parent_dataset_hash == small_fake_reader.get_hash()
+        assert t.tags == ["unit", "fake"]
+    # also check if we can properly get default trace metadata when targets are not specified
+    expected_traces = pyine.organisms.datamodules.sample_utils.get_traces_metadata(
+        readers=small_fake_reader,
+        base_filter=None,
+        verbose=True,
+    )
+    assert len(expected_traces) == len(small_fake_reader)
+    sb2 = SampleBuilder(readers=small_fake_reader)
+    assert len(sb2) == len(expected_traces)
+    for t in sb2.traces:
+        assert t.index in small_fake_reader.trace_indices
+        assert t.identifier in small_fake_reader.trace_keys
+        assert small_fake_reader.trace_keys.index(t.identifier) == t.index
+        assert t.parent_dataset_hash == small_fake_reader.get_hash()
+        assert t.tags != ["unit", "fake"]
 
 
 class TestSampleBuilderFullSamples:
@@ -57,6 +82,7 @@ class TestSampleBuilderFullSamples:
         cfg = SampleTransformConfig(
             partial_sample_decision_strategy="never",
             random_seed=123,
+            output_type_prob_map={},
         )
         sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
         assert len(sb) == 1
@@ -84,7 +110,7 @@ class TestSampleBuilderPartialSamples:
             partial_sample_decision_strategy="always",
             random_seed=42,
             max_partial_trace_steps=3,
-            output_type_prob_map={  # noqa
+            output_type_prob_map={
                 "frame variables": 1.0,
             },
         )
@@ -107,7 +133,7 @@ class TestSampleBuilderPartialSamples:
         cfg = SampleTransformConfig(
             partial_sample_decision_strategy="always",
             random_seed=13,
-            output_type_prob_map={  # noqa
+            output_type_prob_map={
                 "function return": 1.0,
             },
         )
@@ -130,7 +156,7 @@ class TestSampleBuilderPartialSamples:
             partial_sample_decision_strategy="always",
             random_seed=1,
             max_inputs_str_length=0,  # any non-empty inputs will exceed -> partial skipped
-            output_type_prob_map={  # noqa
+            output_type_prob_map={
                 "frame variables": 1.0,
             },
         )
@@ -140,3 +166,35 @@ class TestSampleBuilderPartialSamples:
         assert sample.output_type == "program output"
         tr = small_fake_reader[0]
         assert sample.output == tr.expected_output
+
+
+class TestSampleBuilderRealData:
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(
+        tests.data.utils.dataset_checks.TACO_TRACES_DATASET_MISSING,
+        reason="TACO traces dataset is missing, cannot check sample generation",
+    )
+    def test_sample_generation_on_taco_traces(self):
+        cfg = SampleTransformConfig(
+            random_seed=0,
+            partial_sample_decision_strategy="hybrid",
+            functions_fallback_to_segments=True,
+            max_partial_trace_steps=100,
+            min_partial_trace_steps=5,
+            max_inputs_str_length=1000,
+            max_outputs_str_length=1000,
+            output_type_prob_map={
+                "program output": 0.5,
+                "frame variables": 0.1,
+                "function return": 0.4,
+            },
+        )
+        dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
+        taco_reader = pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
+        sb = SampleBuilder(
+            readers=taco_reader,
+            traces=None,
+            config=cfg,
+        )
+        assert len(sb) == 1000
