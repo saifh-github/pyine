@@ -4,9 +4,14 @@ import sys
 import pytest
 
 from pyine.utils.code.execution import (
+    _unsafe_execute_and_trace_code,  # OK to use here directly w/ hardcoded code strings (will be faster)
+)
+from pyine.utils.code.execution import (
+    EXEC_MODULE_OBJ_NAME,
     EXEC_TRACE_FILE_NAME,
     MockInput,
     MockInputContext,
+    TracingCapException,
     execute_and_trace_code,
 )
 
@@ -75,7 +80,7 @@ class TestMockInputContext:
 value = input("Enter: ")
 print(f"Got: {value}")
 """
-        result = execute_and_trace_code(code, identifier="dummy", inputs="test input")
+        result = _unsafe_execute_and_trace_code(code, identifier="dummy", inputs="test input")
         assert result.exception is None
         assert result.identifier == "dummy"
         assert "Got: test input" in result.stdout
@@ -88,7 +93,7 @@ name = input("What's your name? ")
 age = input("What's your age? ")
 print(f"Hello, {name}! You are {age} years old.")
 """
-    result = execute_and_trace_code(code, inputs="Alice\n30")
+    result = _unsafe_execute_and_trace_code(code, inputs="Alice\n30")
     assert result.exception is None
     assert "Hello, Alice! You are 30 years old." in result.stdout
 
@@ -103,7 +108,7 @@ print("Enter your country:")
 country = sys.stdin.readline().strip()
 print(f"{name} is from {country}.")
 """
-    result = execute_and_trace_code(code, inputs="Bob\nUSA")
+    result = _unsafe_execute_and_trace_code(code, inputs="Bob\nUSA")
     assert result.exception is None
     assert "Bob is from USA." in result.stdout
 
@@ -118,7 +123,7 @@ word_count = len(text.split())
 print(f"You entered {word_count} words.")
 """
     inputs = "This is a test.\nMultiple lines\nof text."
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is None
     assert "You entered 8 words." in result.stdout
 
@@ -133,7 +138,7 @@ print(f"You entered {len(lines)} lines.")
 print(f"First line: {lines[0].strip()}")
 """
     inputs = "First line\nSecond line\nThird line"
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is None
     assert "You entered 3 lines." in result.stdout
     assert "First line: First line" in result.stdout
@@ -151,7 +156,7 @@ info = sys.stdin.read()
 print(f"Name: {name}, Address: {address}, Info: {info.strip()}")
 """
     inputs = "Charlie\n123 Main St\nExtra info\nMore details"
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is None
     assert "Name: Charlie, Address: 123 Main St, Info: Extra info\nMore details" in result.stdout
 
@@ -164,7 +169,7 @@ age = input("What's your age? ")
 country = input("What's your country? ")
 """
     inputs = "David\n42"
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is not None and result.exception.type == "EOFError"
 
 
@@ -175,7 +180,7 @@ x = 10
 y = 0
 result = x / y  # Division by zero error
 """
-    result = execute_and_trace_code(code, inputs="")
+    result = _unsafe_execute_and_trace_code(code, inputs="")
     assert result.exception is not None and result.exception.type == "ZeroDivisionError"
 
 
@@ -186,11 +191,11 @@ response = input("Press Enter to continue...")
 print("You pressed Enter")
 """
     inputs = ""
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is not None  # should get EOF error with empty inputs
 
     inputs = "\n"  # now try with a single empty line
-    result = execute_and_trace_code(code, inputs=inputs)
+    result = _unsafe_execute_and_trace_code(code, inputs=inputs)
     assert result.exception is None and "You pressed Enter" in result.stdout
 
 
@@ -201,7 +206,7 @@ import sys
 print("Hello, world!")
 sys.exit(13)
 """
-    result = execute_and_trace_code(code)
+    result = _unsafe_execute_and_trace_code(code)
     assert "Hello, world!" in result.stdout
     assert result.return_value == 13
     assert result.exception is not None
@@ -244,7 +249,7 @@ print("Hello, world!")
 a = 1 + 2
 print("Goodbye, world!")
 """
-    result = execute_and_trace_code(code, trace_only_inside_code_string=True)
+    result = _unsafe_execute_and_trace_code(code, trace_only_inside_code_string=True)
     assert result.exception is None
     assert "Hello, world!" in result.stdout
     assert "Goodbye, world!" in result.stdout
@@ -271,7 +276,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
 """
     blacklisted_modules = ["numpy", "contextlib", "traceback", "linecache"]
     blacklisted_objects = ["_internal_set_trace", "trace_context", "_get_stack_str"]
-    trace_result = execute_and_trace_code(
+    trace_result = _unsafe_execute_and_trace_code(
         code_string=code,
         blacklisted_modules=blacklisted_modules,
         blacklisted_objects=blacklisted_objects,
@@ -305,7 +310,7 @@ for i in range(3):
 c = int(np.sum(np.ones((5, 5)) * 10))        # L8
 print(f"Final values: a={a}, b={b}, c={c}")  # L9
 """
-    trace_result = execute_and_trace_code(
+    trace_result = _unsafe_execute_and_trace_code(
         code_string=code,
         trace_only_inside_code_string=True,
     )
@@ -322,6 +327,116 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
             last_line = trace_step
     assert last_return.trace_key.line == 10
     assert last_line.trace_key.line == 10
+
+
+def test_entrypoint_with_specific_local_vars():
+    """Test that the entrypoint can be specified and that specific local variables are reported."""
+    code = """\
+def some_magic_function(a: str) -> int:
+    c = int(a) // 2
+    d = 12 ** c
+    print(f"{d=}")
+    return c
+"""
+    trace_result = _unsafe_execute_and_trace_code(
+        identifier="hello",  # just for logging purposes
+        code_string=code,
+        inputs="15",
+        expected_output="potato",  # not verified internally, just logged
+        entrypoint_name="some_magic_function",
+        trace_only_inside_code_string=True,
+    )
+    assert trace_result.identifier == "hello"
+    assert len(trace_result.code_blocks) == 1
+    assert next(iter(trace_result.code_blocks.values())).name == "some_magic_function"
+    assert trace_result.expected_output == "potato"
+    assert trace_result.max_var_repr_length is None
+    assert trace_result.max_events_per_line is None
+    assert f"d={12 ** (15 // 2)}" in trace_result.stdout
+    assert trace_result.return_value == 7
+    assert trace_result.exception is None
+    assert len(trace_result.metadata) > 0
+    expected_tags = ["exec:has_entrypoint", "return:has_value", "return:has_stdout"]
+    assert len(trace_result.tags) > 0 and all([t in trace_result.tags for t in expected_tags])
+    # assume very specific step mapping below, starting from defs, and then the entrypoint call
+    valid_steps = [s for s in trace_result.traced_steps if s is not None]  # drop out-of-scope steps
+    assert len(valid_steps) == 3 + 6  # should have 3 for defines, 6 for entrypoint call->return
+    assert valid_steps[0].event_type == "call"
+    assert valid_steps[0].trace_key.object == EXEC_MODULE_OBJ_NAME
+    assert valid_steps[0].trace_key.file == EXEC_TRACE_FILE_NAME
+    assert valid_steps[0].trace_key.line == 0  # exec init always starts at line zero
+    assert not valid_steps[0].arguments  # no arguments for init call
+    assert not valid_steps[0].local_variables and not valid_steps[0].global_variables
+    assert valid_steps[1].event_type == "line" and valid_steps[1].trace_key.line == 1  # function def
+    assert not valid_steps[1].local_variables and not valid_steps[1].global_variables  # def still not done
+    assert valid_steps[2].event_type == "return"  # now def should exist
+    assert "some_magic_function" in valid_steps[2].global_variables
+    # next steps of interest should be the entrypoint call itself
+    assert valid_steps[3].event_type == "call"
+    assert valid_steps[3].trace_key.object == "some_magic_function"
+    assert valid_steps[3].trace_key.file == EXEC_TRACE_FILE_NAME
+    assert valid_steps[3].trace_key.line == 1  # should now be going to the function def itself
+    assert valid_steps[3].arguments == {"a": "'15'"}  # this is what we passed to the func as input
+    assert valid_steps[3].local_variables == {"a": "'15'"}  # immediately also counts as a local variable
+    assert "some_magic_function" in valid_steps[3].global_variables  # that global should still exist
+    assert valid_steps[4].event_type == "line" and valid_steps[4].trace_key.line == 2  # move up
+    assert valid_steps[4].local_variables == {"a": "'15'"}  # there should not be any new locals yet
+    assert valid_steps[5].event_type == "line" and valid_steps[5].trace_key.line == 3  # move up again
+    assert valid_steps[5].local_variables == {"a": "'15'", "c": "7"}
+    # rest should be OK at this point
+
+
+def test_trace_event_cap():
+    """Test that trace caps work correctly."""
+    code = """\
+i = 0
+while i < 1000:
+    i += 1
+print(f"Final i={i}")
+"""
+    result_no_caps = _unsafe_execute_and_trace_code(
+        code_string=code,
+        trace_only_inside_code_string=True,
+    )
+    assert len([s for s in result_no_caps.traced_steps if s is not None]) > 1000
+    assert result_no_caps.stdout == "Final i=1000\n"
+    with pytest.raises(TracingCapException):
+        _ = _unsafe_execute_and_trace_code(
+            code_string=code,
+            trace_only_inside_code_string=True,
+            max_events_per_line=10,
+        )
+    result_with_caps = _unsafe_execute_and_trace_code(
+        code_string=code,
+        trace_only_inside_code_string=True,
+        max_events_per_line=10_000,
+    )
+    assert result_with_caps.stdout == "Final i=1000\n"
+
+
+def test_trace_max_var_len_cap():
+    code = """\
+i = 1000
+something = ["potato"] * i
+print(f"{len(something)=}")
+"""
+    result_no_caps = _unsafe_execute_and_trace_code(
+        code_string=code,
+        trace_only_inside_code_string=True,
+    )
+    assert result_no_caps.stdout == "len(something)=1000\n"
+    with pytest.raises(TracingCapException):
+        _ = _unsafe_execute_and_trace_code(
+            code_string=code,
+            trace_only_inside_code_string=True,
+            max_var_repr_length=100,
+        )
+    result_with_caps = _unsafe_execute_and_trace_code(
+        code_string=code,
+        trace_only_inside_code_string=True,
+        max_var_repr_length=10_000,
+    )
+    assert result_with_caps.stdout == "len(something)=1000\n"
 
 
 def test_safe_vs_unsafe_tracing():

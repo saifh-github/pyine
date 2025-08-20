@@ -8,7 +8,6 @@ import logging
 import multiprocessing
 import os
 import pprint
-import site
 import sys
 import time
 import traceback
@@ -48,6 +47,9 @@ EXEC_TRACE_FILE_NAME = "<string>"
 
 EXEC_BLOCK_OBJ_NAME = "<block>"
 """Name used to identify code blocks that can be executed in the code string itself."""
+
+EXEC_MODULE_OBJ_NAME = "<module>"
+"""Name used to identify when code modules are 'called' (imported) during execution."""
 
 EXEC_PARENT_FILE_NAME = "<parent>"
 """Name used to identify the parent file executing the code string itself via exec."""
@@ -181,7 +183,7 @@ class TraceException(typing.NamedTuple):
             if tb_frames:
                 last = tb_frames[-1]
                 origin = TraceKey(
-                    file=_get_clean_filename(last.filename),
+                    file=pyine.utils.portability.get_portable_filename(last.filename),
                     object=last.name,
                     line=last.lineno,
                 )
@@ -273,7 +275,7 @@ class TraceResult(pydantic.BaseModel):
     """The captured stderr output during execution (in full)."""
     metadata: dict[str, typing.Any]
     """A dictionary containing metadata about the execution environment & settings."""
-    trace_tags: list[str]
+    tags: list[str]
     """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""
 
     def __str__(self):
@@ -404,35 +406,18 @@ class MockInputContext(contextlib.AbstractContextManager):
             __builtins__.input = self.original_input  # type: ignore
 
 
-def _get_clean_filename(filename: str) -> str:
-    """Returns a cleaned up filename for trace event display/logging purposes."""
-    if filename == EXEC_TRACE_FILE_NAME:
-        return filename  # nothing to do
-    site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
-    for site_dir in site_pkgs:
-        if filename.startswith(site_dir):
-            return os.path.relpath(filename, site_dir)
-    stdlib_dir = os.path.dirname(os.__file__)
-    if filename.startswith(stdlib_dir):
-        return os.path.relpath(filename, stdlib_dir)
-    project_root = str(pyine.utils.filesystem.get_project_root_path())
-    if filename.startswith(project_root):
-        return os.path.relpath(filename, project_root)
-    return filename
-
-
 def _execute_in_subprocess(
-    *args,  # we will forward all args + kwargs to `_execute_and_trace_code`
+    *args,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
     result_queue: multiprocessing.Queue,
     identifier: str | None = None,
     timeout_seconds: float = 60,
     **kwargs,
 ) -> None:
-    """Execute tracing in a separate process (used in the `_safe_execute_and_trace_code` impl)."""
+    """Execute 'unsafe' tracing in a separate process (where unsafe means it could crash the main process)."""
     # note: this could not be a local define because it gets pickled for multiprocessing
     result_queue.put(("started", os.getpid()))
     try:
-        result = _execute_and_trace_code(
+        result = _unsafe_execute_and_trace_code(
             *args,
             identifier=identifier,
             timeout_seconds=timeout_seconds,
@@ -444,7 +429,7 @@ def _execute_in_subprocess(
 
 
 def _safe_execute_and_trace_code(
-    *args,  # we will forward all args + kwargs to `_execute_and_trace_code`
+    *args,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
     identifier: str | None = None,
     timeout_seconds: float = 60,
     timeout_external_buffer_seconds: float = 5,
@@ -452,12 +437,12 @@ def _safe_execute_and_trace_code(
     **kwargs,
 ) -> "TraceResult":
     """
-    Safe wrapper around `_execute_and_trace_code` that handles OS-level crashes.
+    Wrapper around `_unsafe_execute_and_trace_code` that handles OS-level crashes.
 
-    Uses process isolation to prevent segfaults, OOM kills, and other OS-level
-    crashes from taking down the main process.
+    'Safe' in this case relates to using process isolation to prevent segfaults, OOM kills, and
+    other OS-level crashes from taking down the main process.
 
-    See the `_execute_and_trace_code` docstring for more details on the tracing process and args.
+    See the `_unsafe_execute_and_trace_code` docstring for more details on forwarded arguments.
 
     Args:
         identifier: an identifier for this trace (used for printing/logging purposes).
@@ -524,7 +509,7 @@ def _safe_execute_and_trace_code(
     raise TimeoutError(error_msg)
 
 
-def _execute_and_trace_code(
+def _unsafe_execute_and_trace_code(
     code_string: str,
     inputs: str = "",
     expected_output: str = "",
@@ -540,7 +525,10 @@ def _execute_and_trace_code(
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
-    Also replaces calls to input() or sys.stdin.readline() with lines from the provided inputs
+    'Unsafe' here means that any segfaults, OOM kills, or other OS-level crashes will take down
+    the main process if it called this function directly. Refer to the 'safe' version to avoid that.
+
+    Will replace calls to input() or sys.stdin.readline() with lines from the provided inputs
     string, and captures stdout and stderr during execution.
 
     Args:
@@ -589,7 +577,9 @@ def _execute_and_trace_code(
         nonlocal last_trace_step_idx, stdout_buffer, stderr_buffer
 
         trace_key = TraceKey(
-            file=_get_clean_filename(frame.f_code.co_filename), object=frame.f_code.co_name, line=frame.f_lineno
+            file=pyine.utils.portability.get_portable_filename(frame.f_code.co_filename),
+            object=frame.f_code.co_name,
+            line=frame.f_lineno,
         )
         return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
 
@@ -631,12 +621,12 @@ def _execute_and_trace_code(
             stack_trace = []
             current_frame = frame
             while current_frame:
-                clean_filename = _get_clean_filename(current_frame.f_code.co_filename)
+                clean_filename = pyine.utils.portability.get_portable_filename(current_frame.f_code.co_filename)
                 if clean_filename == REL_PATH_FROM_ROOT:
                     break  # stop tracing the stack once we get to this level
                 stack_trace.append(
                     TraceKey(
-                        file=_get_clean_filename(current_frame.f_code.co_filename),
+                        file=clean_filename,
                         object=current_frame.f_code.co_name,
                         line=current_frame.f_lineno,
                     )
@@ -646,7 +636,7 @@ def _execute_and_trace_code(
             local_vars = {
                 name: pyine.utils.portability.get_portable_representation(value)
                 for name, value in frame.f_locals.items()
-                if name.startswith("__") and name not in banned_local_var_names
+                if not name.startswith("__") and name not in banned_local_var_names
             }
             if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in local_vars.values()]):
                 raise TracingCapException(f"max locals repr len exceeded for trace at key {trace_key_repr}")
@@ -709,6 +699,8 @@ def _execute_and_trace_code(
                         # note for later: if this is buggy/annoying, could add call inside code string itself
                         entrypoint_step_idx = last_trace_step_idx
                         entrypoint = exec_namespace[entrypoint_name]
+                        # @@@@@ TODO: could try to analyze entrypoint signature and figure out input forwarding
+                        #             (that should be implemented in a separate function/class though)
                         with trace_context(_trace_callback):
                             return_value = entrypoint(inputs)
                         trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
@@ -716,8 +708,8 @@ def _execute_and_trace_code(
                     with MockInputContext(inputs):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
-    except TimeoutError:
-        # we'll let callers handle what happens when code tracing times out
+    except (TimeoutError, TracingCapException):
+        # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise
     except DONT_CATCH_EXCEPTIONS:
         # process is probably being interrupted, raise immediately here as well
@@ -774,7 +766,7 @@ def _execute_and_trace_code(
             stdout=stdout_buffer,
             stderr=stderr_buffer,
             metadata=reprod_metadata,
-            trace_tags=trace_tags,
+            tags=trace_tags,
         )
     except pydantic.ValidationError as e:
         print(f"Error while creating TraceResult instance (unrelated to exec): {e}")
@@ -793,7 +785,7 @@ def execute_and_trace_code(
     `sys.exit`) or crashing due to memory or OS-level issues will not cause the main process to
     also crash.
 
-    See the `_execute_and_trace_code` docstring for more details on the tracing process and args.
+    See the `_unsafe_execute_and_trace_code` docstring for more details on the tracing arguments.
 
     Note that if tracing exceeds the specified timeout delay, it will raise `TimeoutError`.
 
@@ -806,7 +798,7 @@ def execute_and_trace_code(
         A `TraceResult` instance containing the execution results.
     """
     if not use_safe_execution:
-        return _execute_and_trace_code(*args, **kwargs)
+        return _unsafe_execute_and_trace_code(*args, **kwargs)
     else:
         return _safe_execute_and_trace_code(*args, **kwargs)
 
@@ -906,7 +898,7 @@ for i in range(3):
 c = int(np.sum(np.ones((5, 5)) * some_potato.ok()))
 print(f"Final values: a={a}, b={b}, c={c}")
 """
-    _trace_result = _execute_and_trace_code(
+    _trace_result = _unsafe_execute_and_trace_code(
         code_string=_sample_code,
         inputs="",
         blacklisted_modules=["linecache", "traceback", "pydev", "pydevd_tracing", "contextlib", "numpy"],
