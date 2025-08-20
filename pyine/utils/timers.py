@@ -109,7 +109,7 @@ class TimeLimit:
         ...
         Traceback (most recent call last):
             ...
-        TimeoutError: Code execution timed out after 1.5 seconds.
+        TimeoutError: code execution timed out after 1.5 seconds
     """
 
     def __init__(
@@ -127,7 +127,7 @@ class TimeLimit:
             on_timeout: Optional callback function to execute when timeout occurs.
         """
         self.seconds = seconds
-        self.timeout_message = timeout_message or f"Code execution timed out after {seconds} seconds."
+        self.timeout_message = timeout_message or f"timed out after {seconds:.3f} seconds"
         self.on_timeout = on_timeout
         self._old_handler: typing.Callable | None = None
         self._start_time: float = 0
@@ -150,7 +150,9 @@ class TimeLimit:
         elapsed = time.time() - self._start_time
         if self.on_timeout:
             self.on_timeout()  # executes the on_timeout callback if provided
-        raise TimeoutError(f"{self.timeout_message} (Actual time: {elapsed:.2f}s)")
+        if elapsed > self.seconds * 1.1:  # if we bust the cap by at least 10%, print the actual time
+            raise TimeoutError(f"{self.timeout_message} (actual time: {elapsed:.3f}s)")
+        raise TimeoutError(self.timeout_message)
 
     def __enter__(self) -> "TimeLimit":
         """

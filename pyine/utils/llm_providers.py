@@ -1,3 +1,4 @@
+import functools
 import os
 
 import langchain_core.prompts
@@ -10,11 +11,12 @@ import pydantic
 LLMType = langchain_openai.ChatOpenAI  # just to make typing easier elsewhere
 
 
+@functools.wraps(langchain_openai.chat_models.base.BaseChatOpenAI)
 def get_llm_from_provider(
     provider: str,
     rate_limiter_config: dict | None = None,
     with_retry_config: dict | None = None,
-    **kwargs,
+    **model_kwargs,  # will be forwarded to the chat model constructor
 ) -> LLMType:
     """Get a default LLM from a provider for quick prototyping and testing.
 
@@ -26,17 +28,17 @@ def get_llm_from_provider(
             **rate_limiter_config,
         )
     if provider == "deepseek":
-        if "api_key" not in kwargs:
-            kwargs.update({"api_key": os.environ.get("DEEPSEEK_API_KEY")})
-        if "base_url" not in kwargs:
-            kwargs.update({"base_url": os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1")})
-        llm = langchain_deepseek.ChatDeepSeek(rate_limiter=rate_limiter, **kwargs)
+        if "api_key" not in model_kwargs:
+            model_kwargs.update({"api_key": os.environ.get("DEEPSEEK_API_KEY")})
+        if "base_url" not in model_kwargs:
+            model_kwargs.update({"base_url": os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1")})
+        llm = langchain_deepseek.ChatDeepSeek(rate_limiter=rate_limiter, **model_kwargs)
     elif provider == "openai":
-        if "api_key" not in kwargs:
-            kwargs.update({"api_key": os.environ.get("OPENAI_API_KEY")})
-        if "base_url" not in kwargs:
-            kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
-        llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **kwargs)
+        if "api_key" not in model_kwargs:
+            model_kwargs.update({"api_key": os.environ.get("OPENAI_API_KEY")})
+        if "base_url" not in model_kwargs:
+            model_kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
+        llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
     else:
         raise ValueError(f"Invalid provider: {provider}")
     if with_retry_config is not None:

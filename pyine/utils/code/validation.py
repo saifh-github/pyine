@@ -122,20 +122,24 @@ def find_near_duplicate_code(
     return result
 
 
-def find_near_duplicate_code_clusters(code_strings: list[str], threshold: int | float, **kwargs) -> list[list[int]]:
+def find_near_duplicate_code_clusters(
+    code_strings: list[str],
+    threshold: int | float,
+    **clustering_kwargs,
+) -> list[list[int]]:
     """
     Find clusters of near-duplicate code snippets.
 
     Args:
         code_strings: List of code snippets to check for near-duplicates.
         threshold: Maximum edit distance or dissimilarity score.
-        **kwargs: Additional arguments to pass to find_near_duplicate_code.
+        **clustering_kwargs: Additional arguments to pass to find_near_duplicate_code.
 
     Returns:
         A list of clusters, where each cluster is a list of tuples containing indices of
         near-duplicate code snippets.
     """
-    match_results = find_near_duplicate_code(code_strings, threshold, **kwargs)
+    match_results = find_near_duplicate_code(code_strings, threshold, **clustering_kwargs)
     clustered: set[int] = set()
     clusters: list[list[int]] = []
     for i in range(len(code_strings)):

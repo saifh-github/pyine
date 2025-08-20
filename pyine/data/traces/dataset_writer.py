@@ -444,9 +444,9 @@ def _trace_code_snippet(
             timeout_seconds=config.execution_timeout_seconds,
             use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
         )
-    if config.max_trace_events_total is not None and trace_result.tracing_steps > config.max_trace_events_total:
+    if config.max_trace_events_total is not None and trace_result.total_step_count > config.max_trace_events_total:
         raise ValueError(
-            f"max trace event count exceeded ({trace_result.tracing_steps} exceeds {config.max_trace_events_total})"
+            f"max trace event count exceeded ({trace_result.total_step_count} exceeds {config.max_trace_events_total})"
         )
     comp = functools.partial(
         pyine.utils.code.output_compare.compare,
@@ -667,7 +667,13 @@ async def write_dataset(
     )
     if len(problem_data_iter) == 0:
         raise ValueError(f"no problems found in {config.source_dataset_name} source dataset")
-    log(f"found {len(problem_data_iter)} problems in {config.source_dataset_name} source dataset")
+    if config.target_problem_pattern is not None:
+        log(
+            f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset "
+            f"that matched the following pattern: {config.target_problem_pattern}"
+        )
+    else:
+        log(f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
     await _cooperative_yield()
     if config.llm_provider_kwargs:
         llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
@@ -779,7 +785,7 @@ async def write_dataset(
                 for errored_trace_id, error in errored_traces.items():
                     logger.warning(f"{errored_trace_id} skipped, error writing trace: {error}")
                 for written_trace_id in written_traces.keys():
-                    trace_event_counts.append(traces_to_write[written_trace_id]["tracing_steps"])
+                    trace_event_counts.append(len(traces_to_write[written_trace_id]["traced_steps"]))
                 if written_solutions == 0 and written_traces:  # no traces written so far for current problem
                     # write parent problem data (we found at least one valid trace for it)
                     problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
@@ -817,7 +823,7 @@ async def write_dataset_from_taco(
     output_dataset_path: str | pathlib.Path | None = None,  # if none, will be created in default location
     output_dataset_tag: str | None = None,  # if none, will use a truncated kwargs hash (16 chars)
     verbose: bool = False,
-    **kwargs,  # all kwargs will be forwarded to the trace writer config (see that doc for info)
+    **config_kwargs,  # all kwargs will be forwarded to the trace writer config (see that doc for info)
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from the TACO dataset.
 
@@ -828,7 +834,7 @@ async def write_dataset_from_taco(
         output_dataset_tag: tag to identify the output dataset name. If None, will use a truncated kwargs
             hash (with 16 chars). Only useful if using the default `output_dataset_path` value (`None`).
         verbose: toggles verbose output/logging.
-        kwargs: all kwargs will be forwarded to the `write_dataset` function (see that doc for info).
+        config_kwargs: all kwargs will be forwarded to the `TraceDatasetWriterConfig` (see that doc for info).
 
     Returns:
         The LMDBWriter object that was used to write the traces (once writing is complete). This
@@ -844,7 +850,7 @@ async def write_dataset_from_taco(
     log(f"will attempt to read TACO dataset from: {source_dataset_path}")
     if output_dataset_path is None:
         if output_dataset_tag is None:
-            suffix_hash = pyine.utils.reprod.get_params_hash("TACO", **kwargs)
+            suffix_hash = pyine.utils.reprod.get_params_hash("TACO", **config_kwargs)
             output_dataset_tag = str(suffix_hash[:16])
         output_dataset_path = pyine.data.traces.dataset_utils.get_new_dataset_path(
             source_dataset_name="TACO",
@@ -858,7 +864,7 @@ async def write_dataset_from_taco(
         output_dataset_path=output_dataset_path,
         config=TraceDatasetWriterConfig(
             source_dataset_name="TACO",
-            **kwargs,
+            **config_kwargs,
         ),
         verbose=verbose,
     )

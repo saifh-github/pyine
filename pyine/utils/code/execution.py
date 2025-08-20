@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
-import functools
 import io
 import logging
 import multiprocessing
@@ -17,6 +16,7 @@ import typing
 import pydantic
 
 import pyine.utils.code.blocks
+import pyine.utils.code.input_mock
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -32,13 +32,10 @@ __all__ = [
     "TraceEvent",
     "TraceResult",
     "trace_context",
-    "MockInput",
-    "MockInputContext",
     "execute_and_trace_code",
     "format_traced_code_execution",
 ]
 
-_orig_stdin = sys.stdin
 logger = logging.getLogger(__name__)
 
 
@@ -261,8 +258,6 @@ class TraceResult(pydantic.BaseModel):
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
     list.
     """
-    tracing_steps: int
-    """The total number of tracing steps taken during execution."""
     entrypoint_step_idx: int | None
     """The trace step index just prior to calling the entrypoint function (if one is called)."""
     return_value: typing.Any | None
@@ -290,6 +285,16 @@ class TraceResult(pydantic.BaseModel):
         """Returns the code string with line numbers for each line of code."""
         return pyine.utils.portability.get_code_with_numbered_lines(self.code_string)
 
+    @property
+    def total_step_count(self) -> int:
+        """Returns the total number of recorded tracing steps (including out-of-scope ones)."""
+        return len(self.traced_steps)
+
+    @property
+    def valid_step_count(self) -> int:
+        """Returns the valid number of recorded tracing steps, where valid means in-scope."""
+        return len([s for s in self.traced_steps if s is not None])
+
 
 @contextlib.contextmanager
 def trace_context(
@@ -310,100 +315,6 @@ def trace_context(
         yield
     finally:
         sys.settrace(old_trace)
-
-
-class MockInput:
-    """Mock class for sys.stdin.readline() and input() to read from a provided list of inputs."""
-
-    # noinspection PyUnreachableCode
-    def __init__(self, inputs: str = ""):
-        """Initialize the MockInput instance with an input string to be read from.
-
-        If the input string contains newlines, each line will be read separately. If it does not
-        possess a final newline, one will be added automatically.
-        """
-        self._orig_inputs = inputs
-        if not isinstance(inputs, str):
-            if isinstance(inputs, list):
-                inputs = "\n".join(inputs)
-            else:
-                inputs = str(inputs)
-        if inputs and not inputs.endswith("\n"):
-            inputs += "\n"
-        self._input_iter = iter(inputs.splitlines())
-
-    def readline(self) -> str:
-        """Read a line from the iterator of inputs."""
-        try:
-            next_input = next(self._input_iter)
-            return f"{next_input}\n"  # add newline as readline would return
-        except StopIteration:
-            return ""  # return empty string when no more inputs
-
-    def read(self) -> str:
-        """Read all remaining inputs into a single string."""
-        result = "".join(f"{line}\n" for line in self._input_iter)
-        return result
-
-    def readlines(self) -> list[str]:
-        """Read all remaining inputs into a list of strings."""
-        result = [f"{line}\n" for line in self._input_iter]
-        return result
-
-    def __getattr__(self, name: str) -> typing.Any:
-        """Forward attribute access to sys.stdin for any attributes not found in MockInput."""
-        try:
-            stdin_attr = getattr(_orig_stdin, name)
-            if callable(stdin_attr):
-
-                def wrapper(*args, **kwargs):
-                    method = getattr(sys.stdin, name)
-                    return method(*args, **kwargs)
-
-                return wrapper
-            else:
-                return stdin_attr
-        except AttributeError as e:
-            raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'") from e
-
-    def mock_input(self, _: str = "") -> str:
-        """Read the next input from the iterator of inputs."""
-        try:
-            next_input = next(self._input_iter)
-            return next_input
-        except StopIteration as e:
-            raise EOFError("not enough input lines provided") from e
-
-
-class MockInputContext(contextlib.AbstractContextManager):
-    """Context manager for replacing sys.stdin.readline() and input() with MockInput."""
-
-    def __init__(self, inputs: str = ""):
-        """Initialize the MockInput instance with an input string to be read from.
-
-        If the input string contains newlines, each line will be read separately. If it does not
-        possess a final newline, one will be added automatically.
-        """
-        self.mocker = MockInput(inputs)
-
-    def __enter__(self, inputs: str = ""):
-        """Replaces sys.stdin.readline() and input() with MockInput."""
-        self.original_stdin = sys.stdin
-        if isinstance(__builtins__, dict):
-            self.original_input = __builtins__["input"]  # type: ignore
-            __builtins__["input"] = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
-        else:
-            self.original_input = __builtins__.input  # type: ignore
-            __builtins__.input = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
-        sys.stdin = self.mocker  # type: ignore
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Restores sys.stdin.readline() and input() to their original values."""
-        sys.stdin = self.original_stdin
-        if isinstance(__builtins__, dict):
-            __builtins__["input"] = self.original_input  # type: ignore
-        else:
-            __builtins__.input = self.original_input  # type: ignore
 
 
 def _execute_in_subprocess(
@@ -500,12 +411,11 @@ def _safe_execute_and_trace_code(
         assert isinstance(returned_val, TraceResult)
         return returned_val
     elif status == "raised":
-        assert isinstance(returned_val, tuple) and len(returned_val) == 2
-        exception, tb = returned_val
-        logger.error(f"tracing subprocess raised exception: {exception}\n{tb}")
-        raise exception
-    error_msg = f"tracing subprocess timed out after {latest_time_delta} seconds (name={identifier})"
-    logger.error(error_msg)
+        assert isinstance(returned_val, Exception)
+        logger.debug(f"tracing subprocess raised exception: {returned_val}")
+        raise returned_val
+    error_msg = f"tracing subprocess timed out after {latest_time_delta:.3f} seconds (name={identifier})"
+    logger.debug(error_msg)
     raise TimeoutError(error_msg)
 
 
@@ -642,15 +552,25 @@ def _unsafe_execute_and_trace_code(
                 for name, value in frame.f_locals.items()
                 if not name.startswith("__") and name not in banned_local_var_names
             }
-            if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in local_vars.values()]):
-                raise TracingCapException(f"max locals repr len exceeded for trace at key {trace_key_repr}")
+            if max_var_repr_length is not None and local_vars:
+                max_locals_var_repr_len = max([len(v) for v in local_vars.values()])
+                if max_locals_var_repr_len > max_var_repr_length:
+                    raise TracingCapException(
+                        f"max locals repr len exceeded for trace at key {trace_key_repr} "
+                        f"(found max len: {max_locals_var_repr_len}, cap: {max_var_repr_length})"
+                    )
             global_vars = {
                 name: pyine.utils.portability.get_portable_representation(value)
                 for name, value in frame.f_globals.items()
                 if not name.startswith("__")
             }
-            if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in global_vars.values()]):
-                raise TracingCapException(f"max globals repr len exceeded for trace at key {trace_key_repr}")
+            if max_var_repr_length is not None and global_vars:
+                max_globals_var_repr_len = max([len(v) for v in global_vars.values()])
+                if max_globals_var_repr_len > max_var_repr_length:
+                    raise TracingCapException(
+                        f"max globals repr len exceeded for trace at key {trace_key_repr} "
+                        f"(found max len: {max_globals_var_repr_len}, cap: {max_var_repr_length})"
+                    )
             arguments, exec_return_value, exception = None, None, None
             if event == "call":
                 arguments = {
@@ -658,12 +578,20 @@ def _unsafe_execute_and_trace_code(
                     for name, value in frame.f_locals.items()
                     if not name.startswith("__")
                 }
-                if max_var_repr_length is not None and any([len(v) > max_var_repr_length for v in arguments.values()]):
-                    raise TracingCapException(f"max args repr len exceeded for trace at key {trace_key_repr}")
+                if max_var_repr_length is not None and arguments:
+                    max_args_var_repr_len = max([len(v) for v in arguments.values()])
+                    if max_args_var_repr_len > max_var_repr_length:
+                        raise TracingCapException(
+                            f"max args repr len exceeded for trace at key {trace_key_repr}"
+                            f"(found max len: {max_args_var_repr_len}, cap: {max_var_repr_length})"
+                        )
             elif event == "return":
                 exec_return_value = pyine.utils.portability.get_portable_representation(arg)
                 if max_var_repr_length is not None and len(exec_return_value) > max_var_repr_length:
-                    raise TracingCapException(f"max return val repr len exceeded for trace at key {trace_key_repr}")
+                    raise TracingCapException(
+                        f"max return val repr len exceeded for trace at key {trace_key_repr}"
+                        f"(found len: {len(exec_return_value)}, cap: {max_var_repr_length})"
+                    )
             elif event == "exception":
                 exc_type, exc_value, exc_traceback = arg
                 exception = TraceException.from_exception(exc_type, exc_value, exc_traceback)
@@ -709,7 +637,7 @@ def _unsafe_execute_and_trace_code(
                             return_value = entrypoint(inputs)
                         trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
                 else:
-                    with MockInputContext(inputs):
+                    with pyine.utils.code.input_mock.MockInputContext(inputs):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
     except (TimeoutError, TracingCapException):
@@ -755,7 +683,6 @@ def _unsafe_execute_and_trace_code(
             max_var_repr_length=max_var_repr_length,
             traced_steps=traced_steps,
             traced_steps_map=traced_steps_map,
-            tracing_steps=last_trace_step_idx,
             entrypoint_step_idx=entrypoint_step_idx,
             return_value=return_value,
             exception=(
