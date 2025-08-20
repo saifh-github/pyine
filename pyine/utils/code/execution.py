@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
-import io
 import logging
 import multiprocessing
 import os
@@ -17,6 +16,7 @@ import pydantic
 
 import pyine.utils.code.blocks
 import pyine.utils.code.input_mock
+import pyine.utils.code.output_capture
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -478,26 +478,23 @@ def _unsafe_execute_and_trace_code(
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
-    stdout_capture, stderr_capture = io.StringIO(), io.StringIO()
-    stdout_buffer, stderr_buffer = "", ""
     trace_tags = []  # will be used to store the interesting outcome-related tags for this trace
+    stdout_buffer, stderr_buffer = "", ""
+    stdout_capture = pyine.utils.code.output_capture.StdStreamCapture(
+        stream_name="stdout",
+        encoding="utf-8",
+        errors="replace",
+        fileno_value=1,
+    )
+    stderr_capture = pyine.utils.code.output_capture.StdStreamCapture(
+        stream_name="stderr",
+        encoding="utf-8",
+        errors="replace",
+        fileno_value=2,
+    )
 
-    def _trace_callback(
-        frame: types.FrameType,  # noqa
-        event: str,
-        arg: typing.Any,
-    ) -> typing.Callable | None:
-        """Callback function for sys.settrace that records execution state at each line."""
-        nonlocal last_trace_step_idx, stdout_buffer, stderr_buffer
-
-        trace_key = TraceKey(
-            file=pyine.utils.portability.get_portable_filename(frame.f_code.co_filename),
-            object=frame.f_code.co_name,
-            line=frame.f_lineno,
-        )
-        return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
-
-        # take care of output/error buffers (gather captured data, clear, and reset for next step)
+    def _capture_buffers() -> tuple[str, str]:  # new_stdout, new_stderr
+        nonlocal stdout_buffer, stderr_buffer
         stdout_capture.flush()
         stderr_capture.flush()
         new_stdout = stdout_capture.getvalue()
@@ -508,7 +505,22 @@ def _unsafe_execute_and_trace_code(
         stderr_capture.truncate(0)
         stdout_buffer += new_stdout
         stderr_buffer += new_stderr
+        return new_stdout, new_stderr
 
+    def _trace_callback(
+        frame: types.FrameType,  # noqa
+        event: str,
+        arg: typing.Any,
+    ) -> typing.Callable | None:
+        """Callback function for sys.settrace that records execution state at each line."""
+        nonlocal last_trace_step_idx
+
+        trace_key = TraceKey(
+            file=pyine.utils.portability.get_portable_filename(frame.f_code.co_filename),
+            object=frame.f_code.co_name,
+            line=frame.f_lineno,
+        )
+        return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
         # now, determine if we want to keep the event or not
         is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
             blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
@@ -532,6 +544,7 @@ def _unsafe_execute_and_trace_code(
             trace_event = None
         else:
             # gather the actual event data and create the corresponding object
+            new_stdout, new_stderr = _capture_buffers()
             stack_trace = []
             current_frame = frame
             while current_frame:
@@ -623,7 +636,7 @@ def _unsafe_execute_and_trace_code(
         trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
     try:
         with pyine.utils.timers.TimeLimit(timeout_seconds):
-            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):  # noqa
                 if entrypoint_name is not None:
                     with trace_context(_trace_callback):
                         exec(compiled_code, exec_namespace)
@@ -640,6 +653,7 @@ def _unsafe_execute_and_trace_code(
                     with pyine.utils.code.input_mock.MockInputContext(inputs):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
+                _capture_buffers()
     except (TimeoutError, TracingCapException):
         # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise

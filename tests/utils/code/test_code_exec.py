@@ -81,22 +81,28 @@ time.sleep({sleep_time})
 def test_stdout_capture():
     """Test capturing of stdout at individual event level."""
     code = """\
+import os
+import sys
 print("Hello, world!")
 a = 1 + 2
-print("Goodbye, world!")
+sys.stdout.buffer.write("Goodbye, world!".encode())
+print("one last note", file=sys.stderr)
 """
     result = _unsafe_execute_and_trace_code(code, trace_only_inside_code_string=True)
     assert result.exception is None
     assert "Hello, world!" in result.stdout
     assert "Goodbye, world!" in result.stdout
+    assert "one last note" in result.stderr
     valid_trace_steps = [s for s in result.traced_steps if s is not None]
     assert result.total_step_count == len(result.traced_steps)
     assert result.valid_step_count == len(valid_trace_steps)
-    assert len(valid_trace_steps) == 5  # entrypoint + 3 lines + return
-    assert valid_trace_steps[2].stdout == "Hello, world!\n"
-    assert valid_trace_steps[3].stdout is None
-    assert valid_trace_steps[4].stdout == "Goodbye, world!\n"
-    assert result.stdout == "Hello, world!\nGoodbye, world!\n"
+    assert len(valid_trace_steps) == 8  # entrypoint call + 6 lines + final return
+    assert valid_trace_steps[4].stdout == "Hello, world!\n"
+    assert valid_trace_steps[5].stdout is None
+    assert valid_trace_steps[6].stdout == "Goodbye, world!"
+    assert valid_trace_steps[7].stderr == "one last note\n"
+    assert result.stdout == "Hello, world!\nGoodbye, world!"
+    assert "one last note\n" in result.stderr  # might contain extra warnings from pydev/debugger
 
 
 def test_tracing_with_blacklist():
