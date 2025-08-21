@@ -2,10 +2,10 @@ import pytest
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
-import pyine.organisms.datamodules.sample_utils
+import pyine.organisms.datamodules.utils.samples
 import pyine.utils.code.execution as exec_utils
 import tests.data.utils.dataset_checks
-from pyine.organisms.datamodules.sample_utils import (
+from pyine.organisms.datamodules.utils.samples import (
     SampleBuilder,
     SampleTransformConfig,
     TraceMetadata,
@@ -59,7 +59,7 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
         assert t.parent_dataset_hash == small_fake_reader.get_hash()
         assert t.tags == ["unit", "fake"]
     # also check if we can properly get default trace metadata when targets are not specified
-    expected_traces = pyine.organisms.datamodules.sample_utils.get_traces_metadata(
+    expected_traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
         readers=small_fake_reader,
         base_filter=None,
         verbose=True,

@@ -2,7 +2,6 @@ import typing
 
 import numpy as np
 import pydantic
-import torch.utils.data
 import tqdm
 
 import pyine.data.datamodule
@@ -152,8 +151,11 @@ class SampleData(typing.NamedTuple):
     """Number of steps that are expected to be executed to predict the outputs (can be used as a hint)."""
 
 
-SampleDataReaderType = torch.utils.data.Dataset[SampleData]
+SampleDataParserType = pyine.data.datamodule.BaseDataParserType[SampleData]
 """Type of the dataset reader used to read traces from LMDB datasets."""
+
+SampleDataLoaderType = pyine.data.datamodule.BaseDataLoaderType[SampleData]
+"""Type of the data loader used to batch trace sample data from the dataset parser."""
 
 
 class SampleTransformConfig(pydantic.BaseModel):
@@ -217,7 +219,7 @@ class SampleTransformConfig(pydantic.BaseModel):
     ]
 
 
-class SampleBuilder(SampleDataReaderType):
+class SampleBuilder(SampleDataParserType):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
     This wrapper will optionally transform raw traces into partial execution samples to make the
@@ -240,7 +242,7 @@ class SampleBuilder(SampleDataReaderType):
         self.readers_map = {r.get_hash(): r for r in readers}
         if traces is None:
             # create a list of metadata structs for ALL available traces
-            traces = pyine.organisms.datamodules.sample_utils.get_traces_metadata(
+            traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
                 readers=readers,
                 base_filter=None,
                 verbose=False,
