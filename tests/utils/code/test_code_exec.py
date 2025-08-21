@@ -194,6 +194,7 @@ def some_magic_function(a: str) -> int:
     assert len(trace_result.code_blocks) == 1
     assert next(iter(trace_result.code_blocks.values())).name == "some_magic_function"
     assert trace_result.expected_output == "potato"
+    assert trace_result.max_valid_events is None
     assert trace_result.max_var_repr_length is None
     assert trace_result.max_events_per_line is None
     assert f"d={12 ** (15 // 2)}" in trace_result.stdout
@@ -250,9 +251,16 @@ print(f"Final i={i}")
             trace_only_inside_code_string=True,
             max_events_per_line=10,
         )
+    with pytest.raises(TracingCapException):
+        _ = _unsafe_execute_and_trace_code(
+            code_string=code,
+            trace_only_inside_code_string=True,
+            max_valid_events=100,
+        )
     result_with_caps = _unsafe_execute_and_trace_code(
         code_string=code,
         trace_only_inside_code_string=True,
+        max_valid_events=5_000,
         max_events_per_line=10_000,
     )
     assert result_with_caps.stdout == "Final i=1000\n"

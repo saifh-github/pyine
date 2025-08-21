@@ -61,6 +61,7 @@ class FakeTraceDataConfig:
     tests_per_problem: int = 1
     augmented_per_solution: int = 0  # number of augmented variants per solution/test
     entrypoint_name: str | None = "solution"
+    max_valid_events: int | None = None
     max_events_per_line: int | None = None
     max_var_repr_length: int | None = None
     seed: int = 123
@@ -262,6 +263,7 @@ class FakeTraceDatasetReader(_FakeBase):
             identifier=str(tid),
             entrypoint_name=self._cfg.entrypoint_name,
             trace_only_inside_code_string=True,
+            max_valid_events=self._cfg.max_valid_events,
             max_events_per_line=self._cfg.max_events_per_line,
             max_var_repr_length=self._cfg.max_var_repr_length,
             use_safe_execution=False,

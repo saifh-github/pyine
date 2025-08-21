@@ -111,11 +111,11 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum length of variable representation strings, in characters.",
         ),
     ]
-    max_trace_events_total: typing.Annotated[
+    max_trace_valid_events: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
             default=None,
-            description="Maximum total number of trace events allowed per trace. If None, no maximum.",
+            description="Maximum number of (valid, in-scope) events allowed per trace. If None, no maximum.",
         ),
     ]
     max_trace_results_blob_size: typing.Annotated[
@@ -510,14 +510,11 @@ def _trace_code_snippet(
             identifier=str(code_snippet.trace_id),
             entrypoint_name=code_snippet.entrypoint_name,
             trace_only_inside_code_string=True,
+            max_valid_events=config.max_trace_valid_events,
             max_events_per_line=config.max_trace_events_per_line,
             max_var_repr_length=config.max_trace_var_repr_length,
             timeout_seconds=config.execution_timeout_seconds,
             use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
-        )
-    if config.max_trace_events_total is not None and trace_result.total_step_count > config.max_trace_events_total:
-        raise ValueError(
-            f"max trace event count exceeded ({trace_result.total_step_count} exceeds {config.max_trace_events_total})"
         )
     comp = functools.partial(
         pyine.utils.code.output_compare.compare,
@@ -953,7 +950,7 @@ if __name__ == "__main__":
             max_tests_per_solution=10,
             max_trace_events_per_line=None,
             max_trace_var_repr_length=10_000,  # chars
-            max_trace_events_total=50_000,
+            max_trace_valid_events=20_000,
             max_trace_results_blob_size=1024**3,  # 1GB
             min_solution_line_count=3,
             min_solution_dissimilarity=0.1,

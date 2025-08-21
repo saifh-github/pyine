@@ -115,7 +115,7 @@ def benchmark_serialization_methods(
                         max_output_traces=num_samples,
                         max_solutions_per_problem=2,
                         max_tests_per_solution=2,
-                        max_trace_events_total=100_000,
+                        max_trace_valid_events=100_000,
                         max_trace_results_blob_size=2 * 1024**3,
                         allow_imperfect_solutions=True,
                         writer_serialization_config=cfg,

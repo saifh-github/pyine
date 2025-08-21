@@ -246,6 +246,8 @@ class TraceResult(pydantic.BaseModel):
     """The inputs that were available to the code during execution."""
     expected_output: str
     """The expected output of the code, if any; should be used for verification/predictions."""
+    max_valid_events: int | None
+    """The maximum number of valid (in-scope) events that could have been recorded (if such a cap was used)."""
     max_events_per_line: int | None
     """The maximum number of events to record per line (if such a cap was used)."""
     max_var_repr_length: int | None
@@ -439,6 +441,7 @@ def _unsafe_execute_and_trace_code(
     blacklisted_modules: typing.Iterable[str] | None = None,
     blacklisted_objects: typing.Iterable[str] | None = None,
     trace_only_inside_code_string: bool = False,
+    max_valid_events: int | None = None,
     max_events_per_line: int | None = None,
     max_var_repr_length: int | None = None,
     timeout_seconds: float = 60,
@@ -463,6 +466,8 @@ def _unsafe_execute_and_trace_code(
         blacklisted_modules: A list of module names to exclude from tracing.
         blacklisted_objects: A list of object names to exclude from tracing.
         trace_only_inside_code_string: If True, only trace code inside the provided code_string.
+        max_valid_events: The maximum number of valid (in-scope) events to allow. If this cap is exceeded,
+            a `TracingCapException` will be raised.
         max_events_per_line: The maximum number of events allowed per line. If this cap is exceeded,
             a `TracingCapException` will be raised.
         max_var_repr_length: The maximum length (in chars) allowed for the representation of a
@@ -638,6 +643,11 @@ def _unsafe_execute_and_trace_code(
         traced_steps.append(trace_event)
         traced_steps_map[trace_key_repr].append(last_trace_step_idx)
         last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
+        if max_valid_events is not None and last_trace_step_idx >= max_valid_events:
+            raise TracingCapException(
+                f"max valid events exceeded for trace at key {trace_key_repr} "
+                f"(reached the cap of {last_trace_step_idx} in-scope events)"
+            )
         return return_trace_callback
 
     return_value, caught_exception = None, None
@@ -685,6 +695,7 @@ def _unsafe_execute_and_trace_code(
     reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
     reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
     reprod_metadata["trace_only_inside_code_string"] = trace_only_inside_code_string
+    reprod_metadata["max_valid_events"] = max_valid_events
     reprod_metadata["max_events_per_line"] = max_events_per_line
     reprod_metadata["max_var_repr_length"] = max_var_repr_length
     reprod_metadata["timeout_seconds"] = timeout_seconds
@@ -705,6 +716,7 @@ def _unsafe_execute_and_trace_code(
             code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
             inputs=inputs,
             expected_output=expected_output,
+            max_valid_events=max_valid_events,
             max_events_per_line=max_events_per_line,
             max_var_repr_length=max_var_repr_length,
             traced_steps=traced_steps,
