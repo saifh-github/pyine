@@ -65,6 +65,13 @@ DONT_CATCH_EXCEPTIONS = (
 )
 """Exceptions that should not be caught when tracing, and that should rise to the top process."""
 
+INTERNAL_EVENT_KEY_PREFIXES = (
+    # never report trace events for captured stream operations
+    pyine.utils.portability.get_portable_filename(pyine.utils.code.output_capture.__file__),
+    # ... add more prefixes here as needed for operations that are related to the tracing scaffolding
+)
+"""Prefixes for event keys that should not be reported as they relate to the tracing scaffolding."""
+
 
 class TracingCapException(Exception):
     """Exception signaling that some traced attribute exceeded a predefined cap."""
@@ -287,7 +294,11 @@ class TraceResult(pydantic.BaseModel):
 
     @property
     def total_step_count(self) -> int:
-        """Returns the total number of recorded tracing steps (including out-of-scope ones)."""
+        """Returns the total number of recorded tracing steps (including out-of-scope ones).
+
+        Note: this number can vary due to a number of factors that include the trace scaffolding,
+        and it is therefore NOT a good idea to use it for any kind of prediction task.
+        """
         return len(self.traced_steps)
 
     @property
@@ -527,8 +538,9 @@ def _unsafe_execute_and_trace_code(
         )
         if is_blacklisted and TraceTagType.HAS_EVENT_BLACKLISTED not in trace_tags:
             trace_tags.append(TraceTagType.HAS_EVENT_BLACKLISTED)
+        is_internal = any([str(trace_key).startswith(prefix) for prefix in INTERNAL_EVENT_KEY_PREFIXES])
         is_inside_code_string = trace_key.file == EXEC_TRACE_FILE_NAME
-        must_skip = is_blacklisted or (not is_inside_code_string and trace_only_inside_code_string)
+        must_skip = is_blacklisted or is_internal or (not is_inside_code_string and trace_only_inside_code_string)
         if event == "call" and must_skip:
             return_trace_callback = None  # do not trace that function, skip over it
         trace_key_repr = str(trace_key)

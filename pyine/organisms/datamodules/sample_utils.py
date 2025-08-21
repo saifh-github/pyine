@@ -344,14 +344,10 @@ class SampleBuilder(SampleDataReaderType):
             try_partial_sample = True
         elif self.config.partial_sample_decision_strategy != "never":
             if self.config.partial_sample_decision_strategy in ["if_too_long", "hybrid"]:
-                # compute simple indicators to determine the 'too long' flag
-                code_lines = len(trace_data.code_string.splitlines())
-                total_trace_steps = len(trace_data.traced_steps)
-                valid_trace_steps = len([s for s in trace_data.traced_steps if s is not None])
                 is_too_long = (
-                    total_trace_steps >= self.config.too_long_total_steps_threshold
-                    or valid_trace_steps >= self.config.too_long_valid_steps_threshold
-                    or code_lines >= self.config.too_long_code_lines_threshold
+                    trace_data.total_step_count >= self.config.too_long_total_steps_threshold
+                    or trace_data.valid_step_count >= self.config.too_long_valid_steps_threshold
+                    or len(trace_data.code_string.splitlines()) >= self.config.too_long_code_lines_threshold
                 )
                 if is_too_long:  # if the trace is too long, always try to generate a partial sample
                     try_partial_sample = True

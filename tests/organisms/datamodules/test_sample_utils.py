@@ -98,7 +98,8 @@ class TestSampleBuilderFullSamples:
         # boundaries
         assert sample.first_line == 0
         assert sample.last_line == len(tr.code_string.splitlines())
-        # step count should count only non-None events
+        # step count should count only non-None (i.e. valid) events
+        assert sample.trace_step_count == tr.valid_step_count
         assert sample.trace_step_count == len([s for s in tr.traced_steps if s is not None])
 
 

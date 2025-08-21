@@ -242,7 +242,7 @@ print(f"Final i={i}")
         code_string=code,
         trace_only_inside_code_string=True,
     )
-    assert len([s for s in result_no_caps.traced_steps if s is not None]) > 1000
+    assert result_no_caps.valid_step_count > 1000
     assert result_no_caps.stdout == "Final i=1000\n"
     with pytest.raises(TracingCapException):
         _ = _unsafe_execute_and_trace_code(

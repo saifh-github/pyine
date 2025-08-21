@@ -203,10 +203,10 @@ def format_object_changes(
 
 def get_portable_filename(filename: str) -> str:
     """Returns a cleaned up module/framework filename for portable logging purposes."""
-    import pyine.utils.code.execution
     import pyine.utils.filesystem
+    from pyine.utils.code.execution import EXEC_TRACE_FILE_NAME
 
-    if filename == pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
+    if filename == EXEC_TRACE_FILE_NAME:
         return filename  # nothing to do (special case for code execution from strings)
     site_pkgs = site.getsitepackages() + [site.getusersitepackages()]
     for site_dir in site_pkgs:
@@ -386,25 +386,35 @@ def import_from_dotted_path(
         raise ValueError(f"Attribute {attr_name!r} not found in {module_path!r}") from err
 
 
-def get_fully_qualified_name(type_or_func: type | typing.Callable) -> str:
-    """Get the fully qualified name of a type or function."""
-    if isinstance(type_or_func, type):  # classes/types
-        mod = getattr(type_or_func, "__module__", "") or ""
-        qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", "<unknown>"))
-    else:  # functions/methods/builtins
-        mod = getattr(type_or_func, "__module__", "") or ""
-        qual = getattr(type_or_func, "__qualname__", getattr(type_or_func, "__name__", None))
-        if qual is None:
-            # noinspection PyUnreachableCode
-            if callable(type_or_func):
-                cls = type_or_func.__class__  # noqa
-                mod = getattr(cls, "__module__", "") or ""
-                qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<callable>")) + ".__call__"
-            else:
-                # non-callable fallback to class identity (shouldn't happen for declared types/callables)
-                cls = type_or_func.__class__  # noqa
-                mod = getattr(cls, "__module__", "") or ""
-                qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<object>"))
-    if mod == "builtins" or not mod:
-        return qual
-    return f"{mod}.{qual}"
+def get_fully_qualified_name(
+    obj: type | types.ModuleType | typing.Callable,
+) -> str:
+    """Get the fully qualified name of a type, module, or callable."""
+    if isinstance(obj, types.ModuleType):
+        spec = getattr(obj, "__spec__", None)
+        if spec and getattr(spec, "name", None):
+            mod_name = spec.name
+        else:
+            mod_name = getattr(obj, "__name__", None)
+        if mod_name is None:
+            mod_name = "<module>"
+        return mod_name
+    if isinstance(obj, type):  # classes/types
+        mod = getattr(obj, "__module__", "") or ""
+        qual = getattr(obj, "__qualname__", getattr(obj, "__name__", "<unknown>"))
+        return qual if mod == "builtins" or not mod else f"{mod}.{qual}"
+    # fallback for functions/methods/builtins/callables
+    mod = getattr(obj, "__module__", "") or ""
+    qual = getattr(obj, "__qualname__", getattr(obj, "__name__", None))
+    if qual is None:
+        # noinspection PyUnreachableCode
+        if callable(obj):
+            cls = obj.__class__  # noqa
+            mod = getattr(cls, "__module__", "") or ""
+            qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<callable>")) + ".__call__"
+        else:
+            # non-callable fallback to class identity (shouldn't happen for declared types/callables)
+            cls = obj.__class__  # noqa
+            mod = getattr(cls, "__module__", "") or ""
+            qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<object>"))
+    return qual if mod == "builtins" or not mod else f"{mod}.{qual}"
