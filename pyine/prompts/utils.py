@@ -289,8 +289,8 @@ class PromptConfig(pydantic.BaseModel):
         if use_chat_template:
             output_template = langchain_core.prompts.ChatPromptTemplate(
                 messages=[
-                    langchain_core.messages.SystemMessage(content=system_msg),
-                    langchain_core.messages.HumanMessage(content=self.question.template),
+                    (langchain_core.messages.SystemMessage.model_fields["type"].default, system_msg),
+                    (langchain_core.messages.HumanMessage.model_fields["type"].default, self.question.template),
                 ],
                 template_format=self.question.format,
                 partial_variables=self.question.partial_variables or {},
