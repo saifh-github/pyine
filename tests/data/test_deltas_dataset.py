@@ -12,7 +12,7 @@ import pyine.data.traces.dataset_writer
 import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.portability
-import tests.data.utils.dataset_checks
+import tests.data.utils.env_checks
 
 
 def _check_deltas_ok(deltas):
@@ -201,7 +201,7 @@ print("all done")
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.data.utils.dataset_checks.TACO_DATASET_MISSING,
+    tests.data.utils.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot create mini deltas dataset",
 )
 def test_mini_taco_deltas_dataset(

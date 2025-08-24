@@ -7,7 +7,7 @@ import pyine.data.traces.dataset_reader as dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
 import pyine.data.traces.dataset_writer as dataset_writer
 import pyine.utils.filesystem as fs_utils
-import tests.data.utils.dataset_checks
+import tests.data.utils.env_checks
 
 
 @pytest.mark.parametrize(
@@ -69,7 +69,7 @@ def test_dataset_paths(
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.data.utils.dataset_checks.TACO_DATASET_MISSING,
+    tests.data.utils.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot create mini traces dataset",
 )
 def test_mini_taco_traces_dataset(
@@ -97,7 +97,7 @@ def test_mini_taco_traces_dataset(
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.data.utils.dataset_checks.TACO_DATASET_MISSING,
+    tests.data.utils.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot create mini traces dataset",
 )
 def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
