@@ -1,4 +1,6 @@
 import pathlib
+import sys
+import types
 
 import pytest
 
@@ -59,6 +61,47 @@ def test_get_tmp_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
     probe.unlink(missing_ok=True)  # in case it already exists
     probe.write_text("ok", encoding="utf-8")
     assert probe.exists()
+
+
+def test_find_dotenv_file(tmp_path, monkeypatch):
+    proj = tmp_path / "proj"
+    sub = proj / "app" / "sub"
+    sub.mkdir(parents=True)
+    proj_env = proj / ".env"
+    sub_env = sub / ".env"
+    override_env = tmp_path / ".env.override"
+    proj_env.write_text("FROM=proj\n")
+    sub_env.write_text("FROM=sub\n")
+    override_env.write_text("FROM=override\n")
+    monkeypatch.chdir(sub)
+
+    # 1) DOTENV_PATH override takes precedence
+    monkeypatch.setenv("DOTENV_PATH", str(override_env))
+    assert fs.find_dotenv_file() == override_env.resolve()
+    monkeypatch.delenv("DOTENV_PATH", raising=False)
+
+    # 2) if python-dotenv is available and start == CWD, delegate to it
+    dummy = types.ModuleType("dotenv")
+
+    def _fake_find_dotenv(filename=".env", usecwd=True, raise_error_if_not_found=False):
+        p = pathlib.Path.cwd() / filename
+        return str(p) if p.exists() else ""
+
+    dummy.find_dotenv = _fake_find_dotenv
+    monkeypatch.setitem(sys.modules, "dotenv", dummy)
+    # start defaults to CWD -> uses python-dotenv path and finds sub/.env
+    assert fs.find_dotenv_file() == sub_env.resolve()
+
+    # 3) fallback: no python-dotenv, walk upward to find nearest .env
+    monkeypatch.delitem(sys.modules, "dotenv", raising=False)
+    sub_env.unlink()  # force search to climb to /proj/.env
+    assert fs.find_dotenv_file(start=sub) == proj_env.resolve()
+
+    # 4) no .env anywhere: return None
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    assert fs.find_dotenv_file(start=empty) is None
 
 
 def test_get_relative_path_to_root(tmp_path: pathlib.Path):

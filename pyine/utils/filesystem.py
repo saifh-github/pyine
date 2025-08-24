@@ -79,7 +79,7 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     else:
         tmpdir_base = pathlib.Path(tempfile.gettempdir())
     if not tmpdir_base.is_dir():
-        raise ValueError(f"base temporary dir does not exist: {tmpdir_base}")
+        tmpdir_base.mkdir(parents=True, exist_ok=True)
     if not os.access(str(tmpdir_base), os.W_OK):
         raise PermissionError(f"base temporary dir not writable: {tmpdir_base}")
     # create per-user subdir to avoid collisions on multi-user machines
@@ -94,6 +94,38 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     if not os.access(str(tmpdir), os.W_OK):
         raise PermissionError(f"temporary dir not writable: {tmpdir_base}")
     return tmpdir
+
+
+def find_dotenv_file(start: str | pathlib.Path | None = None) -> pathlib.Path | None:
+    """Returns the path to the CLOSEST '.env' file by walking upward from `start` (or CWD).
+
+    Respects the `DOTENV_PATH` env var if set. Uses python-dotenv's `find_dotenv` when available
+    (no dependency required).
+
+    If not dotenv file is found, returns `None`.
+    """
+    # first, check explicit override (highest priority)
+    override = os.getenv("DOTENV_PATH")
+    if override:
+        p = pathlib.Path(override).expanduser().resolve()
+        if p.is_file():
+            return p
+    # if python-dotenv is available, defer to its search (from CWD)
+    start = pathlib.Path(start or pathlib.Path.cwd()).resolve()
+    try:
+        from dotenv import find_dotenv  # optional
+
+        if start == pathlib.Path.cwd().resolve():
+            path_str = find_dotenv(filename=".env", usecwd=True, raise_error_if_not_found=False)
+            return pathlib.Path(path_str).resolve() if path_str else None
+    except ImportError:
+        pass
+    # minimal stdlib fallback: walk up to filesystem root
+    for folder in (start, *start.parents):
+        candidate = folder / ".env"
+        if candidate.is_file():
+            return candidate.resolve()
+    return None  # found nothing
 
 
 def get_relative_path_to_root(
