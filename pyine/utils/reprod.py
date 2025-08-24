@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import importlib.metadata
 import logging
@@ -186,6 +187,20 @@ def get_reprod_metadata() -> dict[str, typing.Any]:
     }
 
 
+@functools.wraps(dotenv.load_dotenv)
+def load_dotenv(*args, **kwargs) -> bool:
+    """Parses the closest `.env` file and load all the variables found as environment variables."""
+    from pyine.utils.filesystem import find_dotenv_file
+
+    dotenv_path = find_dotenv_file()
+    if dotenv_path is None:
+        raise FileNotFoundError(
+            "could not find .env file containing environment variable overrides; "
+            "see the `.env.template` file for an example of how to set up your environment"
+        )
+    return dotenv.load_dotenv(*args, dotenv_path=dotenv_path, **kwargs)
+
+
 def entrypoint_setup(
     seed: int | None = None,
     seed_workers: bool = False,
@@ -198,7 +213,7 @@ def entrypoint_setup(
         import pyine.utils.logging
         import pyine.utils.pydantic
 
-        dotenv.load_dotenv()
+        load_dotenv()
         pyine.utils.logging.setup_logging(
             level=log_level,
             log_to_file=log_to_file,
