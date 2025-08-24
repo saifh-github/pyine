@@ -198,7 +198,7 @@ def load_dotenv(**kwargs) -> bool:
             "could not find .env file containing environment variable overrides; "
             "see the `.env.template` file for an example of how to set up your environment"
         )
-    return dotenv.load_dotenv(dotenv_path=dotenv_path, **kwargs)
+    return dotenv.load_dotenv(dotenv_path, **kwargs)
 
 
 def entrypoint_setup(

@@ -1,5 +1,8 @@
+import functools
+import pathlib
 import typing
 
+import datasets as hf_datasets
 import numpy as np
 import pydantic
 import tqdm
@@ -219,6 +222,16 @@ class SampleTransformConfig(pydantic.BaseModel):
     ]
 
 
+LMDBDatasetReadersOrPathsType = (
+    pyine.data.traces.dataset_reader.DatasetReader
+    | list[pyine.data.traces.dataset_reader.DatasetReader]
+    | str
+    | pathlib.Path
+    | list[str | pathlib.Path]
+)
+"""Type used to specify source dataset args in the sample builder."""
+
+
 class SampleBuilder(SampleDataParserType):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
@@ -229,7 +242,7 @@ class SampleBuilder(SampleDataParserType):
 
     def __init__(
         self,
-        readers: list[pyine.data.traces.dataset_reader.DatasetReader] | pyine.data.traces.dataset_reader.DatasetReader,
+        source_data: LMDBDatasetReadersOrPathsType,  # noqa
         traces: list[TraceMetadata] | None = None,  # if `None`, will target all available traces
         config: SampleTransformConfig | None = None,
     ) -> None:
@@ -237,13 +250,16 @@ class SampleBuilder(SampleDataParserType):
         if config is None:
             config = SampleTransformConfig()  # noqa
         self.config = config
-        if not isinstance(readers, list):
-            readers = [readers]
-        self.readers_map = {r.get_hash(): r for r in readers}
+        if not isinstance(source_data, list):
+            source_data = [source_data]
+        for src_idx, src in enumerate(source_data):
+            if isinstance(src, (str, pathlib.Path)):
+                source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
+        self.readers_map = {r.get_hash(): r for r in source_data}
         if traces is None:
             # create a list of metadata structs for ALL available traces
             traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
-                readers=readers,
+                readers=source_data,
                 base_filter=None,
                 verbose=False,
             )
@@ -522,10 +538,10 @@ class SampleBuilder(SampleDataParserType):
             else:
                 max_step_count = len(range_steps) - 1
             min_step_count = self.config.min_partial_trace_steps
-            target_step_count = self._rng.integers(min_step_count, max_step_count + 1)
+            target_step_count = int(self._rng.integers(min_step_count, max_step_count + 1))
             # determine the first/last step locations within the range
             assert target_step_count <= len(range_steps) - 1
-            segment_start_idx = self._rng.integers(0, len(range_steps) - target_step_count)
+            segment_start_idx = int(self._rng.integers(0, len(range_steps) - target_step_count))
             segment_end_idx = segment_start_idx + target_step_count  # actually goes to next event to get outcomes
             segment_start, segment_end = range_steps[segment_start_idx], range_steps[segment_end_idx]
             segment_size = segment_end_idx - segment_start_idx
@@ -562,3 +578,27 @@ class SampleBuilderConfig(pyine.data.datamodule.BaseDataParserConfig):
     """Fully qualified class path for the trace parser."""
     params: dict[str, typing.Any] = dict(config=SampleTransformConfig(partial_sample_decision_strategy="never"))
     """Default parameters for the dataset trace parser."""
+
+    def get_hf_dataset(
+        self,
+        named_split: "hf_datasets.NamedSplit",
+        raw_transform_fn: typing.Callable[[SampleData], typing.Any] | None = None,
+        instantiate_kwargs: dict | None = None,
+        generator_kwargs: dict | None = None,
+    ) -> "hf_datasets.Dataset":
+        """Returns a huggingface-compatible generator using a SampleBuilder instance."""
+
+        def _sample_builder_generator():
+            sample_builder = self.instantiate(**(instantiate_kwargs or {}))
+            for sample_idx in range(len(sample_builder)):
+                sample_data = sample_builder[sample_idx]
+                if raw_transform_fn is not None:
+                    yield raw_transform_fn(sample_data)
+                else:
+                    yield sample_data._asdict()
+
+        return hf_datasets.Dataset.from_generator(
+            generator=_sample_builder_generator,
+            split=named_split,
+            **(generator_kwargs or {}),
+        )

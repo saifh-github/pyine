@@ -50,7 +50,7 @@ def make_targets(reader: FakeTraceDatasetReader, indices: list[int]) -> list[Tra
 def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     # first, check if we can indeed target specific traces
     targets = make_targets(small_fake_reader, [0, 1, 2])
-    sb = SampleBuilder(readers=[small_fake_reader], traces=targets)
+    sb = SampleBuilder(source_data=[small_fake_reader], traces=targets)
     assert len(sb) == len(targets)
     for t in sb.traces:
         assert t.index in small_fake_reader.trace_indices
@@ -65,7 +65,7 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
         verbose=True,
     )
     assert len(expected_traces) == len(small_fake_reader)
-    sb2 = SampleBuilder(readers=small_fake_reader)
+    sb2 = SampleBuilder(source_data=small_fake_reader)
     assert len(sb2) == len(expected_traces)
     for t in sb2.traces:
         assert t.index in small_fake_reader.trace_indices
@@ -84,7 +84,7 @@ class TestSampleBuilderFullSamples:
             random_seed=123,
             output_type_prob_map={},
         )
-        sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
         assert len(sb) == 1
         sample = sb[0]
         tr = small_fake_reader[0]
@@ -115,7 +115,7 @@ class TestSampleBuilderPartialSamples:
                 "frame variables": 1.0,
             },
         )
-        sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
         sample = sb[0]
         tr = small_fake_reader[0]
         # boundaries are sane
@@ -138,7 +138,7 @@ class TestSampleBuilderPartialSamples:
                 "function return": 1.0,
             },
         )
-        sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
         sample = sb[0]
         tr = small_fake_reader[0]
         # boundaries are sane
@@ -161,7 +161,7 @@ class TestSampleBuilderPartialSamples:
                 "frame variables": 1.0,
             },
         )
-        sb = SampleBuilder(readers=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
         sample = sb[0]
         # since caps reject partial sample, we should have fallen back to full program output
         assert sample.output_type == "program output"
@@ -194,7 +194,7 @@ class TestSampleBuilderRealData:
         dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
         taco_reader = pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
         sb = SampleBuilder(
-            readers=taco_reader,
+            source_data=taco_reader,
             traces=None,
             config=cfg,
         )
