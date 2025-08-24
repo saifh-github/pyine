@@ -188,7 +188,7 @@ def get_reprod_metadata() -> dict[str, typing.Any]:
 
 
 @functools.wraps(dotenv.load_dotenv)
-def load_dotenv(*args, **kwargs) -> bool:
+def load_dotenv(**kwargs) -> bool:
     """Parses the closest `.env` file and load all the variables found as environment variables."""
     from pyine.utils.filesystem import find_dotenv_file
 
@@ -198,7 +198,7 @@ def load_dotenv(*args, **kwargs) -> bool:
             "could not find .env file containing environment variable overrides; "
             "see the `.env.template` file for an example of how to set up your environment"
         )
-    return dotenv.load_dotenv(*args, dotenv_path=dotenv_path, **kwargs)
+    return dotenv.load_dotenv(dotenv_path=dotenv_path, **kwargs)
 
 
 def entrypoint_setup(
