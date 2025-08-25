@@ -1,23 +1,6 @@
 import json
-import sys
-import types as pytypes
 
 import pytest
-
-# provide lightweight stubs to avoid optional dependency import errors
-if "datasets" not in sys.modules:
-    sys.modules["datasets"] = pytypes.SimpleNamespace(load_dataset=lambda *a, **k: None)  # noqa
-
-if "tiktoken" not in sys.modules:
-
-    class _Tok:
-        def encode(self, s: str):
-            return list(s)
-
-    sys.modules["tiktoken"] = pytypes.SimpleNamespace(encoding_for_model=lambda name: _Tok())  # noqa
-
-if "tqdm" not in sys.modules:
-    sys.modules["tqdm"] = pytypes.SimpleNamespace(tqdm=lambda x: x)  # noqa
 
 import pyine.data.taco.dataset_reader as taco_reader
 
@@ -82,7 +65,7 @@ def patch_datasets(monkeypatch, train_samples, test_samples):
         else:
             raise AssertionError("unexpected split")
 
-    monkeypatch.setattr(taco_reader.datasets, "load_dataset", _fake_load_dataset)
+    monkeypatch.setattr(taco_reader.hf_datasets, "load_dataset", _fake_load_dataset)
 
 
 def test_len_and_getitem_happy_path(monkeypatch):

@@ -96,10 +96,10 @@ def apply_model_template_to_messages(
         )
         assert isinstance(text, list) and len(text) == len(batch[messages_key])
         if strip_output:
-            for idx in len(text):
+            for idx in range(len(text)):
                 text[idx] = text[idx].strip()
         if append_eos_token:
-            for idx in len(text):
+            for idx in range(len(text)):
                 text[idx] += tokenizer.eos_token
         return {"text": text}
 
