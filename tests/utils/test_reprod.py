@@ -146,7 +146,7 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
     # ensure dotenv.load_dotenv is a no-op
     import dotenv as real_dotenv
 
-    monkeypatch.setattr(real_dotenv, "load_dotenv", lambda: None, raising=True)
+    monkeypatch.setattr(real_dotenv, "load_dotenv", lambda x: None, raising=True)
 
     # reset sentinel so entrypoint_setup runs init branch
     monkeypatch.delattr(reprod.entrypoint_setup, "_executed", raising=False)

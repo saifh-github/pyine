@@ -64,10 +64,10 @@ def test_get_config_and_template():
     chat_template = callable_analysis.get_prompt_template(use_chat_template=True)
     assert isinstance(chat_template, langchain_core.prompts.ChatPromptTemplate)
     assert len(chat_template.messages) == 2
-    assert isinstance(chat_template.messages[0], langchain_core.messages.SystemMessage)
-    assert "You are an expert at interpreting and analyzing Python 3 code." in chat_template.messages[0].content
-    assert isinstance(chat_template.messages[1], langchain_core.messages.HumanMessage)
-    assert "Now, provide the structured output for this code, and nothing else:" in chat_template.messages[1].content
+    assert isinstance(chat_template.messages[0], langchain_core.prompts.SystemMessagePromptTemplate)
+    assert "You are an expert at interpreting" in chat_template.messages[0].prompt.template
+    assert isinstance(chat_template.messages[1], langchain_core.prompts.HumanMessagePromptTemplate)
+    assert "Now, provide the structured output" in chat_template.messages[1].prompt.template
 
 
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability

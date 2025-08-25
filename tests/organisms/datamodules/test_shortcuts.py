@@ -69,7 +69,6 @@ def test_shortcuts_datamodule_integration():
             add_generation_prompt=False,
         ),
         batching_map_kwargs=dict(
-            num_proc=2,
             keep_in_memory=True,
         ),
     )
