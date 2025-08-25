@@ -488,61 +488,54 @@ class SampleBuilder(SampleDataParserType):
         if target_output_type == "next step key":
             raise NotImplementedError  # @@@@ TODO
         # TODO @@@@@: try to target specific blocks? (if/else blocks? loops?)
-        # currently, we define 'segments' as contiguous event sequences happening within a single frame
-        candidate_event_ranges: list[tuple[TraceEvent, TraceEvent]] = []
-        curr_event_idx = 0
-        start_event: TraceEvent | None = None
-        while curr_event_idx < len(trace_data.traced_steps):
-            curr_event: TraceEvent = trace_data.traced_steps[curr_event_idx]
-            if curr_event is None:
-                curr_event_idx += 1
-                continue  # skip invalid/external events
-            if start_event is None:
-                # we are not currently building a potential segment range
-                if curr_event.event_type != TraceEventType.CALL:
-                    # start a new range with this event, since it does not correspond to a function call
-                    start_event = curr_event
-            else:
-                # we are currently building a potential segment range
-                if curr_event.event_type == TraceEventType.RETURN:
-                    # we are exiting the current frame; time to end the range and save it if it's OK
-                    # first step: compute the range length using the 'latest' state we found
-                    range_step_count = sum(
-                        [
-                            s is not None
-                            for s in trace_data.traced_steps[start_event.trace_step_idx : curr_event.trace_step_idx]
-                        ]
-                    )
-                    is_too_short = range_step_count < self.config.min_partial_trace_steps
-                    if not is_too_short:
-                        candidate_event_ranges.append((start_event, curr_event))
-                    # reset the range variables
-                    start_event = None
-            curr_event_idx += 1
-        assert start_event is None, "how did we end up with a trace ending without a return event?"
-        while candidate_event_ranges:
-            # given that all the withheld ranges have at least as many steps as we require, we can randomly pick one
-            curr_candidate_idx = int(self._rng.integers(0, len(candidate_event_ranges)))
-            range_start_event, range_end_event = candidate_event_ranges[curr_candidate_idx]
-            # note: the 'end event' is INCLUDED in the range! (differs from typical python range logic)
-            candidate_event_ranges.pop(curr_candidate_idx)
-            range_steps: list[TraceEvent] = [
-                s
-                for s in trace_data.traced_steps[range_start_event.trace_step_idx : range_end_event.trace_step_idx + 1]
-                if s is not None
-            ]
-            assert len(range_steps) > 1, "should have at least one line + one return event"
+        # build candidate event lists contiguous within a single frame at any depth; on CALL, skip callee contents
+        candidate_event_lists: list[list[TraceEvent]] = []
+        current_depth = 0  # track call depth; assume first non-None event is a CALL
+        depth_collectors: dict[int, list[TraceEvent] | None] = {}
+        for step in trace_data.traced_steps:
+            if step is None:
+                continue  # out-of-scope/invalid; cannot update depth reliably
+            # start collecting on any non-CALL event at the current depth
+            if step.event_type != TraceEventType.CALL:
+                if depth_collectors.get(current_depth) is None:
+                    depth_collectors[current_depth] = []
+                assert depth_collectors[current_depth] is not None
+                depth_collectors[current_depth].append(step)
+            # update depth after handling inclusion logic
+            if step.event_type == TraceEventType.CALL:
+                current_depth += 1
+            elif step.event_type == TraceEventType.RETURN:
+                # close the current depth collector (after including RETURN above)
+                if depth_collectors.get(current_depth):
+                    # compute step count excluding the closing return
+                    range_step_count = len(depth_collectors[current_depth]) - 1
+                    if range_step_count >= (self.config.min_partial_trace_steps or 1):
+                        candidate_event_lists.append(depth_collectors[current_depth])  # type: ignore[arg-type]
+                    depth_collectors[current_depth] = None
+                current_depth -= 1
+        # we expect to have closed all collections by encountering matching RETURN events
+        assert not any(depth_collectors.values()), "how did we end up with a trace ending without a return event?"
+        while candidate_event_lists:
+            # pick a random candidate list
+            curr_candidate_idx = int(self._rng.integers(0, len(candidate_event_lists)))
+            range_steps = candidate_event_lists[curr_candidate_idx]
+            candidate_event_lists.pop(curr_candidate_idx)
+            # must have at least one step + one closing return event
+            if len(range_steps) <= 1:
+                continue
             # determine segment step count, i.e. the number of events to keep in the range
             if self.config.max_partial_trace_steps:
                 max_step_count = min(self.config.max_partial_trace_steps, len(range_steps) - 1)
             else:
                 max_step_count = len(range_steps) - 1
-            min_step_count = self.config.min_partial_trace_steps
+            min_step_count = self.config.min_partial_trace_steps or 1
+            if max_step_count < min_step_count:
+                continue
             target_step_count = int(self._rng.integers(min_step_count, max_step_count + 1))
             # determine the first/last step locations within the range
             assert target_step_count <= len(range_steps) - 1
             segment_start_idx = int(self._rng.integers(0, len(range_steps) - target_step_count))
-            segment_end_idx = segment_start_idx + target_step_count  # actually goes to next event to get outcomes
+            segment_end_idx = segment_start_idx + target_step_count  # goes to next event to get outcomes
             segment_start, segment_end = range_steps[segment_start_idx], range_steps[segment_end_idx]
             segment_size = segment_end_idx - segment_start_idx
             assert 0 < segment_size <= max_step_count, "segment size is not valid"
@@ -554,8 +547,7 @@ class SampleBuilder(SampleDataParserType):
                 output_vars = segment_end.local_variables
             input_vars_str, output_vars_str = repr(input_vars), repr(output_vars)
             if not self._satisfies_str_caps(input_vars_str, output_vars_str):
-                # enforce inputs/output str length cap: if exceeded, skip this candidate
-                continue
+                continue  # enforce inputs/output str length cap
             first_line, last_line = segment_start.trace_key.line, segment_end.trace_key.line
             return SampleData(
                 identifier=trace_data.identifier,
@@ -568,7 +560,7 @@ class SampleBuilder(SampleDataParserType):
                 output_type="frame variables",
                 trace_step_count=segment_size,
             )
-        return None  # no more candidate ranges to consider, failed to get a segment sample
+        return None  # no more candidate lists to consider, failed to get a segment sample
 
 
 class SampleBuilderConfig(pyine.data.datamodule.BaseDataParserConfig):

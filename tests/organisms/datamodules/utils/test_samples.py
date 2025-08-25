@@ -231,3 +231,131 @@ class TestSampleBuilderRealData:
                     ]
                     if matched_code_blocks:
                         assert any([cb.name in sample.description for cb in matched_code_blocks])
+
+
+class TestPrivateSampleMethods:
+    """Directly test internal sample builders on controlled fake data."""
+
+    class _FakeKey:
+        def __init__(
+            self,
+            obj: str,
+            line: int,
+        ) -> None:
+            self.object = obj
+            self.line = line
+
+        def __str__(
+            self,
+        ) -> str:
+            return f"{self.object}:{self.line}"
+
+    class _FakeEvent:
+        def __init__(
+            self,
+            event_type: exec_utils.TraceEventType,
+            step_idx: int,
+            key: "TestPrivateSampleMethods._FakeKey",
+            local_vars: dict | None = None,
+            global_vars: dict | None = None,
+            arguments: object | None = None,
+            return_value: object | None = None,
+            exception: object | None = None,
+        ) -> None:
+            self.event_type = event_type
+            self.trace_step_idx = step_idx
+            self.trace_key = key
+            self.local_variables = local_vars or {}
+            self.global_variables = global_vars or {}
+            self.arguments = arguments
+            self.return_value = return_value
+            self.exception = exception
+
+    class _FakeTrace:
+        def __init__(
+            self,
+            steps: list["TestPrivateSampleMethods._FakeEvent"],
+        ) -> None:
+            self.identifier = "fake/trace/1"
+            self.code_string = """\
+x = foo(2) + 1
+print(x)
+"""
+            self.code_blocks = {}
+            self.inputs = ""
+            self.expected_output = ""
+            self.traced_steps = steps
+
+    @pytest.fixture()
+    def nested_call_trace(
+        self,
+    ) -> "_FakeTrace":
+        # shape:
+        # 0 CALL main
+        # 1 LINE main
+        # 2 CALL foo
+        # 3 LINE foo
+        # 4 RETURN foo
+        # 5 LINE main
+        # 6 RETURN main
+        steps: list[TestPrivateSampleMethods._FakeEvent] = []
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.CALL, 0, self._FakeKey("main", 1)))
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 1, self._FakeKey("main", 2), local_vars={"x": 1}))
+        steps.append(
+            self._FakeEvent(
+                exec_utils.TraceEventType.CALL,
+                2,
+                self._FakeKey("foo", 3),
+                arguments=(1,),
+            )
+        )
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 3, self._FakeKey("foo", 101), local_vars={"y": 2}))
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.RETURN, 4, self._FakeKey("foo", 103), return_value=5))
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 5, self._FakeKey("main", 5), local_vars={"x": 6}))
+        steps.append(self._FakeEvent(exec_utils.TraceEventType.RETURN, 6, self._FakeKey("main", 6)))
+        return TestPrivateSampleMethods._FakeTrace(steps=steps)
+
+    def test_get_code_segment_sample_skips_inner_calls(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+        nested_call_trace: "_FakeTrace",
+    ) -> None:
+        cfg = SampleTransformConfig(
+            random_seed=0,
+            min_partial_trace_steps=1,
+            max_partial_trace_steps=3,
+        )
+        # traces can be empty since we call private methods directly; reader is only used to pass __init__ checks
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
+        sample = sb._get_code_segment_sample(nested_call_trace, target_output_type="frame variables")
+        assert sample is not None
+        assert sample.identifier == nested_call_trace.identifier
+        assert sample.code == nested_call_trace.code_string
+        assert sample.output_type == "frame variables"
+        assert 2 <= sample.first_line <= 5
+        assert 3 <= sample.last_line <= 6
+        assert 1 <= sample.trace_step_count <= 3
+        assert isinstance(sample.inputs, str)
+        assert isinstance(sample.output, str)
+
+    def test_get_function_call_sample_basic(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+        nested_call_trace: "_FakeTrace",
+    ) -> None:
+        cfg = SampleTransformConfig(
+            random_seed=0,
+            min_partial_trace_steps=1,
+        )
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
+        sample = sb._get_function_call_sample(nested_call_trace)
+        assert sample is not None
+        assert sample.identifier == nested_call_trace.identifier
+        assert sample.code == nested_call_trace.code_string
+        assert sample.output_type == "function return"
+        assert "foo" in sample.description
+        # since we didn't provide code_blocks mapping, first/last line should equal the call site line
+        assert sample.first_line == sample.last_line == 3
+        assert sample.inputs == "(1,)"
+        assert sample.output == "5"
+        assert sample.trace_step_count == 2
