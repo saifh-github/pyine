@@ -265,9 +265,19 @@ class ClassImportSpec(
         constr_params.update(extra_kwargs)
         return self._resolved_class(*args, **constr_params)
 
-    def get_params_dict(self):
+    def get_params_dict(self) -> dict[str, typing.Any]:
         """Returns the parameters held inside the config as a dictionary."""
         return self.params.model_dump() if isinstance(self.params, pydantic.BaseModel) else self.params.copy()
+
+    def get_non_params_dict(self) -> dict[str, typing.Any]:
+        """Returns the other non-params fields inside the config as a dictionary."""
+        return {k: v for k, v in self.model_dump().items() if k != "params"}
+
+    def get_updated_spec(self, **extra_params) -> "ClassImportSpec[BaseT]":
+        """Returns a new spec with the given extra params kwargs merged in."""
+        config_params = self.get_params_dict()
+        config_params.update(**extra_params)
+        return type(self)(**self.get_non_params_dict(), params=config_params)
 
     # ----------------- below is private stuff that does not affect serialization -----------------
 

@@ -304,6 +304,31 @@ class TestClassImportSpec:
         assert isinstance(obj, FailingCtor)
         assert obj.a == 13
 
+    def test_instantiate_with_updated_spec(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyd.ClassImportSpec(
+            class_path="pkg.module.DummySub",
+            base_class_path="pkg.module.DummyBase",
+            params={"a": 7, "b": -1},
+        )
+        updated_spec = spec.get_updated_spec(b="test")
+        instance = updated_spec.instantiate()
+        assert isinstance(instance, DummySub)
+        assert instance.a == 7
+        assert instance.b == "test"
+        instance = updated_spec.instantiate(b=12)
+        assert isinstance(instance, DummySub)
+        assert instance.a == 7
+        assert instance.b == 12
+
     def test_resolve_propagates_import_error_for_missing_class(
         self,
         install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
