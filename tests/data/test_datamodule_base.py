@@ -4,6 +4,7 @@ import pytest
 import torch.utils.data as tud
 
 import pyine.data.datamodule as datamodule
+import pyine.utils.portability as port
 
 
 class DummyDataset(tud.Dataset):
@@ -39,16 +40,19 @@ def build_default_config() -> datamodule.BaseDataModuleConfig:
         params=datamodule.BaseDataLoaderParams(),  # defaults: batch_size=1, shuffle=False, ...
     )
     cfg = datamodule.BaseDataModuleConfig(
+        datamodule_class_path=port.get_fully_qualified_name(DummyDataModule),
         default_dataparser_config=parser_cfg,
         dataparser_config_overrides={
             "valid": {
-                "params": {"size": 5, "start": 100},
+                "size": 5,
+                "start": 100,
             },
         },
         default_dataloader_config=loader_cfg,
         dataloader_config_overrides={
             "train": {
-                "params": {"batch_size": 4, "shuffle": True},
+                "batch_size": 4,
+                "shuffle": True,
             },
         },
     )

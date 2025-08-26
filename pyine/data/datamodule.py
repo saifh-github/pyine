@@ -1,8 +1,10 @@
 """Contains utility functions and a base interface for lightning datamodules."""
 
 import logging
+import pathlib
 import typing
 
+import datasets as hf_datasets
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
@@ -120,6 +122,13 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True, extra="allow")
     """Pydantic model configuration (freezes the dataclass)."""
+    datamodule_class_path: typing.Annotated[
+        pydantic.StrictStr,
+        pydantic.Field(
+            min_length=1,
+            description="Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'.",
+        ),
+    ]
 
     # --------------- DATA PARSER (torch.utils.data.Dataset-like) CONFIGURATION ---------------
 
@@ -199,6 +208,11 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         loader = loader_config.instantiate(*args, **extra_kwargs)
         return loader
 
+    def instantiate_datamodule(self, *args, **extra_kwargs) -> "BaseDataModule":
+        """Instantiates a data module object based on the configured target class path."""
+        datamodule = self._resolved_datamodule_class(*args, config=self, **extra_kwargs)
+        return datamodule
+
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     # cache resolved subset configs so we don't re-resolve them in each getter call
@@ -208,6 +222,8 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     _resolved_dataloader_configs: dict[LoaderNameType, BaseDataLoaderConfig] = pydantic.PrivateAttr(
         default_factory=dict
     )
+    # cache the resolved datamodule class type also for potential instantiate calls
+    _resolved_datamodule_class: type | None = pydantic.PrivateAttr(default=None)
 
     def _resolve_dataparser_config(
         self,
@@ -217,10 +233,9 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if subset_type not in self.subset_types:
             raise ValueError(f"invalid subset type: {subset_type}, expected one of: {self.subset_types}")
         parser_config = self.default_dataparser_config
+        assert isinstance(parser_config, pyine.utils.pydantic.ClassImportSpec)
         if subset_type in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_type]:
-            subset_params = parser_config.model_dump()
-            subset_params.update(self.dataparser_config_overrides[subset_type])
-            parser_config = type(self.default_dataparser_config)(**subset_params)
+            parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_type])
         return parser_config
 
     def _resolve_dataloader_config(
@@ -231,10 +246,9 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if loader_type not in self.loader_types:
             raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
         loader_config = self.default_dataloader_config
+        assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
         if loader_type in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_type]:
-            loader_params = loader_config.model_dump()
-            loader_params.update(self.dataloader_config_overrides[loader_type])
-            loader_config = type(self.default_dataloader_config)(**loader_params)
+            loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_type])
         return loader_config
 
     @pydantic.model_validator(mode="after")
@@ -244,6 +258,12 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             self._resolved_dataparser_configs[subset_type] = self._resolve_dataparser_config(subset_type)
         for loader_type in self.loader_types:
             self._resolved_dataloader_configs[loader_type] = self._resolve_dataloader_config(loader_type)
+        resolved_class = pyine.utils.portability.import_from_dotted_path(self.datamodule_class_path)
+        if not isinstance(resolved_class, type) or not callable(resolved_class):
+            raise TypeError(f'"{self.datamodule_class_path}" resolved to {resolved_class!r}, which is not a class')
+        if not issubclass(resolved_class, BaseDataModule):
+            raise TypeError(f'"{self.datamodule_class_path}" is not a subclass of BaseDataModule')
+        self._resolved_datamodule_class = resolved_class
         return self
 
 
@@ -425,5 +445,30 @@ class BaseDataModule(pl.LightningDataModule):
         This function exists for users that might not want to use dataloaders directly, and would prefer
         using the data parsers directly instead (e.g. to provide specific transforms, or to use them
         as part of a wider framework such as HuggingFace).
+        """
+        raise NotImplementedError
+
+    def get_hf_dataset(
+        self,
+        subset_type: SubsetNameType,
+        append_answer: bool = True,
+    ) -> hf_datasets.Dataset:
+        """Returns a HuggingFace dataset object for a given subset type.
+
+        This function exists for users that might not want to use dataloaders directly, and would prefer
+        using the data parsers for huggingface-based experiments.
+        """
+        raise NotImplementedError
+
+    def get_openai_dataset(
+        self,
+        subset_type: SubsetNameType,
+    ) -> pathlib.Path:
+        """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
+
+        This function exists for users that might want to use the data in combination with the
+        OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
+        a JSONL file with one example per line. That dataset file can then be uploaded to the
+        OpenAI API to train a model.
         """
         raise NotImplementedError
