@@ -111,6 +111,12 @@ def test_compute_hash_file_and_dir(tmp_path: pathlib.Path):
         bad.chmod(0o644)
 
 
+def test_compute_hash_of_bytes_array():
+    b = b"\x00\x01\x02"
+    h = reprod.compute_hash(b, algorithm="md5")
+    assert len(h) == 32
+
+
 def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
     class Obj:
         pass

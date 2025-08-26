@@ -99,20 +99,22 @@ def get_params_hash(*args, **kwargs) -> str:
 
 
 def compute_hash(
-    path: pathlib.Path | typing.AnyStr,
+    obj: pathlib.Path | typing.AnyStr | bytes,
     algorithm: str = "sha256",
     chunk_size: int = 8192,
     raise_on_error: bool = True,
 ) -> str:
-    """Compute checksum of a file or directory using given hashing algorithm.
+    """Compute the hash of a file, directory, or bytes array using a specified hashing algorithm.
 
     This function handles both individual files and directories. For files, it directly hashes
     the content. For directories, it recursively processes all contained files and combines
-    their hashes in a deterministic way that depends only on content and relative paths, not
+    their hashes deterministically in a way that depends only on content and relative paths, not
     on metadata like timestamps or permissions.
 
+    If a bytes array is passed in, it will be hashed directly.
+
     Args:
-        path: path to the file or directory to hash.
+        obj: path to the file or directory to hash, or the file contents to hash as a bytes array.
         algorithm: hash algorithm to use (e.g., "md5", "sha1", "sha256").
         chunk_size: size of chunks to read when hashing large files.
         raise_on_error: if True, raises an exception if any file cannot be read.
@@ -120,7 +122,11 @@ def compute_hash(
     Returns:
         Hexadecimal digest of the hash.
     """
-    path_obj = pathlib.Path(path).expanduser().resolve()
+    if isinstance(obj, bytes):
+        # assume we gave the file contents directly, just hash that immediately
+        return hashlib.new(algorithm, obj).hexdigest()
+    # otherwise, assume it's the path to a file/dir we want to hash
+    path_obj = pathlib.Path(obj).expanduser().resolve()
     if path_obj.is_file():
         # file case - direct hash of contents
         h = hashlib.new(algorithm)
@@ -155,7 +161,7 @@ def compute_hash(
             dir_hash.update(combined)
         return dir_hash.hexdigest()
     else:
-        raise ValueError(f"path does not exist: {path}")
+        raise ValueError(f"path does not exist: {path_obj}")
 
 
 def set_seed(
