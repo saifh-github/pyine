@@ -33,6 +33,36 @@ class TraceMetadata(typing.NamedTuple):
     tags: list[str]
     """List of tags associated with the trace (problem+exec+augments)."""
 
+    def get_parent_solution_id(self) -> str:
+        """Returns the unique identifier for the parent solution to this trace.
+
+        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
+        can be used to get multiple traces, depending on the input arguments used when executing
+        the code snippet, and depending on applied code augmentations.
+        """
+        return str(self.get_trace_id_obj().get_parent_identifier())
+
+    def get_parent_problem_id(self) -> str:
+        """Returns the unique identifier for the parent problem to this trace.
+
+        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
+        can be used to get multiple traces, depending on the input arguments used when executing
+        the code snippet, and depending on applied code augmentations.
+
+        THIS IS THE ULTIMATE IDENTIFIER THAT SHOULD BE USED FOR SPLITTING PURPOSES. By default, if
+        a trace is assigned to a specific split subset based e.g. on a rule, all traces that belong
+        to the same parent problem will be assigned to the same subset.
+        """
+        return str(self.get_trace_id_obj().get_parent_identifier().get_parent_identifier())
+
+    def get_augment_type(self) -> str | None:
+        """Returns the augmentation type for this trace (if any)."""
+        return self.get_trace_id_obj().augment_category
+
+    def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+        """Returns the trace identifier object for this trace."""
+        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
+
 
 def get_traces_metadata(
     readers: list[pyine.data.traces.dataset_reader.DatasetReader] | pyine.data.traces.dataset_reader.DatasetReader,
@@ -106,6 +136,8 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     """List of withheld traces for each subset."""
     leftover_traces: list[TraceMetadata]
     """List of leftover traces still unassigned after subset filtering and leftover split."""
+    problem_assignments: dict[str, pyine.data.datamodule.SubsetNameType]
+    """Assignments of coding problems """
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate
@@ -152,6 +184,10 @@ class SampleData(typing.NamedTuple):
     """Type of the expected output (for specific descriptions in prompts)."""
     trace_step_count: int
     """Number of steps that are expected to be executed to predict the outputs (can be used as a hint)."""
+
+    def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+        """Returns the trace identifier object for this trace."""
+        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
 
 
 SampleDataParserType = pyine.data.datamodule.BaseDataParserType[SampleData]
