@@ -181,16 +181,20 @@ def set_seed(
     )
 
 
-def get_reprod_metadata() -> dict[str, typing.Any]:
+def get_reprod_metadata(
+    include_installed_packages: bool = True,
+) -> dict[str, str]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
-    return {
-        "python_version": get_python_version(),
-        "platform": get_platform_name(),
-        "timestamp": get_timestamp(),
-        "framework_version": get_framework_version(),
-        "git_revision_hash": get_git_revision_hash(),
-        "installed_packages": get_installed_packages(),
-    }
+    reprod_metadata = dict(
+        python_version=get_python_version(),
+        platform=get_platform_name(),
+        timestamp=get_timestamp(),
+        framework_version=get_framework_version(),
+        git_revision_hash=get_git_revision_hash(),
+    )
+    if include_installed_packages:
+        reprod_metadata["installed_packages"] = "\n".join(get_installed_packages())
+    return reprod_metadata
 
 
 @functools.wraps(dotenv.load_dotenv)

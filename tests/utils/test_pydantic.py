@@ -117,6 +117,11 @@ class DummyUnrelated:
         self.c = c
 
 
+class DummyWithConfig:
+    def __init__(self, cfg: dict):
+        self.cfg = MyModel(**cfg)
+
+
 @pytest.fixture(name="install_fake_import")
 def fixture_install_fake_import(
     monkeypatch: pytest.MonkeyPatch,
@@ -343,3 +348,23 @@ class TestClassImportSpec:
                 class_path="pkg.module.Missing",
                 base_class_path="pkg.module.DummyBase",
             )
+
+    def test_no_base_and_params_key(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummyWithConfig": DummyWithConfig,
+            },
+        )
+        spec = pyd.ClassImportSpec(
+            class_path="pkg.module.DummyWithConfig",
+            base_class_path="pkg.module.DummyWithConfig",
+            params={"a": 7, "b": "hello"},
+            params_key="cfg",
+        )
+        instance = spec.instantiate()
+        assert isinstance(instance, DummyWithConfig)
+        assert instance.cfg.a == 7
+        assert instance.cfg.b == "hello"

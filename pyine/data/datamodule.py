@@ -5,6 +5,9 @@ import pathlib
 import typing
 
 import datasets as hf_datasets
+import langchain_core.language_models
+import langchain_core.prompts
+import langchain_core.runnables
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
@@ -470,5 +473,28 @@ class BaseDataModule(pl.LightningDataModule):
         OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
         a JSONL file with one example per line. That dataset file can then be uploaded to the
         OpenAI API to train a model.
+        """
+        raise NotImplementedError
+
+    def get_prompt_template(
+        self,
+        **kwargs,  # forwarded to prompt manager / constructor
+    ) -> langchain_core.prompts.BasePromptTemplate:
+        """Returns the prompt template used for preparing training/evaluation samples from data.
+
+        Note: if the datamodule does not expect a prompt template to be used in preparing data
+        samples, this function will raise an exception.
+        """
+        raise NotImplementedError
+
+    def get_prompt_chain(
+        self,
+        model: langchain_core.language_models.BaseLanguageModel,
+        **kwargs,  # forwarded to prompt manager / constructor
+    ) -> langchain_core.runnables.Runnable | None:  # noqa
+        """Returns the runnable prompt chain used to get inference results from a given model.
+
+        Note: if the datamodule does not expect a prompt chain to be used in getting inference
+        results, this function will raise an exception.
         """
         raise NotImplementedError

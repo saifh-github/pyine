@@ -257,16 +257,28 @@ class ClassImportSpec(
     params: dict[str, typing.Any] | pydantic.BaseModel = pydantic.Field(
         default_factory=dict, description="Keyword arguments passed to the target class constructor."
     )
+    params_key: typing.Annotated[
+        str | None,
+        pydantic.Field(
+            description=(
+                "Key to use for passing params as a single argument when instantiating objects. "
+                "If not specified, all params will be unpacked and forwarded directly."
+            ),
+        ),
+    ] = None
 
     def instantiate(self, *args, **extra_kwargs) -> BaseT:
         """Instantiates the resolved class with the parameters held inside the config."""
         assert self._resolved_class is not None, "model must be validated before use"
         constr_params = self.get_params_dict()
         constr_params.update(extra_kwargs)
-        return self._resolved_class(*args, **constr_params)
+        if self.params_key is None:
+            return self._resolved_class(*args, **constr_params)
+        else:
+            return self._resolved_class(*args, **{self.params_key: constr_params})
 
     def get_params_dict(self) -> dict[str, typing.Any]:
-        """Returns the parameters held inside the config as a dictionary."""
+        """Returns the parameters held inside the config as a dictionary for obj instantiation."""
         return self.params.model_dump() if isinstance(self.params, pydantic.BaseModel) else self.params.copy()
 
     def get_non_params_dict(self) -> dict[str, typing.Any]:
@@ -311,15 +323,18 @@ class ClassImportSpec(
                 )
         if resolved_class is not resolved_base and not issubclass(resolved_class, resolved_base):
             raise TypeError(f"{resolved_class.__name__} is not a subclass of {resolved_base.__name__}")
-        self._validate_params_against_constructor(resolved_class, self.get_params_dict())
+        self._validate_params_against_constructor(resolved_class)
         self._resolved_class = resolved_class
         self._resolved_base = resolved_base
         return self
 
-    @staticmethod
-    def _validate_params_against_constructor(cls: type, params: dict[str, typing.Any]) -> None:
+    def _validate_params_against_constructor(self, cls: type) -> None:
         """Validates that the provided params match the constructor signature of the class."""
-        # check that all provided params exist in the constructor
+        if self.params_key is None:
+            params = self.get_params_dict()
+        else:
+            params = {self.params_key: self.get_params_dict()}
+        # check that all provided params exist in the target constructor
         sig = inspect.signature(cls)
         invalid_params = set(params) - set(sig.parameters)
         if invalid_params:

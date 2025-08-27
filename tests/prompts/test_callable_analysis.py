@@ -1,8 +1,10 @@
-import langchain_core.messages
+import langchain_core.output_parsers
 import langchain_core.prompts
+import langchain_core.runnables
 import pytest
 
 import pyine.prompts.configs.callable_analysis as callable_analysis
+import pyine.prompts.manager
 import pyine.prompts.utils
 
 
@@ -68,6 +70,13 @@ def test_get_config_and_template():
     assert "You are an expert at interpreting" in chat_template.messages[0].prompt.template
     assert isinstance(chat_template.messages[1], langchain_core.prompts.HumanMessagePromptTemplate)
     assert "Now, provide the structured output" in chat_template.messages[1].prompt.template
+
+
+def test_get_chain(mocker):
+    model = mocker.MagicMock()
+    chain = pyine.prompts.manager.get_prompt_chain(model, "code_analysis")
+    assert isinstance(chain, langchain_core.runnables.RunnableSequence)
+    assert isinstance(chain.last, langchain_core.output_parsers.PydanticOutputParser)
 
 
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability

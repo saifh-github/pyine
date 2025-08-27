@@ -1,4 +1,6 @@
+import langchain_core.output_parsers
 import langchain_core.prompts
+import langchain_core.runnables
 
 import pyine.prompts.configs.code_analysis as code_analysis
 import pyine.prompts.manager
@@ -26,6 +28,13 @@ def test_get_config_and_template():
         code='name = input("Enter name: ")\nprint("Hello, " + name)',
     )
     assert "Enter name: " in rendered_str
+
+
+def test_get_chain(mocker):
+    model = mocker.MagicMock()
+    chain = pyine.prompts.manager.get_prompt_chain(model, "code_analysis")
+    assert isinstance(chain, langchain_core.runnables.RunnableSequence)
+    assert isinstance(chain.last, langchain_core.output_parsers.PydanticOutputParser)
 
 
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability

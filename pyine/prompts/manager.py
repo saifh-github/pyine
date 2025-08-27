@@ -2,7 +2,9 @@ import importlib.resources
 import logging
 import pathlib
 
+import langchain_core.language_models
 import langchain_core.prompts
+import langchain_core.runnables
 import pydantic
 import yaml
 
@@ -207,20 +209,79 @@ def get_prompt_template(
             pick randomly. If `None` is provided instead, all examples are included.
     """
     manager = get_framework_prompt_manager()
-    prompt_config = manager.get_prompt_config(prompt_name=prompt_name, version=version)
     try:
+        # if a getter override exists for this specific prompt in its parent module, use it
         prompt_module = manager._get_prompt_module(prompt_name)  # noqa
         if hasattr(prompt_module, "get_prompt_template"):
             return prompt_module.get_prompt_template(
+                version=version,
                 use_chat_template=use_chat_template,
                 include_examples=include_examples,
                 target_examples=target_examples,
             )
     except ModuleNotFoundError:
-        logger.info(f"could not find module for {prompt_name}, using default template constructor")
-        pass
+        logger.debug(f"could not find module for {prompt_name}, using default template constructor")
+    prompt_config = manager.get_prompt_config(prompt_name=prompt_name, version=version)
     return prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
+        role_variables=None,  # the module override should provide this
+        context_variables=None,  # the module override should provide this
+        examples_block_variables=None,  # the module override should provide this
+    )
+
+
+def get_prompt_chain(
+    model: langchain_core.language_models.BaseLanguageModel,
+    prompt_name: str,
+    version: str | None = None,
+    runnable_name: str | None = None,
+    use_chat_template: bool = False,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+) -> langchain_core.runnables.Runnable:
+    """Convenience function to get a runnable prompt chain using the default manager.
+
+    Note: if the prompt is known and registered, we will check its corresponding module to see if
+    it possesses an override to generate the prompt chain. If so, it will be used instead in
+    order for structured output parsers to be properly attached.
+
+    Args:
+        model: The language model to use inside the runnable prompt chain.
+        prompt_name: Name of the prompt to retrieve
+        version: The version of the prompt to retrieve. If None, the default version is returned.
+        runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
+        use_chat_template: Whether to return a chat prompt template or a regular prompt template.
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+    """
+    prompt_template = get_prompt_template(
+        prompt_name=prompt_name,
+        version=version,
+        use_chat_template=use_chat_template,
+        include_examples=include_examples,
+        target_examples=target_examples,
+    )
+    manager = get_framework_prompt_manager()
+    try:
+        # if a getter override exists for this specific prompt in its parent module, use it
+        prompt_module = manager._get_prompt_module(prompt_name)  # noqa
+        if hasattr(prompt_module, "get_output_parser"):
+            output_parser = prompt_module.get_output_parser(version=version)
+            if output_parser is not None:
+                return langchain_core.runnables.RunnableSequence(
+                    prompt_template,
+                    model,
+                    output_parser,
+                    name=runnable_name,
+                )
+    except ModuleNotFoundError:
+        logger.debug(f"could not find module for {prompt_name}, will not use an output parser")
+    return langchain_core.runnables.RunnableSequence(
+        prompt_template,
+        model,
+        name=runnable_name,
     )

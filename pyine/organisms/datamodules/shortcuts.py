@@ -3,6 +3,8 @@ import pathlib
 import typing
 
 import datasets as hf_datasets
+import langchain_core.language_models
+import langchain_core.prompts
 import msgspec
 import numpy as np
 import pydantic
@@ -13,6 +15,7 @@ import pyine.data.utils.filter_rules
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.organisms.models.utils.openai
+import pyine.prompts.manager
 import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.portability
@@ -264,7 +267,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
             use_chat_template=True,
             append_answer=append_answer,
             use_hf_messages=True,
-            **self.config.chat_prompt_config,
+            **self.config.prompt_config,
         )
         return self.config.default_dataparser_config.get_hf_dataset(
             named_split=named_split,
@@ -299,6 +302,25 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
             hf_dataset = self.get_hf_dataset(subset_type=subset_type, append_answer=True)
             pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
+
+    def get_prompt_template(
+        self,
+        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+    ) -> langchain_core.prompts.BasePromptTemplate:
+        """Returns the prompt template used for preparing training/evaluation samples from data."""
+        prompt_kwargs = self.config.prompt_config.copy()
+        prompt_kwargs.update(kwargs)
+        return pyine.prompts.manager.get_prompt_template(**prompt_kwargs)
+
+    def get_prompt_chain(
+        self,
+        model: langchain_core.language_models.BaseLanguageModel,
+        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+    ) -> langchain_core.runnables.Runnable | None:  # noqa
+        """Returns the runnable prompt chain used to get inference results from a given model."""
+        prompt_kwargs = self.config.prompt_config.copy()
+        prompt_kwargs.update(kwargs)
+        return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs)
 
     def _make_dataloader(
         self,
@@ -424,7 +446,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
-    chat_prompt_config: dict[str, typing.Any] = dict(
+    prompt_config: dict[str, typing.Any] = dict(
         prompt_name="code_execution",
         # version="TODO", @@@@
         include_examples=True,

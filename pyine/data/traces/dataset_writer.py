@@ -16,6 +16,7 @@ import traceback
 import typing
 import warnings
 
+import langchain_core.language_models
 import pydantic
 
 import pyine.data.traces.dataset_utils
@@ -582,7 +583,7 @@ def _trace_code_snippet(
 async def _generate_augmented_code_to_trace(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    llm: pyine.utils.llm_providers.LLMType | None,  # noqa
+    llm: langchain_core.language_models.BaseLanguageModel | None,  # noqa
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
 ) -> list[_CodeToTrace]:
@@ -627,10 +628,7 @@ async def _generate_augmented_code_to_trace(
         # helper function that avoids code duplication for doc-hints and test-hints augments
         if llm is None:
             raise ValueError("runnable augmentation requires an LLM to be provided/configured")
-        llm_chain = pyine.utils.llm_providers.get_chain(
-            prompt_template=pyine.prompts.manager.get_prompt_template(prompt_template_name),
-            llm=llm,
-        )
+        llm_chain = pyine.prompts.manager.get_prompt_chain(llm, prompt_template_name)
         for test_tuple in test_tuples:
             for augment_idx in range(augment_count):
                 # note: having more than one augmented instance per test makes sense w/ non-zero temp
@@ -744,7 +742,7 @@ async def write_dataset(
         log(f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
     await _cooperative_yield()
     if config.llm_provider_kwargs:
-        llm = pyine.utils.llm_providers.get_llm_from_provider(**config.llm_provider_kwargs)
+        llm = pyine.utils.llm_providers.get_model_from_provider(**config.llm_provider_kwargs)
     else:
         llm = None
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)

@@ -10,7 +10,7 @@ import tiktoken
 
 import pyine.data.taco.dataset_reader
 import pyine.data.taco.dataset_utils
-import pyine.prompts.configs.code_analysis
+import pyine.prompts.manager
 import pyine.utils.code.validation
 import pyine.utils.llm_providers
 import pyine.utils.reprod
@@ -40,23 +40,19 @@ async def reprocess_code_samples(
         return len(_tokenizer.encode(text))
 
     dataset_reader = pyine.data.taco.dataset_reader.DatasetReader()
-    code_analysis_prompt = pyine.prompts.configs.code_analysis.get_prompt_template()
-    example_prompt_text = code_analysis_prompt.format(
-        code="def example(): pass",
-    )
-    prompt_token_count = _count_tokens(example_prompt_text)
-    print(f"basic prompt token count (estimate): {prompt_token_count}")
-    llm = pyine.utils.llm_providers.get_llm_from_provider(
+    llm = pyine.utils.llm_providers.get_model_from_provider(
         provider="deepseek",
         model="deepseek-chat",
         temperature=0.0,  # recommended setting for coding/math
         max_tokens=1024,
     )
-    code_analysis_chain = pyine.utils.llm_providers.get_chain(
-        code_analysis_prompt,
-        llm=llm,
-        pydantic_model=pyine.prompts.configs.code_analysis.CodeAnalysisResponse,
+    code_analysis_prompt = pyine.prompts.manager.get_prompt_template("code_analysis")
+    example_prompt_text = code_analysis_prompt.format(
+        code="def example(): pass",
     )
+    prompt_token_count = _count_tokens(example_prompt_text)
+    print(f"basic prompt token count (estimate): {prompt_token_count}")
+    code_analysis_chain = pyine.prompts.manager.get_prompt_chain(llm, "code_analysis")
     total_samples = len(dataset_reader)
     print(f"samples in dataset: {total_samples}")
     for batch_start in range(0, total_samples, batch_size):

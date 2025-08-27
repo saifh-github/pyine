@@ -1,11 +1,43 @@
+import tiktoken
+import torch
 import transformers
 
-from pyine.organisms.models.tokenizers import get_tokenizer
+import pyine.organisms.models.utils.tokenizers as toknz
 
 
-def test_get_tokenizer_basic_functionality():
-    """Test basic functionality of get_tokenizer with default settings."""
-    model_name = "gpt2"  # Using a small model for testing
-    tokenizer = get_tokenizer(model_name)
+def test_get_hf_tokenizer():
+    model_name = "gpt2"
+    tokenizer = toknz.get_hf_tokenizer(model_name)
     assert isinstance(tokenizer, transformers.PreTrainedTokenizerBase)
     assert tokenizer.name_or_path == model_name
+    test_str = "Hello, world!"
+    output = tokenizer(test_str, return_tensors="pt")
+    assert "input_ids" in output and isinstance(output["input_ids"], torch.Tensor)
+    assert "attention_mask" in output and isinstance(output["attention_mask"], torch.Tensor)
+    # also check if tokenizer options are respected
+    tokenizer = toknz.get_hf_tokenizer(
+        model_name,
+        set_padding_to_eos_if_needed=True,
+        override_padding_to_right_side=True,
+    )
+    assert tokenizer.pad_token == tokenizer.eos_token
+    assert tokenizer.padding_side == "right"
+
+
+def test_get_openai_tokenizer():
+    model_name = "gpt-4o"
+    tokenizer = toknz.get_openai_tokenizer(model_name)
+    assert isinstance(tokenizer, tiktoken.Encoding)
+    test_str = "Hello, world!"
+    output = tokenizer.encode(test_str)
+    assert isinstance(output, list) and len(output) > 0
+    assert all([0 <= tid < tokenizer.n_vocab for tid in output])
+
+
+def test_unknown_openai_tokenizer():
+    model_name = "gpt-unknown"
+    tokenizer = toknz.get_openai_tokenizer(model_name, raise_if_not_found=False)
+    assert tokenizer is not None
+    test_str = "Hello, world!"
+    output = tokenizer.encode(test_str)
+    assert isinstance(output, list) and len(output) > 0

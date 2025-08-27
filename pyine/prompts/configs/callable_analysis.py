@@ -56,10 +56,12 @@ class CallableAnalysisResponse(pydantic.BaseModel):
     )
 
 
-output_parser = langchain_core.output_parsers.PydanticOutputParser(
-    pydantic_object=CallableAnalysisResponse,
-)
-expected_output_format_str = output_parser.get_format_instructions()
+def get_output_parser(
+    version: str | None = None,
+) -> langchain_core.output_parsers.BaseOutputParser | None:  # noqa
+    """Get the output parser for the callable analysis prompt (if one should be used)."""
+    # note: we currently have a single output structure for all version
+    return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=CallableAnalysisResponse)
 
 
 def get_prompt_config(
@@ -103,6 +105,6 @@ def get_prompt_template(
         include_examples=include_examples,
         target_examples=target_examples,
         role_variables=None,
-        context_variables=dict(expected_output_format=expected_output_format_str),
+        context_variables=dict(expected_output_format=get_output_parser(version).get_format_instructions()),
         examples_block_variables=None,
     )
