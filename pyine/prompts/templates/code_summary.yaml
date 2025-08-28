@@ -1,0 +1,84 @@
+v1.0:
+  metadata:
+    name: code_summary
+    description: Tasks a model to produce a concise summary of what a given code snippet does.
+  role:
+    template: >
+      You are an expert at interpreting and summarizing Python 3 code for other engineers.
+
+
+      Your role is to read a code snippet and provide a clear, concise description of what the code does.
+  context:
+    template: |
+      Your summary should:
+      - State the primary purpose of the code (what it computes or accomplishes).
+      - Briefly describe key steps or algorithms used, including important data structures or patterns.
+      - Mention expected inputs and outputs, including how outputs are produced (e.g., stdout, return value).
+      - If the provided code snippet is a solution to a coding problem (whose description we will also provide), relate your description to the problem as well.
+      - If a target word count is provided, use it as a guideline but not an absolute requirement.
+
+      You must ONLY provide the summary text, and you must not provide any additional commentary.
+
+      An IDEAL summary is one where, without even seeing the code, we understand what it would produce for some given input.
+  question:
+    template: |
+      Here is the code snippet you must now summarize:
+      ```python
+      {{code.rstrip("\n")}}
+      ```
+      {% if target_length %}
+      Your summary for this specific code snippet should be roughly {{target_length}} words.
+      {%- endif %}
+      {% if description %}
+      Coding problem description (to relate in your summary):
+      =======================================================
+      {{description.rstrip("\n")}}
+      =======================================================
+      {%- endif %}
+
+      Now, provide your summary of the code snippet, and nothing else:
+    format: jinja2
+    partial_variables:
+      description: ""
+  example_template:
+    template: |
+      Example {{example_idx}}/{{example_count}}; input code:
+      ```python
+      {{code.rstrip("\n")}}
+      ```
+      {%- if description %}
+      Coding problem description:
+      ===========================
+      {{description.rstrip("\n")}}
+      ===========================
+      {%- endif %}
+      {%- if target_length %}
+      Expected summary (roughly {{target_length}} words):
+      {%- else %}
+      Expected summary:
+      {%- endif %}
+      {{output.rstrip("\n") + "\n"}}
+    format: jinja2
+  example_block_template:  # unspecified = keep default
+  template_block_separator: "\n"
+  examples:
+    - input_variables:
+        code: |
+          name = input("Enter your name: ")
+          print(f"Hello, {name}")
+        description: |
+          Write code that prints a personalized greeting for a provided name.
+      output: |
+        Reads a name from stdin and prints a greeting to stdout in the form "Hello, <name>".
+    - input_variables:
+        code: |
+          import math
+
+          def area_of_circle(r: float) -> float:
+              return math.pi * r ** 2
+        target_length: 35
+      output: >
+        Defines a function to compute a circle's area (`area = math.pi * (radius ** 2)`); the
+        radius is provided as an argument, and the area is the function's returned value.
+
+__default__: "v1.0"
