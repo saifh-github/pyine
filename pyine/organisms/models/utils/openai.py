@@ -31,24 +31,36 @@ def get_local_file_directory() -> pathlib.Path:
     return tmpdir
 
 
-def write_dataset_to_jsonl(dataset: typing.Iterable[dict | list], path: pathlib.Path) -> None:
+def write_dataset_to_jsonl(
+    dataset: typing.Iterable[dict | list],
+    path: pathlib.Path,
+    enforce_openai_min_dataset_size: bool = True,
+) -> None:
     """Writes a dataset to a JSONL file.
 
-    Assumes each example is a dict or list of messages. If it is a dict, it should have a
-    "messages" key that contains a list of messages.
+    Will dump the dataset samples as one-line-per-sample, assuming each sample contains a conversation
+    stored as a dictionary with a list of messages (a list of dicts). If any require fields are missing,
+    an exception will be raised.
+
+    If `enforce_openai_min_dataset_size` is True, will enforce the minimum size required by OpenAI
+    (i.e. 10 samples). If the dataset is smaller than this, an exception will be raised.
     """
+    samples_str = []
+    for sample in dataset:
+        if isinstance(sample, dict):
+            assert "messages" in sample
+            msgs = sample["messages"]  # drop every other field except messages
+        else:
+            msgs = sample
+        assert isinstance(msgs, list)
+        assert all([isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs])
+        samples_str.append(orjson.dumps({"messages": msgs}).decode("utf-8"))
+    if enforce_openai_min_dataset_size and len(samples_str) < 10:
+        raise ValueError(f"dataset must have at least 10 samples, got {len(samples_str)}")
     with open(path, "w", encoding="utf-8") as fd:
-        for sample in dataset:
-            if isinstance(sample, dict):
-                assert "messages" in sample
-                msgs = sample["messages"]
-            else:
-                msgs = sample
-            assert isinstance(msgs, list)
-            assert all([isinstance(m, dict) for m in msgs])
-            fd.write(orjson.dumps(msgs).decode("utf-8") + "\n")
+        fd.write("\n".join(samples_str))
     dataset_size = pyine.utils.filesystem.get_human_readable_size(path.stat().st_size)
-    logger.debug(f"wrote {dataset_size} dataset to {path}")
+    logger.debug(f"wrote {dataset_size} dataset with {len(samples_str)} samples to {path}")
 
 
 def read_dataset_from_jsonl(
@@ -56,8 +68,8 @@ def read_dataset_from_jsonl(
 ) -> list[list[dict[str, str]]]:
     """Reads a dataset from a JSONL file.
 
-    Will return the dataset as a list of dicts, where each dict is a message containing
-    role and content entries.
+    Will parse the dataset samples as one-line-per-sample, where each line contains a conversation
+    stored as a dictionary with a list of messages (a list of dicts).
     """
     if not path.is_file():
         raise FileNotFoundError(f"file does not exist: {path}")
@@ -95,6 +107,38 @@ def read_dataset_from_jsonl(
                 curr_messages.append(msg)
             messages_dataset.append(curr_messages)
     return messages_dataset
+
+
+def write_objects_to_jsonl(dataset: typing.Iterable[typing.Any], path: pathlib.Path) -> None:
+    """Writes a dataset of arbitrary JSON-serializable objects to a JSONL file.
+
+    This preserves each object's schema as-is on a single line. Useful for RL or preference
+    datasets where examples may include fields like 'chosen'/'rejected', 'preference',
+    'reward', or trajectories that do not fit the simple chat 'messages' format.
+    """
+    with open(path, "w", encoding="utf-8") as fd:
+        for sample in dataset:
+            fd.write(orjson.dumps(sample).decode("utf-8") + "\n")
+    dataset_size = pyine.utils.filesystem.get_human_readable_size(path.stat().st_size)
+    logger.debug(f"wrote {dataset_size} raw-object dataset to {path}")
+
+
+def read_objects_from_jsonl(path: pathlib.Path) -> list[typing.Any]:
+    """Reads a JSONL file of arbitrary objects into a list of Python objects."""
+    if not path.is_file():
+        raise FileNotFoundError(f"file does not exist: {path}")
+    objects: list[typing.Any] = []
+    with open(path, encoding="utf-8") as fd:
+        for lineno, raw in enumerate(fd, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                obj = orjson.loads(line)
+            except Exception as e:
+                raise ValueError(f"invalid JSON on line {lineno}: {e}") from e
+            objects.append(obj)
+    return objects
 
 
 def estimate_token_count(text: str, model_id: str) -> int:
@@ -216,6 +260,10 @@ class OpenAIFineTunerParamsConfig(pydantic.BaseModel):
     """Override of the default client timeout for the fine-tuning job."""
     file_upload_params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Additional parameters to pass to the Files API when uploading fine-tuning files."""
+    files_purpose: str | None = "fine-tune"
+    """Default 'purpose' to use with the Files API (set to None to not send a purpose)."""
+    job_params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    """Additional fine-tuning job parameters to pass through to jobs.create (method-specific)."""
 
 
 class OpenAIFineTuner:
@@ -267,15 +315,36 @@ class OpenAIFineTuner:
         content = self.client.files.content(file_id).read()
         return pyine.utils.reprod.compute_hash(content)
 
-    def list_remote_files(self) -> list[typing.Any]:
-        """List remote files that are available for fine-tuning."""
-        page = self.client.files.list(purpose="fine-tune")
-        return list(page.data)
+    def list_remote_files(
+        self,
+        purpose: str | None = None,  # note: we do not override this one with internal config value
+        pattern: str | None = None,  # optional regex pattern for matching
+    ) -> list[openai.types.FileObject]:
+        """Returns remote files that are available for a specific purpose (or for any)."""
+        page = self.client.files.list(purpose=purpose) if purpose is not None else self.client.files.list()
+        remote_files = list(page.data)
+        if pattern is not None:
+            regex: typing.Pattern[str] = re.compile(pattern)
+            return [f for f in remote_files if regex.match(f.filename)]
+        return remote_files
+
+    def list_remote_models(
+        self,
+        pattern: str | None = None,  # optional regex pattern for matching
+    ) -> list[openai.types.fine_tuning.fine_tuning_job.FineTuningJob]:
+        """Returns remote models that have been created via fine-tuning."""
+        page = self.client.fine_tuning.jobs.list()
+        models = list(page.data)
+        if pattern is not None:
+            regex: typing.Pattern[str] = re.compile(pattern)
+            return [m for m in models if m.fine_tuned_model and regex.match(m.fine_tuned_model)]
+        return models
 
     def is_file_already_uploaded(
         self,
         local_path: pathlib.Path | str,
         confirm_by_hash: bool = True,
+        purpose: str | None = None,
     ) -> str | None:
         """Return an existing Files API id if a given local file is already uploaded.
 
@@ -284,6 +353,7 @@ class OpenAIFineTuner:
         Args:
             local_path: Path to the local file to be potentially uploaded.
             confirm_by_hash: If True, confirm equality by SHA-256 of remote bytes.
+            purpose: Optional Files API purpose to filter by; defaults to config.files_purpose.
 
         Returns:
             File id if a match is found; otherwise None.
@@ -292,7 +362,9 @@ class OpenAIFineTuner:
         if not local_path.is_file():
             raise FileNotFoundError(f"local file does not exist: {local_path}")
         local_size = local_path.stat().st_size
-        page = self.client.files.list(purpose="fine-tune")
+        if purpose is None:
+            purpose = self.config.files_purpose
+        page = self.client.files.list(purpose=purpose) if purpose is not None else self.client.files.list()
         candidates: list[typing.Any] = []
         for remote in page.data:
             if remote.filename == local_path.name and int(remote.bytes) == int(local_size):
@@ -313,11 +385,14 @@ class OpenAIFineTuner:
     def upload_file(
         self,
         path: pathlib.Path | str,
+        purpose: str | None = None,
     ) -> str:
-        """Upload a local file to the Files API for fine-tuning.
+        """Upload a local file to the Files API.
 
         Args:
             path: Local path to the file to upload.
+            purpose: Optional Files API purpose; defaults to config.files_purpose. If None,
+                no explicit purpose is sent unless provided via file_upload_params.
 
         Returns:
             The uploaded file id.
@@ -326,10 +401,15 @@ class OpenAIFineTuner:
         file_size = pyine.utils.filesystem.get_human_readable_size(path.stat().st_size)
         logger.info(f"uploading {file_size} file: {path}")
         with open(path, "rb") as f:
+            kwargs = dict(self.config.file_upload_params)
+            if purpose is None:
+                purpose = self.config.files_purpose
+            # Only set purpose if not provided explicitly via file_upload_params and not None here
+            if purpose is not None and "purpose" not in kwargs:
+                kwargs["purpose"] = purpose
             up = self.client.files.create(
                 file=f,
-                purpose="fine-tune",  # purpose required
-                **self.config.file_upload_params,
+                **kwargs,
             )
         logger.info(f"file uploaded; id={up.id}")
         return up.id
@@ -338,6 +418,7 @@ class OpenAIFineTuner:
         self,
         path: pathlib.Path | str,
         confirm_by_hash: bool = True,
+        purpose: str | None = None,
     ) -> str:
         """Ensure the file is uploaded and return its file id.
 
@@ -347,15 +428,16 @@ class OpenAIFineTuner:
         Args:
             path: Local path to the file to upload.
             confirm_by_hash: Whether to verify by SHA-256 content hash.
+            purpose: Optional Files API purpose to filter/search and upload with; defaults to config.files_purpose.
 
         Returns:
             Files API id of the existing or uploaded file.
         """
-        existing = self.is_file_already_uploaded(path, confirm_by_hash=confirm_by_hash)
+        existing = self.is_file_already_uploaded(path, confirm_by_hash=confirm_by_hash, purpose=purpose)
         if existing:
             logger.debug(f"file already uploaded: {path} -> id={existing}")
             return existing
-        return self.upload_file(str(path))
+        return self.upload_file(str(path), purpose=purpose)
 
     @backoff.on_exception(backoff.expo, Exception, max_time=120)
     def download_file(
@@ -389,14 +471,19 @@ class OpenAIFineTuner:
     @backoff.on_exception(backoff.expo, Exception, max_time=120)
     def create_job(
         self,
-        training_file_id: str,
-        validation_file_id: str | None,
+        training_file_id: str | None = None,
+        validation_file_id: str | None = None,
+        extra_file_args: dict[str, str | None] | None = None,
+        extra_job_params: dict[str, typing.Any] | None = None,
     ) -> str:
         """Create a fine-tuning job.
 
         Args:
-            training_file_id: Files API id of the training dataset.
-            validation_file_id: Files API id of the validation dataset (or None).
+            training_file_id: Files API id of the training dataset (optional if provided via extra_file_args).
+            validation_file_id: Files API id of the validation dataset (optional).
+            extra_file_args: Additional file arguments to pass to the job creation call, e.g.,
+                {'preference_file': 'file-abc', 'reward_file': 'file-def'} for RL methods.
+            extra_job_params: Additional method-specific job parameters to pass through.
 
         Returns:
             The fine-tuning job id.
@@ -405,18 +492,29 @@ class OpenAIFineTuner:
         integrations = None
         if self.config.wandb_integration is not None:
             integrations = [self.config.wandb_integration.model_dump()]
-        job = self.client.fine_tuning.jobs.create(
-            model=self.config.base_model,
-            training_file=training_file_id,
-            validation_file=validation_file_id,
-            hyperparameters=self.config.hyperparams.model_dump(),
-            integrations=integrations,
-            metadata=self.config.metadata,
-            method=self.config.method,
-            seed=self.config.seed,
-            suffix=self.config.suffix,
-            timeout=self.config.timeout_override,
-        )
+
+        params: dict[str, typing.Any] = {
+            "model": self.config.base_model,
+            "hyperparameters": self.config.hyperparams.model_dump(),
+            "integrations": integrations,
+            "metadata": self.config.metadata,
+            "method": self.config.method,
+            "seed": self.config.seed,
+            "suffix": self.config.suffix,
+            "timeout": self.config.timeout_override,
+        }
+        if training_file_id is not None:
+            params["training_file"] = training_file_id
+        if validation_file_id is not None:
+            params["validation_file"] = validation_file_id
+        if extra_file_args:
+            params.update({k: v for k, v in extra_file_args.items() if v is not None})
+        if self.config.job_params:
+            params.update(self.config.job_params)
+        if extra_job_params:
+            params.update(extra_job_params)
+
+        job = self.client.fine_tuning.jobs.create(**params)
         logger.info(f"fine-tuning job created, id={job.id}, status={job.status}")
         return job.id
 
@@ -429,9 +527,18 @@ class OpenAIFineTuner:
         logger.info("streaming fine-tune events (Ctrl-C to stop streaming)...")
         for evt in self.client.fine_tuning.jobs.list_events(fine_tuning_job_id=job_id):
             # event typically has .created_at, .level, .message depending on SDK version
-            msg = getattr(evt, "message", None) or getattr(evt, "data", None)
             created = getattr(evt, "created_at", None)
             level = getattr(evt, "level", "info")
+            msg = getattr(evt, "message", None)
+            if not msg:
+                data = getattr(evt, "data", None)
+                if data is not None:
+                    try:
+                        msg = orjson.dumps(data).decode("utf-8")
+                    except Exception:
+                        msg = str(data)
+                else:
+                    msg = str(evt)
             logger.info(f"[{created}][{level}] {msg}")
 
     def wait_for_job(
@@ -527,30 +634,70 @@ class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec[OpenAIFineTuner
 def cleanup_finetuned_models(
     client: openai.OpenAI,
     pattern: str,
-    max_age_days: int = 0,  # can be zero, i.e. clean up all matched models
-    dry_run: bool = True,
-) -> None:
+    max_age_days: int = 0,  # if zero, will clean up all matched models
+    dry_run: bool = False,
+) -> list[openai.types.model.Model]:
     """Scans fine-tuned models with the given pattern and delete ones older than `max_age_days`.
 
     Args:
+        client: OpenAI client instance.
         pattern: Regex string to match model IDs (e.g., r"^ft:.*:dummy$")
         max_age_days: Maximum allowed model age in days before deletion; if zero, all matched
             models will be deleted (default 0).
-        dry_run: If True, only print what would be deleted (default True).
+        dry_run: If True, only print what would be deleted (default False).
+
+    Returns:
+        A list of cleaned up models (or models that would have been deleted if dry_run=True).
     """
     regex: typing.Pattern[str] = re.compile(pattern)
     cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
     models = client.models.list()
+    matched_models = []
     for model in models.data:
-        model_id = model.id
-        created_ts = getattr(model, "created", None)
-        if not created_ts:
-            continue
-        created_dt = datetime.datetime.fromtimestamp(created_ts)
-        if regex.match(model_id) and created_dt < cutoff_time:
-            age_days = (datetime.datetime.now() - created_dt).days
+        creation_dt = datetime.datetime.fromtimestamp(model.created)
+        if regex.match(model.id) and creation_dt < cutoff_time:
+            age_days = (datetime.datetime.now() - creation_dt).days
+            matched_models.append(model)
             if dry_run:
-                logger.info(f"[DRY RUN] Would delete {model_id} (age {age_days} days)")
+                logger.info(f"[DRY RUN] Would delete {model.id} (age={age_days} days)")
             else:
-                logger.info(f"Deleting {model_id} (age {age_days} days)")
-                client.models.delete(model_id)
+                logger.info(f"Deleting {model.id} (age={age_days} days)")
+                client.models.delete(model.id)
+    return matched_models
+
+
+def cleanup_files(
+    client: openai.OpenAI,
+    pattern: str,
+    purpose: str | None = None,
+    max_age_days: int = 0,  # if zero, will clean up all matched files
+    dry_run: bool = False,
+) -> list[openai.types.file_object.FileObject]:
+    """Scans remote files with the given pattern and delete ones older than `max_age_days`.
+
+    Args:
+        client: OpenAI client instance.
+        pattern: Regex string to match file names (e.g., r"^.*.dummy.jsonl$")
+        purpose: Optional Files API purpose to filter by..
+        max_age_days: Maximum allowed file age in days before deletion; if zero, all matched
+            files will be deleted (default 0).
+        dry_run: If True, only print what would be deleted (default False).
+
+    Returns:
+        A list of cleaned up files (or that would be cleaned up if dry_run=False).
+    """
+    regex: typing.Pattern[str] = re.compile(pattern)
+    cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
+    file_page = client.files.list(purpose=purpose) if purpose is not None else client.files.list()
+    matched_files = []
+    for file in file_page.data:
+        creation_dt = datetime.datetime.fromtimestamp(file.created_at)
+        if regex.match(file.filename) and creation_dt < cutoff_time:
+            age_days = (datetime.datetime.now() - creation_dt).days
+            matched_files.append(file)
+            if dry_run:
+                logger.info(f"[DRY RUN] Would delete {file.id} (name={file.filename}; age={age_days} days)")
+            else:
+                logger.info(f"Deleting {file.id} (name={file.filename}; age={age_days} days)")
+                client.files.delete(file.id)
+    return matched_files
