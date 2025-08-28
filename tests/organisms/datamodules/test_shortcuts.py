@@ -49,7 +49,7 @@ def test_shortcuts_datamodule_integration():
         subset_filter_rules=dict(),  # reset rule-based assignments (do random split instead)
         subset_leftover_split_ratios=dict(
             train=0.8,
-            val=0.2,
+            valid=0.2,
         ),
     )
     dm = config.instantiate_datamodule(verbose=True)
@@ -77,7 +77,7 @@ def test_shortcuts_datamodule_integration():
     assert isinstance(transformed_sample_msgs, list)
     assert all([hasattr(m, "type") and hasattr(m, "content") for m in transformed_sample_msgs])
     print("sample transform works")
-    hf_msgs_dataset = dm.get_hf_dataset(subset_type="train")
+    hf_msgs_dataset = dm.get_hf_messages_dataset(subset_type="train")
     assert isinstance(hf_msgs_dataset, hf_datasets.Dataset)
     assert len(hf_msgs_dataset) == len(parser)  # noqa
     hf_msgs_sample = hf_msgs_dataset[0]

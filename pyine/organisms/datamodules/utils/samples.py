@@ -607,7 +607,7 @@ class SampleBuilderConfig(pyine.data.datamodule.BaseDataParserConfig):
     params: dict[str, typing.Any] = dict(config=SampleTransformConfig(partial_sample_decision_strategy="never"))
     """Default parameters for the dataset trace parser."""
 
-    def get_hf_dataset(
+    def get_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
         raw_transform_fn: typing.Callable[[SampleData], typing.Any] | None = None,

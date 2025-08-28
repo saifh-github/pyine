@@ -13,6 +13,8 @@ import lightning.pytorch.utilities.types as pl_types
 import pydantic
 import torch.utils.data
 
+import pyine.prompts.manager
+import pyine.prompts.utils
 import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
@@ -120,7 +122,7 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataLoaderTy
 class BaseDataModuleConfig(pydantic.BaseModel):
     """Base configuration class for datamodule objects.
 
-    This class defines the default configuration for data parsers and data loaders. It also
+    This class defines the default configuration for data parsers and data loaders.
     """
 
     model_config = pydantic.ConfigDict(frozen=True, extra="allow")
@@ -203,18 +205,24 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         """Instantiates a data parser object for the given subset type."""
         parser_config = self._resolved_dataparser_configs[subset_type]
         parser = parser_config.instantiate(*args, **extra_kwargs)
+        if not isinstance(parser, BaseDataParserType):
+            raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser)}")
         return parser
 
     def instantiate_dataloader(self, loader_type: LoaderNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
         """Instantiates a data loader object for the given loader type."""
         loader_config = self._resolved_dataloader_configs[loader_type]
         loader = loader_config.instantiate(*args, **extra_kwargs)
+        if not isinstance(loader, BaseDataLoaderType):
+            raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader)}")
         return loader
 
     def instantiate_datamodule(self, *args, **extra_kwargs) -> "BaseDataModule":
         """Instantiates a data module object based on the configured target class path."""
-        datamodule = self._resolved_datamodule_class(*args, config=self, **extra_kwargs)
-        return datamodule
+        dm = self._resolved_datamodule_class(*args, config=self, **extra_kwargs)
+        if not isinstance(dm, BaseDataModule):
+            raise TypeError(f"expected {BaseDataModule} (or subclass), got {type(dm)}")
+        return dm
 
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
@@ -293,6 +301,8 @@ class BaseDataModule(pl.LightningDataModule):
             config: configuration model of data module (parser/loader) settings.
         """
         super().__init__()
+        if not isinstance(config, BaseDataModuleConfig):
+            raise TypeError(f"invalid config type: {type(config)}, expected {BaseDataModuleConfig}")
         self.save_hyperparameters(config.model_dump())
         self.config = config
 
@@ -451,50 +461,135 @@ class BaseDataModule(pl.LightningDataModule):
         """
         raise NotImplementedError
 
-    def get_hf_dataset(
+
+class ConversationPromptConfig(pydantic.BaseModel):
+    """Helper class used to define the conversation prompt configuration parameters."""
+
+    # note: this should remain synced with the defaults provided by the prompt manager
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    prompt_name: str
+    """Name of the prompt used to prepare the conversation messages."""
+    version: str | None = None
+    """Version of the prompt to use."""
+    use_chat_template: bool = False
+    """Whether to use a chat-style template for the prompt."""
+    include_examples: bool = True
+    """Whether to include examples in the prompt."""
+    target_examples: int | list[int] | None = None
+    """Number or list of examples to include in the prompt; if `None`, all examples are included."""
+
+
+class ConversationDataModuleConfig(BaseDataModuleConfig):
+    """Specialized configuration class for conversation datamodule objects.
+
+    This class supplements the base class defaults with conversation-specific settings.
+    """
+
+    prompt_config: ConversationPromptConfig
+    """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
+
+    def get_prompt_template(
+        self,
+        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+    ) -> langchain_core.prompts.BasePromptTemplate:
+        """Returns the prompt template used for preparing training/evaluation conversations."""
+        prompt_kwargs = self.prompt_config.model_dump()
+        prompt_kwargs.update(kwargs)
+        return pyine.prompts.manager.get_prompt_template(**prompt_kwargs)
+
+    def get_prompt_chain(
+        self,
+        model: langchain_core.language_models.BaseLanguageModel,
+        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+    ) -> langchain_core.runnables.Runnable | None:  # noqa
+        """Returns the runnable prompt chain used to infer assistant messages in conversations."""
+        prompt_kwargs = self.prompt_config.model_dump()
+        prompt_kwargs.update(kwargs)
+        return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs)
+
+    def instantiate_datamodule(self, *args, **extra_kwargs) -> "ConversationDataModule":
+        """Instantiates a data module object based on the configured target class path."""
+        dm = super().instantiate_datamodule(*args, **extra_kwargs)
+        if not isinstance(dm, ConversationDataModule):
+            raise TypeError(f"expected {ConversationDataModule} (or subclass), got {type(dm)}")
+        return dm
+
+    @pydantic.model_validator(mode="after")
+    def _validate_and_resolve(self) -> "ConversationDataModuleConfig":
+        """Validates and resolves prompt config stuff as well as parent checks."""
+        super()._validate_and_resolve()
+        # check if we can instantiate a prompt template given the provided config
+        _resolved_template = self.get_prompt_template()
+        assert _resolved_template is not None
+        return self
+
+
+class ConversationDataModule(BaseDataModule):
+    """Data module base class for conversation-based data.
+
+    This specialized data module class is designed to work with data that can be structured as
+    lists of messages, i.e. conversations, between a user and an AI assistant.
+
+    See the parent class documentation for more details on the interface.
+    """
+
+    def __init__(
+        self,
+        config: ConversationDataModuleConfig,
+    ):
+        """Initializes the base interface using the expected configs of parsers/loaders.
+
+        Args:
+            config: configuration model of data module (parser/loader) settings.
+        """
+        if not isinstance(config, ConversationDataModuleConfig):
+            raise TypeError(f"invalid config type: {type(config)}, expected {ConversationDataModuleConfig}")
+        super().__init__(config)
+        self.config: ConversationDataModuleConfig = config
+
+    def get_sample_to_messages_transform(
+        self,
+        append_answer: bool = True,
+        use_hf_messages: bool = False,
+    ) -> typing.Callable[[typing.Any], typing.Any]:
+        """Returns the sample transform function used to prepare training/evaluation conversations.
+
+        This function exists for users that might not want to use dataloaders directly, and would
+        prefer using the data parsers while applying raw data transforms directly instead.
+
+        Note: if the datamodule does not support the conversion of raw data samples into
+        conversation messages, this function will raise an exception.
+        """
+        raise NotImplementedError
+
+    def get_hf_messages_dataset(
         self,
         subset_type: SubsetNameType,
         append_answer: bool = True,
     ) -> hf_datasets.Dataset:
-        """Returns a HuggingFace dataset object for a given subset type.
+        """Returns a HuggingFace messages dataset object for a given subset type.
 
-        This function exists for users that might not want to use dataloaders directly, and would prefer
-        using the data parsers for huggingface-based experiments.
+        This function exists for users that might not want to use raw data loaders directly, and
+        would prefer using already-prepared conversation data for huggingface-based experiments.
+
+        Note: if the datamodule does not support the conversion of raw data samples into
+        conversation messages, this function will raise an exception.
         """
         raise NotImplementedError
 
-    def get_openai_dataset(
+    def get_openai_messages_dataset(
         self,
         subset_type: SubsetNameType,
     ) -> pathlib.Path:
         """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
 
-        This function exists for users that might want to use the data in combination with the
-        OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
-        a JSONL file with one example per line. That dataset file can then be uploaded to the
-        OpenAI API to train a model.
-        """
-        raise NotImplementedError
+        This function exists for users that might not want to use raw data loaders directly, and
+        would prefer using already-prepared conversation data for OpenAI-API-based experiments. The
+        format of the datasets in this case is a JSONL file with one example per line. That dataset
+        is written to disk (ready to be uploaded to OpenAI) at the returned path.
 
-    def get_prompt_template(
-        self,
-        **kwargs,  # forwarded to prompt manager / constructor
-    ) -> langchain_core.prompts.BasePromptTemplate:
-        """Returns the prompt template used for preparing training/evaluation samples from data.
-
-        Note: if the datamodule does not expect a prompt template to be used in preparing data
-        samples, this function will raise an exception.
-        """
-        raise NotImplementedError
-
-    def get_prompt_chain(
-        self,
-        model: langchain_core.language_models.BaseLanguageModel,
-        **kwargs,  # forwarded to prompt manager / constructor
-    ) -> langchain_core.runnables.Runnable | None:  # noqa
-        """Returns the runnable prompt chain used to get inference results from a given model.
-
-        Note: if the datamodule does not expect a prompt chain to be used in getting inference
-        results, this function will raise an exception.
+        Note: if the datamodule does not support the conversion of raw data samples into
+        conversation messages, this function will raise an exception.
         """
         raise NotImplementedError

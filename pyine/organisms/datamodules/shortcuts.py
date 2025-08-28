@@ -3,8 +3,6 @@ import pathlib
 import typing
 
 import datasets as hf_datasets
-import langchain_core.language_models
-import langchain_core.prompts
 import msgspec
 import numpy as np
 import pydantic
@@ -37,12 +35,12 @@ ProblemIdType = str
 # @@@@ TODO: add prompt that builds description of problem+code with optional hinting inside
 
 
-class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
+class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     """DataModule wrapping one or multiple PyINE code trace datasets for shortcut-bias experiments.
 
     This module loads one or more LMDB trace datasets, optionally filters available traces
     using flexible rules, validates that there are no duplicate trace identifiers across
-    all selected samples, and finally creates simple random train/val/test splits and loaders.
+    all selected samples, and finally creates simple random train/valid/test splits and loaders.
 
     Filtering is performed prior to concatenation and splitting. When multiple datasets are
     provided, they are concatenated in the provided order.
@@ -198,7 +196,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
         self,
         stage: str | None = None,
     ) -> None:
-        """Loads the prepared metadata and creates train/val/test data readers.
+        """Loads the prepared metadata and creates train/valid/test data readers.
 
         Args:
             stage: Optional stage indicator provided by Lightning; not used here.
@@ -239,7 +237,19 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
             raise ValueError(f"parser for subset {subset_type} is not defined")
         return self._subset_parsers[subset_type]
 
-    def get_hf_dataset(
+    def get_sample_to_messages_transform(
+        self,
+        append_answer: bool = True,
+        use_hf_messages: bool = False,
+    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
+        """Returns the sample transform function used to prepare training/evaluation conversations."""
+        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
+            append_answer=append_answer,
+            use_hf_messages=use_hf_messages,
+            **self.config.prompt_config.model_dump(),
+        )
+
+    def get_hf_messages_dataset(
         self,
         subset_type: SubsetNameType | None = None,
         append_answer: bool = True,
@@ -263,23 +273,18 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
         else:
             named_split = hf_datasets.NamedSplit(name="all")
             subset_traces = self._metadata.base_traces
-        transf_fn = pyine.organisms.datamodules.utils.transforms.create_sample_transform(
-            use_chat_template=True,
-            append_answer=append_answer,
-            use_hf_messages=True,
-            **self.config.prompt_config,
-        )
-        return self.config.default_dataparser_config.get_hf_dataset(
+        transf_fn = self.get_sample_to_messages_transform(append_answer=append_answer, use_hf_messages=True)
+        return self.config.default_dataparser_config.get_hf_messages_dataset(
             named_split=named_split,
             raw_transform_fn=transf_fn,
             instantiate_kwargs=dict(
-                source_data=self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
+                source_data=self.config.lmdb_paths.copy(),  # defer instantiation to the generator due to pickling
                 traces=subset_traces,
             ),
             generator_kwargs=self.config.chat_generator_config,
         )
 
-    def get_openai_dataset(
+    def get_openai_messages_dataset(
         self,
         subset_type: SubsetNameType | None = None,
     ) -> pathlib.Path:
@@ -299,28 +304,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
         local_output_path = openai_local_data_dir / f"shortcuts.{subset_type_name}.{params_hash}.jsonl"
         if not local_output_path.is_file():
             # note: this impl relies on the huggingface getter (DRY)
-            hf_dataset = self.get_hf_dataset(subset_type=subset_type, append_answer=True)
+            hf_dataset = self.get_hf_messages_dataset(subset_type=subset_type, append_answer=True)
             pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
-
-    def get_prompt_template(
-        self,
-        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
-    ) -> langchain_core.prompts.BasePromptTemplate:
-        """Returns the prompt template used for preparing training/evaluation samples from data."""
-        prompt_kwargs = self.config.prompt_config.copy()
-        prompt_kwargs.update(kwargs)
-        return pyine.prompts.manager.get_prompt_template(**prompt_kwargs)
-
-    def get_prompt_chain(
-        self,
-        model: langchain_core.language_models.BaseLanguageModel,
-        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
-    ) -> langchain_core.runnables.Runnable | None:  # noqa
-        """Returns the runnable prompt chain used to get inference results from a given model."""
-        prompt_kwargs = self.config.prompt_config.copy()
-        prompt_kwargs.update(kwargs)
-        return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs)
 
     def _make_dataloader(
         self,
@@ -355,7 +341,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.BaseDataModule):
         self._readers: list[dataset_reader.DatasetReader] = []
 
 
-class ShortcutBiasDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
+class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleConfig):
     """Configuration class for the `ShortcutBiasDataModule`.
 
     Note: we override the base data module config class to add additional fields.
@@ -446,10 +432,12 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
-    prompt_config: dict[str, typing.Any] = dict(
+    prompt_config: pyine.data.datamodule.ConversationPromptConfig = pyine.data.datamodule.ConversationPromptConfig(
         prompt_name="code_execution",
         # version="TODO", @@@@
+        use_chat_template=True,
         include_examples=True,
+        target_examples=None,  # all
     )
     """Configuration for the prompt used to when transforming raw sample data to chat model requests."""
 
