@@ -36,3 +36,12 @@ def has_hf_access_token():
 
 
 HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
+
+
+def has_openai_api_key():
+    """Return True if an OpenAI API key is available."""
+    key = os.environ.get("OPENAI_API_KEY", None)
+    return key is not None and len(key) > 0
+
+
+OPENAI_API_KEY_MISSING = not has_openai_api_key()
