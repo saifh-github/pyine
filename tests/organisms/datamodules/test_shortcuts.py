@@ -100,7 +100,7 @@ def test_shortcuts_datamodule_integration():
     assert isinstance(hf_batch_dataset, hf_datasets.Dataset)
     assert len(hf_batch_dataset) == len(parser)  # noqa
     print("hf dataset batching and tokenization works")
-    openai_dataset_path = dm.get_openai_dataset("train")
+    openai_dataset_path = dm.get_openai_messages_dataset("train")
     assert openai_dataset_path.exists() and openai_dataset_path.is_file()
     print("open dataset writing works")
     dm.teardown()
