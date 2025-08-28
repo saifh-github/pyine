@@ -38,11 +38,15 @@ def write_dataset_to_jsonl(dataset: typing.Iterable[dict | list], path: pathlib.
     "messages" key that contains a list of messages.
     """
     with open(path, "w", encoding="utf-8") as fd:
-        for ex in dataset:
-            if isinstance(ex, dict):
-                assert list(ex.keys()) == ["messages"] and isinstance(ex["messages"], list)
-                ex = ex["messages"]
-            fd.write(orjson.dumps(ex).decode("utf-8") + "\n")
+        for sample in dataset:
+            if isinstance(sample, dict):
+                assert "messages" in sample
+                msgs = sample["messages"]
+            else:
+                msgs = sample
+            assert isinstance(msgs, list)
+            assert all([isinstance(m, dict) for m in msgs])
+            fd.write(orjson.dumps(msgs).decode("utf-8") + "\n")
     dataset_size = pyine.utils.filesystem.get_human_readable_size(path.stat().st_size)
     logger.debug(f"wrote {dataset_size} dataset to {path}")
 
