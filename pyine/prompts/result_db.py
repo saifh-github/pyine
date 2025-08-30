@@ -1,15 +1,24 @@
+import dataclasses
 import datetime
-import json
+import functools
 import pathlib
 import sqlite3
 import threading
 import typing
 
 import backoff
+import orjson
 import pydantic
 
 import pyine.data.utils.filter_rules
 import pyine.utils.filesystem
+import pyine.utils.reprod
+
+if typing.TYPE_CHECKING:
+    import langchain_core.language_models  # type: ignore
+
+
+T = typing.TypeVar("T")
 
 
 class CreationMeta(pydantic.BaseModel):
@@ -21,9 +30,13 @@ class CreationMeta(pydantic.BaseModel):
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
     """UTC Timestamp of record creation."""
-    user: str | None = None
+    user: str = pydantic.Field(
+        default_factory=lambda: pyine.utils.filesystem.get_username(),
+    )
     """Username or email of the user who created the record."""
-    platform: str | None = None
+    platform: str = pydantic.Field(
+        default_factory=lambda: pyine.utils.reprod.get_platform_name(),
+    )
     """Platform or service name where the record was created."""
     provider: str | None = None
     """Platform or service that generated the result."""
@@ -133,11 +146,11 @@ class PromptResultDB:
                             prompt_name,
                             prompt_version,
                             created_at,
-                            json.dumps(creation_meta.model_dump(mode="json")),
+                            orjson.dumps(creation_meta.model_dump(mode="json")),
                             prompt,
                             result,
-                            json.dumps(meta) if meta is not None else None,
-                            json.dumps(tags) if tags is not None else None,
+                            orjson.dumps(meta) if meta is not None else None,
+                            orjson.dumps(tags) if tags is not None else None,
                         ),
                     )
                     conn.commit()
@@ -157,6 +170,7 @@ class PromptResultDB:
         prompt_name: str | None = None,
         prompt_version: str | None = None,
         tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
         """Fetch entries matching the given identifier with optional filtering.
 
@@ -166,18 +180,13 @@ class PromptResultDB:
             prompt_version: Optional prompt version to filter by (requires prompt_name).
             tag_filter_rule: Optional rule string for filtering by tags. See the
                 `pyine.data.utils.filter_rules` module for more details.
+            max_result_age: Optional maximum age of results to return.
 
         Returns:
             List of matching PromptResultRecord objects, ordered by creation time.
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
-        tag_filter_fn = None
-        if tag_filter_rule:
-            tag_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
-                rule=tag_filter_rule,
-                case_sensitive=True,
-            )
         sql = [
             "SELECT * FROM items WHERE identifier = ?",
         ]
@@ -189,15 +198,7 @@ class PromptResultDB:
             sql.append("AND prompt_version = ?")
             params.append(prompt_version)
         sql.append("ORDER BY created_at ASC, id ASC")
-        conn = self._connect(row_factory=True)
-        try:
-            rows = conn.execute(" ".join(sql), params).fetchall()
-            records = [self._row_to_record(r) for r in rows]
-            if tag_filter_fn is not None:
-                return [rec for rec in records if not tag_filter_fn(rec.tags or [])]
-            return records
-        finally:
-            conn.close()
+        return self._get_records(sql, params, tag_filter_rule, max_result_age)
 
     def get_by_group(
         self,
@@ -206,6 +207,7 @@ class PromptResultDB:
         prompt_name: str | None = None,
         prompt_version: str | None = None,
         tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
         """Fetch all records belonging to the specified group.
 
@@ -215,18 +217,13 @@ class PromptResultDB:
             prompt_version: Optional prompt version to filter by (requires prompt_name).
             tag_filter_rule: Optional rule string for filtering by tags. See the
                 `pyine.data.utils.filter_rules` module for more details.
+            max_result_age: Optional maximum age of results to return.
 
         Returns:
             List of matching PromptResultRecord objects, ordered by identifier and creation time.
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
-        tag_filter_fn = None
-        if tag_filter_rule:
-            tag_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
-                rule=tag_filter_rule,
-                case_sensitive=True,
-            )
         sql = [
             'SELECT * FROM items WHERE "group" = ?',
         ]
@@ -238,15 +235,7 @@ class PromptResultDB:
             sql.append("AND prompt_version = ?")
             params.append(prompt_version)
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
-        conn = self._connect(row_factory=True)
-        try:
-            rows = conn.execute(" ".join(sql), params).fetchall()
-            records = [self._row_to_record(r) for r in rows]
-            if tag_filter_fn is not None:
-                return [rec for rec in records if not tag_filter_fn(rec.tags or [])]
-            return records
-        finally:
-            conn.close()
+        return self._get_records(sql, params, tag_filter_rule, max_result_age)
 
     def list_groups(self) -> list[str]:
         """List all unique group names present in the database.
@@ -321,6 +310,31 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    def _get_records(
+        self,
+        sql: list[str],
+        params: list[typing.Any],
+        tag_filter_rule: str | None,
+        max_result_age: datetime.timedelta | None,
+    ) -> list[PromptResultRecord]:
+        """Fetch records from the database using the provided SQL queries and params."""
+        conn = self._connect(row_factory=True)
+        try:
+            rows = conn.execute(" ".join(sql), params).fetchall()
+            records = [self._row_to_record(r) for r in rows]
+        finally:
+            conn.close()
+        if tag_filter_rule is not None:
+            tag_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
+                rule=tag_filter_rule,
+                case_sensitive=True,
+            )
+            records = [rec for rec in records if not tag_filter_fn(rec.tags or [])]
+        if max_result_age is not None:
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            records = [rec for rec in records if rec.creation_meta.created_at >= cutoff]
+        return records
+
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> PromptResultRecord:
         """Convert a sqlite3.Row to a PromptResultRecord."""
@@ -330,7 +344,7 @@ class PromptResultDB:
         tags_raw = row["tags"]
         cmeta_raw = row["creation_meta"]
         cmeta_dict = (
-            json.loads(cmeta_raw)
+            orjson.loads(cmeta_raw)
             if cmeta_raw
             else {"created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         )
@@ -344,8 +358,8 @@ class PromptResultDB:
             creation_meta=CreationMeta(**cmeta_dict),
             prompt=row["prompt"],
             result=row["result"],
-            meta=json.loads(meta_raw) if meta_raw else dict(),
-            tags=json.loads(tags_raw) if tags_raw else list(),
+            meta=orjson.loads(meta_raw) if meta_raw else dict(),
+            tags=orjson.loads(tags_raw) if tags_raw else list(),
         )
 
 
@@ -365,3 +379,209 @@ def get_framework_db_path() -> pathlib.Path:
     """Get the default path for the SQLite database."""
     data_root = pyine.utils.filesystem.get_data_root_path()
     return data_root / "prompt_results.sqlite"
+
+
+def fetch_or_generate_prompt_results(
+    model: "langchain_core.language_models.BaseLanguageModel",
+    identifier: str,
+    input_variables: dict[str, typing.Any],
+    *,
+    prompt_kwargs: dict[str, typing.Any],
+    db: PromptResultDB | None = None,
+    max_result_age: datetime.timedelta | None = None,
+    tag_filter_rule: str | None = None,
+    deduplicate_results: bool = True,
+    generate_until_result_count: int | None = None,
+    log_new_results: bool = True,
+    force_generation: bool = False,
+    creation_meta: CreationMeta | None = None,
+    group: str | None = None,
+    tags: list[str] | None = None,
+    meta: dict[str, typing.Any] | None = None,
+) -> list[PromptResultRecord]:
+    """Fetch existing prompt results for an identifier or generate and (optionally) log new ones.
+
+    This utility looks up previously recorded prompt results in the framework's default
+    PromptResultDB for the provided identifier and prompt spec. If matches are found, it returns
+    them (optionally filtered by age). If not enough matches are found and
+    ``invoke_if_insufficient`` is True, it will build a runnable chain using
+    ``pyine.prompts.manager.get_prompt_chain(model, **prompt_kwargs)`` and invoke it with the
+    provided ``input_variables`` to generate additional results, which can also be stored in the
+    database when ``log_new`` is True.
+
+    Args:
+        model: A LangChain BaseLanguageModel instance.
+        identifier: Identifier to match previously generated results.
+        input_variables: Mapping of input variable names to values for rendering/invoking the prompt.
+        prompt_kwargs: Keyword arguments that specify the prompt to use. Must include
+            ``prompt_name``; may include ``version``, ``runnable_name``, ``use_chat_template``,
+            ``include_examples``, and ``target_examples``. Any of
+            ``role_variables``, ``context_variables``, and ``examples_block_variables`` will be used
+            only for rendering the prompt string to store alongside results.
+        db: Optional DB instance; if omitted, uses the framework default DB.
+        max_result_age: If provided, ignore preexisting results older than this age (relative to now).
+        tag_filter_rule: Optional tag filter rule applied to preexisting DB records.
+        deduplicate_results: If True, deduplicate results (based on result string) before returning.
+        generate_until_result_count: If provided, prompt results will be generated until the specified
+            minimum number of results is logged in the database.
+        log_new_results: Whether to log newly generated results into the DB.
+        force_generation: If True, always generate new results, even with enough preexisting results.
+        creation_meta: Optional metadata to attach to stored records; default is auto-generated.
+        group: Optional group name to store alongside new records.
+        tags: Optional list of tags to store alongside new records.
+        meta: Optional metadata dict for the DB ``meta`` column when logging new results.
+
+    Returns:
+        A list of PromptResultRecord objects (newly created and/or preexisting in the database).
+    """
+    db = db or get_framework_db()
+    prompt_name = typing.cast(str | None, prompt_kwargs.get("prompt_name"))
+    if not prompt_name:
+        raise ValueError("prompt_kwargs must include 'prompt_name'")
+    prompt_version = typing.cast(str | None, prompt_kwargs.get("version"))
+    existing_records = (
+        []
+        if force_generation
+        else db.get_by_identifier(
+            identifier,
+            prompt_name=prompt_name,
+            prompt_version=prompt_version,
+            tag_filter_rule=tag_filter_rule,
+            max_result_age=max_result_age,
+        )
+    )
+
+    def _dedupe_records(records: list[PromptResultRecord]) -> list[PromptResultRecord]:
+        if not deduplicate_results:
+            return records
+        seen: set[str] = set()
+        uniq: list[PromptResultRecord] = []
+        for rec in records:
+            if rec.result not in seen:
+                seen.add(rec.result)
+                uniq.append(rec)
+        return uniq
+
+    existing_records = _dedupe_records(existing_records)
+    if force_generation or len(existing_records) == 0:
+        need_to_generate = generate_until_result_count or 1
+    else:
+        need_to_generate = max(0, (generate_until_result_count or 1) - len(existing_records))
+    new_records: list[PromptResultRecord] = []
+    if need_to_generate > 0:
+        # lazy import to avoid heavy deps at module import time
+        import pyine.prompts.manager as prompt_manager
+
+        prompt_template = prompt_manager.get_prompt_template(**prompt_kwargs)
+        chain = prompt_manager.get_prompt_chain(model=model, **prompt_kwargs)
+        while len(new_records) < need_to_generate:
+            output = chain.invoke(input_variables)
+            if isinstance(output, str):
+                result_str = output
+            elif hasattr(output, "model_dump_json") and callable(output.model_dump_json):
+                result_str = output.model_dump_json()
+            elif isinstance(output, (dict, list)):
+                result_str = orjson.dumps(output)
+            else:
+                result_str = str(output)
+            cm = creation_meta or CreationMeta()
+            prompt_str = prompt_template.format(**input_variables)
+            if log_new_results:
+                db.store(
+                    identifier=identifier,
+                    prompt=prompt_str,
+                    result=result_str,
+                    meta=meta,
+                    tags=tags,
+                    group=group,
+                    prompt_name=prompt_name,
+                    prompt_version=prompt_version,
+                    creation_meta=cm,
+                )
+            new_records.append(
+                PromptResultRecord(
+                    identifier=identifier,
+                    prompt_name=prompt_name,
+                    prompt_version=prompt_version,
+                    group=group,
+                    creation_meta=cm,
+                    prompt=prompt_str,
+                    result=result_str,
+                    meta=meta or {},
+                    tags=tags or [],
+                )
+            )
+    combined_records = existing_records + new_records
+    return combined_records
+
+
+@dataclasses.dataclass(frozen=True)
+class TypedPromptResult(typing.Generic[T]):
+    """A typed wrapper containing a DB record and its decoded result."""
+
+    record: PromptResultRecord
+    result: T
+
+
+class TypedPromptResultFetcher(typing.Generic[T]):
+    """Wraps fetch_or_generate_prompt_results and decodes string results into a target type.
+
+    Provide either:
+      - result_type: a class/type that the string should be decoded into (supports pydantic BaseModel,
+        dataclasses, dict/list/tuple/set, or any class with a `.from_json(str)`), or
+      - decoder: a callable that maps the stored string into the target type.
+
+    If neither is provided, results are returned as raw strings (typed as Any).
+    """
+
+    def __init__(
+        self,
+        result_type: type[T] | None = None,
+        decoder: typing.Callable[[str], T] | None = None,
+    ) -> None:
+        self._type: type[T] | None = result_type
+        self._decoder: typing.Callable[[str], T] | None = decoder
+
+    def _decode(self, text: str) -> T:
+        if self._decoder is not None:
+            return self._decoder(text)
+        if self._type is None:
+            return typing.cast(typing.Any, text)
+        if self._type is str:
+            return typing.cast(T, text)
+        if isinstance(self._type, type) and issubclass(self._type, pydantic.BaseModel):
+            return typing.cast(T, self._type.model_validate_json(text))
+        if isinstance(self._type, type) and dataclasses.is_dataclass(self._type):
+            data = orjson.loads(text)
+            assert isinstance(data, dict)
+            return typing.cast(T, self._type(**data))  # noqa
+        if self._type in (dict, list, tuple, set):
+            data = orjson.loads(text)
+            if self._type is set:
+                return typing.cast(T, set(data))
+            if self._type is tuple:
+                return typing.cast(T, tuple(data))
+            return typing.cast(T, data)
+        if (
+            isinstance(self._type, type)
+            and hasattr(self._type, "from_json")
+            and callable(getattr(self._type, "from_json"))
+        ):
+            return typing.cast(T, self._type.from_json(text))
+        # ultimate fallback: just load via json as-is
+        data = orjson.loads(text)
+        if isinstance(data, self._type):
+            return typing.cast(T, data)
+        raise ValueError(
+            f"Could not decode result string into the requested type: {getattr(self._type, '__name__', self._type)}"
+        )
+
+    def decode_record(self, record: PromptResultRecord) -> TypedPromptResult[T]:
+        """Decode a single PromptResultRecord into a typed result."""
+        return TypedPromptResult(record=record, result=self._decode(record.result))
+
+    @functools.wraps(fetch_or_generate_prompt_results)
+    def fetch_or_generate(self, *args, **kwargs) -> list[TypedPromptResult[T]]:
+        """Fetch/generate records then decode each into the target type."""
+        records = fetch_or_generate_prompt_results(*args, **kwargs)
+        return [self.decode_record(r) for r in records]
