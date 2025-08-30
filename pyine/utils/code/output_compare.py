@@ -15,14 +15,22 @@ import math
 import re
 import typing
 
+import langchain_core.language_models
 import pydantic
 
 import pyine.utils.portability
+from pyine.prompts.configs.pred_grader import (
+    GradingResult,
+    GradingResultWithReasoning,
+)
 
 __all__ = [
     "CompareOptions",
     "CompareResult",
+    "GradingResult",
+    "GradingResultWithReasoning",
     "compare",
+    "compare_exec_output_with_llm",
 ]
 
 Number = typing.Union[int, float]
@@ -412,3 +420,52 @@ def _fail(reason: str) -> CompareResult:
 def _fail_path(path: str, reason: str) -> CompareResult:
     """Helper to return a non-equal result with a path."""
     return CompareResult(False, reason, path or "")
+
+
+def compare_exec_output_with_llm(
+    predicted: typing.Any,
+    expected: typing.Any,
+    execution_type: str,
+    llm: langchain_core.language_models.BaseLanguageModel,
+    with_reasoning: bool = False,
+    runnable_name: str | None = None,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+) -> GradingResult | GradingResultWithReasoning:
+    """Compare two execution outputs (one predicted, one expected) using an LLM grader.
+
+    Args:
+        predicted: The predicted execution output to compare.
+        expected: The expected execution output to compare against.
+        llm: The language model to use inside the runnable prompt chain.
+        with_reasoning: Whether to ask the LLM to provide a reasoning for the comparison.
+        runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
+        include_examples: Whether to include few-shot examples in the template.
+        target_examples: List of examples to target when rendering the prompt. Can pass in
+            a list of example indices, or an integer that specifies the number of samples to
+            pick randomly. If `None` is provided instead, all examples are included.
+        # TODO: @@@@@ add optional prompt results db to bypass invocation if possible, or log new version?
+
+    Returns:
+        Grading outcome with score and optional reasoning.
+    """
+    import pyine.prompts.manager
+
+    prompt_name = "pred_grader"
+    prompt_version = "score_only" if not with_reasoning else "with_reasoning"
+    chain = pyine.prompts.manager.get_prompt_chain(
+        model=llm,
+        prompt_name=prompt_name,
+        version=prompt_version,
+        runnable_name=runnable_name,
+        include_examples=include_examples,
+        target_examples=target_examples,
+    )
+    result = chain.invoke(
+        dict(
+            expected_output=expected,
+            predicted_output=predicted,
+            execution_type=execution_type,
+        )
+    )
+    return result

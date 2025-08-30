@@ -6,6 +6,7 @@ import pytest
 import pyine.prompts.configs.pred_grader as pred_grader
 import pyine.prompts.manager
 import pyine.prompts.utils
+import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
 from tests.data.utils.env_checks import OPENAI_API_KEY_MISSING
 
@@ -19,7 +20,7 @@ def test_get_score_only_config_and_template():
     ex = config.examples[0]
     assert isinstance(ex, pyine.prompts.utils.PromptExample)
     assert ex.input_variables["execution_type"] in {"program output", "frame variables", "function return"}
-    assert isinstance(ex.output, pred_grader.GradingResults)
+    assert isinstance(ex.output, pred_grader.GradingResult)
     assert 0.0 <= ex.output.score <= 1.0
     template = pred_grader.get_prompt_template(prompt_version, include_examples=False)
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
@@ -43,7 +44,7 @@ def test_get_with_reasoning_config_and_template():
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "pred_grader"
     ex = config.examples[0]
-    assert isinstance(ex.output, pred_grader.GradingResultsWithReasoning)
+    assert isinstance(ex.output, pred_grader.GradingResultWithReasoning)
     assert 0.0 <= ex.output.score <= 1.0
     assert ex.output.reasoning is None or isinstance(ex.output.reasoning, str)
     template = pred_grader.get_prompt_template(prompt_version, include_examples=False)
@@ -67,11 +68,11 @@ def test_get_chain_attaches_parser(mocker):
     score_only_chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader")
     assert isinstance(score_only_chain, langchain_core.runnables.RunnableSequence)
     assert isinstance(score_only_chain.last, langchain_core.output_parsers.PydanticOutputParser)
-    assert score_only_chain.last.pydantic_object == pred_grader.GradingResults
+    assert score_only_chain.last.pydantic_object == pred_grader.GradingResult
     with_reasoning_chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader", "with_reasoning")
     assert isinstance(with_reasoning_chain, langchain_core.runnables.RunnableSequence)
     assert isinstance(with_reasoning_chain.last, langchain_core.output_parsers.PydanticOutputParser)
-    assert with_reasoning_chain.last.pydantic_object == pred_grader.GradingResultsWithReasoning
+    assert with_reasoning_chain.last.pydantic_object == pred_grader.GradingResultWithReasoning
 
 
 @pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
@@ -80,14 +81,12 @@ def test_pred_grader_infer_score_only():
         provider="openai",
         model="gpt-4o-mini",
     )
-    prompt_version = "score_only"
-    chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader", prompt_version)
-    result = chain.invoke(
-        dict(
-            execution_type="program output",
-            expected_output="Hello, Bob",
-            predicted_output="Hello Bob",
-        )
+    result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
+        predicted="Hello Bob",
+        expected="Hello, Bob",
+        execution_type="program output",
+        llm=model,
+        with_reasoning=False,
     )
     assert hasattr(result, "score")
     assert isinstance(result.score, float)
@@ -100,14 +99,12 @@ def test_pred_grader_infer_with_reasoning():
         provider="openai",
         model="gpt-4o-mini",
     )
-    prompt_version = "with_reasoning"
-    chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader", prompt_version)
-    result = chain.invoke(
-        dict(
-            execution_type="function return",
-            expected_output="{'a': 1, 'b': 2}",
-            predicted_output="{'b': 2, 'a': 1}",
-        )
+    result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
+        predicted="Hello Bob",
+        expected="Hello, Bob",
+        execution_type="program output",
+        llm=model,
+        with_reasoning=True,
     )
     assert hasattr(result, "score")
     assert 0.0 <= float(result.score) <= 1.0

@@ -9,7 +9,7 @@ import pyine.prompts.utils
 import pyine.utils.pydantic
 
 
-class GradingResults(pydantic.BaseModel):
+class GradingResult(pydantic.BaseModel):
     """Structured grading results schema containing only a score."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
@@ -20,7 +20,7 @@ class GradingResults(pydantic.BaseModel):
     )
 
 
-class GradingResultsWithReasoning(GradingResults):
+class GradingResultWithReasoning(GradingResult):
     """Structured grading results schema with optional reasoning supporting the score."""
 
     reasoning: str | None = pydantic.Field(
@@ -32,9 +32,9 @@ class GradingResultsWithReasoning(GradingResults):
 def get_output_parser(version: str | None = None) -> langchain_core.output_parsers.BaseOutputParser | None:  # noqa
     """Return the output parser for the pred_grader prompt based on version."""
     if version == "score_only" or version is None:
-        model = GradingResults
+        model = GradingResult
     elif version == "with_reasoning":
-        model = GradingResultsWithReasoning
+        model = GradingResultWithReasoning
     else:
         raise NotImplementedError(f"Unsupported version: {version}")
     return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=model)
