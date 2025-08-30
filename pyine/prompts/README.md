@@ -1,53 +1,65 @@
-# PyINE Prompt Framework
+# `pyine.prompts` — Prompting tools
 
-@@@@@ TODO: update this readme w/ latest changes, and to document the prompt result database
+This package provides a small, test-backed toolkit to author, version, load, render, and run LLM prompts.
+It is centered around simple YAML templates and a few helper functions. Keep reading for the fastest way to use it.
 
-### High-level overview
+Focus: only prompting. Everything below relates to prompt templates, their Python helpers, and an optional results log.
 
-- The `pyine.prompts` package provides a small, test-backed framework to author, version, load,
-  and render LLM prompts from YAML configuration files.
-- The YAML files live under `pyine/prompts/templates` and define one or more versions of a prompt.
-  Each version defines four basic blocks for each prompt, namely **role**, **context**, **examples**, and
-  **question**:
-  - The **role** block provides the initial instructions provided to the LLM that should describe
-    its role/specialty, as a kind of "early context" that should be mostly task-independent.
-  - The **context** block provides task-specific instructions that describe what is needed of the LLM.
-  - The **examples** block provides in-context examples that the LLM should use as inspiration or
-    guidance for answering questions; these can be structured individually and under a group template.
-  - The **question** block provides the actual question that the LLM should answer.
-- Python "config" modules live under `pyine/prompts/configs` and can optionally:
-  - Define structured output models (Pydantic);
-  - Compute dynamic partial variables to inject into the template (e.g., output format instructions); and
-  - Expose convenience helpers (e.g. `get_prompt_config` and `get_prompt_template`).
-- A centralized `PromptManager` loads YAML files, resolves Pydantic tags, caches prompt configs,
-  lists available prompts and versions, and constructs LangChain `PromptTemplate` objects.
+## What you get
 
-### Key benefits
+- Versioned YAML prompts under `pyine/prompts/templates`;
+- Simple helpers to list prompts, load a prompt config, render a prompt, or build a Runnable chain;
+- Optional SQLite-backed prompt results database for caching/analysis of generations.
 
-- **Versioned prompts with defaults.** A single YAML can host many prompt versions; a `__default__`
-  key selects the default version that is loaded by the manager. If no default is specified, the last
-  version defined in the file is taken as the default.
-- **Strongly typed examples and outputs.** YAML files can embed tagged Pydantic objects, which
-  are automatically registered and instantiated when the files are loaded; your prompt unit tests
-  can then directly validate round-tripping and schema correctness.
-- **Render-time flexibility.** You can mix f-string and jinja2 templates to configure templates and
-  make them parameter-dependent; you can also choose zero, some, or all examples to be inserted in
-  prompts at render time; finally, you can pass extra variables to blocks as needed.
-- **Structured output guidance.** Pair prompts with Pydantic models and LangChain’s
-  `PydanticOutputParser` to consistently steer model outputs.
-- **Simple discovery.** `list_prompts` and `list_prompt_versions` allow simple scripts and notebooks
-  to discover all available prompts and their variants.
+## Quick start
 
-### Architecture and main concepts
+- Listing available prompts and using one of them:
 
-#### Versioned YAML templates (`pyine/prompts/templates`)
+```python
+from pyine.prompts import list_prompts, get_prompt_template
 
-Each file contains a named prompt with one or more versions. Some prompts are grouped in
-subdirectories based what prompt family they belong to (e.g., the `hints/tests.yaml` prompt config is
-under the same `hints` family as the `hints/docs.yaml`, as both address the task of injecting hints in
-code).
+print(list_prompts())
+# e.g. ["callable_analysis", "code_analysis", "code_execution", "code_summary", "hints/stubs", ...]
+pt = get_prompt_template("code_analysis")  # default version unless specified
+text = pt.format(code='print("Hello")')  # provide input arguments for the prompt here
+print(text)
+```
 
-**High-level YAML schema per version:**
+- Building a runnable chain for a given language model:
+
+```python
+from pyine.prompts import get_prompt_chain
+
+# model = ...  # any langchain_core.language_models.BaseLanguageModel
+chain = get_prompt_chain(model, "code_analysis")
+result = chain.invoke({"code": 'name = input("Enter name: ")\nprint("Hello, " + name)'})
+# if the prompt module provides an output parser, the above result is a structured object
+```
+
+- Controlling examples and chat/text format:
+
+```python
+from pyine.prompts import get_prompt_template
+
+# get a plain template containing no example
+pt = get_prompt_template("code_analysis", include_examples=False)
+# get a template containing one random example (instead of all, by default)
+pt = get_prompt_template("code_analysis", include_examples=True, target_examples=1)
+# get a ChatPromptTemplate instead of a text template
+chat_pt = get_prompt_template("code_analysis", use_chat_template=True)
+```
+
+- Loading a prompt config (includes metadata, fillable meta-templates, and examples):
+
+```python
+from pyine.prompts import get_prompt_config, list_prompt_versions
+
+cfg = get_prompt_config("code_analysis")
+print(cfg.metadata.name, cfg.metadata.version)
+print(list_prompt_versions("code_analysis"))  # ["v1.0", ...]
+```
+
+## YAML template anatomy (per version)
 
 ```yaml
 v1.0-universal:  # arbitrary name that identifies the VERSION of the prompt
@@ -139,17 +151,7 @@ __default__: "v1.0-universal"  # optional, prompt version to use by default when
 - Template formatting supports both f-string and jinja2. Prefer f-string for safety; use jinja2 only
   when you control input.
 
-#### Prompt config model and manager (`pyine/prompts/utils.py` and `pyine/prompts/manager.py`)
-
-The `PromptConfig` class wires the four prompt blocks, manages examples, and constructs LangChain
-`PromptTemplate` objects on demand. Important APIs include:
-
-- `PromptConfig.create_prompt_template`: creates a LangChain `PromptTemplate` object from the
-  role/context/examples/question blocks. Can optionally return a chat template as well.
-- `PromptConfig.render_prompt`: renders a complete prompt with the provided variables.
-- `PromptConfig.get_examples_as_text`: renders the examples block with the provided variables.
-- `VersionedPromptConfig.from_yaml`: parses a YAML file into a version-to-prompt-config map, and
-  resolves the default prompt version to be used.
+## Prompt manager (`pyine/prompts/manager.py`)
 
 The `PromptManager` is a singleton that loads YAML files, resolves Pydantic tags, caches prompt
 configs, lists available prompts and versions, and constructs LangChain `PromptTemplate` objects.
@@ -162,33 +164,41 @@ Important APIs include:
 - `PromptManager.list_prompts`: lists all available prompts.
 - `PromptManager.list_prompt_versions`: lists all available versions for a prompt.
 
-### Basic usage
+## Prompt result database (`pyine/prompts/result_db.py`)
 
-Listing available prompts and fetching/rendering a prompt template:
-
-```python
-import pyine.prompts.manager
-
-available = pyine.prompts.manager.list_prompts()
-# e.g. ["callable_analysis", "code_analysis", "code_execution", "hints/stubs", "hints/tests", ...]
-
-prompt_config = pyine.prompts.manager.get_prompt_config("code_analysis")  # returns default if version unspecified
-print(f"prompt metadata: {prompt_config.metadata}")
-prompt_template = pyine.prompts.manager.get_prompt_template("code_analysis")
-rendered = prompt_template.format(code='print("hi")')
-print(f"example rendered prompt:\n\n{rendered}")
-```
-
-Rendering a prompt with examples disabled, or with specific examples:
+The `PromptResultDB` class implements a database interface that relies on SQLite to fetch previous
+generations or log new ones. Example usage via fire-and-forget helper that fetches existing results
+or generates new ones:
 
 ```python
-import pyine.prompts.manager
+from datetime import timedelta
+from pyine.prompts.result_db import fetch_or_generate_prompt_results
 
-prompt_template = pyine.prompts.manager.get_prompt_template("code_analysis", include_examples=False)
-# or: include_examples=True, target_examples=[0, 2] or target_examples=1 (random 1 example)
+records = fetch_or_generate_prompt_results(
+    model=my_llm,
+    identifier="dataset-item-42",
+    input_variables={"code": "print('hi')"},
+    prompt_kwargs={
+        "prompt_name": "code_summary",
+        # optional: "version", "use_chat_template", "include_examples", "target_examples"
+    },
+    max_result_age=timedelta(days=7),
+)
+for r in records:
+    print(r.result)  # str (raw text) or JSON string when the chain returns a model/dict
 ```
 
-### Creating a new prompt
+You can also work directly with the database:
+
+```python
+from pyine.prompts.result_db import PromptResultDB
+
+db = PromptResultDB()  # defaults to a framework path
+v = db.store(identifier="id1", prompt="...", result="...", tags=["ok"], group="g1")
+records = db.get_by_identifier("id1")
+```
+
+## Creating a new prompt
 
 1. Add a YAML template file under `pyine/prompts/templates`:
    - Choose a file path; this path (minus `.yaml`) becomes the prompt name, for example:
