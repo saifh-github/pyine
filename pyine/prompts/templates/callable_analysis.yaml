@@ -47,7 +47,7 @@ v1.0:
       Expected output:
       {{output.model_dump_json() + "\n"}}
     format: jinja2
-  example_block_template:  # unspecified = keep default
+  examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"
   examples:
     - input_variables:

@@ -177,8 +177,10 @@ class PromptConfig(pydantic.BaseModel):
                 EXAMPLE_OUTPUT_KEY in prompt_template.input_variables
             ), f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
             example_vars = example.input_variables.copy()
-            assert EXAMPLE_OUTPUT_KEY not in example_vars, "overlap between input/output variable names"
-            example_vars[EXAMPLE_OUTPUT_KEY] = example.output
+            if EXAMPLE_OUTPUT_KEY in example_vars:
+                assert example_vars[EXAMPLE_OUTPUT_KEY] == example.output, "unexpected output value in example"
+            else:
+                example_vars[EXAMPLE_OUTPUT_KEY] = example.output
             # add any variables that might be in the example object directly (but not in its input vars attribute)
             example_vars.update(
                 {k: v for k, v in example.model_dump().items() if k not in [*example_vars, "input_variables"]}

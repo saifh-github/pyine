@@ -628,6 +628,8 @@ async def _generate_augmented_code_to_trace(
         # helper function that avoids code duplication for doc-hints and test-hints augments
         if llm is None:
             raise ValueError("runnable augmentation requires an LLM to be provided/configured")
+        # TODO @@@@@@ add wrapper function to check prompt results db before invoking
+        #      might need to create CodeToTrace results immediately if using db entries
         llm_chain = pyine.prompts.manager.get_prompt_chain(llm, prompt_template_name)
         for test_tuple in test_tuples:
             for augment_idx in range(augment_count):

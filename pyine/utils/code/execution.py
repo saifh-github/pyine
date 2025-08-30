@@ -267,6 +267,8 @@ class TraceResult(pydantic.BaseModel):
     and values are lists of indices pointing to `TraceEvent` objects in the above `traced_steps`
     list.
     """
+    entrypoint_name: str | None
+    """The name of the entrypoint function that was executed, if any."""
     entrypoint_step_idx: int | None
     """The trace step index just prior to calling the entrypoint function (if one is called)."""
     return_value: typing.Any | None
@@ -691,15 +693,15 @@ def _unsafe_execute_and_trace_code(
         # otherwise, if it's not a timeout/dontcatch/sysexit, store the exception as part of the results
         caught_exception = e
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
-    reprod_metadata["entrypoint_name"] = entrypoint_name
-    reprod_metadata["blacklisted_modules"] = list(blacklisted_modules or [])
-    reprod_metadata["blacklisted_objects"] = list(blacklisted_objects or [])
-    reprod_metadata["trace_only_inside_code_string"] = trace_only_inside_code_string
-    reprod_metadata["max_valid_events"] = max_valid_events
-    reprod_metadata["max_events_per_line"] = max_events_per_line
-    reprod_metadata["max_var_repr_length"] = max_var_repr_length
-    reprod_metadata["timeout_seconds"] = timeout_seconds
-    reprod_metadata["seed"] = seed
+    reprod_metadata["entrypoint_name"] = str(entrypoint_name)
+    reprod_metadata["blacklisted_modules"] = str(list(blacklisted_modules or []))
+    reprod_metadata["blacklisted_objects"] = str(list(blacklisted_objects or []))
+    reprod_metadata["trace_only_inside_code_string"] = str(trace_only_inside_code_string)
+    reprod_metadata["max_valid_events"] = str(max_valid_events)
+    reprod_metadata["max_events_per_line"] = str(max_events_per_line)
+    reprod_metadata["max_var_repr_length"] = str(max_var_repr_length)
+    reprod_metadata["timeout_seconds"] = str(timeout_seconds)
+    reprod_metadata["seed"] = str(seed)
     if return_value is not None:
         trace_tags.append(TraceTagType.HAS_RETURN_VALUE)
     if caught_exception is not None:
@@ -721,6 +723,7 @@ def _unsafe_execute_and_trace_code(
             max_var_repr_length=max_var_repr_length,
             traced_steps=traced_steps,
             traced_steps_map=traced_steps_map,
+            entrypoint_name=entrypoint_name,
             entrypoint_step_idx=entrypoint_step_idx,
             return_value=return_value,
             exception=(

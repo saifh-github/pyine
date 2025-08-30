@@ -22,10 +22,10 @@ def test_get_config_and_template():
     assert template_str.startswith("You are an expert at interpreting and summarizing Python 3 code")
     assert template_str.endswith("Now, provide your summary of the code snippet, and nothing else:\n")
 
-    # problem description and target_length are optional (provided as partials)
+    # problem description and target_length are optional
     assert "code" in template.input_variables
     assert "target_length" in template.input_variables
-    assert "description" not in template.input_variables
+    assert "description" in template.input_variables
     rendered_str = template.format(
         code='print("Hello")',
     )

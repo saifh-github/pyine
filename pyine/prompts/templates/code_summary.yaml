@@ -38,8 +38,6 @@ v1.0:
 
       Now, provide your summary of the code snippet, and nothing else:
     format: jinja2
-    partial_variables:
-      description: ""
   example_template:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
@@ -59,7 +57,7 @@ v1.0:
       {%- endif %}
       {{output.rstrip("\n") + "\n"}}
     format: jinja2
-  example_block_template:  # unspecified = keep default
+  examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"
   examples:
     - input_variables:

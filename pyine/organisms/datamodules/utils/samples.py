@@ -172,6 +172,8 @@ class SampleData(typing.NamedTuple):
     """Code string that has been executed and for which results must be predicted."""
     description: str
     """High-level description of the implemented code/algorithm (may be empty)."""
+    entrypoint: str
+    """Entrypoint name used when executing a target function (may be empty if irrelevant/unused)."""
     first_line: int
     """First execution line in the code string (should be 0 for full execs, non-zero for partial execs)."""
     last_line: int
@@ -307,6 +309,8 @@ class SampleBuilder(SampleDataParserType):
         self._rng = np.random.default_rng(self.config.random_seed)
         if self.config.partial_sample_decision_strategy != "never" and not self.config.output_type_prob_map:
             raise ValueError("output type prob map must be provided when using partial samples generation")
+        # TODO @@@@@@@: look up code descriptions generated via `code_summary` prompt in local results db
+        #       (for the targeted traces, that is; keep fetched data into memory as read-only)
 
     def __len__(self) -> int:
         """Returns the number of traces covered by this reader."""
@@ -357,7 +361,8 @@ class SampleBuilder(SampleDataParserType):
         return SampleData(
             identifier=trace_data.identifier,
             code=trace_data.code_string,
-            description="",  # @@@@@ TODO: get from code + problem.problem_statement? (do that later)
+            description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+            entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
             last_line=len(trace_data.code_string.splitlines()),
             inputs=trace_data.inputs,
@@ -501,7 +506,8 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description=f"Function that is being called: {target_func_name}",  # @@@@@ TODO: add docstring?
+                description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+                entrypoint=target_func_name,
                 first_line=first_line,
                 last_line=last_line,
                 inputs=call_args_str,
@@ -588,7 +594,8 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description="",  # TODO: get from parent function somehow?
+                description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+                entrypoint="",
                 first_line=first_line,
                 last_line=last_line,
                 inputs=input_vars_str,

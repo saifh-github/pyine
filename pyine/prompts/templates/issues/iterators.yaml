@@ -321,7 +321,7 @@ full_output/v1.0:
       ```
       {% endif %}
     format: jinja2
-  example_block_template:  # unspecified = keep default
+  examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"
   examples:
     - input_variables:
@@ -329,7 +329,7 @@ full_output/v1.0:
       output: *example_1_full_output
     - input_variables:
         <<: *example_2
-      output: #*example_2_full_output
+      output: # invalid code, no output
     - input_variables:
         <<: *example_3
       output: *example_3_full_output

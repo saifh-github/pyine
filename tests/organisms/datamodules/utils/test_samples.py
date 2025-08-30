@@ -353,7 +353,7 @@ print(x)
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
         assert sample.output_type == "function return"
-        assert "foo" in sample.description
+        assert sample.entrypoint == "foo"
         # since we didn't provide code_blocks mapping, first/last line should equal the call site line
         assert sample.first_line == sample.last_line == 3
         assert sample.inputs == "(1,)"
