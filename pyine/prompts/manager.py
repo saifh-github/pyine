@@ -136,6 +136,16 @@ class PromptManager:
         versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
         return list(versioned_config.versions.keys())
 
+    def get_default_prompt_version(self, prompt_name: str) -> str:
+        """Returns the default version used for a specific prompt."""
+        prompt_path = self._get_prompt_file_path(prompt_name)
+        package_files = importlib.resources.files(self.package_name)
+        prompt_file = package_files / str(prompt_path)
+        if not prompt_file.is_file():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+        versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
+        return versioned_config.default_version
+
     def clear_cache(self) -> None:
         """Clear the internal prompt cache."""
         self._cache.clear()
