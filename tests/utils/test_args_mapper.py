@@ -21,7 +21,7 @@ def test_simple_positional_and_kwargs_mapping():
     assert fn(*args, **kwargs) == 3
 
     # sequence -> args
-    args, kwargs = args_mapper.map_inputs_to_callable(fn, [1, 2])
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, (1, 2))
     assert args == (1, 2)
     assert kwargs == {}
     assert fn(*args, **kwargs) == 3
@@ -63,6 +63,10 @@ def test_mapping_with_defaults():
     args, kwargs = args_mapper.map_inputs_to_callable(fn, {"a": 1, "b": 2})
     assert fn(*args, **kwargs) == 3
     args, kwargs = args_mapper.map_inputs_to_callable(fn, {"a": 1})
+    assert fn(*args, **kwargs) == 1
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, (1,))
+    assert fn(*args, **kwargs) == 1
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, [1])
     assert fn(*args, **kwargs) == 1
     with pytest.raises(ValueError):
         _ = args_mapper.map_inputs_to_callable(fn, None)

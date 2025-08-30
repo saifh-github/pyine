@@ -498,7 +498,7 @@ def _trace_code_snippet(
         and isinstance(test_outputs, list)
         and len(test_inputs) == len(test_outputs) == 1
     ):
-        # @@@@@ TODO confirm that these are fine everywhere and they do not cause some i/o issues?
+        # TODO: confirm that these are fine everywhere and they do not cause some i/o issues?
         test_inputs = test_inputs[0]
         test_outputs = test_outputs[0]
     with warnings.catch_warnings():

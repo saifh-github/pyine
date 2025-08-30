@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import contextlib
 import dataclasses
 import enum
@@ -14,6 +15,7 @@ import typing
 
 import pydantic
 
+import pyine.utils.code.args_mapper
 import pyine.utils.code.blocks
 import pyine.utils.code.input_mock
 import pyine.utils.code.output_capture
@@ -436,8 +438,8 @@ def _safe_execute_and_trace_code(
 
 def _unsafe_execute_and_trace_code(
     code_string: str,
-    inputs: str = "",
-    expected_output: str = "",
+    inputs: typing.Any | None = None,
+    expected_output: typing.Any | None = None,
     identifier: str | None = None,
     entrypoint_name: str | None = None,
     blacklisted_modules: typing.Iterable[str] | None = None,
@@ -454,15 +456,14 @@ def _unsafe_execute_and_trace_code(
     'Unsafe' here means that any segfaults, OOM kills, or other OS-level crashes will take down
     the main process if it called this function directly. Refer to the 'safe' version to avoid that.
 
-    Will replace calls to input() or sys.stdin.readline() with lines from the provided inputs
-    string, and captures stdout and stderr during execution.
+    Will replace calls to input() or sys.stdin.readline() with lines from the provided inputs, and
+    captures stdout and stderr during execution.
 
     Args:
         code_string: a string containing arbitrary Python code to execute and trace.
-        inputs: a string containing individual lines to be used as input values
-            (one line per input call).
-        expected_output: a string containing the expected output of the code execution. This output
-            will not be verified here, and is passed here for logging/serialization purposes.
+        inputs: input arguments for the execution (either fed via stdin, or provided to entrypoint).
+        expected_output: the expected output of the code execution. This output will not be verified
+            in this function, and is passed for logging/serialization purposes only.
         identifier: an identifier for this trace (used for printing/logging purposes).
         entrypoint_name: The name of the entrypoint function to execute.
         blacklisted_modules: A list of module names to exclude from tracing.
@@ -656,7 +657,7 @@ def _unsafe_execute_and_trace_code(
     entrypoint_step_idx = None  # only used if we call an entrypoint after exec
     pyine.utils.reprod.set_seed(seed)
     exec_namespace = {}
-    if not inputs:
+    if inputs is None or (isinstance(inputs, collections.abc.Sized) and not inputs):
         trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
     try:
         with pyine.utils.timers.TimeLimit(timeout_seconds):
@@ -668,13 +669,14 @@ def _unsafe_execute_and_trace_code(
                         # note for later: if this is buggy/annoying, could add call inside code string itself
                         entrypoint_step_idx = last_trace_step_idx
                         entrypoint = exec_namespace[entrypoint_name]
-                        # @@@@@ TODO: could try to analyze entrypoint signature and figure out input forwarding
-                        #             (that should be implemented in a separate function/class though)
+                        entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
+                            entrypoint, inputs
+                        )
                         with trace_context(_trace_callback):
-                            return_value = entrypoint(inputs)
+                            return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
                         trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
                 else:
-                    with pyine.utils.code.input_mock.MockInputContext(inputs):
+                    with pyine.utils.code.input_mock.MockInputContext(str(inputs)):
                         with trace_context(_trace_callback):
                             exec(compiled_code, exec_namespace)
                 _capture_buffers()
@@ -716,8 +718,8 @@ def _unsafe_execute_and_trace_code(
             identifier=identifier,
             code_string=code_string,
             code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
-            inputs=inputs,
-            expected_output=expected_output,
+            inputs=str(inputs),
+            expected_output=str(expected_output),
             max_valid_events=max_valid_events,
             max_events_per_line=max_events_per_line,
             max_var_repr_length=max_var_repr_length,

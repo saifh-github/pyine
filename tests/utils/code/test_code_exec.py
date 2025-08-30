@@ -185,7 +185,7 @@ def some_magic_function(a: str) -> int:
     trace_result = _unsafe_execute_and_trace_code(
         identifier="hello",  # just for logging purposes
         code_string=code,
-        inputs="15",
+        inputs="'15'",
         expected_output="potato",  # not verified internally, just logged
         entrypoint_name="some_magic_function",
         trace_only_inside_code_string=True,
@@ -229,6 +229,30 @@ def some_magic_function(a: str) -> int:
     assert valid_steps[5].event_type == "line" and valid_steps[5].trace_key.line == 3  # move up again
     assert valid_steps[5].local_variables == {"a": "'15'", "c": "7"}
     # rest should be OK at this point
+
+
+def test_entrypoint_with_multiple_args():
+    """Test that the entrypoint can be specified and that specific local variables are reported."""
+    code = """\
+def some_magic_function(a: str, b: int, c: int = 1) -> int:
+    return int(a) + b + c
+"""
+    inputs_outputs_to_test = [
+        (["3", 2.0], 6),
+        ({"a": "3", "b": 2}, 6),
+        ("'3', 2, 1", 6),
+        ("'3', 2.0", 6),
+    ]
+    for inputs, expected_output in inputs_outputs_to_test:
+        trace_result = _unsafe_execute_and_trace_code(
+            identifier="hello",  # just for logging purposes
+            code_string=code,
+            inputs=inputs,
+            expected_output=str(expected_output),
+            entrypoint_name="some_magic_function",
+            trace_only_inside_code_string=True,
+        )
+        assert trace_result.return_value == expected_output
 
 
 def test_trace_event_cap():
