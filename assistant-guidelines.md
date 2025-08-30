@@ -46,6 +46,10 @@ loop index, use `idx`, or ideally `<something>_idx`.
 Avoid using single empty lines across the code. Only use empty lines where needed for PEP8
 formatting.
 
+Avoid using too many "defensive" try-except blocks (especially ones that catch any Exception);
+let the code fail up to the caller if exceptions are raised, unless the logic requires one to be
+raised.
+
 When defining functions, put each argument on a separate new line, unless there is a single
 argument for that function. Also put the type of the function's return value on a new line, for
 example:
