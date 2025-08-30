@@ -945,7 +945,7 @@ if __name__ == "__main__":
         write_dataset_from_taco(
             # create a dummy dataset for quick prototyping
             banned_problem_tags_rule=None,
-            max_output_traces=1000,
+            max_output_traces=30_000,
             max_solutions_per_problem=10,
             max_tests_per_solution=10,
             max_trace_events_per_line=None,

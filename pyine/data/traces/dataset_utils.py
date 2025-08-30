@@ -409,11 +409,16 @@ class CodingProblemIterator:
                     ):
                         continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
-                    json_data = orjson.load(fd)
-                    assert isinstance(json_data, dict)
-                    if len(json_data) == 1 and "error" in json_data:
-                        continue  # skip this file (useless; prior repackaging failed)
-                    output_paths.append(json_file_path)
+                    try:
+                        json_data = orjson.loads(fd.read())
+                    except orjson.JSONDecodeError as e:
+                        logger.warning(f"skipping invalid JSON file: {json_file_path} ({e})")
+                        continue  # there's likely something not escaped probably in the file
+                assert isinstance(json_data, dict)
+                if len(json_data) == 1 and "error" in json_data:
+                    logger.debug(f"skipping empty JSON file: {json_file_path}")
+                    continue  # skip this file (useless; prior repackaging failed)
+                output_paths.append(json_file_path)
             assert len(output_paths) > 0, "no valid JSON files found in the dataset root directory"
             return output_paths
         else:
@@ -442,8 +447,8 @@ class CodingProblemIterator:
         if self.dataset_name in JSON_BASED_SOURCE_DATASETS:
             assert isinstance(problem_metadata, (str, pathlib.Path))
             json_file = pathlib.Path(problem_metadata)
-            with open(json_file, encoding="utf-8") as f:
-                data = orjson.load(f)
+            with open(json_file, encoding="utf-8") as fd:
+                data = orjson.loads(fd.read())
             data["__root_path__"] = str(json_file)
             data["__root_hash__"] = pyine.utils.reprod.compute_hash(json_file)
             return data
