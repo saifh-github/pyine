@@ -83,8 +83,7 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     if not os.access(str(tmpdir_base), os.W_OK):
         raise PermissionError(f"base temporary dir not writable: {tmpdir_base}")
     # create per-user subdir to avoid collisions on multi-user machines
-    username = getpass.getuser() or "unknown"
-    tmpdir = pathlib.Path(tmpdir_base) / f"pyine-{username}"
+    tmpdir = pathlib.Path(tmpdir_base) / f"pyine-{get_username()}"
     tmpdir.mkdir(mode=mode, exist_ok=True)
     try:
         tmpdir.chmod(mode)
@@ -94,6 +93,15 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     if not os.access(str(tmpdir), os.W_OK):
         raise PermissionError(f"temporary dir not writable: {tmpdir_base}")
     return tmpdir
+
+
+def get_username() -> str:
+    """Returns the username from the environment or password database.
+
+    If the username cannot be determined, returns 'unknown'.
+    """
+    username = getpass.getuser() or "unknown"
+    return username
 
 
 def find_dotenv_file(start: str | pathlib.Path | None = None) -> pathlib.Path | None:

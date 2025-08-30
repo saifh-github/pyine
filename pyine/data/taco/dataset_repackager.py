@@ -3,9 +3,9 @@ This module contains the TACO dataset repackaging logic.
 """
 
 import asyncio
-import json
 import pathlib
 
+import orjson
 import tiktoken
 
 import pyine.data.taco.dataset_reader
@@ -71,7 +71,7 @@ async def reprocess_code_samples(
                 print(f"Error loading sample {sample_idx}: {e}")
                 sample_output_path = output_dir_path / f"{sample_idx:06d}.json"
                 with open(sample_output_path, "w") as fd:
-                    json.dump({"error": str(e)}, fd, indent=2)  # noqa
+                    orjson.dump({"error": str(e)}, fd, indent=2)  # noqa
                 continue
         all_solutions, solution_mapping = [], []
         for sample_idx, sample in batch_samples:
@@ -151,7 +151,7 @@ async def reprocess_code_samples(
         for sample_idx, processed_sample in results_by_sample.items():
             sample_output_path = output_dir_path / f"{sample_idx:06d}.json"
             with open(sample_output_path, "w") as fd:
-                json.dump(processed_sample, fd, indent=2)  # noqa
+                orjson.dump(processed_sample, fd, indent=2)  # noqa
 
 
 if __name__ == "__main__":

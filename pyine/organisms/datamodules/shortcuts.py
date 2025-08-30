@@ -32,8 +32,6 @@ SubsetNameType = pyine.data.datamodule.SubsetNameType
 ProblemIdType = str
 """Type def used to represent a coding problem identifier (for cleanliness)."""
 
-# @@@@ TODO: add prompt that builds description of problem+code with optional hinting inside
-
 
 class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     """DataModule wrapping one or multiple PyINE code trace datasets for shortcut-bias experiments.

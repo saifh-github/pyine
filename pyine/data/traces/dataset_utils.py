@@ -2,13 +2,13 @@ import dataclasses
 import datetime
 import fnmatch
 import importlib.resources as pkg_resources
-import json
 import logging
 import pathlib
 import re
 import typing
 
 import numpy as np
+import orjson
 import pydantic
 import tqdm
 import yaml
@@ -409,7 +409,7 @@ class CodingProblemIterator:
                     ):
                         continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
-                    json_data = json.load(fd)
+                    json_data = orjson.load(fd)
                     assert isinstance(json_data, dict)
                     if len(json_data) == 1 and "error" in json_data:
                         continue  # skip this file (useless; prior repackaging failed)
@@ -443,7 +443,7 @@ class CodingProblemIterator:
             assert isinstance(problem_metadata, (str, pathlib.Path))
             json_file = pathlib.Path(problem_metadata)
             with open(json_file, encoding="utf-8") as f:
-                data = json.load(f)
+                data = orjson.load(f)
             data["__root_path__"] = str(json_file)
             data["__root_hash__"] = pyine.utils.reprod.compute_hash(json_file)
             return data

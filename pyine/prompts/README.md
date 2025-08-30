@@ -1,5 +1,7 @@
 # PyINE Prompt Framework
 
+@@@@@ TODO: update this readme w/ latest changes, and to document the prompt result database
+
 ### High-level overview
 
 - The `pyine.prompts` package provides a small, test-backed framework to author, version, load,

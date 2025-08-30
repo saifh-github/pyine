@@ -458,6 +458,7 @@ def compare_exec_output_with_llm(
         prompt_name=prompt_name,
         version=prompt_version,
         runnable_name=runnable_name,
+        use_chat_template=False,
         include_examples=include_examples,
         target_examples=target_examples,
     )
