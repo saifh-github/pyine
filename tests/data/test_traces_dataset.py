@@ -68,6 +68,7 @@ def test_dataset_paths(
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(120)  # 2 minutes should be plenty, otherwise tracing is failing for all snippets
 @pytest.mark.skipif(
     tests.data.utils.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot create mini traces dataset",
@@ -96,6 +97,7 @@ def test_mini_taco_traces_dataset(
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(120)  # 2 minutes should be plenty, otherwise tracing is failing for all snippets
 @pytest.mark.skipif(
     tests.data.utils.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot create mini traces dataset",
