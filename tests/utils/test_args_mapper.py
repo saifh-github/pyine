@@ -54,6 +54,8 @@ def test_simple_positional_and_kwargs_mapping():
         _ = args_mapper.map_inputs_to_callable(fn, None)
     with pytest.raises(ValueError):
         _ = args_mapper.map_inputs_to_callable(fn, [1])
+    with pytest.raises(ValueError):
+        _ = args_mapper.map_inputs_to_callable(fn, [1, 2, 3])
 
 
 def test_mapping_with_defaults():
@@ -65,9 +67,11 @@ def test_mapping_with_defaults():
     args, kwargs = args_mapper.map_inputs_to_callable(fn, {"a": 1})
     assert fn(*args, **kwargs) == 1
     args, kwargs = args_mapper.map_inputs_to_callable(fn, (1,))
-    assert fn(*args, **kwargs) == 1
+    assert args == ((1,),)
+    assert kwargs == {}
     args, kwargs = args_mapper.map_inputs_to_callable(fn, [1])
-    assert fn(*args, **kwargs) == 1
+    assert args == ([1],)
+    assert kwargs == {}
     with pytest.raises(ValueError):
         _ = args_mapper.map_inputs_to_callable(fn, None)
 
@@ -76,15 +80,26 @@ def test_querystring_and_colon_syntax():
     def fn(a: int, b: int) -> int:
         return a * b
 
-    args, kwargs = args_mapper.map_inputs_to_callable(fn, "a=3&b=4")
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, "a=3,b=4")
     assert args == ()
     assert kwargs == {"a": 3, "b": 4}
+    assert fn(*args, **kwargs) == 12
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, "a = 3, b = 4")
     assert fn(*args, **kwargs) == 12
 
     args, kwargs = args_mapper.map_inputs_to_callable(fn, "a: 2, b: 5")
     assert args == ()
     assert kwargs == {"a": 2, "b": 5}
     assert fn(*args, **kwargs) == 10
+    args, kwargs = args_mapper.map_inputs_to_callable(fn, "a:2,b:5")
+    assert fn(*args, **kwargs) == 10
+
+    with pytest.raises(ValueError):
+        _ = args_mapper.map_inputs_to_callable(fn, "a:2,b:5,c:6")
+    with pytest.raises(ValueError):
+        _ = args_mapper.map_inputs_to_callable(fn, "a:2,b:5,potato")
+    with pytest.raises(ValueError):
+        _ = args_mapper.map_inputs_to_callable(fn, "a:2,potato")
 
 
 def test_parenthesized_and_spaces():
@@ -123,9 +138,9 @@ def test_varargs_and_varkwargs_passthrough():
     assert args == ()
     assert kwargs == {"x": 1, "y": 2}
 
-    # sequence to varargs
+    # sequence kept as a single positional argument if it binds
     args, kwargs = args_mapper.map_inputs_to_callable(fn, [1, 2, 3])
-    assert args == (1, 2, 3)
+    assert args == ([1, 2, 3],)
     assert kwargs == {}
 
 
@@ -135,6 +150,8 @@ def test_scalar_and_none_inputs():
 
     # scalar maps to single positional
     assert _call_with_mapped(one, 5) == 5
+    assert _call_with_mapped(one, "null") is None
+    assert _call_with_mapped(one, "true") is True
 
     # string scalar should parse to positional
     args, kwargs = args_mapper.map_inputs_to_callable(one, "5")
@@ -166,12 +183,6 @@ def test_object_attribute_mapping_and_filtering():
     assert args == ()
     assert kwargs == {"a": 10, "b": 20}
     assert fn(*args, **kwargs) == 200
-
-    def only_a(a):
-        return a
-
-    with pytest.raises(ValueError):
-        _ = args_mapper.map_inputs_to_callable(only_a, {"a": 1, "c": 5})
 
 
 def test_nested_structures_in_string():

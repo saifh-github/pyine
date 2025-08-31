@@ -30,7 +30,6 @@ def map_inputs_to_callable(
             - sequences (treated as positional args),
             - strings describing args/kwargs (e.g. "a=2, b=4" or "1, 2"),
             - JSON strings ("{\"a\": 2}" or "[1, 2]"),
-            - query-string like ("a=1&b=2"),
             - objects with attributes (mapped via vars(obj)),
             - scalars (best-effort if the callable has a single parameter).
 
@@ -55,6 +54,16 @@ def map_inputs_to_callable(
             has_var_pos = True
         elif param.kind == inspect.Parameter.VAR_KEYWORD:
             has_var_kw = True
+
+    def _mapping_can_bind_as_kwargs(mapping: collections.abc.Mapping) -> bool:
+        try:
+            temp_args = [mapping[name] for name in pos_only if name in mapping]
+            temp_kwargs = {k: v for k, v in mapping.items() if k not in pos_only}
+            sig.bind(*temp_args, **temp_kwargs)
+            return True
+        except TypeError:
+            return False
+
     args: list[typing.Any] = []
     kwargs: dict[str, typing.Any] = {}
     if inputs is None:
@@ -74,35 +83,61 @@ def map_inputs_to_callable(
             raise ValueError(
                 f"cannot map None to callable requiring arguments {required_missing}; missing required inputs"
             )
-        # otherwise, nothing to pass
-        pass
-    elif isinstance(inputs, collections.abc.Mapping):
-        # treat as kwargs; we'll relocate positional-only ones to args
-        kwargs = dict(inputs)  # shallow copy
     elif isinstance(inputs, str):
-        parsed_args, parsed_kwargs = _parse_args_string(inputs)
-        args = parsed_args
-        kwargs = parsed_kwargs
-    elif isinstance(inputs, collections.abc.Sequence):
-        args = list(inputs)
-    else:
-        # try to coerce objects with attributes to kwargs
-        obj_vars = _coerce_to_mapping_if_object(inputs)
-        if obj_vars is not None:
-            kwargs = obj_vars
+        # try to interpret the entire string as a single value first
+        value = _parse_value(inputs)
+        if isinstance(value, collections.abc.Mapping):
+            # try binding mapping as kwargs (with pos-only relocation)
+            if _mapping_can_bind_as_kwargs(value):
+                kwargs = dict(value)
+            else:
+                # otherwise, try passing the mapping itself as a single positional arg
+                try:
+                    sig.bind(value)
+                    args = [value]
+                except TypeError:
+                    # fallback: split into args/kwargs via string parsing
+                    parsed_args, parsed_kwargs = _parse_args_string(inputs)
+                    args = parsed_args
+                    kwargs = parsed_kwargs
         else:
-            # scalar: if callable has one param and does not demand keyword, pass as single arg
-            total_params = sum(
-                1
-                for param in params.values()
-                if param.kind
-                in (
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                )
-            )
-            if total_params == 1 or has_var_pos:
+            # non-mapping parsed value: try single positional, else split
+            try:
+                sig.bind(value)
+                args = [value]
+            except TypeError:
+                parsed_args, parsed_kwargs = _parse_args_string(inputs)
+                args = parsed_args
+                kwargs = parsed_kwargs
+    elif isinstance(inputs, collections.abc.Mapping):
+        # Prefer binding the mapping as kwargs (with pos-only relocation), then as a single positional arg.
+        if _mapping_can_bind_as_kwargs(inputs):
+            kwargs = dict(inputs)  # shallow copy; relocation happens later
+        else:
+            try:
+                sig.bind(inputs)
                 args = [inputs]
+            except TypeError:
+                # Fall back to kwargs path; downstream validation will raise if truly incompatible
+                kwargs = dict(inputs)
+    elif isinstance(inputs, collections.abc.Sequence):
+        try:
+            sig.bind(inputs)
+            args = [inputs]
+        except TypeError:
+            args = list(inputs)
+    else:
+        try:
+            sig.bind(inputs)
+            args = [inputs]
+        except TypeError:
+            obj_vars = _coerce_to_mapping_if_object(inputs)
+            if obj_vars is not None:
+                try:
+                    sig.bind(obj_vars)
+                    args = [obj_vars]
+                except TypeError:
+                    kwargs = obj_vars
             else:
                 raise ValueError(
                     "cannot map scalar input to callable without a single "
@@ -188,7 +223,7 @@ def _parse_args_string(
 
     Supports the following forms:
     - JSON objects/arrays: "{\"a\":1}" or "[1, 2]"
-    - Comma- or ampersand-separated tokens: "a=1, b=2", "1, 2", "a=1&b=2"
+    - Comma-separated tokens: "a=1, b=2", "1, 2"
 
     Returns positional args list and kwargs dict.
     """
@@ -209,7 +244,7 @@ def _parse_args_string(
         except Exception:
             # fall back to manual parsing below
             pass
-    tokens = _split_top_level(text, delimiters={",", "&"})
+    tokens = _split_top_level(text, delimiters={","})
     pos_args: list[typing.Any] = []
     kwargs: dict[str, typing.Any] = {}
     for tok in tokens:
@@ -299,5 +334,5 @@ def _parse_value(text: str) -> typing.Any:
         return orjson.loads(text)
     except Exception:
         pass
-    # as a last resort, return the stripped string
-    return text.strip()
+    # if nothing else works, return str directly
+    return text

@@ -232,7 +232,7 @@ def some_magic_function(a: str) -> int:
 
 
 def test_entrypoint_with_multiple_args():
-    """Test that the entrypoint can be specified and that specific local variables are reported."""
+    """Test that the entrypoint can be specified and that multi-args unpacking goes well."""
     code = """\
 def some_magic_function(a: str, b: int, c: int = 1) -> int:
     return int(a) + b + c
@@ -250,6 +250,31 @@ def some_magic_function(a: str, b: int, c: int = 1) -> int:
             inputs=inputs,
             expected_output=str(expected_output),
             entrypoint_name="some_magic_function",
+            trace_only_inside_code_string=True,
+        )
+        assert trace_result.return_value == expected_output
+
+
+def test_entrypoint_with_single_arg():
+    """Test that the entrypoint can be specified and that single-arg unpacking goes well."""
+    code = """\
+def single_arg_fn(a):
+    return a + a
+"""
+    inputs_outputs_to_test = [
+        (3, 6),
+        ("3", 6),
+        ("'3'", "33"),
+        (2.2, 4.4),
+        ([1, 2, 3], [1, 2, 3, 1, 2, 3]),
+    ]
+    for inputs, expected_output in inputs_outputs_to_test:
+        trace_result = _unsafe_execute_and_trace_code(
+            identifier="hello",  # just for logging purposes
+            code_string=code,
+            inputs=inputs,
+            expected_output=str(expected_output),
+            entrypoint_name="single_arg_fn",
             trace_only_inside_code_string=True,
         )
         assert trace_result.return_value == expected_output
