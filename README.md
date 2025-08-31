@@ -116,14 +116,8 @@ ______________________________________________________________________
 
 ## **Contributing**
 
-Contributions to PyINE are welcomed! If you'd like to contribute:
-
-1. Fork this repository.
-2. Create a new branch for your feature or bug fix.
-3. Submit a pull request with a clear description of your changes.
-
-Please ensure compliance with the contribution guidelines (to be added soon; TODO! @@@@). For now,
-make sure you add PLSC as a reviewer in your PR.
+Contributions to PyINE are welcomed! If you'd like to contribute, refer to the
+[contribution guidelines](./CONTRIBUTING.md).
 
 ______________________________________________________________________
 
