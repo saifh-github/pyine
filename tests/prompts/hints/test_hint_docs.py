@@ -1,11 +1,11 @@
 import langchain_core.prompts
 
-import pyine.prompts.configs.hints.docs as hints_docs
+import pyine.prompts.manager
 import pyine.prompts.utils
 
 
 def test_get_full_output_config_and_template():
-    config = hints_docs.get_prompt_config(version="full_output/v1.0")
+    config = pyine.prompts.manager.get_prompt_config("hints/docs", version="full_output/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     last_example = config.examples[-1]
     assert isinstance(last_example, pyine.prompts.utils.PromptExample)
@@ -13,7 +13,7 @@ def test_get_full_output_config_and_template():
     assert last_example.input_variables["inputs"] == "{x=230, y=160}"
     assert last_example.input_variables["expected_exec_output"] == "10"
     assert ">>> Z.g(230, 160)\n        10" in last_example.output
-    template = hints_docs.get_prompt_template(version="full_output/v1.0")
+    template = pyine.prompts.manager.get_prompt_template("hints/docs", version="full_output/v1.0")
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and editing Python 3 code.")

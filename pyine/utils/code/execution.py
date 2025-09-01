@@ -281,7 +281,7 @@ class TraceResult(pydantic.BaseModel):
     """The captured stdout output during execution (in full)."""
     stderr: str
     """The captured stderr output during execution (in full)."""
-    metadata: dict[str, typing.Any]
+    metadata: dict[str, pydantic.JsonValue]
     """A dictionary containing metadata about the execution environment & settings."""
     tags: list[str]
     """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""

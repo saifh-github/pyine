@@ -1,17 +1,17 @@
 import langchain_core.prompts
 
-import pyine.prompts.configs.hints.tests as hints_tests
+import pyine.prompts.manager
 import pyine.prompts.utils
 
 
 def test_get_full_output_config_and_template():
-    config = hints_tests.get_prompt_config(version="full_output/v1.0")
+    config = pyine.prompts.manager.get_prompt_config("hints/tests", version="full_output/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     # example_2 = config.examples[1]
     # assert isinstance(example_2, pyine.prompts.utils.PromptExample)
     # assert example_2.input_variables["todo"] == todo
     # assert todo in example_2.output
-    template = hints_tests.get_prompt_template(version="full_output/v1.0")
+    template = pyine.prompts.manager.get_prompt_template("hints/tests", version="full_output/v1.0")
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and editing Python 3 code.")

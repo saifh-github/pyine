@@ -578,7 +578,7 @@ class OpenAIFineTuner:
                         self.cancel_job(job_id)
                         logger.warning(f"timed out and attempted to cancel job: {job_id}")
                     except Exception as e:
-                        logger.error(f"timed out and failed to cancel job {job_id}: {e}")
+                        logger.exception(f"timed out and failed to cancel job {job_id}")
                         raise e
                 raise TimeoutError("timed out waiting for fine-tuning job")
             time.sleep(poll_seconds)

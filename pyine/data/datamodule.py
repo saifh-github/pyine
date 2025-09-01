@@ -14,7 +14,7 @@ import pydantic
 import torch.utils.data
 
 import pyine.prompts.manager
-import pyine.prompts.utils
+import pyine.prompts.types
 import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
@@ -462,31 +462,13 @@ class BaseDataModule(pl.LightningDataModule):
         raise NotImplementedError
 
 
-class ConversationPromptConfig(pydantic.BaseModel):
-    """Helper class used to define the conversation prompt configuration parameters."""
-
-    # note: this should remain synced with the defaults provided by the prompt manager
-    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
-
-    prompt_name: str
-    """Name of the prompt used to prepare the conversation messages."""
-    version: str | None = None
-    """Version of the prompt to use."""
-    use_chat_template: bool = False
-    """Whether to use a chat-style template for the prompt."""
-    include_examples: bool = True
-    """Whether to include examples in the prompt."""
-    target_examples: int | list[int] | None = None
-    """Number or list of examples to include in the prompt; if `None`, all examples are included."""
-
-
 class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Specialized configuration class for conversation datamodule objects.
 
     This class supplements the base class defaults with conversation-specific settings.
     """
 
-    prompt_config: ConversationPromptConfig
+    prompt_config: pyine.prompts.types.PromptBuildConfig
     """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
 
     def get_prompt_template(
@@ -501,12 +483,13 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     def get_prompt_chain(
         self,
         model: langchain_core.language_models.BaseLanguageModel,
+        runnable_name: str | None = None,
         **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
     ) -> langchain_core.runnables.Runnable | None:  # noqa
         """Returns the runnable prompt chain used to infer assistant messages in conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
         prompt_kwargs.update(kwargs)
-        return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs)
+        return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs, runnable_name=runnable_name)
 
     def instantiate_datamodule(self, *args, **extra_kwargs) -> "ConversationDataModule":
         """Instantiates a data module object based on the configured target class path."""

@@ -1,7 +1,6 @@
 import concurrent.futures
 import json
 import pathlib
-import sys
 import threading
 import types
 
@@ -10,6 +9,7 @@ import pytest
 
 from pyine.prompts.result_db import (
     CreationMeta,
+    PromptBuildConfig,
     PromptResultDB,
     PromptResultRecord,
     TypedPromptResultFetcher,
@@ -158,7 +158,7 @@ def test_fetch_or_generate_deduplicates_existing(db: PromptResultDB, monkeypatch
         model=object(),
         identifier="dup-id",
         input_variables={"name": "Bob"},
-        prompt_kwargs={"prompt_name": "pn"},
+        prompt_config=PromptBuildConfig(prompt_name="pn"),
         db=db,
     )
     # deduplication should leave a single record and not generate new ones
@@ -180,7 +180,7 @@ def test_fetch_or_generate_generate_until_count_no_log(db: PromptResultDB, monke
         def __init__(self, outputs):
             self._iter = iter(outputs)
 
-        def invoke(self, _inputs):
+        def invoke(self, _inputs, **kwargs):
             try:
                 return next(self._iter)
             except StopIteration:
@@ -198,7 +198,7 @@ def test_fetch_or_generate_generate_until_count_no_log(db: PromptResultDB, monke
         model=object(),
         identifier="gen-no-log",
         input_variables={"name": "Bob"},
-        prompt_kwargs={"prompt_name": "pn"},
+        prompt_config=PromptBuildConfig(prompt_name="pn"),
         db=db,
         generate_until_result_count=2,
         log_new_results=False,
@@ -241,7 +241,7 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
         def __init__(self, outputs):
             self._iter = iter(outputs)
 
-        def invoke(self, _inputs):
+        def invoke(self, _inputs, **kwargs):
             try:
                 return next(self._iter)
             except StopIteration:
@@ -260,7 +260,7 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
         model=object(),
         identifier="typed-fetch",
         input_variables={"x": "Z"},
-        prompt_kwargs={"prompt_name": "pn"},
+        prompt_config=PromptBuildConfig(prompt_name="pn"),
         db=db,
         log_new_results=False,
     )

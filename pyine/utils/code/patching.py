@@ -82,7 +82,7 @@ def apply_patch(
         return "".join(patched_lines), True
     except Exception as e:
         # any error during parsing or applying means failure
-        logger.error(f"error applying patch: {e}")
+        logger.exception("failed to apply patch")
         return text, False
 
 

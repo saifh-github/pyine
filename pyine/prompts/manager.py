@@ -1,6 +1,7 @@
 import importlib.resources
 import logging
 import pathlib
+import typing
 
 import langchain_core.language_models
 import langchain_core.prompts
@@ -8,9 +9,13 @@ import langchain_core.runnables
 import pydantic
 import yaml
 
-import pyine.prompts.utils as prompt_utils
+from pyine.prompts.types import PromptNameType, PromptVersionType
+from pyine.prompts.utils import PromptConfig
 
 logger = logging.getLogger(__name__)
+
+_PromptCacheKeyType = str
+"""Type used to represent a prompt cache key (e.g. 'code_summary:v1.0')."""
 
 
 class PromptManager:
@@ -35,28 +40,28 @@ class PromptManager:
         """
         self.package_name = package_name
         self.prompts_subdir = prompts_subdir
-        self._cache: dict[str, prompt_utils.PromptConfig] = {}
+        self._cache: dict[_PromptCacheKeyType, PromptConfig] = {}
 
     def _get_prompt_file_path(
         self,
-        prompt_name: str,
+        prompt_name: PromptNameType,
     ) -> pathlib.Path:
         """Get the path to a prompt YAML file within the package resources."""
         return pathlib.Path(self.prompts_subdir) / f"{prompt_name}.yaml"
 
     def _get_prompt_module(
         self,
-        prompt_name: str,
+        prompt_name: PromptNameType,
     ):
         """Get the module containing specific prompt template defines by name."""
-        prompt_module_path = prompt_name.replace("/", ".")
+        prompt_module_path = str(prompt_name).replace("/", ".")
         return importlib.import_module(f"{self.package_name}.configs.{prompt_module_path}")
 
     def _load_prompt_config(
         self,
-        prompt_name: str,
-        version: str | None = None,
-    ) -> prompt_utils.PromptConfig:
+        prompt_name: PromptNameType,
+        version: PromptVersionType | None = None,
+    ) -> PromptConfig:
         """Load and parse a prompt configuration from YAML.
 
         Args:
@@ -66,7 +71,10 @@ class PromptManager:
         Returns:
             The parsed prompt configuration for the requested version.
         """
+        import pyine.prompts.utils as prompt_utils
+
         prompt_path = self._get_prompt_file_path(prompt_name)
+        logger.debug(f"loading prompt config from: {prompt_path}")
         try:
             package_files = importlib.resources.files(self.package_name)
             prompt_file = package_files / str(prompt_path)
@@ -90,9 +98,9 @@ class PromptManager:
 
     def get_prompt_config(
         self,
-        prompt_name: str,
-        version: str | None = None,
-    ) -> prompt_utils.PromptConfig:
+        prompt_name: PromptNameType,
+        version: PromptVersionType | None = None,
+    ) -> PromptConfig:
         """Get a prompt configuration with caching.
 
         Args:
@@ -107,7 +115,7 @@ class PromptManager:
             self._cache[cache_key] = self._load_prompt_config(prompt_name, version)
         return self._cache[cache_key]
 
-    def list_prompts(self) -> list[str]:
+    def list_prompts(self) -> list[PromptNameType]:
         """Returns a list of all available prompts in the package (as names without extension)."""
         package_files = importlib.resources.files(self.package_name)
         prompts_dir = pathlib.Path(package_files) / self.prompts_subdir  # noqa
@@ -123,11 +131,12 @@ class PromptManager:
                     prompt_names.append(file[:-5])  # remove .yaml extension
                 else:
                     prompt_names.append(f"{rel_path}/{file[:-5]}")
-
         return sorted(prompt_names)
 
-    def list_prompt_versions(self, prompt_name: str) -> list[str]:
+    def list_prompt_versions(self, prompt_name: PromptNameType) -> list[PromptVersionType]:
         """List all available versions for a specific prompt."""
+        import pyine.prompts.utils as prompt_utils
+
         prompt_path = self._get_prompt_file_path(prompt_name)
         package_files = importlib.resources.files(self.package_name)
         prompt_file = package_files / str(prompt_path)
@@ -136,8 +145,10 @@ class PromptManager:
         versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
         return list(versioned_config.versions.keys())
 
-    def get_default_prompt_version(self, prompt_name: str) -> str:
+    def get_default_prompt_version(self, prompt_name: PromptNameType) -> PromptVersionType:
         """Returns the default version used for a specific prompt."""
+        import pyine.prompts.utils as prompt_utils
+
         prompt_path = self._get_prompt_file_path(prompt_name)
         package_files = importlib.resources.files(self.package_name)
         prompt_file = package_files / str(prompt_path)
@@ -162,27 +173,28 @@ def get_framework_prompt_manager() -> PromptManager:
         import pyine.utils.pydantic
 
         # if the default framework manager is not created, make sure models are all registered too
+        logger.debug("registering pydantic models for framework prompt manager")
         pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_package("pyine")
         _default_prompt_manager = PromptManager()
     return _default_prompt_manager
 
 
-def list_prompts() -> list[str]:
+def list_prompts() -> list[PromptNameType]:
     """Convenience function to list all available prompts in the package."""
     manager = get_framework_prompt_manager()
     return manager.list_prompts()
 
 
-def list_prompt_versions(prompt_name: str) -> list[str]:
+def list_prompt_versions(prompt_name: PromptNameType) -> list[PromptVersionType]:
     """Convenience function to list all available versions for a specific prompt."""
     manager = get_framework_prompt_manager()
     return manager.list_prompt_versions(prompt_name)
 
 
 def get_prompt_config(
-    prompt_name: str,
-    version: str | None = None,
-) -> prompt_utils.PromptConfig:
+    prompt_name: PromptNameType,
+    version: PromptVersionType | None = None,
+) -> PromptConfig:
     """Convenience function to get a prompt config using the default manager.
 
     Args:
@@ -197,11 +209,12 @@ def get_prompt_config(
 
 
 def get_prompt_template(
-    prompt_name: str,
-    version: str | None = None,
+    prompt_name: PromptNameType,
+    version: PromptVersionType | None = None,
     use_chat_template: bool = False,
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
+    partial_vars: dict[str, typing.Any] | None = None,
 ) -> langchain_core.prompts.BasePromptTemplate:
     """Convenience function to get a prompt template using the default manager.
 
@@ -217,22 +230,25 @@ def get_prompt_template(
         target_examples: List of examples to target when rendering the prompt. Can pass in
             a list of example indices, or an integer that specifies the number of samples to
             pick randomly. If `None` is provided instead, all examples are included.
+        partial_vars: Optional partial variables to use for prompt template substitution.
     """
     manager = get_framework_prompt_manager()
+    prompt_module = None
     try:
         # if a getter override exists for this specific prompt in its parent module, use it
         prompt_module = manager._get_prompt_module(prompt_name)  # noqa
-        if hasattr(prompt_module, "get_prompt_template"):
-            return prompt_module.get_prompt_template(
-                version=version,
-                use_chat_template=use_chat_template,
-                include_examples=include_examples,
-                target_examples=target_examples,
-            )
     except ModuleNotFoundError:
         logger.debug(f"could not find module for {prompt_name}, using default template constructor")
+    if prompt_module is not None and hasattr(prompt_module, "get_prompt_template"):
+        return prompt_module.get_prompt_template(
+            version=version,
+            use_chat_template=use_chat_template,
+            include_examples=include_examples,
+            target_examples=target_examples,
+            partial_vars=partial_vars,
+        )
     prompt_config = manager.get_prompt_config(prompt_name=prompt_name, version=version)
-    return prompt_config.create_prompt_template(
+    template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
@@ -240,16 +256,20 @@ def get_prompt_template(
         context_variables=None,  # the module override should provide this
         examples_block_variables=None,  # the module override should provide this
     )
+    if partial_vars:
+        template = template.partial(**partial_vars)
+    return template
 
 
 def get_prompt_chain(
     model: langchain_core.language_models.BaseLanguageModel,
-    prompt_name: str,
-    version: str | None = None,
-    runnable_name: str | None = None,
+    prompt_name: PromptNameType,
+    version: PromptVersionType | None = None,
     use_chat_template: bool = False,
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
+    partial_vars: dict[str, typing.Any] | None = None,
+    runnable_name: str | None = None,
 ) -> langchain_core.runnables.Runnable:
     """Convenience function to get a runnable prompt chain using the default manager.
 
@@ -261,35 +281,48 @@ def get_prompt_chain(
         model: The language model to use inside the runnable prompt chain.
         prompt_name: Name of the prompt to retrieve
         version: The version of the prompt to retrieve. If None, the default version is returned.
-        runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         use_chat_template: Whether to return a chat prompt template or a regular prompt template.
         include_examples: Whether to include few-shot examples in the template.
         target_examples: List of examples to target when rendering the prompt. Can pass in
             a list of example indices, or an integer that specifies the number of samples to
             pick randomly. If `None` is provided instead, all examples are included.
+        partial_vars: Optional partial variables to use for prompt template substitution.
+        runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
     """
+    manager = get_framework_prompt_manager()
+    prompt_module = None
+    try:
+        # if a getter override exists for this specific prompt in its parent module, use it
+        prompt_module = manager._get_prompt_module(prompt_name)  # noqa
+    except ModuleNotFoundError:
+        logger.debug(f"could not find module for {prompt_name}, will not use any overrides")
+    if prompt_module is not None and hasattr(prompt_module, "get_prompt_chain"):
+        return prompt_module.get_prompt_chain(
+            model=model,
+            version=version,
+            use_chat_template=use_chat_template,
+            include_examples=include_examples,
+            target_examples=target_examples,
+            partial_vars=partial_vars,
+            runnable_name=runnable_name,
+        )
     prompt_template = get_prompt_template(
         prompt_name=prompt_name,
         version=version,
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
+        partial_vars=partial_vars,
     )
-    manager = get_framework_prompt_manager()
-    try:
-        # if a getter override exists for this specific prompt in its parent module, use it
-        prompt_module = manager._get_prompt_module(prompt_name)  # noqa
-        if hasattr(prompt_module, "get_output_parser"):
-            output_parser = prompt_module.get_output_parser(version=version)
-            if output_parser is not None:
-                return langchain_core.runnables.RunnableSequence(
-                    prompt_template,
-                    model,
-                    output_parser,
-                    name=runnable_name,
-                )
-    except ModuleNotFoundError:
-        logger.debug(f"could not find module for {prompt_name}, will not use an output parser")
+    if prompt_module is not None and hasattr(prompt_module, "get_output_parser"):
+        output_parser = prompt_module.get_output_parser(version=version)
+        if output_parser is not None:
+            return langchain_core.runnables.RunnableSequence(
+                prompt_template,
+                model,
+                output_parser,
+                name=runnable_name,
+            )
     return langchain_core.runnables.RunnableSequence(
         prompt_template,
         model,

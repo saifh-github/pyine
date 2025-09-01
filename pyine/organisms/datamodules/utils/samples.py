@@ -552,7 +552,7 @@ class SampleBuilder(SampleDataParserType):
                     # compute step count excluding the closing return
                     range_step_count = len(depth_collectors[current_depth]) - 1
                     if range_step_count >= (self.config.min_partial_trace_steps or 1):
-                        candidate_event_lists.append(depth_collectors[current_depth])  # type: ignore[arg-type]
+                        candidate_event_lists.append(depth_collectors[current_depth])
                     depth_collectors[current_depth] = None
                 current_depth -= 1
         # we expect to have closed all collections by encountering matching RETURN events

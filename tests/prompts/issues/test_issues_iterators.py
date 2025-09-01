@@ -1,11 +1,12 @@
 import langchain_core.prompts
 
 import pyine.prompts.configs.issues.iterators as issues_iterators
+import pyine.prompts.manager
 import pyine.prompts.utils
 
 
 def test_get_full_output_config_and_template():
-    config = issues_iterators.get_prompt_config(version="full_output/v1.0")
+    config = pyine.prompts.manager.get_prompt_config("issues/iterators", version="full_output/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     for example in config.examples:
         assert isinstance(example, pyine.prompts.utils.PromptExample)
@@ -21,7 +22,7 @@ def test_get_full_output_config_and_template():
         .rstrip("\n")
         .endswith(issues_iterators.invalid_code_token)
     )
-    template = issues_iterators.get_prompt_template(version="full_output/v1.0")
+    template = pyine.prompts.manager.get_prompt_template("issues/iterators", version="full_output/v1.0")
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and editing Python 3 code.")

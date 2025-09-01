@@ -7,13 +7,25 @@ from .manager import (
     list_prompts,
 )
 from .result_db import (
+    CreationMeta,
     PromptResultDB,
     PromptResultRecord,
+    TypedPromptResultFetcher,
+    fetch_or_generate_prompt_results,
     get_framework_db,
     get_framework_db_path,
 )
+from .types import (
+    PromptBuildConfig,
+    PromptNameType,
+    PromptVersionType,
+)
 
 __all__ = [
+    # types
+    "PromptNameType",
+    "PromptVersionType",
+    "PromptBuildConfig",
     # manager
     "get_framework_prompt_manager",
     "list_prompts",
@@ -22,8 +34,11 @@ __all__ = [
     "get_prompt_template",
     "get_prompt_chain",
     # result db
-    "PromptResultDB",
+    "CreationMeta",
     "PromptResultRecord",
+    "PromptResultDB",
     "get_framework_db",
     "get_framework_db_path",
+    "fetch_or_generate_prompt_results",
+    "TypedPromptResultFetcher",
 ]

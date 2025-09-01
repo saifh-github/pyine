@@ -8,7 +8,7 @@ import pyine.prompts.utils
 
 
 def test_get_config_and_template():
-    config = code_analysis.get_prompt_config()
+    config = pyine.prompts.manager.get_prompt_config("code_analysis")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     first_example = config.examples[0]
     assert isinstance(first_example, pyine.prompts.utils.PromptExample)
@@ -18,7 +18,7 @@ def test_get_config_and_template():
     assert first_example_output.code_type == "simple-with-declarations"
     assert first_example_output.input_type == "stdin"
     assert first_example_output.output_type == "stdout"
-    template = code_analysis.get_prompt_template()
+    template = pyine.prompts.manager.get_prompt_template("code_analysis")
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and analyzing Python 3 code.")

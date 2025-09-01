@@ -1,12 +1,12 @@
 import typing
 
-import langchain_core.output_parsers
-import langchain_core.prompts
 import pydantic
 
-import pyine.prompts.manager
-import pyine.prompts.utils
-import pyine.utils.pydantic
+if typing.TYPE_CHECKING:
+    import langchain_core.output_parsers
+    import langchain_core.prompts
+
+    import pyine.prompts.types
 
 python_def_pattern = r"^[A-Za-z_][A-Za-z0-9_]*$"
 """Regex pattern to use to identify any variable/function/method/class name definition."""
@@ -57,50 +57,30 @@ class CallableAnalysisResponse(pydantic.BaseModel):
 
 
 def get_output_parser(
-    version: str | None = None,
-) -> langchain_core.output_parsers.BaseOutputParser | None:  # noqa
+    version: "pyine.prompts.types.PromptVersionType | None" = None,
+) -> "langchain_core.output_parsers.BaseOutputParser | None":  # noqa
     """Get the output parser for the callable analysis prompt (if one should be used)."""
     # note: we currently have a single output structure for all version
+    import langchain_core.output_parsers
+
     return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=CallableAnalysisResponse)
 
 
-def get_prompt_config(
-    version: str | None = None,
-) -> pyine.prompts.utils.PromptConfig:
-    """Get the prompt configuration for the callable analysis prompt.
-
-    Args:
-        version: The version of the prompt to retrieve. If None, the default version is returned.
-    """
-    # first, make sure the pydantic loader has already registered this class
-    pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_module(__name__)
-    # note: this will be cached by the prompt manager
-    return pyine.prompts.manager.get_prompt_config(
-        prompt_name="callable_analysis",
-        version=version,
-    )
-
-
 def get_prompt_template(
-    version: str | None = None,
+    version: "pyine.prompts.types.PromptVersionType | None" = None,
     use_chat_template: bool = False,
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
-) -> langchain_core.prompts.BasePromptTemplate:
-    """Return the prompt template for the callable analysis prompt.
+    partial_vars: dict[str, typing.Any] | None = None,
+) -> "langchain_core.prompts.BasePromptTemplate":
+    """Returns the prompt template for the callable analysis prompt (manager module override).
 
     Note: this implementation appropriately fills in all relevant partial variables, if any.
-
-    Args:
-        version: The version of the prompt to retrieve. If None, the default version is returned.
-        use_chat_template: Whether to return a chat prompt template or a regular prompt template.
-        include_examples: Whether to include few-shot examples in the template.
-        target_examples: List of examples to target when rendering the prompt. Can pass in
-            a list of example indices, or an integer that specifies the number of samples to
-            pick randomly. If `None` is provided instead, all examples are included.
     """
-    prompt_config = get_prompt_config(version=version)
-    return prompt_config.create_prompt_template(
+    import pyine.prompts.manager
+
+    prompt_config = pyine.prompts.manager.get_prompt_config("callable_analysis", version=version)
+    template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
@@ -108,3 +88,6 @@ def get_prompt_template(
         context_variables=dict(expected_output_format=get_output_parser(version).get_format_instructions()),
         examples_block_variables=None,
     )
+    if partial_vars:
+        template = template.partial(**partial_vars)
+    return template

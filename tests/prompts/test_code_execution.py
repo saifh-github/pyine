@@ -1,19 +1,19 @@
 import langchain_core.prompts
 
-import pyine.prompts.configs.code_execution as code_execution
+import pyine.prompts.manager
 import pyine.prompts.utils
 
 
 def test_get_no_pressure_config_and_template():
     prompt_version = "no_pressure_demo"
-    config = code_execution.get_prompt_config(version=prompt_version)
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     first_example = config.examples[0]
     assert isinstance(first_example, pyine.prompts.utils.PromptExample)
     assert first_example.input_variables["code"].startswith('name = input("Enter your name: ")\n')
     assert first_example.input_variables["inputs"] == "Bob"
     assert first_example.output.rstrip("\n") == "Hello, Bob"
-    template = code_execution.get_prompt_template(version=prompt_version)
+    template = pyine.prompts.manager.get_prompt_template("code_execution", version=prompt_version)
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
@@ -28,11 +28,13 @@ def test_get_no_pressure_config_and_template():
 
 def test_get_unstructured_with_3_output_types_config_and_template():
     prompt_version = "unstructured_with_3_output_types"
-    config = code_execution.get_prompt_config(version=prompt_version)
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "code_execution"
     assert config.example_count >= 3
-    template = code_execution.get_prompt_template(version=prompt_version, include_examples=True)
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution", version=prompt_version, include_examples=True
+    )
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     core_vars = {"code", "description", "output_type", "inputs"}
     assert core_vars.issubset(set(template.input_variables))

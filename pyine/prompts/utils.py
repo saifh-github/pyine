@@ -8,6 +8,7 @@ import langchain_core.prompts
 import pydantic
 
 import pyine.utils.pydantic
+from pyine.prompts.types import PromptNameType, PromptVersionType
 
 DEFAULT_PROMPT_VERSION_KEY = "__default__"
 """Key used in config files to identify the default prompt version to use if none is specified.
@@ -17,15 +18,6 @@ prompt version in the file will be used as the default.
 """
 INTERNAL_DEFINES_KEY = "__defines__"
 """Key used to store internal defines in YAML files (will be skipped by the YAML parser)."""
-
-PromptTemplateFormat = langchain_core.prompts.string.PromptTemplateFormat
-"""Supported formats for prompt templates (provided by LangChain).
-
-Note: we suggest using f-string templates by default; jinja2 templates should only be used if you
-trust whoever provided them, as parsing them can lead to arbitrary code execution. See LangChain
-documentation for more details.
-"""
-
 EXAMPLE_OUTPUT_KEY = "output"
 """Key used to identify expected outputs in example templates; required to be in all templates."""
 EXAMPLE_OPT_INDEX_KEY = "example_idx"
@@ -41,7 +33,7 @@ class PromptTemplate(pydantic.BaseModel):
 
     template: str
     """The prompt template string."""
-    format: PromptTemplateFormat = "f-string"
+    format: langchain_core.prompts.string.PromptTemplateFormat = "f-string"
     """The format of the prompt template (f-string or jinja2; f-string is preferred for security)."""
     partial_variables: dict[str, typing.Any] | None = None
     """Optional dictionary of partial variables to be used in the template."""
@@ -95,11 +87,11 @@ class PromptMetadata(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="allow")
     """Pydantic model configuration (freezes the dataclass)."""
 
-    name: str
+    name: PromptNameType
     """Name of the prompt."""
     description: str
     """Description of what this prompt does."""
-    version: str
+    version: PromptVersionType
     """Version or reference name for the prompt (e.g. "v1.0", "big-provider/target_model", ...)."""
 
 
@@ -369,9 +361,9 @@ class VersionedPromptConfig(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (freezes the dataclass)."""
-    versions: dict[str, PromptConfig]
-    """Dictionary mapping version strings to prompt configurations."""
-    default_version: str
+    versions: dict[PromptVersionType, PromptConfig]
+    """Dictionary mapping version identifiers to prompt configurations."""
+    default_version: PromptVersionType
     """The default version to use if none is specified when asked for a prompt config."""
 
     @classmethod
@@ -397,7 +389,7 @@ class VersionedPromptConfig(pydantic.BaseModel):
             raise ValueError("no valid prompt versions found in YAML file")
         if DEFAULT_PROMPT_VERSION_KEY in raw_data:
             default_version = raw_data[DEFAULT_PROMPT_VERSION_KEY]
-            if not (isinstance(default_version, str) and default_version in versions):
+            if default_version not in versions:
                 raise ValueError("default version does not exist")
         else:
             # set the default version to be the latest one by default if nothing is specified (i.e. last in file)

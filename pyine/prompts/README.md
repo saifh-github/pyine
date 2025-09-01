@@ -44,7 +44,7 @@ from pyine.prompts import get_prompt_template
 # get a plain template containing no example
 pt = get_prompt_template("code_analysis", include_examples=False)
 # get a template containing one random example (instead of all, by default)
-pt = get_prompt_template("code_analysis", include_examples=True, target_examples=1)
+pt_w_ex = get_prompt_template("code_analysis", include_examples=True, target_examples=1)
 # get a ChatPromptTemplate instead of a text template
 chat_pt = get_prompt_template("code_analysis", use_chat_template=True)
 ```
@@ -171,21 +171,22 @@ generations or log new ones. Example usage via fire-and-forget helper that fetch
 or generates new ones:
 
 ```python
-from datetime import timedelta
-from pyine.prompts.result_db import fetch_or_generate_prompt_results
+import datetime
+import pyine.prompts
 
-records = fetch_or_generate_prompt_results(
+records = pyine.prompts.fetch_or_generate_prompt_results(
     model=my_llm,
     identifier="dataset-item-42",
     input_variables={"code": "print('hi')"},
-    prompt_kwargs={
-        "prompt_name": "code_summary",
-        # optional: "version", "use_chat_template", "include_examples", "target_examples"
-    },
-    max_result_age=timedelta(days=7),
+    prompt_config=pyine.prompts.PromptBuildConfig(
+        prompt_name="code_summary",
+        # ... other args if needed
+    ),
+    max_result_age=datetime.timedelta(days=7),
 )
 for r in records:
     print(r.result)  # str (raw text) or JSON string when the chain returns a model/dict
+# if you need typed outputs (e.g. pydantic models) from records, see `pyine.prompts.TypedPromptResultFetcher`
 ```
 
 You can also work directly with the database:
@@ -217,9 +218,9 @@ records = db.get_by_identifier("id1")
    - Create a matching Python module path mirroring your YAML file name. For example, for a template
      `some_group/my_prompt.yaml`, create a module named `pyine/prompts/configs/some_group/my_prompt.py`.
    - Define Pydantic models to structure outputs and examples, if needed; they will be auto-registered
-     so that YAML files that refer to them can be loaded transparently.
-   - Expose a `get_prompt_config(version: str | None = None) -> PromptConfig` function with any kind
-     of custom handling your prompt config implementation might require.
+     so that YAML files that refer to them can be loaded transparently. For these models to also be
+     automatically used for structured output parsing in langchain runnables, you should also expose
+     `get_output_parser(version) -> langchain_core.output_parsers.BaseOutputParser | None`.
    - Expose a `get_prompt_template(...) -> LangChain BasePromptTemplate` function, and optionally inject
      computed partial variables (e.g., structured output format instructions).
 3. Write tests. See `tests/prompts` for patterns; they should cover discovery, prompt listing,

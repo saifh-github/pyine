@@ -13,7 +13,7 @@ import pyine.data.utils.filter_rules
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.organisms.models.utils.openai
-import pyine.prompts.manager
+import pyine.prompts
 import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.portability
@@ -430,7 +430,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
-    prompt_config: pyine.data.datamodule.ConversationPromptConfig = pyine.data.datamodule.ConversationPromptConfig(
+    prompt_config: pyine.prompts.PromptBuildConfig = pyine.prompts.PromptBuildConfig(
         prompt_name="code_execution",
         # version="TODO", @@@@
         use_chat_template=True,

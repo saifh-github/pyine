@@ -13,7 +13,7 @@ from tests.data.utils.env_checks import OPENAI_API_KEY_MISSING
 
 def test_get_score_only_config_and_template():
     prompt_version = "score_only"
-    config = pred_grader.get_prompt_config(prompt_version)
+    config = pyine.prompts.manager.get_prompt_config("pred_grader", prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "pred_grader"
     assert config.example_count >= 2
@@ -22,7 +22,7 @@ def test_get_score_only_config_and_template():
     assert ex.input_variables["execution_type"] in {"program output", "frame variables", "function return"}
     assert isinstance(ex.output, pred_grader.GradingResult)
     assert 0.0 <= ex.output.score <= 1.0
-    template = pred_grader.get_prompt_template(prompt_version, include_examples=False)
+    template = pyine.prompts.manager.get_prompt_template("pred_grader", prompt_version, include_examples=False)
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     tmpl = template.template
     assert tmpl.startswith("You are an expert evaluator of Python 3 code execution results.")
@@ -40,14 +40,14 @@ def test_get_score_only_config_and_template():
 
 def test_get_with_reasoning_config_and_template():
     prompt_version = "with_reasoning"
-    config = pred_grader.get_prompt_config(prompt_version)
+    config = pyine.prompts.manager.get_prompt_config("pred_grader", prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "pred_grader"
     ex = config.examples[0]
     assert isinstance(ex.output, pred_grader.GradingResultWithReasoning)
     assert 0.0 <= ex.output.score <= 1.0
     assert ex.output.reasoning is None or isinstance(ex.output.reasoning, str)
-    template = pred_grader.get_prompt_template(prompt_version, include_examples=False)
+    template = pyine.prompts.manager.get_prompt_template("pred_grader", prompt_version, include_examples=False)
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     tmpl = template.template
     assert tmpl.endswith(
