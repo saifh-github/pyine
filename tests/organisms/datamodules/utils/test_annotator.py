@@ -153,7 +153,7 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
         return {
             "code": trace.code_string,
             "description": problem.problem_statement,
-            "target_length": 40,
+            "target_word_count": 40,
         }
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
@@ -182,7 +182,7 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["prompt_name"] == "code_summary"
     assert captured["input_variables"]["code"].startswith("def add")
     assert captured["input_variables"]["description"].startswith("Add two numbers")
-    assert captured["input_variables"]["target_length"] == 40
+    assert captured["input_variables"]["target_word_count"] == 40
 
 
 def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,7 +372,7 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
         prompt_config=prompt_types.PromptBuildConfig(
             prompt_name="code_summary",
             partial_vars=dict(
-                target_length=30,  # in words
+                target_word_count=30,
             ),
         ),
         target_indices=target_indices,

@@ -213,10 +213,10 @@ def _default_tags_builder(
     # add prompt-specific tags below
     if config.prompt_config.prompt_name == "code_summary":
         template_partial_vars = config.prompt_config.partial_vars or {}
-        if "target_length" not in template_partial_vars:
-            raise ValueError("missing 'target_length' in prompt template partial variables")
-        target_length = template_partial_vars["target_length"]
-        output_tags.append(f"target_summary_length:{target_length}")
+        if "target_word_count" not in template_partial_vars:
+            raise ValueError("missing 'target_word_count' in prompt template partial variables")
+        target_word_count = template_partial_vars["target_word_count"]
+        output_tags.append(f"target_summary_word_count:{target_word_count}")
     # elif prompt_name == ...
     return output_tags
 

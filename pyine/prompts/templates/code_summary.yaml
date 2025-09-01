@@ -26,8 +26,8 @@ v1.0:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {% if target_length %}
-      Your summary for this specific code snippet should be roughly {{target_length}} words.
+      {% if target_word_count %}
+      Your summary for this specific code snippet should be roughly {{target_word_count}} words.
       {%- endif %}
       {% if description %}
       Coding problem description (to relate in your summary):
@@ -50,8 +50,8 @@ v1.0:
       {{description.rstrip("\n")}}
       ===========================
       {%- endif %}
-      {%- if target_length %}
-      Expected summary (roughly {{target_length}} words):
+      {%- if target_word_count %}
+      Expected summary (roughly {{target_word_count}} words):
       {%- else %}
       Expected summary:
       {%- endif %}
@@ -74,7 +74,7 @@ v1.0:
 
           def area_of_circle(r: float) -> float:
               return math.pi * r ** 2
-        target_length: 35
+        target_word_count: 35
       output: >
         Defines a function to compute a circle's area (`area = math.pi * (radius ** 2)`); the
         radius is provided as an argument, and the area is the function's returned value.
