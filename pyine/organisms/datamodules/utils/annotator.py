@@ -22,23 +22,35 @@ import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
-ResolverCallableInputType = [
-    pyine.utils.code.execution.TraceResult,
-    pyine.data.traces.dataset_utils.CodingProblem,
-    "AnnotationOptions",
+IdentifierResolverType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    str,
 ]
-"""Type used to represent the arguments that a resolver callable expects."""
-IdentifierResolverType = typing.Callable[[*ResolverCallableInputType], str]
 """Type used to represent an identifier resolver callable."""
-GroupResolverType = typing.Callable[[*ResolverCallableInputType], str | None]
+GroupResolverType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    str | None,
+]
 """Type used to represent a group resolver callable."""
-InputVariablesBuilderType = typing.Callable[[*ResolverCallableInputType], dict[str, typing.Any]]
+InputVariablesBuilderType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    dict[str, typing.Any],
+]
 """Type used to represent an input variables builder callable."""
-TagsBuilderType = typing.Callable[[*ResolverCallableInputType], list[str]]
+TagsBuilderType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    list[str],
+]
 """Type used to represent a tags builder callable."""
-MetadataBuilderType = typing.Callable[[*ResolverCallableInputType], dict[str, pydantic.JsonValue]]
+MetadataBuilderType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    dict[str, pydantic.JsonValue],
+]
 """Type used to represent a metadata builder callable."""
-CreationMetaBuilderType = typing.Callable[[*ResolverCallableInputType], pyine.prompts.result_db.CreationMeta]
+CreationMetaBuilderType = typing.Callable[
+    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
+    pyine.prompts.result_db.CreationMeta,
+]
 """Type used to represent a creation metadata builder callable."""
 
 
@@ -296,11 +308,11 @@ class AnnotationReport:
         annotated_frac = self.annotated_samples / self.total_samples if self.total_samples > 0 else 0
         skipped_frac = self.skipped_samples / self.total_samples if self.total_samples > 0 else 0
         return (
-            f"total (considered) samples: {self.total_samples:_}, "
-            f"annotated samples: {self.annotated_samples:_} ({annotated_frac:.1%}% of total),"
-            f"skipped samples: {self.skipped_samples:_} ({skipped_frac:.1%}% of total), "
-            f"new results generated: {self.new_results_generated:_}, "
-            f"total tokens exchanged: {self.total_tokens_exchanged:_}, "
+            f"total samples: {self.total_samples:_}, "
+            f"annotated: {self.annotated_samples:_} ({annotated_frac:.1%} of total), "
+            f"skipped: {self.skipped_samples:_} ({skipped_frac:.1%} of total), "
+            f"new results: {self.new_results_generated:_}, "
+            f"tokens exchanged: {self.total_tokens_exchanged:_}, "
             f"errors: {self.errors}"
         )
 
@@ -328,7 +340,7 @@ def annotate_trace_dataset(
         dry_run: whether to skip logging actual annotations and only report results and stats.
         parallel: whether to process dataset items concurrently using a thread pool.
         max_workers: optional maximum number of worker threads to use when parallel=True.
-        verbose: verbose logging of annotation progress reports (for non-parallel runs only).
+        verbose: verbose logging of annotation progress reports.
 
     Returns:
         A small report dictionary with annotation outcome counts.
@@ -339,50 +351,6 @@ def annotate_trace_dataset(
         raise ValueError(f"unknown prompt '{prompt_name}'")
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
-    data_indices = list(config.target_indices or range(len(dataset)))
-    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="annotation progress")
-    output = AnnotationReport()
-    if not parallel:
-        for sample_idx in wrapped_data_indices:
-            output += _process_one_annotation(
-                trace=dataset[sample_idx],
-                problem=dataset.get_problem_data(sample_idx),
-                sample_idx=sample_idx,
-                model=model,
-                config=config,
-                dry_run=dry_run,
-            )
-            if verbose and sample_idx % 10 == 0:  # print progress report every 10 samples
-                wrapped_data_indices.write(f"progress report: {output.summary()}")
-        return output
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(
-                _process_one_annotation,
-                trace=dataset[sample_idx],
-                problem=dataset.get_problem_data(sample_idx),
-                sample_idx=sample_idx,
-                model=model,
-                config=config,
-                dry_run=dry_run,
-            )
-            for sample_idx in wrapped_data_indices
-        ]
-        for future in concurrent.futures.as_completed(futures):
-            output += future.result()
-    logger.info(f"final report: {output.summary()}")
-    return output
-
-
-def _process_one_annotation(
-    trace: pyine.utils.code.execution.TraceResult,
-    problem: pyine.data.traces.dataset_utils.CodingProblem,
-    sample_idx: int,
-    model: langchain_core.language_models.BaseLanguageModel,
-    config: AnnotationOptions,
-    dry_run: bool,
-) -> AnnotationReport:
-    """Helper function to process one annotation."""
     base_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
         rule=(config.base_filter_rule or ""),
         case_sensitive=False,
@@ -397,6 +365,81 @@ def _process_one_annotation(
     tags_getter = config.tags_builder or _default_tags_builder
     meta_getter = config.meta_builder or _default_meta_builder
     creation_meta_getter = config.creation_meta_builder or _default_creation_meta_builder
+    data_indices = list(config.target_indices or range(len(dataset)))
+    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="parsing progress")
+    output = AnnotationReport()
+    if not parallel:
+        for sample_idx in wrapped_data_indices:
+            output += _process_one_annotation(
+                trace=dataset[sample_idx],
+                problem=dataset.get_problem_data(sample_idx),
+                sample_idx=sample_idx,
+                model=model,
+                config=config,
+                dry_run=dry_run,
+                base_filter_fn=base_filter_fn,
+                db=db,
+                identifier_getter=identifier_getter,
+                group_getter=group_getter,
+                prompt_input_vars_getter=prompt_input_vars_getter,
+                tags_getter=tags_getter,
+                meta_getter=meta_getter,
+                creation_meta_getter=creation_meta_getter,
+            )
+            if verbose and sample_idx % 10 == 0:  # print progress report every 10 samples
+                wrapped_data_indices.write(f"progress report: {output.summary()}")
+        return output
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _process_one_annotation,
+                trace=dataset[sample_idx],
+                problem=dataset.get_problem_data(sample_idx),
+                sample_idx=sample_idx,
+                model=model,
+                config=config,
+                dry_run=dry_run,
+                base_filter_fn=base_filter_fn,
+                db=db,
+                identifier_getter=identifier_getter,
+                group_getter=group_getter,
+                prompt_input_vars_getter=prompt_input_vars_getter,
+                tags_getter=tags_getter,
+                meta_getter=meta_getter,
+                creation_meta_getter=creation_meta_getter,
+            )
+            for sample_idx in wrapped_data_indices
+        ]
+        wrapped_futures = tqdm.tqdm(
+            enumerate(concurrent.futures.as_completed(futures)),
+            disable=not show_progress,
+            desc="waiting for results",
+        )
+        for future_idx, future in wrapped_futures:
+            output += future.result()
+            if verbose and future_idx % 40 == 0:  # print progress report every 40 samples
+                wrapped_data_indices.write(f"progress report: {output.summary()}")
+    logger.info(f"final report: {output.summary()}")
+    return output
+
+
+def _process_one_annotation(
+    trace: pyine.utils.code.execution.TraceResult,
+    problem: pyine.data.traces.dataset_utils.CodingProblem,
+    sample_idx: int,
+    model: langchain_core.language_models.BaseLanguageModel,
+    config: AnnotationOptions,
+    dry_run: bool,
+    base_filter_fn: typing.Callable[[list[str]], bool],
+    db: pyine.prompts.result_db.PromptResultDB,
+    identifier_getter: IdentifierResolverType,
+    group_getter: GroupResolverType,
+    prompt_input_vars_getter: InputVariablesBuilderType,
+    tags_getter: TagsBuilderType,
+    meta_getter: MetadataBuilderType,
+    creation_meta_getter: CreationMetaBuilderType,
+) -> AnnotationReport:
+    """Helper function to process one annotation."""
     rep = AnnotationReport(total_samples=1)
     try:
         prompt_tags = tags_getter(trace, problem, config)
