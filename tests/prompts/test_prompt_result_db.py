@@ -45,6 +45,7 @@ def test_store_and_fetch_by_identifier(db: PromptResultDB):
         tags=["a", "x"],
     )
     assert v2 == 2
+    assert db.count_records() == 2
     # fetch all versions for the identifier
     all_for_id = db.get_by_identifier("id1")
     assert len(all_for_id) == 2

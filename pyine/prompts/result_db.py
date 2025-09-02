@@ -272,6 +272,15 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    def count_records(self) -> int:
+        """Return the total number of records stored in the database."""
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM items").fetchone()
+            return int(row[0]) if row is not None else 0
+        finally:
+            conn.close()
+
     def delete_records(
         self,
         *,
