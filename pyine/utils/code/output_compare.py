@@ -63,6 +63,22 @@ class CompareOptions(pydantic.BaseModel):
     """If True, NaN is considered equal to NaN."""
 
 
+def get_options_for_code_exec_outputs() -> CompareOptions:
+    """Get default options for experiments involving comparing code execution outputs."""
+    return CompareOptions(
+        rel_tol="auto",
+        abs_tol="auto",
+        normalize_whitespace=True,
+        strip=True,
+        case_sensitive=True,
+        numeric_token_tolerance=True,
+        list_order_matters=True,
+        tuple_order_matters=True,
+        array_type_matters=False,
+        nan_equal=True,
+    )
+
+
 @dataclasses.dataclass
 class CompareResult:
     """Result of a comparison.

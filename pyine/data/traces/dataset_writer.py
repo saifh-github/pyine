@@ -211,11 +211,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     test_output_compare_options: typing.Annotated[
         pyine.utils.code.output_compare.CompareOptions,
         pydantic.Field(
-            default=pyine.utils.code.output_compare.CompareOptions(
-                rel_tol="auto",
-                abs_tol="auto",
-                array_type_matters=False,
-            ),
+            default=pyine.utils.code.output_compare.get_options_for_code_exec_outputs(),
             validate_default=True,
             description="Options to use for comparing the output of a test with the expected output.",
         ),

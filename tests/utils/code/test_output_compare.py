@@ -1,13 +1,27 @@
-from pyine.utils.code.output_compare import CompareOptions, compare
+import pyine.utils.code.output_compare
 
 
 def eq(a, b, **opts):
-    return compare(a, b, CompareOptions(**opts)).equal
+    return pyine.utils.code.output_compare.compare(
+        a,
+        b,
+        pyine.utils.code.output_compare.CompareOptions(**opts),
+    ).equal
 
 
 def neq(a, b, **opts):
-    r = compare(a, b, CompareOptions(**opts))
+    r = pyine.utils.code.output_compare.compare(
+        a,
+        b,
+        pyine.utils.code.output_compare.CompareOptions(**opts),
+    )
     return not r.equal, r
+
+
+def test_get_default_options():
+    opts = pyine.utils.code.output_compare.get_options_for_code_exec_outputs()
+    assert isinstance(opts, pyine.utils.code.output_compare.CompareOptions)
+    assert eq("123", "123", **opts.model_dump())
 
 
 # ---------------- numbers ----------------
@@ -177,19 +191,19 @@ def test_string_vs_literal_none_and_bool():
 
 
 def test_type_mismatch_reports():
-    r = compare([1, 2], (1, 2))
+    r = pyine.utils.code.output_compare.compare([1, 2], (1, 2))
     assert not r.equal
     assert "Type differs" in r.reason
 
 
 def test_length_mismatch_in_sequences():
-    r = compare([1, 2, 3], [1, 2])
+    r = pyine.utils.code.output_compare.compare([1, 2, 3], [1, 2])
     assert not r.equal
     assert "Length differs" in r.reason
 
 
 def test_dict_key_difference():
-    r = compare({"a": 1}, {"b": 1})
+    r = pyine.utils.code.output_compare.compare({"a": 1}, {"b": 1})
     assert not r.equal
     assert "Dict keys differ" in r.reason
 
@@ -197,7 +211,7 @@ def test_dict_key_difference():
 def test_text_token_structure_diff():
     a = "result: 1 2"
     b = "result:"
-    r = compare(a, b)
+    r = pyine.utils.code.output_compare.compare(a, b)
     assert not r.equal
     assert "Token structure differs" in r.reason
 
@@ -216,6 +230,10 @@ def test_list_tuple_type_agnostic_nested():
 
 
 def test_list_tuple_type_agnostic_length_mismatch():
-    r = compare([1, 2, 3], (1, 2), CompareOptions(array_type_matters=False))
+    r = pyine.utils.code.output_compare.compare(
+        [1, 2, 3],
+        (1, 2),
+        pyine.utils.code.output_compare.CompareOptions(array_type_matters=False),
+    )
     assert not r.equal
     assert "Length differs" in r.reason
