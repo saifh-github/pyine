@@ -293,12 +293,14 @@ class AnnotationReport:
 
     def summary(self) -> str:
         """Returns a summary string with counts and stats."""
+        annotated_frac = self.annotated_samples / self.total_samples if self.total_samples > 0 else 0
+        skipped_frac = self.skipped_samples / self.total_samples if self.total_samples > 0 else 0
         return (
-            f"total samples: {self.total_samples}, "
-            f"annotated samples: {self.annotated_samples}, "
-            f"skipped samples: {self.skipped_samples}, "
-            f"new results generated: {self.new_results_generated}, "
-            f"total tokens exchanged: {self.total_tokens_exchanged}, "
+            f"total (considered) samples: {self.total_samples:_}, "
+            f"annotated samples: {self.annotated_samples:_} ({annotated_frac:.1%}% of total),"
+            f"skipped samples: {self.skipped_samples:_} ({skipped_frac:.1%}% of total), "
+            f"new results generated: {self.new_results_generated:_}, "
+            f"total tokens exchanged: {self.total_tokens_exchanged:_}, "
             f"errors: {self.errors}"
         )
 
@@ -310,6 +312,7 @@ def annotate_trace_dataset(
     dry_run: bool = False,
     parallel: bool = True,
     max_workers: int | None = None,
+    verbose: bool = False,
 ) -> AnnotationReport:
     """Annotates a trace dataset by invoking LLM prompts per element and logging results.
 
@@ -325,22 +328,21 @@ def annotate_trace_dataset(
         dry_run: whether to skip logging actual annotations and only report results and stats.
         parallel: whether to process dataset items concurrently using a thread pool.
         max_workers: optional maximum number of worker threads to use when parallel=True.
+        verbose: verbose logging of annotation progress reports (for non-parallel runs only).
 
     Returns:
         A small report dictionary with annotation outcome counts.
     """
-    # prepare prompt-related stuff
     model = pyine.utils.llm_providers.get_model_from_provider(**config.llm_provider_kwargs)
     prompt_name, prompt_version = config.prompt_config.prompt_name, config.prompt_config.version
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
-    # validate targets in dataset
     data_indices = list(config.target_indices or range(len(dataset)))
+    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="annotation progress")
     output = AnnotationReport()
     if not parallel:
-        wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="annotation progress")
         for sample_idx in wrapped_data_indices:
             output += _process_one_annotation(
                 trace=dataset[sample_idx],
@@ -350,28 +352,25 @@ def annotate_trace_dataset(
                 config=config,
                 dry_run=dry_run,
             )
+            if verbose and sample_idx % 10 == 0:  # print progress report every 10 samples
+                wrapped_data_indices.write(f"progress report: {output.summary()}")
         return output
-    progress = tqdm.tqdm(total=len(data_indices), disable=not show_progress, desc="annotation progress")
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(
-                    _process_one_annotation,
-                    trace=dataset[sample_idx],
-                    problem=dataset.get_problem_data(sample_idx),
-                    sample_idx=sample_idx,
-                    model=model,
-                    config=config,
-                    dry_run=dry_run,
-                )
-                for sample_idx in data_indices
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                output += future.result()
-                progress.update(1)
-    finally:
-        progress.close()
-    logger.info(f"annotation report: {output.summary()}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _process_one_annotation,
+                trace=dataset[sample_idx],
+                problem=dataset.get_problem_data(sample_idx),
+                sample_idx=sample_idx,
+                model=model,
+                config=config,
+                dry_run=dry_run,
+            )
+            for sample_idx in wrapped_data_indices
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            output += future.result()
+    logger.info(f"final report: {output.summary()}")
     return output
 
 
