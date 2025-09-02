@@ -272,6 +272,81 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    def delete_records(
+        self,
+        *,
+        identifier: str | None = None,
+        group: str | None = None,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
+        older_than: datetime.timedelta | None = None,
+    ) -> int:
+        """Delete records matching the provided filters.
+
+        At least one filter must be provided to avoid accidentally deleting the entire table.
+
+        Args:
+            identifier: If provided, delete only records with this identifier.
+            group: If provided, delete only records in this group.
+            prompt_name: If provided, filter by prompt name.
+            prompt_version: If provided, filter by prompt version (requires prompt_name).
+            older_than: If provided, delete only records with created_at older than now - older_than.
+
+        Returns:
+            Number of rows deleted.
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+        if not any([identifier, group, prompt_name, prompt_version, older_than]):
+            raise ValueError("Refusing to delete without any filters; specify at least one filter")
+
+        sql: list[str] = ["DELETE FROM items WHERE 1=1"]
+        params: list[typing.Any] = []
+
+        if identifier is not None:
+            sql.append("AND identifier = ?")
+            params.append(identifier)
+        if group is not None:
+            sql.append('AND "group" = ?')
+            params.append(group)
+        if prompt_name is not None:
+            sql.append("AND prompt_name = ?")
+            params.append(prompt_name)
+        if prompt_version is not None:
+            sql.append("AND prompt_version = ?")
+            params.append(prompt_version)
+        if older_than is not None:
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - older_than
+            sql.append("AND created_at < ?")
+            params.append(cutoff.isoformat())
+
+        logger.debug(
+            "deleting entries from database with filters "
+            f"(identifier={identifier!r}, group={group!r}, prompt_name={prompt_name!r}, "
+            f"prompt_version={prompt_version!r}, older_than={older_than})"
+        )
+
+        with self._lock:
+
+            @backoff.on_exception(
+                backoff.expo,
+                (sqlite3.OperationalError, sqlite3.IntegrityError),
+                max_time=30,
+                jitter=backoff.full_jitter,
+            )
+            def _do_delete() -> int:
+                conn = self._connect()
+                try:
+                    conn.execute("BEGIN IMMEDIATE;")
+                    cur = conn.execute(" ".join(sql), params)
+                    conn.commit()
+                    # sqlite3 may return -1 in some cases; normalize to 0 minimum
+                    return max(int(cur.rowcount or 0), 0)
+                finally:
+                    conn.close()
+
+            return _do_delete()
+
     def _connect(self, row_factory: bool = False) -> sqlite3.Connection:
         """Connect to the database."""
         conn = sqlite3.connect(self._path, check_same_thread=False, timeout=30.0)

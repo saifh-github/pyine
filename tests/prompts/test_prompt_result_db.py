@@ -1,4 +1,5 @@
 import concurrent.futures
+import datetime
 import json
 import pathlib
 import threading
@@ -268,3 +269,42 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     assert isinstance(items[0].result, Item)
     assert items[0].result.v == 10
     assert items[0].record.prompt == "Value Z"
+
+
+def test_delete_records_by_identifier(db: PromptResultDB):
+    # insert two for same identifier and one for another identifier
+    db.store(identifier="del-id-1", group="g", prompt="p1", result="r1")
+    db.store(identifier="del-id-1", group="g", prompt="p2", result="r2")
+    db.store(identifier="keep-id", group="g", prompt="p3", result="r3")
+    deleted = db.delete_records(identifier="del-id-1")
+    assert deleted == 2
+    assert db.get_by_identifier("del-id-1") == []
+    assert [r.result for r in db.get_by_identifier("keep-id")] == ["r3"]
+    with pytest.raises(ValueError):
+        db.delete_records()
+    with pytest.raises(ValueError):
+        db.delete_records(prompt_version="v1")
+
+
+def test_delete_records_by_group_and_prompt_version(db: PromptResultDB):
+    # two in target group (v1 and v2), one in another group
+    db.store(identifier="x1", group="del-group", prompt_name="pn", prompt_version="v1", prompt="p", result="r1")
+    db.store(identifier="x2", group="del-group", prompt_name="pn", prompt_version="v2", prompt="p", result="r2")
+    db.store(identifier="x3", group="other", prompt_name="pn", prompt_version="v1", prompt="p", result="r3")
+    deleted = db.delete_records(group="del-group", prompt_name="pn", prompt_version="v1")
+    assert deleted == 1
+    remaining_in_group = db.get_by_group("del-group")
+    assert {(r.identifier, r.prompt_version) for r in remaining_in_group} == {("x2", "v2")}
+    other_group = db.get_by_group("other")
+    assert {(r.identifier, r.prompt_version) for r in other_group} == {("x3", "v1")}
+
+
+def test_delete_records_older_than(db: PromptResultDB):
+    old_cm = CreationMeta(created_at=datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2))
+    new_cm = CreationMeta(created_at=datetime.datetime.now(datetime.timezone.utc))
+    db.store(identifier="age-del", prompt="p", result="old", creation_meta=old_cm)
+    db.store(identifier="age-del", prompt="p", result="new", creation_meta=new_cm)
+    deleted = db.delete_records(older_than=datetime.timedelta(days=1))
+    assert deleted == 1
+    remaining = db.get_by_identifier("age-del")
+    assert [r.result for r in remaining] == ["new"]
