@@ -22,6 +22,8 @@ class PydanticYAMLLoader(yaml.SafeLoader):
 
     # registry of available models for YAML tag resolution
     _model_registry: dict[str, type[pydantic.BaseModel]] = {}
+    # cache of modules that were already scanned for pydantic models
+    _scanned_modules: set[str] = set()
 
     @classmethod
     def register_model(
@@ -76,22 +78,27 @@ class PydanticYAMLLoader(yaml.SafeLoader):
         cls,
         package_name: str,
         tag_prefix: str = "",
+        force_rescan: bool = False,
     ) -> None:
         """Auto-register all Pydantic models from all modules in a package.
 
         Args:
             package_name: Name of the package to scan recursively
             tag_prefix: Optional prefix to add to all tag names
+            force_rescan: When True, scan modules even if they were scanned before
         """
         try:
             package = importlib.import_module(package_name)
         except ImportError as error:
             raise ValueError(f"failed to import package '{package_name}'") from error
-        total_registered = 0
+        total_new_registered = 0
         for _, module_name, _ in pkgutil.walk_packages(package.__path__, prefix=f"{package_name}."):
+            # skip modules we've already scanned unless forced
+            if not force_rescan and module_name in cls._scanned_modules:
+                continue
             try:
                 module = importlib.import_module(module_name)
-                registered_count = 0
+                new_registered_in_module = 0
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
                     if (
@@ -102,14 +109,18 @@ class PydanticYAMLLoader(yaml.SafeLoader):
                         # use fully qualified names (`pkg.subpkg.module.Model`)
                         qualified_name = f"{module_name}.{attr_name}"
                         tag_name = f"{tag_prefix}{qualified_name}" if tag_prefix else qualified_name
-                        cls.register_model(tag_name, attr)
-                        registered_count += 1
-                if registered_count > 0:
-                    logger.debug(f"registered {registered_count} models from module '{module_name}'")
-                total_registered += registered_count
+                        # only count if this is a newly registered model
+                        if tag_name not in cls._model_registry:
+                            cls.register_model(tag_name, attr)
+                            new_registered_in_module += 1
+                if new_registered_in_module > 0:
+                    logger.debug(f"registered {new_registered_in_module} models from module '{module_name}'")
+                total_new_registered += new_registered_in_module
+                # mark module as scanned regardless of whether we found new models
+                cls._scanned_modules.add(module_name)
             except ImportError:
                 continue  # skip modules that can't be imported
-        logger.info(f"registered {total_registered} models from package '{package_name}'")
+        logger.info(f"registered {total_new_registered} new model(s) from package '{package_name}'")
 
     @classmethod
     def get_registered_models(cls) -> dict[str, type[pydantic.BaseModel]]:

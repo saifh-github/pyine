@@ -1,6 +1,7 @@
 import builtins
 import pathlib
 
+import dotenv
 import pytest
 
 import pyine.utils.reprod as reprod
@@ -121,29 +122,16 @@ def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
 
 def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch):
     # patch logging and pydantic loader to avoid side effects by patching real modules
-    calls = {"setup_logging": 0, "register_models": 0}
+    calls = {"setup_logging": 0}
 
     import pyine.utils.logging as real_log_mod
-    import pyine.utils.pydantic as real_pyd_mod
 
     def fake_setup_logging(level, log_to_file, log_path):
         calls["setup_logging"] += 1
 
-    def fake_register_models_from_package(pkg):
-        calls["register_models"] += 1
-
     monkeypatch.setattr(real_log_mod, "setup_logging", fake_setup_logging, raising=True)
-    monkeypatch.setattr(
-        real_pyd_mod.PydanticYAMLLoader,
-        "register_models_from_package",
-        classmethod(lambda cls, pkg: fake_register_models_from_package(pkg)),
-        raising=True,
-    )
-
     # ensure dotenv.load_dotenv is a no-op
-    import dotenv as real_dotenv
-
-    monkeypatch.setattr(real_dotenv, "load_dotenv", lambda x: None, raising=True)
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda x: None, raising=True)
     # reset sentinel so entrypoint_setup runs init branch
     monkeypatch.delattr(reprod.entrypoint_setup, "_executed", raising=False)
     # first call initializes
@@ -151,4 +139,3 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
     # second call should not call setup again, only reseed
     reprod.entrypoint_setup(seed=456)
     assert calls["setup_logging"] == 1
-    assert calls["register_models"] == 1

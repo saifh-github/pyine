@@ -219,10 +219,13 @@ def entrypoint_setup(
     log_path: pathlib.Path | str | None = None,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
-    # use a sentinel object to track first execution
+    # no matter what execution this is, re-seed if needed
+    if seed is not None:
+        set_seed(seed=seed, workers=seed_workers)
+    # use a sentinel object to track first execution for the rest
     if not hasattr(entrypoint_setup, "_executed"):
+        import pyine.prompts
         import pyine.utils.logging
-        import pyine.utils.pydantic
 
         load_dotenv()
         pyine.utils.logging.setup_logging(
@@ -230,9 +233,8 @@ def entrypoint_setup(
             log_to_file=log_to_file,
             log_path=log_path,
         )
-        pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_package("pyine")
+        # initialize the prompt-related utilities
+        _ = pyine.prompts.get_framework_prompt_manager()
+        _ = pyine.prompts.get_framework_db()
         entrypoint_setup._executed = True
-    # no matter what execution this is, re-seed if needed
-    if seed is not None:
-        set_seed(seed=seed, workers=seed_workers)
     logger.info(f"set up entrypoint (seed={seed})")
