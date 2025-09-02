@@ -1,8 +1,5 @@
-import hashlib
-import os
+import builtins
 import pathlib
-import sys
-import types
 
 import pytest
 
@@ -25,9 +22,7 @@ def test_get_framework_version_package_missing(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
-    # Simulate ImportError for git module
-    import builtins
-
+    # simulate ImportError for git module
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -40,8 +35,8 @@ def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
-    # Simulate git module present but repo invalid
-    import builtins
+    # simulate git module present but repo invalid
+    real_import = builtins.__import__
 
     class FakeGit:
         class InvalidGitRepositoryError(Exception):
@@ -50,8 +45,6 @@ def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
         class Repo:
             def __init__(self, *args, **kwargs):  # noqa: ARG002
                 raise FakeGit.InvalidGitRepositoryError()
-
-    real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
         if name == "git":
@@ -63,16 +56,14 @@ def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
-    # Force importlib.metadata.distributions to raise ImportError to try pip branch
+    # force importlib.metadata.distributions to raise ImportError to try pip branch
+    real_import = builtins.__import__
+
     class FakeMeta:
         def distributions(self):
             raise ImportError("boom")
 
     monkeypatch.setattr(reprod.importlib, "metadata", FakeMeta(), raising=True)
-
-    import builtins as _bi
-
-    real_import = _bi.__import__
 
     class FakePip:
         def get_installed_distributions(self):  # noqa: RUF100
@@ -83,7 +74,7 @@ def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
             return FakePip()
         return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(_bi, "__import__", fake_import)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     assert reprod.get_installed_packages() == []
 
 
@@ -122,23 +113,23 @@ def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
         pass
 
     o = Obj()
-    # Ensure that including repr with memory addresses yields stable hash due to cleaning
+    # ensure that including repr with memory addresses yields stable hash due to cleaning
     s1 = reprod.get_params_hash(o)
     s2 = reprod.get_params_hash(o)
     assert s1 == s2
 
 
 def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch):
-    # Patch logging and pydantic loader to avoid side effects by patching real modules
+    # patch logging and pydantic loader to avoid side effects by patching real modules
     calls = {"setup_logging": 0, "register_models": 0}
 
     import pyine.utils.logging as real_log_mod
     import pyine.utils.pydantic as real_pyd_mod
 
-    def fake_setup_logging(level, log_to_file):  # noqa: ARG002
+    def fake_setup_logging(level, log_to_file, log_path):
         calls["setup_logging"] += 1
 
-    def fake_register_models_from_package(pkg):  # noqa: ARG002
+    def fake_register_models_from_package(pkg):
         calls["register_models"] += 1
 
     monkeypatch.setattr(real_log_mod, "setup_logging", fake_setup_logging, raising=True)
@@ -153,14 +144,11 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
     import dotenv as real_dotenv
 
     monkeypatch.setattr(real_dotenv, "load_dotenv", lambda x: None, raising=True)
-
     # reset sentinel so entrypoint_setup runs init branch
     monkeypatch.delattr(reprod.entrypoint_setup, "_executed", raising=False)
-
     # first call initializes
     reprod.entrypoint_setup(seed=123, log_level=10, log_to_file=False)
     # second call should not call setup again, only reseed
     reprod.entrypoint_setup(seed=456)
-
     assert calls["setup_logging"] == 1
     assert calls["register_models"] == 1

@@ -1,6 +1,7 @@
 import logging
 import logging.handlers
 import os
+import pathlib
 
 import pytest
 
@@ -18,8 +19,8 @@ def test_setup_logging_console_only(tmp_path: str, capsys: pytest.CaptureFixture
 
 
 def test_setup_logging_with_file(tmp_path: str, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.chdir(tmp_path)
-    log_utils.setup_logging(level=logging.INFO, log_to_file=True)
+    log_path = pathlib.Path(tmp_path) / "some_dir" / "dummy.log"
+    log_utils.setup_logging(level=logging.INFO, log_to_file=True, log_path=log_path)
     main_logger = logging.getLogger(log_utils.PROJECT_LOGGER_NAME)
     has_file_handler = any(isinstance(h, logging.handlers.RotatingFileHandler) for h in main_logger.handlers)
     assert has_file_handler
@@ -28,7 +29,6 @@ def test_setup_logging_with_file(tmp_path: str, monkeypatch: pytest.MonkeyPatch)
     for h in main_logger.handlers:
         if isinstance(h, logging.handlers.RotatingFileHandler):
             h.flush()
-    log_path = tmp_path / f"{log_utils.PROJECT_LOGGER_NAME}.log"
     assert log_path.exists()
     content = log_path.read_text(encoding="utf-8")
     assert test_message in content
