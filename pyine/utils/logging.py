@@ -1,13 +1,22 @@
 import logging
 import logging.config
+import pathlib
 
 PROJECT_LOGGER_NAME = "pyine"
 """The name of the root logger for the entire PyINE framework."""
 
 
+def get_default_log_file_path() -> pathlib.Path:
+    """Returns the default path to the log file."""
+    import pyine.utils.filesystem
+
+    return pyine.utils.filesystem.get_logs_root_path() / f"{PROJECT_LOGGER_NAME}.log"
+
+
 def setup_logging(
     level: int = logging.INFO,
     log_to_file: bool = False,
+    log_path: pathlib.Path | str | None = None,  # `None` = auto-decide, if log_to_file = True
 ):
     """Configures logging for the entire framework.
 
@@ -19,7 +28,8 @@ def setup_logging(
 
     Args:
         level: The minimum logging level to capture (e.g., logging.INFO, logging.DEBUG).
-        log_to_file: If True, logs will also be written to 'pyine.log'.
+        log_to_file: If True, logs will also be written to a file.
+        log_path: The path to write log files to; if `None` and required, we will use a default path.
     """
     logging_config = {
         "version": 1,
@@ -30,7 +40,7 @@ def setup_logging(
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
             "detailed": {
-                "format": ("%(asctime)s - %(levelname)-8s - %(name)s.%(funcName)s:%(lineno)d - %(message)s"),
+                "format": "%(asctime)s - %(levelname)-8s - %(name)s.%(funcName)s:%(lineno)d - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
         },
@@ -56,11 +66,13 @@ def setup_logging(
     }
 
     if log_to_file:
+        default_log_path = get_default_log_file_path() if log_path is None else pathlib.Path(log_path)
+        default_log_path.parent.mkdir(parents=True, exist_ok=True)
         logging_config["handlers"]["file"] = {
             "class": "logging.handlers.RotatingFileHandler",
             "formatter": "detailed",
-            "filename": f"{PROJECT_LOGGER_NAME}.log",
-            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+            "filename": str(default_log_path),
+            "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 3,
             "encoding": "utf-8",
         }

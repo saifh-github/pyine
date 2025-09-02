@@ -1,3 +1,4 @@
+import datetime
 import functools
 import importlib
 import inspect
@@ -418,3 +419,72 @@ def get_fully_qualified_name(
             mod = getattr(cls, "__module__", "") or ""
             qual = getattr(cls, "__qualname__", getattr(cls, "__name__", "<object>"))
     return qual if mod == "builtins" or not mod else f"{mod}.{qual}"
+
+
+_DURATION_RE = re.compile(r"(?P<value>\d+)\s*(?P<unit>[smhd])", re.IGNORECASE)
+"""Regex pattern for parsing duration strings like '90m', '1h30m', '2d', '3600s'."""
+
+
+def parse_duration_to_timedelta(
+    spec: str | None,
+) -> datetime.timedelta | None:
+    """Parses a duration like '90m', '1h30m', '2d', '3600s' to a timedelta, or None if spec is falsy.
+
+    The parser is strict: any unexpected characters (other than whitespace between tokens)
+    cause a ValueError.
+    """
+    if not spec:
+        return None
+    total_seconds = 0
+    idx = 0
+    n = len(spec)
+    matched_any = False
+    while idx < n:
+        # skip whitespace between tokens
+        while idx < n and spec[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        match = _DURATION_RE.match(spec, idx)
+        if not match:
+            raise ValueError(f"invalid duration token starting at position {idx} in '{spec}'")
+        matched_any = True
+        value = int(match.group("value"))
+        unit = match.group("unit").lower()
+        if unit == "s":
+            total_seconds += value
+        elif unit == "m":
+            total_seconds += value * 60
+        elif unit == "h":
+            total_seconds += value * 3600
+        elif unit == "d":
+            total_seconds += value * 86400
+        else:
+            # should not happen due to regex, but keep for safety
+            raise ValueError(f"unsupported time unit in '{spec}': {unit}")
+        idx = match.end()
+    if not matched_any:
+        raise ValueError(f"could not parse duration spec: '{spec}'")
+    return datetime.timedelta(seconds=total_seconds)
+
+
+def parse_indices_spec(
+    spec: str,
+) -> list[int]:
+    """Parses comma-separated indices spec like '1-5,7,9-12' into a sorted list of unique ints.
+
+    Note: when a range is specified in the provided spec, it is assumed to be inclusive on both ends.
+    """
+    indices: set[int] = set()
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    for part in parts:
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            if end < start:
+                raise ValueError(f"invalid range '{part}': end < start")
+            for idx in range(start, end + 1):
+                indices.add(idx)
+        else:
+            indices.add(int(part))
+    return sorted(indices)

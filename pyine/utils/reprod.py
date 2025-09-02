@@ -216,6 +216,7 @@ def entrypoint_setup(
     seed_workers: bool = False,
     log_level: int = logging.INFO,
     log_to_file: bool = False,
+    log_path: pathlib.Path | str | None = None,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
     # use a sentinel object to track first execution
@@ -227,6 +228,7 @@ def entrypoint_setup(
         pyine.utils.logging.setup_logging(
             level=log_level,
             log_to_file=log_to_file,
+            log_path=log_path,
         )
         pyine.utils.pydantic.PydanticYAMLLoader.register_models_from_package("pyine")
         entrypoint_setup._executed = True

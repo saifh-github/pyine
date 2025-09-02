@@ -1,4 +1,5 @@
 import builtins
+import datetime
 
 import numpy as np
 import pandas as pd
@@ -319,3 +320,29 @@ class TestImportFromDottedPath:
     def test_import_invalid_path(self):
         with pytest.raises(ValueError):
             portability.import_from_dotted_path("")
+
+
+def test_parse_duration_to_timedelta():
+    assert portability.parse_duration_to_timedelta("") is None
+    assert portability.parse_duration_to_timedelta(None) is None
+    assert portability.parse_duration_to_timedelta("0s") == datetime.timedelta(0)
+    assert portability.parse_duration_to_timedelta("1h") == datetime.timedelta(hours=1)
+    assert portability.parse_duration_to_timedelta("30m") == datetime.timedelta(minutes=30)
+    assert portability.parse_duration_to_timedelta("45s") == datetime.timedelta(seconds=45)
+    assert portability.parse_duration_to_timedelta("1h30m") == datetime.timedelta(hours=1, minutes=30)
+    assert portability.parse_duration_to_timedelta("2h15m30s") == datetime.timedelta(hours=2, minutes=15, seconds=30)
+    assert portability.parse_duration_to_timedelta("45m30s") == datetime.timedelta(minutes=45, seconds=30)
+    with pytest.raises(ValueError):
+        portability.parse_duration_to_timedelta("invalid")
+    with pytest.raises(ValueError):
+        portability.parse_duration_to_timedelta("1happy")
+
+
+def test_parse_indices_spec():
+    assert portability.parse_indices_spec("") == []
+    assert portability.parse_indices_spec("0") == [0]
+    assert portability.parse_indices_spec("0,1") == [0, 1]
+    assert portability.parse_indices_spec("5-9") == list(range(5, 10))
+    assert portability.parse_indices_spec("0-1,2") == [0, 1, 2]
+    assert portability.parse_indices_spec("0,1-2,3") == [0, 1, 2, 3]
+    assert portability.parse_indices_spec("4-10,1-3") == [1, 2, 3, *range(4, 11)]
