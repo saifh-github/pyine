@@ -477,13 +477,12 @@ def get_deltas_from_trace_steps(
                     )
                     next_call_step = next_next_step.trace_step_idx
                     next_next_step = event_iterator.get_next_event(increment=True)  # fetch next event for its trace key
-                    assert next_next_step.exception is None, "why step into a function if an exception is being raised?"
                     output_deltas.append(
                         TraceDelta(
                             curr_trace_key=caller_trace_key,
                             next_trace_key=next_next_step.trace_key,
                             trace_step_idx=next_call_step,
-                            exception=None,
+                            exception=next_next_step.exception,
                             variables=next_call_delta,
                             stdout=next_next_step.stdout,
                             stderr=next_next_step.stderr,
@@ -498,7 +497,7 @@ def get_deltas_from_trace_steps(
                             curr_trace_key=caller_trace_key,
                             next_trace_key=next_next_step.trace_key,
                             trace_step_idx=next_step.trace_step_idx,
-                            exception=None,
+                            exception=next_next_step.exception,
                             variables=delta_generator_fn(caller_vars, next_next_step),
                             stdout=next_next_step.stdout,
                             stderr=next_next_step.stderr,
