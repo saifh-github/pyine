@@ -82,6 +82,60 @@ class TestLocalDatasetIO:
         assert count > 0
 
 
+class TestMessageConversion:
+
+    def test_convert_dict_messages_and_tool_calls(self) -> None:
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": "Let me call a function.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "foo", "arguments": '{"x": 1}'},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "foo",
+                "tool_call_id": "call_1",
+                "content": '{"result": 42}',
+            },
+        ]
+        out = openai_utils.convert_messages_to_openai(messages)
+        assert isinstance(out, list)
+        assert [m["role"] for m in out] == ["system", "user", "assistant", "tool"]
+        assert out[0]["content"] == "You are helpful."
+        assert out[2]["content"] == "Let me call a function."
+        assert isinstance(out[2].get("tool_calls"), list)
+        assert out[2]["tool_calls"][0]["function"]["name"] == "foo"
+        assert out[3]["tool_call_id"] == "call_1"
+        assert out[3]["name"] == "foo"
+
+    def test_convert_multimodal_and_generic_object(self) -> None:
+        # multimodal: content list should be preserved as a list of dicts
+        multimodal = [{"type": "text", "text": "hello"}, {"type": "text", "text": "world"}]
+        out = openai_utils.convert_messages_to_openai([{"role": "user", "content": multimodal}])
+        assert isinstance(out, list) and len(out) == 1
+        assert isinstance(out[0]["content"], list)
+        assert out[0]["content"][0]["type"] == "text"
+        assert out[0]["content"][0]["text"] == "hello"
+
+        # generic object with role/content attributes should be mapped correctly
+        class DummyMsg:
+            def __init__(self, role: str, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        out2 = openai_utils.convert_messages_to_openai([DummyMsg("assistant", "ok")])
+        assert out2[0]["role"] == "assistant"
+        assert out2[0]["content"] == "ok"
+
+
 @pytest.fixture(scope="class")
 def client() -> openai_sdk.OpenAI:
     return openai_sdk.OpenAI()
@@ -257,6 +311,11 @@ class TestOpenAIIntegration:
         )
         assert isinstance(reply, str)
         assert len(reply) > 0
+
+
+def test_default_pred_grader_fine_tune_method_config_getter():
+    config = openai_utils.PredGraderFineTuneMethodConfig().get_openai_method_config()
+    assert isinstance(config, dict)
 
 
 @pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")

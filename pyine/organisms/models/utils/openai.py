@@ -6,9 +6,12 @@ import time
 import typing
 
 import backoff
+import langchain_core.messages
+import langchain_core.prompts
 import openai
 import openai.types.chat
 import openai.types.fine_tuning
+import openai.types.graders
 import orjson
 import pydantic
 
@@ -49,10 +52,9 @@ def write_dataset_to_jsonl(
     for sample in dataset:
         if isinstance(sample, dict):
             assert "messages" in sample
-            msgs = sample["messages"]  # drop every other field except messages
+            msgs = convert_messages_to_openai(sample["messages"])  # drop every other field except messages
         else:
-            msgs = sample
-        assert isinstance(msgs, list)
+            msgs = convert_messages_to_openai(sample)
         assert all([isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs])
         samples_str.append(orjson.dumps({"messages": msgs}).decode("utf-8"))
     if enforce_openai_min_dataset_size and len(samples_str) < 10:
@@ -159,11 +161,131 @@ def estimate_token_count(text: str, model_id: str) -> int:
     return len(tokenizer.encode(text))
 
 
+def convert_messages_to_openai(
+    messages: typing.Sequence[typing.Any],
+) -> list[dict[str, typing.Any]]:
+    """Convert a list of LangChain messages (or message-like dicts) into OpenAI Chat API-compatible messages.
+
+    This function maps common LangChain message types to OpenAI 'messages' format:
+      - LangChain SystemMessage -> role 'system'
+      - LangChain HumanMessage -> role 'user'
+      - LangChain AIMessage -> role 'assistant' (supports tool_calls)
+      - LangChain ToolMessage -> role 'tool' (with tool_call_id when present)
+      - LangChain FunctionMessage -> role 'function' (legacy compatibility)
+      - LangChain ChatMessage (generic) -> role from message
+
+    Args:
+        messages: Sequence of LangChain BaseMessage instances or dicts already containing role/content.
+
+    Returns:
+        A list of dictionaries compatible with the OpenAI Chat Completions API 'messages' parameter.
+    """
+
+    def _normalize_content(
+        _content: typing.Any,
+    ) -> str | list[dict[str, typing.Any]]:
+        # OpenAI supports either a string or a list of content parts (for multimodal).
+        if isinstance(_content, str):
+            return _content
+        if isinstance(_content, list):
+            parts: list[dict[str, typing.Any]] = []
+            for p in _content:
+                if isinstance(p, dict):
+                    parts.append(p)
+                elif hasattr(p, "model_dump") and callable(getattr(p, "model_dump")):
+                    parts.append(typing.cast(dict, p.model_dump()))
+                else:
+                    parts.append({"type": "text", "text": str(p)})
+            return parts
+        return str(_content)
+
+    oai_messages: list[dict[str, typing.Any]] = []
+    for orig_msg in messages:
+        if isinstance(orig_msg, dict):
+            role = str(orig_msg.get("role", "user"))
+            content = _normalize_content(orig_msg.get("content", ""))
+            msg: dict[str, typing.Any] = {"role": role, "content": content}
+            name = orig_msg.get("name")
+            if name:
+                msg["name"] = str(name)
+            tool_call_id = orig_msg.get("tool_call_id")
+            if tool_call_id and role == "tool":
+                msg["tool_call_id"] = str(tool_call_id)
+            tool_calls = orig_msg.get("tool_calls")
+            if tool_calls and role == "assistant":
+                msg["tool_calls"] = tool_calls
+            oai_messages.append(msg)
+            continue
+        content = _normalize_content(getattr(orig_msg, "content", ""))
+        if isinstance(orig_msg, langchain_core.messages.SystemMessage):
+            msg_dict: dict[str, typing.Any] = {"role": "system", "content": content}
+        elif isinstance(orig_msg, langchain_core.messages.HumanMessage):
+            msg_dict = {"role": "user", "content": content}
+        elif isinstance(orig_msg, langchain_core.messages.AIMessage):
+            msg_dict = {"role": "assistant", "content": content}
+            tool_calls = getattr(orig_msg, "tool_calls", None)
+            if tool_calls:
+                tc_out: list[dict[str, typing.Any]] = []
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        name = tc.get("name") or (tc.get("function") or {}).get("name")
+                        args = (
+                            tc.get("args") or tc.get("arguments") or (tc.get("function") or {}).get("arguments") or {}
+                        )
+                        arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
+                        entry: dict[str, typing.Any] = {
+                            "type": "function",
+                            "function": {"name": name or "unknown", "arguments": arguments},
+                        }
+                        if "id" in tc:
+                            entry["id"] = tc["id"]
+                        tc_out.append(entry)
+                    else:
+                        name = (
+                            getattr(tc, "name", None)
+                            or getattr(getattr(tc, "function", None), "name", None)
+                            or "unknown"
+                        )
+                        args = (
+                            getattr(tc, "args", None)
+                            or getattr(tc, "arguments", None)
+                            or getattr(getattr(tc, "function", None), "arguments", None)
+                            or {}
+                        )
+                        arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
+                        entry = {"type": "function", "function": {"name": name, "arguments": arguments}}
+                        tc_id = getattr(tc, "id", None)
+                        if tc_id:
+                            entry["id"] = tc_id
+                        tc_out.append(entry)
+                if tc_out:
+                    msg_dict["tool_calls"] = tc_out
+        elif isinstance(orig_msg, langchain_core.messages.ToolMessage):
+            msg_dict = {"role": "tool", "content": content}
+            tcid = getattr(orig_msg, "tool_call_id", None)
+            if tcid:
+                msg_dict["tool_call_id"] = str(tcid)
+            name = getattr(orig_msg, "name", None)
+            if name:
+                msg_dict["name"] = str(name)
+        elif isinstance(orig_msg, langchain_core.messages.FunctionMessage):
+            # legacy support for function role
+            name = getattr(orig_msg, "name", None) or "function"
+            msg_dict = {"role": "function", "name": str(name), "content": content}
+        elif hasattr(orig_msg, "role"):
+            # generic ChatMessage or similar
+            msg_dict = {"role": str(getattr(orig_msg, "role", "user")), "content": content}
+        else:
+            # fallback: attempt to use .type as role or default to 'user'
+            role = str(getattr(orig_msg, "type", "user"))
+            msg_dict = {"role": role, "content": content}
+        oai_messages.append(msg_dict)
+    return oai_messages
+
+
 class OpenAIClientParamsConfig(pydantic.BaseModel):
     """Configuration parameters for the OpenAI client SDK."""
 
-    # note: we don't actually specify much here, just a default value for the project name
-    # (it would be unwise to hardcode anything specific here, especially API keys or org names)
     model_config = pydantic.ConfigDict(frozen=True, extra="allow")
     """Pydantic model configuration (freezes the dataclass)."""
 
@@ -233,8 +355,8 @@ class OpenAIFineTunerParamsConfig(pydantic.BaseModel):
 
     base_model: str
     """Name of the base model to fine-tune."""
-    method: openai.types.fine_tuning.job_create_params.Method | None = None
-    """The fine-tuning method to use. If `None`, defaults to the OpenAI 'not-given' default."""
+    method: openai.types.fine_tuning.job_create_params.Method | dict[str, typing.Any]
+    """The fine-tuning method to use."""
     hyperparams: OpenAIFineTunerHyperparamsConfig = OpenAIFineTunerHyperparamsConfig()
     """Hyperparameters for the fine-tuning job."""
     seed: int | None = None
@@ -481,8 +603,9 @@ class OpenAIFineTuner:
         Args:
             training_file_id: Files API id of the training dataset (optional if provided via extra_file_args).
             validation_file_id: Files API id of the validation dataset (optional).
-            extra_file_args: Additional file arguments to pass to the job creation call, e.g.,
-                {'preference_file': 'file-abc', 'reward_file': 'file-def'} for RL methods.
+            extra_file_args: Additional file arguments to pass to the job creation call. For RL-style
+                approaches, pass fields like {'preference_file': 'file-abc'} or {'reward_file': 'file-def'}
+                depending on the selected method.
             extra_job_params: Additional method-specific job parameters to pass through.
 
         Returns:
@@ -492,7 +615,6 @@ class OpenAIFineTuner:
         integrations = None
         if self.config.wandb_integration is not None:
             integrations = [self.config.wandb_integration.model_dump()]
-
         params: dict[str, typing.Any] = {
             "model": self.config.base_model,
             "hyperparameters": self.config.hyperparams.model_dump(),
@@ -513,7 +635,6 @@ class OpenAIFineTuner:
             params.update(self.config.job_params)
         if extra_job_params:
             params.update(extra_job_params)
-
         job = self.client.fine_tuning.jobs.create(**params)
         logger.info(f"fine-tuning job created, id={job.id}, status={job.status}")
         return job.id
@@ -629,6 +750,89 @@ class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec[OpenAIFineTuner
     """Configuration parameters for the OpenAI fine-tuning API helper."""
     params_key: str = "config"
     """Key to use when passing the params configuration to the class constructor."""
+
+
+DefaultPromptMsgsType = typing.Literal["default"]
+
+
+class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
+    """Configuration for the prediction grader RL fine-tuning method used in RL experiments."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    grader_model: str = "gpt-4.1-mini-2025-04-14"
+    """Model to use for the prediction grader.
+
+    For more information on gradel model constraints, see:
+    https://platform.openai.com/docs/guides/graders#model-grader-constraints
+    """
+    grader_name: str = "pred_grader"
+    """Arbitrary name for the prediction grader."""
+    default_max_output_tokens: int = 64  # we don't need much, should be a float-only output? (+struct?)
+    """Default maximum output tokens for the prediction grader."""
+    pred_grader_prompt_messages: list[dict[str, pydantic.JsonValue]] | DefaultPromptMsgsType = "default"
+    """Messages to use as the prompt for the prediction grader."""
+    compute_multiplier: typing.Literal["auto"] | float = "auto"
+    """Multiplier on amount of compute used for exploring search space during training."""
+    eval_interval: typing.Literal["auto"] | int = "auto"
+    """The number of training steps between evaluation runs."""
+    eval_samples: typing.Literal["auto"] | int = "auto"
+    """Number of evaluation samples to generate per training step."""
+    reasoning_effort: typing.Literal["default", "low", "medium", "high"] = "default"
+    """Level of reasoning effort."""
+
+    def get_openai_method_config(self) -> openai.types.fine_tuning.job_create_params.Method:
+        """Returns the configuration for the prediction grader used in OpenAI RL experiments."""
+        if self.pred_grader_prompt_messages != "default":
+            prompt_messages = self.pred_grader_prompt_messages
+        else:
+            assert self._resolved_pred_grader_prompt_messages is not None
+            prompt_messages = self._resolved_pred_grader_prompt_messages
+        return openai.types.fine_tuning.job_create_params.Method(
+            type="reinforcement",
+            reinforcement=openai.types.fine_tuning.reinforcement_method_param.ReinforcementMethodParam(
+                grader=openai.types.graders.score_model_grader_param.ScoreModelGraderParam(
+                    input=prompt_messages,  # noqa
+                    model=self.grader_model,
+                    name=self.grader_name,
+                    type="score_model",
+                    range=[0, 1],
+                    sampling_params=dict(
+                        max_tokens=self.default_max_output_tokens,
+                    ),
+                ),
+                hyperparameters=openai.types.fine_tuning.reinforcement_hyperparameters_param.ReinforcementHyperparametersParam(
+                    compute_multiplier=self.compute_multiplier,
+                    eval_interval=self.eval_interval,
+                    eval_samples=self.eval_samples,
+                    reasoning_effort=self.reasoning_effort,
+                ),
+            ),
+        )
+
+    _resolved_pred_grader_prompt_messages: list[dict[str, pydantic.JsonValue]] | None = pydantic.PrivateAttr(
+        default=None,
+    )
+
+    @pydantic.model_validator(mode="after")
+    def _validate_and_resolve(self) -> "PredGraderFineTuneMethodConfig":
+        """Validates and resolves the prompt template messages (if needed)."""
+        if self.pred_grader_prompt_messages == "default":
+            import pyine.prompts.manager
+
+            messages = pyine.prompts.manager.get_prompt_template(
+                "pred_grader",
+                version="score_only_for_openai_grader",
+                use_chat_template=True,
+                include_examples=True,
+            ).messages
+            assert len(messages) == 2
+            assert isinstance(messages[0], langchain_core.messages.SystemMessage)
+            assert isinstance(messages[1], langchain_core.prompts.HumanMessagePromptTemplate)
+            messages = [messages[0], {"role": "user", "content": messages[1].prompt.template}]
+            self._resolved_pred_grader_prompt_messages = convert_messages_to_openai(messages)
+        return self
 
 
 def cleanup_finetuned_models(

@@ -35,8 +35,10 @@ def get_output_parser(
     """Return the output parser for the pred_grader prompt based on version."""
     import langchain_core.output_parsers
 
-    if version == "score_only" or version is None:
+    if version == "score_only" or version is None:  # default
         model = GradingResult
+    elif version == "score_only_for_openai_grader":
+        return None  # not using schema/structured output for openai usage
     elif version == "with_reasoning":
         model = GradingResultWithReasoning
     else:
@@ -64,7 +66,7 @@ def get_prompt_template(
         include_examples=include_examples,
         target_examples=target_examples,
         role_variables=None,
-        context_variables=dict(expected_output_format=parser.get_format_instructions()),
+        context_variables=dict(expected_output_format=parser.get_format_instructions()) if parser else None,
         examples_block_variables=None,
     )
     if partial_vars:

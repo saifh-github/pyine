@@ -73,6 +73,10 @@ def test_get_chain_attaches_parser(mocker):
     assert isinstance(with_reasoning_chain, langchain_core.runnables.RunnableSequence)
     assert isinstance(with_reasoning_chain.last, langchain_core.output_parsers.PydanticOutputParser)
     assert with_reasoning_chain.last.pydantic_object == pred_grader.GradingResultWithReasoning
+    # special handling for the openai grader: no parser
+    openai_chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader", "score_only_for_openai_grader")
+    assert isinstance(openai_chain, langchain_core.runnables.RunnableSequence)
+    assert not isinstance(openai_chain.last, langchain_core.output_parsers.PydanticOutputParser)
 
 
 @pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")

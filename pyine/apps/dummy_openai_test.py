@@ -1,10 +1,14 @@
 import functools
 import logging
+import pathlib
 import sys
 import typing
 
+import langchain_core.prompts
 import langchain_core.runnables
 import openai
+import openai.types
+import openai.types.fine_tuning
 import pydantic
 
 import pyine.data.datamodule
@@ -39,12 +43,13 @@ class MainConfig(pydantic.BaseModel):
         )
     )
     openai_client: pyine.organisms.models.utils.openai.OpenAIClientConfig = (
-        pyine.organisms.models.utils.openai.OpenAIClientConfig()
+        pyine.organisms.models.utils.openai.OpenAIClientConfig(),
     )
     openai_finetuner: pyine.organisms.models.utils.openai.OpenAIFineTunerConfig = (
         pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(
             params=pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
-                base_model="gpt-4.1-nano-2025-04-14",
+                base_model="o4-mini-2025-04-16",
+                method=pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig().model_dump(),
                 seed=0,
                 suffix="dummy",
                 wandb_integration=None,
@@ -53,15 +58,10 @@ class MainConfig(pydantic.BaseModel):
             )
         )
     )
-    pred_output_compare_options: typing.Annotated[  # TODO @@@@ make project-wide default
+    pred_output_compare_options: typing.Annotated[
         pyine.utils.code.output_compare.CompareOptions,
         pydantic.Field(
-            default=pyine.utils.code.output_compare.CompareOptions(
-                rel_tol="auto",
-                abs_tol="auto",
-                array_type_matters=False,
-            ),
-            validate_default=True,
+            default=pyine.utils.code.output_compare.get_options_for_code_exec_outputs(),
             description="Options to use for comparing a predicted output with the expected output.",
         ),
     ]
@@ -147,10 +147,10 @@ def main(
         va_file_id = finetuner.ensure_uploaded(va_file_path)
         job_id = finetuner.create_job(tr_file_id, va_file_id)
         try:
-            finetuner.stream_events(job_id)  # streams events without blocking
+            finetuner.stream_job_events(job_id)  # streams events without blocking
         except KeyboardInterrupt:
             logger.info("Stopped streaming events; continuing to poll status...")
-        model_name = finetuner.wait_for_terminal(job_id)
+        model_name = finetuner.wait_for_job(job_id)
         if not model_name:
             logger.error("fine-tune failed or no model name returned")
             sys.exit(-1)
