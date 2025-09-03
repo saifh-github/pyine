@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 class PromptTemplate(pydantic.BaseModel):
-    """Model for prompt templates."""
+    """Model for prompt templates (simpler version of the LangChain PromptTemplate class)."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
 
     template: str
     """The prompt template string."""
@@ -37,6 +40,8 @@ class PromptTemplate(pydantic.BaseModel):
     """The format of the prompt template (f-string or jinja2; f-string is preferred for security)."""
     partial_variables: dict[str, typing.Any] | None = None
     """Optional dictionary of partial variables to be used in the template."""
+    optional_variables: list[str] | None = None
+    """Optional dictionary of optional variables that do not need to be specified when rendering."""
 
     def get_partially_rendered_prompt(
         self,
@@ -294,11 +299,14 @@ class PromptConfig(pydantic.BaseModel):
                     self.question.template,
                     template_format=self.question.format,
                     partial_variables=self.question.partial_variables or {},
+                    optional_variables=self.question.optional_variables or [],
                 ),
             ]
             output_template = langchain_core.prompts.ChatPromptTemplate(
                 messages=messages,
                 input_variables=question_input_vars,
+                partial_variables=self.question.partial_variables or {},
+                optional_variables=self.question.optional_variables or [],
             )
         else:
             output_template = langchain_core.prompts.PromptTemplate(
@@ -306,7 +314,11 @@ class PromptConfig(pydantic.BaseModel):
                 template_format=self.question.format,
                 input_variables=question_input_vars,
                 partial_variables=self.question.partial_variables or {},
+                optional_variables=self.question.optional_variables or [],
             )
+        if self.question.optional_variables:
+            # set all optional variables with a default to avoid/bypass issues w/ optionals not being honored
+            output_template = output_template.partial(**{opt_var: "" for opt_var in self.question.optional_variables})
         return output_template
 
     def render_prompt(

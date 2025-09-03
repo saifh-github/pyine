@@ -26,10 +26,10 @@ v1.0:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {% if target_word_count %}
+      {% if target_word_count is defined and target_word_count %}
       Your summary for this specific code snippet should be roughly {{target_word_count}} words.
       {%- endif %}
-      {% if description %}
+      {% if description is defined and description %}
       Coding problem description (to relate in your summary):
       =======================================================
       {{description.rstrip("\n")}}
@@ -38,6 +38,9 @@ v1.0:
 
       Now, provide your summary of the code snippet, and nothing else:
     format: jinja2
+    optional_variables:
+      - target_word_count
+      - description
   example_template:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
