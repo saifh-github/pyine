@@ -22,7 +22,7 @@ class MainConfig(pydantic.BaseModel):
     """Configuration for the script's main function.
 
     Assembles the components required to fine-tune a model for code execution using a code execution
-    traces datamodule (the 'shortcuts' one by default).
+    traces datamodule.
 
     NOTE: this config is intended to be used with the `main` function defined below, and is provided
     here as a demonstration of how to use this app (will be refactored/cleaned when we have a config
@@ -31,22 +31,8 @@ class MainConfig(pydantic.BaseModel):
 
     seed: int | None = None
     """Seed to use for reproducibility."""
-    datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig = (
-        pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
-            lmdb_paths=[
-                pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
-            ],
-            max_trace_count=1000,  # cap off the max dataset size
-            base_filter_rule="+subset:train",  # conduct all prototyping on train only (w/ internal split)
-            subset_filter_rules=dict(),  # reset rule-based assignments for subset (will take random split)
-            subset_leftover_split_ratios=dict(
-                # take 80-20 split from the original train dataset itself for this prototyping
-                train=0.8,
-                valid=0.2,
-            ),
-        )
-    )
-    """Configuration for the datamodule to use."""
+    datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig
+    """Configuration for the datamodule to use (NOT SPECIFIED BY DEFAULT!)."""
     openai_client: pyine.organisms.models.utils.openai.OpenAIClientConfig = (
         pyine.organisms.models.utils.openai.OpenAIClientConfig()
     )
@@ -128,6 +114,13 @@ def main(
     config: MainConfig,
     skip_fine_tuning: bool = False,  # used to evaluate the base model directly
 ) -> None:
+    """Main function for the script; performs fine-tuning and evaluation for an OpenAI model.
+
+    Args:
+        config: Configuration for the script; see `MainConfig` for details.
+        skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
+            a reference for performance comparisons).
+    """
     pyine.utils.reprod.entrypoint_setup(
         seed=config.seed,
     )
@@ -177,4 +170,17 @@ def main(
 
 
 if __name__ == "__main__":
-    main(MainConfig(), skip_fine_tuning=False)
+    _dmconfig = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
+        lmdb_paths=[
+            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
+        ],
+        max_trace_count=1000,  # cap off the max dataset size
+        base_filter_rule="+subset:train",  # conduct all prototyping on train only (w/ internal split)
+        subset_filter_rules=dict(),  # reset rule-based assignments for subset (will take random split)
+        subset_leftover_split_ratios=dict(
+            # take 80-20 split from the original train dataset itself for this prototyping
+            train=0.8,
+            valid=0.2,
+        ),
+    )
+    main(MainConfig(datamodule_config=_dmconfig), skip_fine_tuning=False)
