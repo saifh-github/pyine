@@ -432,7 +432,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     prompt_config: pyine.prompts.PromptBuildConfig = pyine.prompts.PromptBuildConfig(
         prompt_name="code_execution",
-        # version="TODO", @@@@
         use_chat_template=True,
         include_examples=True,
         target_examples=None,  # all

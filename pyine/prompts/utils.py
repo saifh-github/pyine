@@ -280,19 +280,31 @@ class PromptConfig(pydantic.BaseModel):
             context_variables=context_variables,
             examples_block_variables=examples_block_variables,
         )
+        # for proper escaping of anything in the system message, pre-determine input vars
+        question_input_vars = langchain_core.prompts.string.get_template_variables(
+            template=self.question.template,
+            template_format=self.question.format,
+        )
+        if self.question.partial_variables:
+            question_input_vars = [var for var in question_input_vars if var not in self.question.partial_variables]
         if use_chat_template:
+            messages = [
+                langchain_core.messages.SystemMessage(content=system_msg),
+                langchain_core.prompts.HumanMessagePromptTemplate.from_template(
+                    self.question.template,
+                    template_format=self.question.format,
+                    partial_variables=self.question.partial_variables or {},
+                ),
+            ]
             output_template = langchain_core.prompts.ChatPromptTemplate(
-                messages=[
-                    (langchain_core.messages.SystemMessage.model_fields["type"].default, system_msg),
-                    (langchain_core.messages.HumanMessage.model_fields["type"].default, self.question.template),
-                ],
-                template_format=self.question.format,
-                partial_variables=self.question.partial_variables or {},
+                messages=messages,
+                input_variables=question_input_vars,
             )
         else:
-            output_template = langchain_core.prompts.PromptTemplate.from_template(
+            output_template = langchain_core.prompts.PromptTemplate(
                 template=self.template_block_separator.join([*system_msg, self.question.template]),
                 template_format=self.question.format,
+                input_variables=question_input_vars,
                 partial_variables=self.question.partial_variables or {},
             )
         return output_template
