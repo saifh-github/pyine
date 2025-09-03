@@ -56,8 +56,7 @@ def create_sample_transform(
             sample_args = sample
             sample = pyine.organisms.datamodules.utils.samples.SampleData(**sample)
         else:
-            assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
-            sample_args = sample._asdict()
+            sample_args = sample._asdict()  # should be a named-tuple-like interface
         if use_chat_template:
             output = prompt_template.format_messages(**sample_args)
             assert isinstance(output, list)
