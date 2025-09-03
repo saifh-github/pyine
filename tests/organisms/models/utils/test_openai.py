@@ -315,7 +315,7 @@ class TestOpenAIIntegration:
 
 
 def test_default_pred_grader_fine_tune_method_config_getter():
-    config = openai_utils.PredGraderFineTuneMethodConfig().get_openai_method_config()
+    config = openai_utils.PredGraderFineTuneMethodConfig().get_openai_config()
     assert isinstance(config, dict)
 
 

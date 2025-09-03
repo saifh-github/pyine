@@ -617,7 +617,7 @@ class SampleBuilderConfig(pyine.data.datamodule.BaseDataParserConfig):
     def get_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
-        raw_transform_fn: typing.Callable[[SampleData], typing.Any] | None = None,
+        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
         instantiate_kwargs: dict | None = None,
         generator_kwargs: dict | None = None,
     ) -> "hf_datasets.Dataset":
@@ -627,13 +627,11 @@ class SampleBuilderConfig(pyine.data.datamodule.BaseDataParserConfig):
             sample_builder = self.instantiate(**(instantiate_kwargs or {}))
             for sample_idx in range(len(sample_builder)):
                 sample_data = sample_builder[sample_idx]
-                if raw_transform_fn is not None:
-                    yield raw_transform_fn(sample_data)
-                else:
-                    yield sample_data._asdict()
+                yield sample_data._asdict()  # noqa
 
-        return hf_datasets.Dataset.from_generator(
+        dataset = hf_datasets.Dataset.from_generator(
             generator=_sample_builder_generator,
             split=named_split,
             **(generator_kwargs or {}),
-        )
+        ).map(raw_transform_fn or (lambda x: x))
+        return dataset

@@ -535,6 +535,7 @@ class ConversationDataModule(BaseDataModule):
         self,
         append_answer: bool = True,
         use_hf_messages: bool = False,
+        merge_system_with_user: bool = False,
     ) -> typing.Callable[[typing.Any], typing.Any]:
         """Returns the sample transform function used to prepare training/evaluation conversations.
 
@@ -543,6 +544,15 @@ class ConversationDataModule(BaseDataModule):
 
         Note: if the datamodule does not support the conversion of raw data samples into
         conversation messages, this function will raise an exception.
+
+        Args:
+            append_answer: whether to append the assistant's response to the conversation messages.
+            use_hf_messages: whether to use HuggingFace messages format or the langchain format.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+             The sample transform function.
         """
         raise NotImplementedError
 
@@ -550,6 +560,7 @@ class ConversationDataModule(BaseDataModule):
         self,
         subset_type: SubsetNameType,
         append_answer: bool = True,
+        merge_system_with_user: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace messages dataset object for a given subset type.
 
@@ -558,12 +569,23 @@ class ConversationDataModule(BaseDataModule):
 
         Note: if the datamodule does not support the conversion of raw data samples into
         conversation messages, this function will raise an exception.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+             The HuggingFace messages dataset object.
         """
         raise NotImplementedError
 
     def get_openai_messages_dataset(
         self,
         subset_type: SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
     ) -> pathlib.Path:
         """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
 
@@ -574,5 +596,14 @@ class ConversationDataModule(BaseDataModule):
 
         Note: if the datamodule does not support the conversion of raw data samples into
         conversation messages, this function will raise an exception.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+             The path to the written dataset, which can be used for uploads to the OpenAI API.
         """
         raise NotImplementedError

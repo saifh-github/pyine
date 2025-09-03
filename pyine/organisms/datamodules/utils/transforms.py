@@ -1,3 +1,4 @@
+import collections
 import functools
 import typing
 
@@ -14,7 +15,7 @@ if typing.TYPE_CHECKING:
 
 
 HFMessageListType = list[dict[str, str]]
-SampleTransformInputType = pyine.organisms.datamodules.utils.samples.SampleData
+SampleTransformInputType = pyine.organisms.datamodules.utils.samples.SampleData | dict[str, typing.Any]
 SampleTransformOutputType = str | list[langchain_core.messages.BaseMessage] | HFMessageListType
 SampleTransformType = typing.Callable[[SampleTransformInputType], SampleTransformOutputType]
 
@@ -23,14 +24,18 @@ def create_sample_transform(
     use_chat_template: bool,
     append_answer: bool,
     use_hf_messages: bool = False,
+    merge_system_with_user: bool = False,
     **prompt_kwargs,  # forwarded to the prompt manager template getter
 ) -> SampleTransformType:
     """Create a transform function applying a prompt template to a data sample.
 
-    If `use_chat_template=True`, the transform function will format the produced messages and return
-    those (instead of formatting the prompt as a string directly). If `append_answer=True`, the
-    expected answer that the assistant would provide will be appended to the end of rendered prompt
-    or messages.
+    Args:
+        use_chat_template: whether to use a chat template or a regular template for sample formatting.
+        append_answer: whether to append the assistant's response to the conversation messages.
+        use_hf_messages: whether to use HuggingFace messages format or the langchain format.
+        merge_system_with_user: whether to merge the system message with the user message (used
+            when working with e.g. o1/o3/o4, which do not support custom system prompts). Has no
+            effect when `use_chat_template` is False.
 
     Returns:
         A transform function that converts a SampleData object to a string or list of messages.
@@ -47,16 +52,28 @@ def create_sample_transform(
     def _apply_template_to_sample(
         sample: SampleTransformInputType,
     ) -> SampleTransformOutputType:
-        sample_args = sample._asdict()
+        if isinstance(sample, collections.abc.Mapping):
+            sample_args = sample
+            sample = pyine.organisms.datamodules.utils.samples.SampleData(**sample)
+        else:
+            assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
+            sample_args = sample._asdict()
         if use_chat_template:
             output = prompt_template.format_messages(**sample_args)
             assert isinstance(output, list)
+            # note: we currently only support single-turn interactions here, so one request per convo
+            assert sum([isinstance(m, langchain_core.messages.SystemMessage) for m in output]) <= 1
+            assert sum([isinstance(m, langchain_core.messages.HumanMessage) for m in output]) == 1
+            assert sum([isinstance(m, langchain_core.messages.AIMessage) for m in output]) == 0  # added below
+            assert len(output) in [1, 2]  # we currently only support single-turn transforms here
+            if merge_system_with_user and len(output) == 2:
+                output = typing.cast(
+                    list[langchain_core.messages.BaseMessage],
+                    [langchain_core.messages.HumanMessage(output[0].content + "\n\n" + output[1].content)],
+                )
             if append_answer:
                 output.append(langchain_core.messages.AIMessage(sample.output))
             if use_hf_messages:
-                assert sum([isinstance(m, langchain_core.messages.SystemMessage) for m in output]) <= 1
-                assert sum([isinstance(m, langchain_core.messages.HumanMessage) for m in output]) <= 1
-                assert sum([isinstance(m, langchain_core.messages.AIMessage) for m in output]) <= 1
                 hf_msgs: list[dict[str, str]] = []
                 for msg in output:
                     if isinstance(msg, langchain_core.messages.SystemMessage):

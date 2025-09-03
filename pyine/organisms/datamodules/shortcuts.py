@@ -239,11 +239,13 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self,
         append_answer: bool = True,
         use_hf_messages: bool = False,
+        merge_system_with_user: bool = False,
     ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
         """Returns the sample transform function used to prepare training/evaluation conversations."""
         return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
             append_answer=append_answer,
             use_hf_messages=use_hf_messages,
+            merge_system_with_user=merge_system_with_user,
             **self.config.prompt_config.model_dump(),
         )
 
@@ -251,11 +253,18 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self,
         subset_type: SubsetNameType | None = None,
         append_answer: bool = True,
+        merge_system_with_user: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset object for a given subset type or for the full dataset (if None).
 
         This function exists for users that might not want to use dataloaders directly, and would prefer
         using the data parsers for huggingface-based experiments.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
 
         Returns:
             A huggingface dataset object that produces chat-templated 'conversations' containing
@@ -271,7 +280,11 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         else:
             named_split = hf_datasets.NamedSplit(name="all")
             subset_traces = self._metadata.base_traces
-        transf_fn = self.get_sample_to_messages_transform(append_answer=append_answer, use_hf_messages=True)
+        transf_fn = self.get_sample_to_messages_transform(
+            append_answer=append_answer,
+            use_hf_messages=True,
+            merge_system_with_user=merge_system_with_user,
+        )
         return self.config.default_dataparser_config.get_hf_messages_dataset(
             named_split=named_split,
             raw_transform_fn=transf_fn,
@@ -285,24 +298,40 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     def get_openai_messages_dataset(
         self,
         subset_type: SubsetNameType | None = None,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
     ) -> pathlib.Path:
         """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
 
         This function exists for users that might want to use the data in combination with the
         OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
         a JSONL file with one example per line. That dataset file can then be uploaded to the
-        OpenAI API to train a model.
+        OpenAI API to train/validate a model.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
 
         Returns:
              The path to the written dataset, which can be used for uploads to the OpenAI API.
         """
         openai_local_data_dir = pyine.organisms.models.utils.openai.get_local_file_directory()
-        params_hash = pyine.utils.reprod.get_params_hash(self.config.model_dump())
+        params_hash = pyine.utils.reprod.get_params_hash(
+            self.config.model_dump(),
+            append_answer,
+            merge_system_with_user,
+        )
         subset_type_name = subset_type if subset_type is not None else "all"
-        local_output_path = openai_local_data_dir / f"shortcuts.{subset_type_name}.{params_hash}.jsonl"
+        local_output_path = openai_local_data_dir / f"shortcuts-data.{subset_type_name}.{params_hash}.jsonl"
         if not local_output_path.is_file():
             # note: this impl relies on the huggingface getter (DRY)
-            hf_dataset = self.get_hf_messages_dataset(subset_type=subset_type, append_answer=True)
+            hf_dataset = self.get_hf_messages_dataset(
+                subset_type=subset_type,
+                append_answer=append_answer,
+                merge_system_with_user=merge_system_with_user,
+            )
             pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
 
