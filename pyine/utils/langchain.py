@@ -25,9 +25,9 @@ class CapturedEvent(pydantic.BaseModel):
     error: str | None = None
     """Error message; only captured captured on LLM error."""
     created_at: datetime.datetime = pydantic.Field(
-        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc),
+        default_factory=lambda: datetime.datetime.now(),
     )
-    """UTC Timestamp of event creation."""
+    """Timestamp of event creation (in local time)."""
     kwargs: dict[str, typing.Any] = dict()
     """Keyword arguments passed to the LLM call; may include e.g. invocation_params."""
 

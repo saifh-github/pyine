@@ -29,10 +29,10 @@ class CreationMeta(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="allow")
     """Allows extra fields to be defined in subclasses."""
     created_at: datetime.datetime = pydantic.Field(
-        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc),
+        default_factory=lambda: datetime.datetime.now(),
     )
-    """UTC Timestamp of record creation."""
-    user: str = pydantic.Field(
+    """Timestamp of record creation (in local time)."""
+    created_by: str = pydantic.Field(
         default_factory=lambda: pyine.utils.filesystem.get_username(),
     )
     """Username or email of the user who created the record."""
@@ -126,9 +126,10 @@ class PromptResultDB:
         """
         if creation_meta is None:
             creation_meta = CreationMeta()
+        # note: internally used created_at field is in UTC time zone, and stored as isoformat string
+        internal_created_at = creation_meta.created_at.astimezone(datetime.timezone.utc).isoformat()
         logger.debug(f"storing new entry in database ({identifier=})")
         with self._lock:
-            created_at = creation_meta.created_at.isoformat()
 
             @backoff.on_exception(
                 backoff.expo,
@@ -153,7 +154,7 @@ class PromptResultDB:
                             group,
                             prompt_name,
                             prompt_version,
-                            created_at,
+                            internal_created_at,
                             orjson.dumps(creation_meta.model_dump(mode="json")),
                             prompt,
                             result,
@@ -203,8 +204,13 @@ class PromptResultDB:
         if prompt_version is not None:
             sql.append("AND prompt_version = ?")
             params.append(prompt_version)
-        sql.append("ORDER BY created_at ASC, id ASC")
-        return self._get_records(sql, params, tag_filter_rule, max_result_age)
+        if max_result_age is not None:
+            # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            sql.append("AND created_at > ?")
+            params.append(cutoff.isoformat())
+        sql.append("ORDER BY created_at ASC, id ASC")  # ordered by iso utc time
+        return self._get_records(sql, params, tag_filter_rule)
 
     def get_by_group(
         self,
@@ -231,9 +237,7 @@ class PromptResultDB:
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
         logger.debug(f"fetching potential entries from database ({group=})")
-        sql = [
-            'SELECT * FROM items WHERE "group" = ?',
-        ]
+        sql = ['SELECT * FROM items WHERE "group" = ?']
         params: list[typing.Any] = [group]
         if prompt_name is not None:
             sql.append("AND prompt_name = ?")
@@ -241,8 +245,13 @@ class PromptResultDB:
         if prompt_version is not None:
             sql.append("AND prompt_version = ?")
             params.append(prompt_version)
+        if max_result_age is not None:
+            # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            sql.append("AND created_at > ?")
+            params.append(cutoff.isoformat())
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
-        return self._get_records(sql, params, tag_filter_rule, max_result_age)
+        return self._get_records(sql, params, tag_filter_rule)
 
     def list_groups(self) -> list[str]:
         """List all unique group names present in the database.
@@ -325,6 +334,7 @@ class PromptResultDB:
             sql.append("AND prompt_version = ?")
             params.append(prompt_version)
         if older_than is not None:
+            # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
             cutoff = datetime.datetime.now(datetime.timezone.utc) - older_than
             sql.append("AND created_at < ?")
             params.append(cutoff.isoformat())
@@ -406,7 +416,6 @@ class PromptResultDB:
         sql: list[str],
         params: list[typing.Any],
         tag_filter_rule: str | None,
-        max_result_age: datetime.timedelta | None,
     ) -> list[PromptResultRecord]:
         """Fetch records from the database using the provided SQL queries and params."""
         conn = self._connect(row_factory=True)
@@ -421,9 +430,6 @@ class PromptResultDB:
                 case_sensitive=True,
             )
             records = [rec for rec in records if not tag_filter_fn(rec.tags or [])]
-        if max_result_age is not None:
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
-            records = [rec for rec in records if rec.creation_meta.created_at >= cutoff]
         return records
 
     @staticmethod
@@ -434,12 +440,8 @@ class PromptResultDB:
         meta_raw = row["meta"]
         tags_raw = row["tags"]
         cmeta_raw = row["creation_meta"]
-        cmeta_dict = (
-            orjson.loads(cmeta_raw)
-            if cmeta_raw
-            else {"created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-        )
-        if isinstance(cmeta_dict.get("created_at"), str):
+        cmeta_dict = orjson.loads(cmeta_raw) if cmeta_raw else {}
+        if isinstance(cmeta_dict.get("created_at", None), str):
             cmeta_dict["created_at"] = datetime.datetime.fromisoformat(cmeta_dict["created_at"])  # noqa
         return PromptResultRecord(
             identifier=row["identifier"],
@@ -576,11 +578,18 @@ def fetch_or_generate_prompt_results(
                 result_str = orjson.dumps(output)
             else:
                 result_str = str(output)
-            cm = creation_meta or CreationMeta()
+            cm = creation_meta if creation_meta is not None else CreationMeta()
             latest_llm_event = llm_event_logger.get_latest_event("llm_end")
             if latest_llm_event is not None:
                 cm.llm_output = latest_llm_event.response.llm_output
             prompt_str = prompt_template.format(**input_variables)
+            if tags is None:
+                tags = []
+            if not any([t.startswith("created_by") for t in tags]):
+                tags.append(f"created_by:{cm.created_by}")
+            if not any([t.startswith("created_at") for t in tags]):
+                # don't use full iso format for tags (clashes w/ column-based formatting)
+                tags.append(f"created_at:{cm.created_at.strftime('%Y%m%d-%H%M%S')}")
             if log_new_results:
                 db.store(
                     identifier=identifier,
@@ -603,7 +612,7 @@ def fetch_or_generate_prompt_results(
                     prompt=prompt_str,
                     result=result_str,
                     meta=meta or {},
-                    tags=tags or [],
+                    tags=tags,
                 )
             )
     combined_records = _dedupe_records(existing_records + new_records)
