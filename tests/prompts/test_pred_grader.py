@@ -90,7 +90,7 @@ def test_pred_grader_infer_score_only():
         expected="Hello, Bob",
         execution_type="program output",
         llm=model,
-        with_reasoning=False,
+        options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=False),
     )
     assert hasattr(result, "score")
     assert isinstance(result.score, float)
@@ -108,7 +108,7 @@ def test_pred_grader_infer_with_reasoning():
         expected="Hello, Bob",
         execution_type="program output",
         llm=model,
-        with_reasoning=True,
+        options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=True),
     )
     assert hasattr(result, "score")
     assert 0.0 <= float(result.score) <= 1.0
