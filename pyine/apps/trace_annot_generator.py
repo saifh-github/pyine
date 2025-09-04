@@ -88,6 +88,7 @@ import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.organisms.datamodules.utils.annotator as annotator
 import pyine.prompts.types
+import pyine.utils.llm_providers
 import pyine.utils.portability
 import pyine.utils.reprod
 
@@ -414,6 +415,10 @@ def main(
     if llm_kv:
         llm_kwargs.update(_parse_kv_list_to_dict(llm_kv))
         logger.debug(f"parsed LLM options: {llm_kwargs}")
+    try:
+        llm_provider_config = pyine.utils.llm_providers.LLMProviderConfig.from_dict(llm_kwargs)
+    except Exception as exc:
+        raise click.BadParameter("llm options resulted in an invalid provider config") from exc
 
     indices_list: list[int] | None = None
     if target_indices:
@@ -437,7 +442,7 @@ def main(
     )
     logger.debug(f"parsed prompt config: {prompt_config}")
     options = annotator.AnnotationOptions(
-        llm_provider_kwargs=llm_kwargs,
+        llm_provider_config=llm_provider_config,
         prompt_config=prompt_config,
         target_indices=indices_list,
         base_filter_rule=base_filter_rule,

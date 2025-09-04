@@ -1,5 +1,8 @@
 import typing
 
+import langchain_core.language_models
+import langchain_core.prompts
+import langchain_core.runnables
 import pydantic
 
 PromptNameType = str
@@ -16,6 +19,9 @@ class PromptBuildConfig(pydantic.BaseModel):
     prompt module.
     """
 
+    model_config = pydantic.ConfigDict(frozen=True, extra="allow")
+    """Pydantic model configuration (freezes the dataclass)."""
+
     prompt_name: PromptNameType
     """Name of the prompt to build a template or chain for."""
     version: PromptVersionType | None = None
@@ -26,5 +32,37 @@ class PromptBuildConfig(pydantic.BaseModel):
     """Whether to include few-shot examples in the template."""
     target_examples: int | list[int] | None = None
     """Number or list of examples to include in the template; if `None`, all examples are included."""
-    partial_vars: dict[str, typing.Any] | None = None
+    partial_vars: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Optional partial variables to use for prompt template substitution."""
+
+    def get_template(self) -> langchain_core.prompts.BasePromptTemplate:
+        """Returns a LangChain prompt template for this prompt."""
+        import pyine.prompts.manager
+
+        return pyine.prompts.manager.get_prompt_template(
+            prompt_name=self.prompt_name,
+            version=self.version,
+            use_chat_template=self.use_chat_template,
+            include_examples=self.include_examples,
+            target_examples=self.target_examples,
+            partial_vars=self.partial_vars,
+        )
+
+    def get_chain(
+        self,
+        model: langchain_core.language_models.BaseLanguageModel,
+        runnable_name: str | None = None,
+    ) -> langchain_core.runnables.Runnable:
+        """Returns a LangChain runnable chain for this prompt."""
+        import pyine.prompts.manager
+
+        return pyine.prompts.manager.get_prompt_chain(
+            model=model,
+            prompt_name=self.prompt_name,
+            version=self.version,
+            runnable_name=runnable_name,
+            use_chat_template=self.use_chat_template,
+            include_examples=self.include_examples,
+            target_examples=self.target_examples,
+            partial_vars=self.partial_vars,
+        )

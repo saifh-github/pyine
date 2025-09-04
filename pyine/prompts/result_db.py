@@ -557,13 +557,9 @@ def fetch_or_generate_prompt_results(
         need_to_generate = max(0, (generate_until_result_count or 1) - len(existing_records))
     new_records: list[PromptResultRecord] = []
     if need_to_generate > 0:
-        # lazy import to avoid heavy deps at module import time
-        import pyine.prompts.manager as prompt_manager
-
-        prompt_template = prompt_manager.get_prompt_template(**prompt_config.model_dump())
-        chain = prompt_manager.get_prompt_chain(
+        prompt_template = prompt_config.get_template()
+        chain = prompt_config.get_chain(
             model=model,
-            **prompt_config.model_dump(),
             runnable_name=runnable_name,
         )
         while len(new_records) < need_to_generate:

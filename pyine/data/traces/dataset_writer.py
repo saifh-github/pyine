@@ -201,7 +201,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Timeout in seconds for each LLM runnable invocation. If exceeded, test is skipped.",
         ),
     ]
-    llm_provider_kwargs: typing.Annotated[
+    llm_provider_config: typing.Annotated[  # @@@@@@ TODO: remove this from here, replace by result_db config
         dict[str, typing.Any] | None,
         pydantic.Field(
             default=None,
@@ -738,8 +738,8 @@ async def write_dataset(
     else:
         log(f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
     await _cooperative_yield()
-    if config.llm_provider_kwargs:
-        llm = pyine.utils.llm_providers.get_model_from_provider(**config.llm_provider_kwargs)
+    if config.llm_provider_config:
+        llm = pyine.utils.llm_providers.get_model_from_provider(**config.llm_provider_config)
     else:
         llm = None
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
@@ -819,7 +819,7 @@ async def write_dataset(
                     log(f"{solution}: skipping solution since original code exec test(s) failed")
                     continue
                 # if all test cases passed for the original solution, do the required 'augmentations' now
-                augmented_code_to_trace = await _generate_augmented_code_to_trace(
+                augmented_code_to_trace = await _generate_augmented_code_to_trace(  # TODO @@@@ replace by db lookup
                     problem=problem,
                     solution=solution,
                     llm=llm,
@@ -960,7 +960,7 @@ if __name__ == "__main__":
             # generate_doc_hinted_solutions=1,
             # generate_test_hinted_solutions=1,
             llm_runnable_timeout_seconds=60,
-            llm_provider_kwargs=dict(
+            llm_provider_config=dict(
                 provider="openai",
                 model="gpt-5-mini",
                 temperature=0.1,

@@ -158,13 +158,13 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
     options = annotator.AnnotationOptions(
-        llm_provider_kwargs={"provider": "dummy"},
+        llm_provider_config={"provider": "openai"},
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=_group_resolver,
         input_variables_builder=_input_builder,
-        tags_builder=lambda *_: [],
-        meta_builder=lambda *_: {},
+        tags_builder=lambda *_: [],  # noqa
+        meta_builder=lambda *_: {},  # noqa
         min_results_per_item=1,
         force_generation=True,
     )
@@ -235,7 +235,7 @@ def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch_same_count)
     options = annotator.AnnotationOptions(
-        llm_provider_kwargs={"provider": "dummy"},
+        llm_provider_config={"provider": "openai"},
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=_group_resolver,
@@ -243,8 +243,8 @@ def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
             "code": trace.code_string,
             "description": problem.problem_statement,
         },
-        tags_builder=lambda *_: [],
-        meta_builder=lambda *_: {},
+        tags_builder=lambda *_: [],  # noqa
+        meta_builder=lambda *_: {},  # noqa
         min_results_per_item=1,
     )
     report = annotator.annotate_trace_dataset(
@@ -310,13 +310,13 @@ def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
     options = annotator.AnnotationOptions(
-        llm_provider_kwargs={"provider": "dummy"},
+        llm_provider_config={"provider": "openai"},
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=lambda _t, p, _c: str(p.problem_id),
         input_variables_builder=lambda t, p, c: {"code": t.code_string, "description": p.problem_statement},
-        tags_builder=lambda *_: [],
-        meta_builder=lambda *_: {},
+        tags_builder=lambda *_: [],  # noqa
+        meta_builder=lambda *_: {},  # noqa
         min_results_per_item=1,
     )
     report = annotator.annotate_trace_dataset(
@@ -365,7 +365,7 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
         creation_meta=result_db.CreationMeta(),
     )
     options = annotator.AnnotationOptions(
-        llm_provider_kwargs=dict(
+        llm_provider_config=dict(
             provider="openai",
             model="gpt-4o-mini",
         ),

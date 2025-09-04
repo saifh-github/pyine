@@ -1,5 +1,6 @@
 import functools
 import os
+import typing
 
 import langchain_core.language_models
 import langchain_core.prompts
@@ -7,18 +8,55 @@ import langchain_core.rate_limiters
 import langchain_core.runnables
 import langchain_deepseek
 import langchain_openai
+import pydantic
+
+SupportedProviderType = typing.Literal[
+    "deepseek",
+    "openai",
+    # @@@@ TODO: add more here if needed, e.g. for local vLLM server?
+]
+"""Supported LLM providers."""
+
+
+class LLMProviderConfig(pydantic.BaseModel):
+    """Configuration for a LLM provider."""
+
+    provider: SupportedProviderType
+    """Provider name."""
+    rate_limiter_config: dict[str, typing.Any] | None = None
+    """Configuration for the rate limiter."""
+    with_retry_config: dict[str, typing.Any] | None = None
+    """Configuration for the retry mechanism."""
+    model_kwargs: dict[str, typing.Any] = {}
+    """Keyword arguments to be passed to the LLM constructor."""
+
+    @classmethod
+    def from_dict(cls, config: dict[str, typing.Any]) -> "LLMProviderConfig":
+        """Parses a configuration model from a given dictionary."""
+        if "provider" not in config:
+            raise ValueError("missing required 'provider' field in config")
+        config_top_fields = {k: v for k, v in config.items() if k in cls.model_fields}
+        config_without_top_keys = {k: v for k, v in config.items() if k not in cls.model_fields}
+        return cls(**config_top_fields, model_kwargs=config_without_top_keys)
 
 
 @functools.wraps(langchain_openai.chat_models.base.BaseChatOpenAI)
 def get_model_from_provider(
-    provider: str,
-    rate_limiter_config: dict | None = None,
-    with_retry_config: dict | None = None,
+    provider: SupportedProviderType,
+    rate_limiter_config: dict[str, typing.Any] | None = None,
+    with_retry_config: dict[str, typing.Any] | None = None,
     **model_kwargs,  # will be forwarded to the chat model constructor
 ) -> langchain_core.language_models.BaseLanguageModel:
     """Get a default LLM from a provider for quick prototyping and testing.
 
-    Currently supports DeepSeek and OpenAI.
+    Args:
+        provider: The provider name. Currently supports "deepseek" and "openai".
+        rate_limiter_config: Configuration for the LangChain in-memory rate limiter (if needed).
+        with_retry_config: Configuration for the LangChain retry mechanism (if needed).
+        model_kwargs: Keyword arguments to be passed to the LLM constructor.
+
+    Returns:
+        The LangChain LLM instance that can be used for chain invocations.
     """
     rate_limiter = None
     if rate_limiter_config is not None:
@@ -47,3 +85,18 @@ def get_model_from_provider(
     if with_retry_config is not None:
         llm = llm.with_retries(**with_retry_config)  # if you want to e.g. customize the retry backoff
     return llm
+
+
+def get_model_from_provider_config(
+    provider_config: LLMProviderConfig,
+) -> langchain_core.language_models.BaseLanguageModel:
+    """Get a default LLM from a provider config for quick prototyping and testing.
+
+    See the `get_model_from_provider` function for more details.
+    """
+    return get_model_from_provider(
+        provider=provider_config.provider,
+        rate_limiter_config=provider_config.rate_limiter_config,
+        with_retry_config=provider_config.with_retry_config,
+        **provider_config.model_kwargs,
+    )

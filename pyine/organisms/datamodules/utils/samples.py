@@ -90,7 +90,7 @@ def get_traces_metadata(
             trace_data = reader[trace_idx]
             assert trace_data.identifier is not None, "trace identifier is required"
             problem_data = reader.get_problem_data(trace_idx)
-            tags = _get_tags_for_trace(trace_data, problem_data)
+            tags = get_tags_for_trace(trace_data, problem_data)
             is_banned = base_filter(tags) if base_filter is not None else False
             if not is_banned:
                 base_traces_meta.append(
@@ -108,7 +108,7 @@ def get_traces_metadata(
     return base_traces_meta
 
 
-def _get_tags_for_trace(
+def get_tags_for_trace(
     trace_data: pyine.utils.code.execution.TraceResult,
     problem_data: pyine.data.traces.dataset_utils.CodingProblem,
 ) -> list[str]:

@@ -62,8 +62,8 @@ class AnnotationOptions(pydantic.BaseModel):
 
     # ---------- prompt-related settings ----------
 
-    llm_provider_kwargs: dict[str, typing.Any] = pydantic.Field(
-        description="Keyword arguments to pass to the LLM provider pipeline.",
+    llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig = pydantic.Field(
+        description="Configuration to pass to the LLM provider pipeline.",
     )
     prompt_config: pyine.prompts.types.PromptBuildConfig = pydantic.Field(
         description="Configuration for the prompt to use to generate 'annotations'.",
@@ -248,7 +248,7 @@ def _default_meta_builder(
     """
     default_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
     default_metadata = typing.cast(dict[str, typing.Any], default_metadata)
-    default_metadata["llm_provider_config"] = config.llm_provider_kwargs
+    default_metadata["llm_provider_config"] = config.llm_provider_config
     default_metadata["prompt_config"] = config.prompt_config.model_dump()
     default_metadata["was_force_generated"] = config.force_generation
     default_metadata["shared_tags"] = config.shared_tags or []
@@ -268,8 +268,8 @@ def _default_creation_meta_builder(
     only contain generic creation metadata fields shared by all prompt types.
     """
     return pyine.prompts.result_db.CreationMeta(
-        provider=config.llm_provider_kwargs.get("provider", None),
-        llm_params=config.llm_provider_kwargs,  # noqa
+        provider=config.llm_provider_config.provider,
+        llm_params=config.llm_provider_config.model_dump(),  # noqa
     )
 
 
@@ -345,7 +345,7 @@ def annotate_trace_dataset(
     Returns:
         A small report dictionary with annotation outcome counts.
     """
-    model = pyine.utils.llm_providers.get_model_from_provider(**config.llm_provider_kwargs)
+    model = pyine.utils.llm_providers.get_model_from_provider_config(config.llm_provider_config)
     prompt_name, prompt_version = config.prompt_config.prompt_name, config.prompt_config.version
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
