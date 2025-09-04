@@ -18,6 +18,36 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
+default_rl_params_config = pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
+    base_model="o4-mini-2025-04-16",
+    method=pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig().get_openai_config(),
+    seed=0,
+    suffix="dummy",
+    wandb_integration=None,
+    metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),  # noqa
+    timeout_override=60 * 60,  # 60 min
+)
+"""Default parameters configuration for OpenAI RL fine-tuning using o4-mini.
+
+Note: as of 2025-09-03, training o4-mini using this approach is VERY COSTLY, even for VERY TINY
+datasets (we're talking hundreds of dollars per run here, minimum). Don't use this config unless
+you know what you're doing.
+"""
+
+default_sft_params_config = pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
+    base_model="gpt-4.1-mini-2025-04-14",
+    method=dict(
+        type="supervised",
+    ),
+    seed=0,
+    suffix="dummy",
+    wandb_integration=None,
+    metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),  # noqa
+    timeout_override=60 * 60,  # 60 min
+)
+"""Default parameters configuration for OpenAI supervised fine-tuning using gpt-4.1-mini."""
+
+
 class MainConfig(pydantic.BaseModel):
     """Configuration for the script's main function.
 
@@ -38,17 +68,7 @@ class MainConfig(pydantic.BaseModel):
     )
     """Configuration for the OpenAI client to use."""
     openai_finetuner: pyine.organisms.models.utils.openai.OpenAIFineTunerConfig = (
-        pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(
-            params=pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
-                base_model="o4-mini-2025-04-16",
-                method=pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig().get_openai_config(),
-                seed=0,
-                suffix="dummy",
-                wandb_integration=None,
-                metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),  # noqa
-                timeout_override=60 * 60,  # 60 min
-            )
-        )
+        pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(params=default_sft_params_config)
     )
     """Configuration for the OpenAI fine-tuner to use; defaults to an RL fine-tuning config for o4-mini."""
     pred_output_compare_options: pyine.utils.code.output_compare.CompareOptions = (
@@ -174,7 +194,7 @@ if __name__ == "__main__":
         lmdb_paths=[
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
-        max_trace_count=1000,  # cap off the max dataset size
+        max_trace_count=200,  # cap off the max dataset size
         base_filter_rule="+subset:train",  # conduct all prototyping on train only (w/ internal split)
         subset_filter_rules=dict(),  # reset rule-based assignments for subset (will take random split)
         subset_leftover_split_ratios=dict(
