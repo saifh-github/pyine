@@ -20,13 +20,8 @@ import tests.data.utils.env_checks as env_checks
 )
 def test_main_evaluates_base_model_with_skip_fine_tuning(
     tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    End-to-end exercise of main() using the real OpenAI API but skipping fine-tuning.
-
-    Uses the fake datamodule via a monkeypatched instantiation and a small dataset; asserts completion.
-    """
+    """End-to-end exercise of main() using the real OpenAI API but skipping fine-tuning."""
 
     real_dm_config = shortcuts_dm.ShortcutBiasDataModuleConfig(
         lmdb_paths=[

@@ -141,6 +141,7 @@ def main(
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
+    # @@@@@@ TODO: update this main to actually use click or a config/experiment manager
     pyine.utils.reprod.entrypoint_setup(
         seed=config.seed,
     )
