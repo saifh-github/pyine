@@ -39,6 +39,10 @@ class LLMProviderConfig(pydantic.BaseModel):
         config_without_top_keys = {k: v for k, v in config.items() if k not in cls.model_fields}
         return cls(**config_top_fields, model_kwargs=config_without_top_keys)
 
+    def get_model(self) -> langchain_core.language_models.BaseLanguageModel:
+        """Returns a LangChain LLM instance based on the provider config."""
+        return get_model_from_provider_config(self)
+
 
 @functools.wraps(langchain_openai.chat_models.base.BaseChatOpenAI)
 def get_model_from_provider(
@@ -47,7 +51,7 @@ def get_model_from_provider(
     with_retry_config: dict[str, typing.Any] | None = None,
     **model_kwargs,  # will be forwarded to the chat model constructor
 ) -> langchain_core.language_models.BaseLanguageModel:
-    """Get a default LLM from a provider for quick prototyping and testing.
+    """Get a LangChain language model instance from a provider following the OpenAI-style API.
 
     Args:
         provider: The provider name. Currently supports "deepseek" and "openai".

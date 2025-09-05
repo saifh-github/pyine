@@ -248,7 +248,7 @@ def _default_meta_builder(
     """
     default_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
     default_metadata = typing.cast(dict[str, typing.Any], default_metadata)
-    default_metadata["llm_provider_config"] = config.llm_provider_config
+    default_metadata["llm_provider_config"] = config.llm_provider_config.model_dump()
     default_metadata["prompt_config"] = config.prompt_config.model_dump()
     default_metadata["was_force_generated"] = config.force_generation
     default_metadata["shared_tags"] = config.shared_tags or []
