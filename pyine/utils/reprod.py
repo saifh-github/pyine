@@ -48,7 +48,7 @@ def get_framework_version() -> str:
 def get_git_revision_hash() -> str:
     """Returns a print-friendly hash (SHA1 signature) for the underlying git repository (if found).
 
-    If a git repository is not found, the function will return a static string.
+    If no git repository is found, the function will return a static string.
     """
     try:
         import git  # noqa
@@ -60,6 +60,29 @@ def get_git_revision_hash() -> str:
         return str(sha)
     except (AttributeError, ValueError, git.InvalidGitRepositoryError):
         return "git-revision-unknown"
+
+
+def is_git_repo_clean(include_untracked: bool = False) -> bool:
+    """Returns whether the underlying git repository is clean (no uncommitted changes).
+
+    By 'clean', we mean no staged changes, no unstaged changes, and optionally no untracked files.
+
+    If no git repository is found (or if the git package is not found), the function will return False.
+    """
+    try:
+        import git  # noqa
+    except (ImportError, AttributeError):
+        return False
+    try:
+        repo = git.Repo(path=os.path.abspath(__file__), search_parent_directories=True)
+        return not repo.is_dirty(
+            index=True,
+            working_tree=True,
+            untracked_files=include_untracked,
+            submodules=True,
+        )
+    except (AttributeError, ValueError, git.InvalidGitRepositoryError):
+        return False
 
 
 def get_installed_packages() -> list[str]:
@@ -185,12 +208,16 @@ def get_reprod_metadata(
     include_installed_packages: bool = True,
 ) -> dict[str, str]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
+    import pyine.utils.filesystem
+
     reprod_metadata = dict(
         python_version=get_python_version(),
+        created_by=pyine.utils.filesystem.get_username(),
         platform=get_platform_name(),
         timestamp=get_timestamp(),
         framework_version=get_framework_version(),
         git_revision_hash=get_git_revision_hash(),
+        git_repo_clean=str(is_git_repo_clean()),
     )
     if include_installed_packages:
         reprod_metadata["installed_packages"] = "\n".join(get_installed_packages())

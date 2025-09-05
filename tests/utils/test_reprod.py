@@ -22,6 +22,14 @@ def test_get_framework_version_package_missing(monkeypatch: pytest.MonkeyPatch):
     assert reprod.get_framework_version().startswith("0.0.0-unknown")
 
 
+def test_get_git_repo_regular():
+    # can't really test anything more specific than types by default
+    hash = reprod.get_git_revision_hash()
+    assert isinstance(hash, str) and len(hash)
+    is_clean = reprod.is_git_repo_clean(include_untracked=True)
+    assert isinstance(is_clean, bool)
+
+
 def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
     # simulate ImportError for git module
     real_import = builtins.__import__
@@ -33,6 +41,7 @@ def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     assert reprod.get_git_revision_hash() == "git-import-error"
+    assert reprod.is_git_repo_clean() is False
 
 
 def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
@@ -54,6 +63,7 @@ def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     assert reprod.get_git_revision_hash() == "git-revision-unknown"
+    assert reprod.is_git_repo_clean() is False
 
 
 def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
