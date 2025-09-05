@@ -338,7 +338,22 @@ class ProblemIdPattern(pydantic.BaseModel):
 
 
 class CodingProblemIterator:
-    """Iterator class for iterating over coding problem data from a source dataset."""
+    """Iterator class for iterating over coding problem data from a source dataset.
+
+    Usage example:
+    >>> from pyine.data.traces.dataset_utils import CodingProblemIterator
+    >>>
+    >>> problem_iterator =  CodingProblemIterator(
+    >>>     dataset_name="TACO",
+    >>>     root_data_path="<path_to_the_repackaged_TACO_dataset_folder>",
+    >>> )
+    >>>
+    >>> for problem, solutions in problem_iterator:  # yields tuple[CodingProblem, list[Solution]]
+    >>>     print(f"{problem.problem_id=}")
+    >>>     for solution in solutions:
+    >>>         print(f"{solution.solution_id=}")
+    >>>     # ...
+    """
 
     def __init__(
         self,
@@ -348,6 +363,7 @@ class CodingProblemIterator:
         reformat_code_strings: bool = True,
         validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
+        add_orig_subset_as_tag: bool = False,
         show_progress: bool = False,
     ):
         """Initialize the iterator, validating source dataset name/path.
@@ -361,6 +377,9 @@ class CodingProblemIterator:
             allow_banned_samples: Whether to allow loading of banned problems/solutions. Banned
                 samples are problems/solutions that are likely to cause errors during parsing or
                 execution, and that have been manually identified in `banned_samples.yaml`.
+            add_orig_subset_as_tag: Whether to add the original subset name as a tag to the
+                tags list of each sample. Useful when you want to filter problems by their original
+                subset, but may be distracting if you intend to create a new split.
             show_progress: Whether to show a progress bar while iterating.
         """
         if dataset_name not in SUPPORTED_SOURCE_DATASETS:
@@ -380,6 +399,7 @@ class CodingProblemIterator:
             self.banned = _BannedData()  # will be initialized w/ empty maps
         else:
             self.banned = self._load_banned_data()
+        self.add_orig_subset_as_tag = add_orig_subset_as_tag
         self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
         self._current_idx = 0
         self._show_progress = show_progress
@@ -396,7 +416,7 @@ class CodingProblemIterator:
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
-                if json_file_path.name in self.banned.metadata:
+                if self.banned.metadata and json_file_path.name in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
                 # optionally filter by a target pattern
                 if self._target_pattern is not None:
@@ -486,8 +506,9 @@ class CodingProblemIterator:
             tags = [
                 f"source:{_tag_cleaner(problem_data['source'])}",
                 f"difficulty:{_tag_cleaner(problem_data['difficulty'])}",
-                f"subset:{_tag_cleaner(problem_data['subset'])}",
             ]
+            if self.add_orig_subset_as_tag:
+                tags.append(f"subset:{_tag_cleaner(problem_data['subset'])}")
             for tag_group in ["raw_tags", "tags", "skill_types"]:
                 tags.extend([f"{tag_group}:{_tag_cleaner(tag)}" for tag in problem_data.get(tag_group, [])])
             solutions, solution_ids = [], []
