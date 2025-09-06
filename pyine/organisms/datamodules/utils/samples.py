@@ -11,6 +11,7 @@ import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
+import pyine.prompts
 import pyine.utils.code.blocks
 import pyine.utils.code.execution
 import pyine.utils.portability
@@ -285,17 +286,31 @@ class SampleBuilder(SampleDataParserType):
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
         traces: list[TraceMetadata] | None = None,  # if `None`, will target all available traces
         config: SampleTransformConfig | None = None,
+        prompt_result_db_path: str | None = None,  # if `None`, will use framework default
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces."""
         if config is None:
             config = SampleTransformConfig()  # noqa
         self.config = config
+        self._rng = np.random.default_rng(self.config.random_seed)
+        if self.config.partial_sample_decision_strategy != "never" and not self.config.output_type_prob_map:
+            raise ValueError("output type prob map must be provided when using partial samples generation")
+        self.readers_map, self.traces = self._init_readers_and_trace_metadata(source_data, traces)
+        self.code_summaries = self._build_code_summaries_lut(self.traces, prompt_result_db_path)
+
+    @staticmethod
+    def _init_readers_and_trace_metadata(
+        source_data: LMDBDatasetReadersOrPathsType,  # noqa
+        traces: list[TraceMetadata] | None,  # if `None`, will target all available traces
+    ) -> tuple[dict[str, pyine.data.traces.dataset_reader.DatasetReader], list[TraceMetadata]]:
+        """Initializes a list of LMDB readers and a list of target traces."""
         if not isinstance(source_data, list):
             source_data = [source_data]
         for src_idx, src in enumerate(source_data):
             if isinstance(src, (str, pathlib.Path)):
                 source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
-        self.readers_map = {r.get_hash(): r for r in source_data}
+        readers_map = {r.get_hash(): r for r in source_data}
+        assert len(readers_map) > 0
         if traces is None:
             # create a list of metadata structs for ALL available traces
             traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
@@ -303,16 +318,32 @@ class SampleBuilder(SampleDataParserType):
                 base_filter=None,
                 verbose=False,
             )
-        self.traces = traces
-        assert len(self.readers_map) > 0
-        assert isinstance(self.traces, list)
-        assert all([t.parent_dataset_hash in self.readers_map for t in self.traces])
-        assert all([0 <= t.index < len(self.readers_map[t.parent_dataset_hash]) for t in self.traces])
-        self._rng = np.random.default_rng(self.config.random_seed)
-        if self.config.partial_sample_decision_strategy != "never" and not self.config.output_type_prob_map:
-            raise ValueError("output type prob map must be provided when using partial samples generation")
-        # TODO @@@@@@@: look up code descriptions generated via `code_summary` prompt in local results db
-        #       (for the targeted traces, that is; keep fetched data into memory as read-only)
+        assert isinstance(traces, list)
+        assert all([t.parent_dataset_hash in readers_map for t in traces])
+        assert all([0 <= t.index < len(readers_map[t.parent_dataset_hash]) for t in traces])
+        return readers_map, traces
+
+    def _build_code_summaries_lut(
+        self,
+        traces: list[TraceMetadata],
+        prompt_result_db_path: str | None,
+    ) -> dict[str, str]:  # solution id to code description string
+        """Builds a lookup table of code summaries for each trace."""
+        if prompt_result_db_path is None:
+            prompt_result_db = pyine.prompts.get_framework_db()
+        else:
+            prompt_result_db = pyine.prompts.PromptResultDB(prompt_result_db_path)
+        code_summaries_lut: dict[str, str] = dict()
+        for trace_meta in traces:
+            solution_id = trace_meta.get_parent_solution_id()
+            if solution_id not in code_summaries_lut:
+                records = prompt_result_db.get_by_identifier(
+                    identifier=trace_meta.get_parent_solution_id(),
+                    prompt_name="code_summary",
+                )
+                if records:
+                    code_summaries_lut[solution_id] = records[-1].result
+        return code_summaries_lut
 
     def __len__(self) -> int:
         """Returns the number of traces covered by this reader."""
@@ -344,7 +375,7 @@ class SampleBuilder(SampleDataParserType):
         picked_output_type = self._pick_output_type(trace_data)
         if picked_output_type == "function return":
             # first, if requested, try to generate a sample for a function call
-            sample = self._get_function_call_sample(trace_data=trace_data)
+            sample = self._get_function_call_sample(trace_data=trace_data, trace_meta=trace_meta)
             if sample is not None:
                 # if we did successfully build a partial sample, return it now
                 return sample
@@ -354,6 +385,7 @@ class SampleBuilder(SampleDataParserType):
             # if requested (or as a fallback from the function call sample), try to generate a segment sample
             sample = self._get_code_segment_sample(
                 trace_data=trace_data,
+                trace_meta=trace_meta,
                 target_output_type=picked_output_type,
             )
             if sample is not None:
@@ -363,7 +395,7 @@ class SampleBuilder(SampleDataParserType):
         return SampleData(
             identifier=trace_data.identifier,
             code=trace_data.code_string,
-            description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+            description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
             entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
             last_line=len(trace_data.code_string.splitlines()),
@@ -437,6 +469,7 @@ class SampleBuilder(SampleDataParserType):
     def _get_function_call_sample(
         self,
         trace_data: pyine.utils.code.execution.TraceResult,
+        trace_meta: TraceMetadata,
     ) -> SampleData | None:
         """Returns a sample for a function call in the given trace."""
         candidate_events = []
@@ -508,7 +541,7 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+                description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
                 entrypoint=target_func_name,
                 first_line=first_line,
                 last_line=last_line,
@@ -522,6 +555,7 @@ class SampleBuilder(SampleDataParserType):
     def _get_code_segment_sample(
         self,
         trace_data: pyine.utils.code.execution.TraceResult,
+        trace_meta: TraceMetadata,
         target_output_type: SampleOutputType,
     ) -> SampleData | None:
         """Returns a sample for a segment of the given trace."""
@@ -596,7 +630,7 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description="",  # @@@@@ TODO: get using code_summarization prompt? (prior run logged somewhere?)
+                description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
                 entrypoint="",
                 first_line=first_line,
                 last_line=last_line,

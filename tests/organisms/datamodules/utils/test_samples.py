@@ -3,6 +3,7 @@ import pytest
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.organisms.datamodules.utils.samples
+import pyine.prompts
 import pyine.utils.code.execution as exec_utils
 import tests.data.utils.env_checks
 from pyine.organisms.datamodules.utils.samples import (
@@ -316,9 +317,7 @@ print(x)
         return TestPrivateSampleMethods._FakeTrace(steps=steps)
 
     def test_get_code_segment_sample_skips_inner_calls(
-        self,
-        small_fake_reader: FakeTraceDatasetReader,
-        nested_call_trace: "_FakeTrace",
+        self, small_fake_reader: FakeTraceDatasetReader, nested_call_trace: "_FakeTrace", mocker
     ) -> None:
         cfg = SampleTransformConfig(
             random_seed=0,
@@ -327,7 +326,11 @@ print(x)
         )
         # traces can be empty since we call private methods directly; reader is only used to pass __init__ checks
         sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
-        sample = sb._get_code_segment_sample(nested_call_trace, target_output_type="frame variables")
+        sample = sb._get_code_segment_sample(
+            nested_call_trace,
+            trace_meta=mocker.MagicMock(),
+            target_output_type="frame variables",
+        )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
@@ -342,13 +345,14 @@ print(x)
         self,
         small_fake_reader: FakeTraceDatasetReader,
         nested_call_trace: "_FakeTrace",
+        mocker,
     ) -> None:
         cfg = SampleTransformConfig(
             random_seed=0,
             min_partial_trace_steps=1,
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
-        sample = sb._get_function_call_sample(nested_call_trace)
+        sample = sb._get_function_call_sample(nested_call_trace, trace_meta=mocker.MagicMock())
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
@@ -359,3 +363,46 @@ print(x)
         assert sample.inputs == "(1,)"
         assert sample.output == "5"
         assert sample.trace_step_count == 2
+
+
+def test_code_summary_is_used_from_prompt_db(small_fake_reader: FakeTraceDatasetReader, tmp_path) -> None:
+    # create a temporary prompt result DB and insert a single code summary for one solution id
+    db_path = tmp_path / "prompt_results.sqlite"
+    db = pyine.prompts.PromptResultDB(str(db_path))
+    tr0 = small_fake_reader[0]
+    assert tr0.identifier is not None
+    sol_id_obj = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(tr0.identifier).get_parent_identifier()
+    sol_id_str = str(sol_id_obj)
+    expected_summary = "This solution computes and prints intermediate values, then returns 2*x."
+    db.store(
+        identifier=sol_id_str,
+        prompt="code summary prompt",
+        result=expected_summary,
+        prompt_name="code_summary",
+    )
+    # build SampleBuilder pointing to our temporary DB; force full samples to simplify checks
+    cfg = SampleTransformConfig(
+        partial_sample_decision_strategy="never",
+        random_seed=0,
+        output_type_prob_map={},
+    )
+    sb = SampleBuilder(
+        source_data=[small_fake_reader],
+        traces=None,
+        config=cfg,
+        prompt_result_db_path=str(db_path),
+    )
+    assert len(sb) == len(small_fake_reader)
+    # for traces matching the stored solution id, description should match; others should be empty
+    for i in range(len(sb)):
+        sample = sb[i]
+        assert isinstance(sample.description, str)
+        tr = small_fake_reader[i]
+        assert tr.identifier is not None
+        curr_sol_id_str = str(
+            pyine.data.traces.dataset_utils.TraceIdentifier.from_string(tr.identifier).get_parent_identifier()
+        )
+        if curr_sol_id_str == sol_id_str:
+            assert sample.description == expected_summary
+        else:
+            assert sample.description == ""
