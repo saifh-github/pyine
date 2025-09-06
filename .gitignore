@@ -38,6 +38,7 @@ htmlcov/
 # Local development settings
 .env
 .env.local
+*.local.*
 
 # Logs
 *.log
