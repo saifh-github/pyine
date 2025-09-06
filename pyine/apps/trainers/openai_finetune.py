@@ -1,3 +1,10 @@
+"""
+OpenAI API model fine-tuning CLI.
+
+This is a work-in-progress / demo / reference script for fine-tuning an OpenAI model using a code
+execution traces dataset. It is not meant to be used directly yet; TODO! @@@@
+"""
+
 import functools
 import logging
 import sys

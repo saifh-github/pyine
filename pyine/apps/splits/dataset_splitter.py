@@ -1,3 +1,27 @@
+"""
+Dataset splitter CLI.
+
+This application wraps the dataset splitter routine and lets you generate a split file for a given
+dataset with command-line controls.
+
+Examples:
+
+    Splitting the TACO dataset 80-10-10 with difficulty and solution counts groups:
+    ```bash
+        python pyine/apps/splits/dataset_splitter.py \
+            --dataset-name TACO \
+            --train-fraction=0.8 \
+            --valid-fraction=0.1 \
+            --test-fraction=0.1 \
+            --use-difficulty-group \
+            --use-solution-counts-group \
+            --progress
+    ```
+
+Note: by default, if the path to the dataset is not specified, the CLI will attempt to fetch the
+latest version of the dataset from the corresponding dataset module's utility functions.
+"""
+
 import logging
 import pathlib
 
