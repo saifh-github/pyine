@@ -10,6 +10,7 @@ import pydantic
 import pyine.data.datamodule
 import pyine.data.traces.dataset_reader as dataset_reader
 import pyine.data.utils.filter_rules
+import pyine.data.utils.splits
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.organisms.models.utils.openai
@@ -84,61 +85,27 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             orig_idxs = list(range(len(base_traces_meta)))
             picked_idxs = rng.choice(orig_idxs, size=self.config.max_trace_count, replace=False)
             base_traces_meta = [base_traces_meta[idx] for idx in picked_idxs]
-        # next, pass base_traces_meta elements into subset filtering rules to find initial matches
-        subset_traces_meta: dict[SubsetNameType, list[TraceMetadata]] = dict()
-        unassigned_traces_meta: list[TraceMetadata] = []
-        potential_subset_names = {
-            *self.config._resolved_subset_filters,  # noqa
-            *self.config.subset_leftover_split_ratios,
-            *self.config.subset_types,
+        # load coding problem split data and keep relevant assignments
+        split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
+        split_data = pyine.data.utils.splits.SplitResult.from_file(self.config.split_file_path)
+        if split_data.config.subset_names != self.config.subset_types:
+            raise ValueError("mismatch between split data subsets and configured subsets")
+        subset_traces_meta: dict[SubsetNameType, list[TraceMetadata]] = {
+            subset_name: [] for subset_name in split_data.config.subset_names
         }
-        for subset_name in potential_subset_names:  # init trace lists for all potential subsets
-            subset_traces_meta[subset_name] = []
-        problem_assignments: dict[ProblemIdType, SubsetNameType] = dict()
+        unassigned_traces_meta: list[TraceMetadata] = []
         for trace_meta in base_traces_meta:
-            # if we already assigned the parent problem of this trace to a subset, apply it here too
             problem_id = trace_meta.get_parent_problem_id()
-            if problem_id in problem_assignments:
-                subset_traces_meta[problem_assignments[problem_id]].append(trace_meta)
-                continue
-            # if the trace can be assigned to multiple potential subsets, pick one at random
-            matched_subsets = [
-                subset_name
-                for subset_name, filter_rule in self.config._resolved_subset_filters.items()  # noqa
-                if not filter_rule(trace_meta.tags)  # we want to filter in, not out, so flipped
-            ]
-            if len(matched_subsets):
-                if len(matched_subsets) > 1:
-                    picked_subset = rng.choice(matched_subsets)
-                else:
-                    picked_subset = matched_subsets[0]
-                assert problem_id not in problem_assignments, "should not be assigned twice"
-                problem_assignments[problem_id] = picked_subset
-                subset_traces_meta[picked_subset].append(trace_meta)
+            if problem_id in split_data.subset_assignments:
+                subset_traces_meta[split_data.subset_assignments[problem_id]].append(trace_meta)
             else:
                 unassigned_traces_meta.append(trace_meta)
-        # finally, assign leftover traces to subsets based on leftover split ratios
-        leftover_traces_meta: list[TraceMetadata] = []
-        for trace_meta in unassigned_traces_meta:
-            # if we already assigned the parent problem of this trace to a subset, apply it here too
-            problem_id = trace_meta.get_parent_problem_id()
-            if problem_id in problem_assignments:
-                subset_traces_meta[problem_assignments[problem_id]].append(trace_meta)
-                continue
-            # otherwise, pick a random subset (based on configured probs) and assign the trace to it
-            picked_subset = self._pick_random_subset(rng)
-            if picked_subset is not None:
-                assert problem_id not in problem_assignments, "should not be assigned twice"
-                problem_assignments[problem_id] = picked_subset
-                subset_traces_meta[picked_subset].append(trace_meta)
-            else:
-                leftover_traces_meta.append(trace_meta)
-        # once we have determined which traces we want to keep and how to split them, save the result
         metadata = TraceDatasetMetadata(
             base_traces=base_traces_meta,
             subset_traces=subset_traces_meta,
-            leftover_traces=leftover_traces_meta,
-            problem_assignments=problem_assignments,
+            leftover_traces=unassigned_traces_meta,
+            problem_assignments=split_data.subset_assignments,
+            split_hash=split_hash,
         )
         self._save_prepared_metadata(metadata)
         # @@@@@@ TODO extra step: tag-stratified split w/ clustering (?)
@@ -170,25 +137,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         params_hash = pyine.utils.reprod.get_params_hash(self.config.model_dump())
         tmpdir = pyine.utils.filesystem.get_tmp_dir()
         return tmpdir / f"shortcuts.metadata.{params_hash}.msgspec"
-
-    def _pick_random_subset(
-        self,
-        rng: np.random.Generator,
-    ) -> SubsetNameType | None:
-        """Randomly chooses a subset based on the internal leftover split ratios.
-
-        Assumptions:
-          - All split ratios are non-negative.
-          - Sum of all ratios is <= 1.0.
-          - If the random draw falls in the leftover mass (1.0 - sum), returns None.
-        """
-        r = rng.random()
-        total = 0.0
-        for name, p in self.config.subset_leftover_split_ratios.items():
-            total += p
-            if r < total:
-                return name
-        return None
 
     def setup(
         self,
@@ -414,48 +362,18 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     max_trace_count: int | None = None
     """Maximum number of traces to load across all datasets."""
+    split_file_path: pathlib.Path
+    """Path to the file containing the split data for the full dataset.
+
+    This file should have been created by the `pyine.apps.splits.dataset_splitter.py` module; it
+    is expected to contain all coding problem identifiers that could be loaded by this datamodule.
+    """
     base_filter_rule: str = ""  # empty = no filter by default
     """Base filter rule to apply to tags of all traces to determine what to include across all subsets.
 
     Traces with tags that match this rule will be filtered out. See the `pyine.data.utils.filter_rules`
     module to see examples of filter rules. Note that this rule applies in a case-insensitive manner.
     """
-    subset_filter_rules: typing.Annotated[
-        typing.DefaultDict[
-            SubsetNameType,
-            str,
-        ],
-        pydantic.Field(
-            default=dict(
-                train="+subset:train",
-                valid="+subset:valid",
-                test="+subset:test",
-            ),
-            description=(
-                "Specifies filtering rules to use to assign traces to specific subsets. "
-                "Traces with tags that match these rules will be assigned to the corresponding subset. "
-                "Applied after base filtering and before leftover split; case-insensitive. "
-                "If a trace matches multiple rules, it will be randomly assigned to one matched subset. "
-            ),
-        ),
-    ]
-    subset_leftover_split_ratios: typing.Annotated[
-        typing.DefaultDict[
-            SubsetNameType,
-            typing.Annotated[
-                pydantic.StrictFloat,
-                pydantic.Field(ge=0.0, le=1.0, default_factory=lambda: 0.0),
-            ],
-        ],
-        pydantic.Field(
-            default_factory=lambda: collections.defaultdict(float),
-            description=(
-                "Fraction of 'leftover' traces (not yet assigned to a specific subset) to include in each subset. "
-                "If unspecified, no leftover traces (0%) are added beyond the ones selected by filtering rules. "
-                "Applies after base and subset-specific filtering."
-            ),
-        ),
-    ]
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
@@ -477,12 +395,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(
         default=None,
     )
-    _resolved_subset_filters: dict[
-        SubsetNameType,
-        pyine.data.utils.filter_rules.FilterType,
-    ] = pydantic.PrivateAttr(
-        default_factory=dict,
-    )
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
@@ -494,11 +406,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         self._resolved_base_filter = pyine.data.utils.filter_rules.build_filter_from_rule(
             self.base_filter_rule, case_sensitive=False
         )
-        for subset_name, rule in self.subset_filter_rules.items():
-            self._resolved_subset_filters[subset_name] = pyine.data.utils.filter_rules.build_filter_from_rule(
-                rule, case_sensitive=False
-            )
-        summed_split_ratios = sum(self.subset_leftover_split_ratios.values())
-        if summed_split_ratios > 1.0:
-            raise ValueError(f"Sum of subset leftover split ratios exceeds 1.0: {summed_split_ratios}")
+        if not self.split_file_path.is_file():
+            raise ValueError(f"dataset split file does not exist at path: {self.split_file_path}")
         return self

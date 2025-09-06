@@ -3,6 +3,7 @@ import pytest
 import transformers
 
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.splits
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
@@ -30,6 +31,10 @@ def _assert_non_leaking_assignments(metadata):
     reason="TACO traces dataset is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
+    tests.data.utils.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    reason="TACO traces dataset split is missing, cannot check sample generation",
+)
+@pytest.mark.skipif(
     tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
@@ -46,11 +51,7 @@ def test_shortcuts_datamodule_integration():
             ),
         ),
         max_trace_count=1000,
-        subset_filter_rules=dict(),  # reset rule-based assignments (do random split instead)
-        subset_leftover_split_ratios=dict(
-            train=0.8,
-            valid=0.2,
-        ),
+        split_file_path=pyine.data.utils.splits.get_dataset_split_result("TACO"),
     )
     dm = config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
@@ -112,6 +113,10 @@ def test_shortcuts_datamodule_integration():
     reason="TACO traces dataset is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
+    tests.data.utils.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    reason="TACO traces dataset split is missing, cannot check sample generation",
+)
+@pytest.mark.skipif(
     tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
@@ -122,11 +127,7 @@ def test_shortcuts_datamodule_predefined_split():
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
         max_trace_count=1000,
-        subset_filter_rules=dict(
-            train="+subset:train",
-            valid="+subset:valid",
-            test="+subset:test",
-        ),
+        split_file_path=pyine.data.utils.splits.get_dataset_split_result("TACO"),
     )
     dm = config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():

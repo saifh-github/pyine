@@ -7,6 +7,7 @@ import pydantic
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.splits
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.models.utils.openai
@@ -196,12 +197,6 @@ if __name__ == "__main__":
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
         max_trace_count=200,  # cap off the max dataset size
-        base_filter_rule="+subset:train",  # conduct all prototyping on train only (w/ internal split)
-        subset_filter_rules=dict(),  # reset rule-based assignments for subset (will take random split)
-        subset_leftover_split_ratios=dict(
-            # take 80-20 split from the original train dataset itself for this prototyping
-            train=0.8,
-            valid=0.2,
-        ),
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
     main(MainConfig(datamodule_config=_dmconfig), skip_fine_tuning=False)

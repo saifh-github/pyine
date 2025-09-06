@@ -239,7 +239,7 @@ class SplitResult(pydantic.BaseModel):
     """Dictionary mapping subset names to lists of sample indices assigned to that subset."""
     creation_metadata: dict[str, pydantic.JsonValue]
     """Additional metadata associated with this split result."""
-    split_config: SplitConfig
+    config: SplitConfig
     """Split settings specifying optional stratified grouping rules."""
 
     @pydantic.model_validator(mode="after")
@@ -256,6 +256,23 @@ class SplitResult(pydantic.BaseModel):
         if len(self.source_data_hashes) != len(set(self.source_data_hashes)):
             raise ValueError("source data hashes must be unique")
         return self
+
+    @classmethod
+    def from_file(cls, file_path: pathlib.Path | str) -> "SplitResult":
+        """Loads a split result from a file."""
+        file_path = pathlib.Path(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"split result file not found: {file_path}")
+        with open(file_path, "rb") as fd:
+            split_result_dict = orjson.loads(fd.read())
+        return cls.model_validate(split_result_dict)
+
+    def to_file(self, file_path: pathlib.Path | str) -> None:
+        """Saves a split result to a file."""
+        file_path = pathlib.Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wb") as fd:
+            fd.write(orjson.dumps(self.model_dump()))
 
 
 def _get_solution_count_bucket_tag(solution_count: int) -> str:

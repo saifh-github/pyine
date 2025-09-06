@@ -2,6 +2,7 @@ import os
 
 import pyine.data.taco.dataset_utils
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.splits
 import pyine.utils.reprod
 
 pyine.utils.reprod.load_dotenv()
@@ -25,8 +26,18 @@ def has_taco_traces_dataset():
     return path.exists()
 
 
+def has_taco_traces_dataset_split():
+    """Returns true if the TACO traces dataset split is available."""
+    try:
+        path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
+    except (FileNotFoundError, AssertionError):
+        return False
+    return path.exists()
+
+
 TACO_DATASET_MISSING = not has_taco_dataset()
 TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
+TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
 
 
 def has_hf_access_token():

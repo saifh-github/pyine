@@ -210,7 +210,10 @@ def check_output_path_overwrite(
             exit(0)
         else:
             logger.warning(f"Overwriting existing output at: {output_path.absolute()}")
-            shutil.rmtree(output_path)
+            if output_path.is_file():
+                output_path.unlink()
+            elif output_path.is_dir():
+                shutil.rmtree(output_path)
 
 
 def slugify(text: str) -> str:

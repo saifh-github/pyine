@@ -137,7 +137,9 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     leftover_traces: list[TraceMetadata]
     """List of leftover traces still unassigned after subset filtering and leftover split."""
     problem_assignments: dict[str, pyine.data.datamodule.SubsetNameType]
-    """Assignments of coding problems """
+    """Assignments of coding problems to data subsets."""
+    split_hash: str
+    """Hash of the split file where the assignments were parsed from."""
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate

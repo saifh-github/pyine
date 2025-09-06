@@ -2,8 +2,6 @@ import logging
 import pathlib
 
 import click
-import orjson
-import pydantic
 
 import pyine.data.taco.dataset_utils
 import pyine.data.traces.dataset_utils
@@ -12,32 +10,6 @@ import pyine.utils.filesystem
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
-
-
-LATEST_DATASET_PATH_TOKEN = "__latest__"
-"""Special token used to indicate that the latest dataset should be used.
-
-Only supported for datasets that are known and for which we have an imported module.
-"""
-
-
-class MainConfig(pydantic.BaseModel):
-    """Configuration for the script's main function.
-
-    Assembles the components required to split a coding problem dataset according to specific groups
-    of tags, and save the resulting splits to disk.
-
-    NOTE: this config is intended to be used with the `main` function defined below, and is provided
-    here as a demonstration of how to use this app (will be refactored/cleaned when we have a config
-    manager).
-    """
-
-    source_dataset_name: str
-    """Name of the source dataset this split is derived from."""
-    source_dataset_path: str = LATEST_DATASET_PATH_TOKEN
-    """Hash of the source dataset this split is derived from."""
-    split_config: pyine.data.utils.splits.SplitConfig
-    """Split settings specifying optional stratified grouping rules."""
 
 
 def _get_group_rules(
@@ -68,7 +40,7 @@ def _get_resolved_dataset_path(
     source_dataset_path: pathlib.Path | str | None,
 ) -> pathlib.Path:
     """Returns the resolved path to the dataset to be split."""
-    if source_dataset_path is None or source_dataset_path == LATEST_DATASET_PATH_TOKEN:
+    if source_dataset_path is None:
         supported_source_datasets = ["TACO"]
         if source_dataset_name not in supported_source_datasets:
             raise ValueError(f"invalid source dataset name for latest detection: {source_dataset_name}")
@@ -181,8 +153,8 @@ def main(
     if not isinstance(numeric_log_level, int):
         raise click.BadParameter(f"invalid log level: {numeric_log_level}")
     pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
-    split_output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name)
-    pyine.utils.filesystem.check_output_path_overwrite(split_output_path)
+    output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name)
+    pyine.utils.filesystem.check_output_path_overwrite(output_path)
     dataset_path = _get_resolved_dataset_path(dataset_name, dataset_path)
     logger.info(f"computing dataset hash for '{dataset_name}' at: {dataset_path}")
     source_dataset_hash = pyine.utils.reprod.compute_hash(dataset_path)
@@ -214,11 +186,13 @@ def main(
         source_data_hashes=hash_list,
         subset_assignments=assignments,
         creation_metadata=pyine.utils.reprod.get_reprod_metadata(),
-        split_config=split_config,
+        config=split_config,
     )
-    with open(split_output_path, "wb") as fd:
-        fd.write(orjson.dumps(result.model_dump()))
-    print("all done")
+    result.to_file(output_path)
+    split_file_size = pyine.utils.filesystem.get_human_readable_size(
+        num_bytes=output_path.stat().st_size,
+    )
+    print(f"all done; wrote {split_file_size} file with {len(assignments)} assignments to: {output_path}")
 
 
 if __name__ == "__main__":
