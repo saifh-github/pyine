@@ -4,7 +4,9 @@ import fnmatch
 import importlib.resources as pkg_resources
 import logging
 import pathlib
+import queue
 import re
+import threading
 import typing
 
 import numpy as np
@@ -365,6 +367,8 @@ class CodingProblemIterator:
         allow_banned_samples: bool = False,
         add_orig_subset_as_tag: bool = False,
         show_progress: bool = False,
+        enable_async_prefetch: bool = False,
+        prefetch_cache_size: int = 8,
     ):
         """Initialize the iterator, validating source dataset name/path.
 
@@ -381,6 +385,8 @@ class CodingProblemIterator:
                 tags list of each sample. Useful when you want to filter problems by their original
                 subset, but may be distracting if you intend to create a new split.
             show_progress: Whether to show a progress bar while iterating.
+            enable_async_prefetch: If True, enable asynchronous prefetching of samples.
+            prefetch_cache_size: Bounded cache size (>=1) for prefetched samples.
         """
         if dataset_name not in SUPPORTED_SOURCE_DATASETS:
             raise ValueError(f"unsupported source dataset: {dataset_name}")
@@ -404,6 +410,68 @@ class CodingProblemIterator:
         self._current_idx = 0
         self._show_progress = show_progress
         self._progress_bar = None
+        # async prefetch configuration/state
+        self._use_prefetch: bool = bool(enable_async_prefetch)
+        self._prefetch_cache_size: int = int(prefetch_cache_size)
+        if self._use_prefetch and self._prefetch_cache_size <= 0:
+            raise ValueError("prefetch_cache_size must be >= 1 when async prefetch is enabled")
+        self._prefetch_queue: queue.Queue | None = None
+        self._prefetch_thread: threading.Thread | None = None
+        self._stop_event: threading.Event | None = None
+        self._prefetch_sentinel: object = object()
+
+    def _start_prefetch(self) -> None:
+        """Start the background prefetch worker if enabled."""
+        if not self._use_prefetch:
+            return
+        if self._prefetch_thread is not None and self._prefetch_thread.is_alive():
+            return
+        logger.info("starting coding problem iterator async prefetch worker")
+        self._prefetch_queue = queue.Queue(maxsize=self._prefetch_cache_size)
+        self._stop_event = threading.Event()
+        self._prefetch_thread = threading.Thread(
+            target=self._prefetch_worker,
+            name=f"CodingProblemIteratorPrefetch[{self.dataset_name}]",
+            daemon=True,
+        )
+        self._prefetch_thread.start()
+
+    def _stop_prefetching(self) -> None:
+        """Signal the prefetch worker to stop and clean up resources."""
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._prefetch_thread is not None:
+            logger.info("stopping coding problem iterator async prefetch worker")
+            # short join to avoid blocking shutdowns too long
+            self._prefetch_thread.join(timeout=0.1)
+        self._prefetch_thread = None
+        self._stop_event = None
+        self._prefetch_queue = None
+
+    def _prefetch_worker(self) -> None:
+        """Worker that preloads items into a bounded queue in order."""
+        assert self._prefetch_queue is not None
+        exc: Exception | None = None
+        try:
+            for idx in range(len(self.problems_metadata)):
+                if self._stop_event is not None and self._stop_event.is_set():
+                    break
+                pm = self.problems_metadata[idx]
+                raw_problem_data = self._load_problem_data(pm)
+                item = self._process_data(raw_problem_data)  # (problem, solutions)
+                self._prefetch_queue.put(item)  # blocks if cache full
+        except Exception as e:
+            exc = e
+        finally:
+            # signal completion or error to the consumer
+            self._prefetch_queue.put((self._prefetch_sentinel, exc))
+
+    def __del__(self):
+        """Best-effort cleanup of background resources."""
+        try:
+            self._stop_prefetching()
+        except Exception:
+            pass
 
     def _prepare_problem_metadata(self) -> list:
         """Prepares problem metadata for the iterator, loading high-level source data."""
@@ -577,10 +645,31 @@ class CodingProblemIterator:
         self._current_idx = 0
         if self._show_progress:
             self._progress_bar = tqdm.tqdm(total=len(self.problems_metadata))
+        if self._use_prefetch:
+            # ensure a clean start for each iteration
+            self._stop_prefetching()
+            self._start_prefetch()
         return self
 
     def __next__(self) -> tuple[CodingProblem, list[Solution]]:
         """Returns the next coding problem and solutions object tuple."""
+        if self._use_prefetch and self._prefetch_queue is not None:
+            item = self._prefetch_queue.get()
+            # check for sentinel indicating completion or error
+            if isinstance(item, tuple) and len(item) == 2 and item[0] is self._prefetch_sentinel:
+                _, exc = item
+                if self._progress_bar is not None:
+                    self._progress_bar.close()
+                    self._progress_bar = None
+                self._stop_prefetching()
+                if exc is not None:
+                    raise exc
+                raise StopIteration
+            problem, solutions = item
+            if self._progress_bar is not None:
+                self._progress_bar.update(1)
+            return problem, solutions
+        # fallback to on-demand loading when prefetch is disabled
         if self._current_idx >= len(self.problems_metadata):
             if self._progress_bar is not None:
                 self._progress_bar.close()
@@ -599,6 +688,8 @@ class CodingProblemIterator:
         if self._progress_bar is not None:
             self._progress_bar.close()
             self._progress_bar = None
+        if self._use_prefetch:
+            self._stop_prefetching()
 
     def __getitem__(self, idx: int) -> tuple[CodingProblem, list[Solution]]:
         """Returns a coding problem and solutions object tuple for the specified index."""
