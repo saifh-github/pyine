@@ -1,10 +1,12 @@
 import logging
 import pathlib
+import sys
 import typing
 
 import numpy as np
 import orjson
 import pydantic
+import tqdm
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
@@ -323,13 +325,20 @@ def get_split_data_from_coding_problem_dataset(
         dataset_name=source_dataset_name,
         root_data_path=source_dataset_path,
         show_progress=verbose,
+        reformat_code_strings=False,
+        validate_code_strings=False,
+        add_orig_subset_as_tag=False,
     )
     if len(problem_data_iter) == 0:
         raise ValueError(f"no problems found in {source_dataset_name} source dataset")
     identifiers: list[SampleIdentifierType] = []
     tag_lists: list[SampleTagsType] = []
     hash_list: list[SampleHashType] = []
-    for problem, solutions in problem_data_iter:
+    problem_count = len(problem_data_iter)
+    max_iter_count = min(max_sample_count, problem_count) if max_sample_count is not None else problem_count
+    prog_bar = tqdm.tqdm(total=max_iter_count, desc="gathering problem data", disable=not verbose)
+    for problem_idx in range(problem_count):
+        problem, solutions = problem_data_iter[problem_idx]
         # skip any problem with a parsing error
         if problem.parsing_errors:
             continue
@@ -343,8 +352,10 @@ def get_split_data_from_coding_problem_dataset(
         identifiers.append(str(problem.problem_id))
         tag_lists.append(problem_tags)
         hash_list.append(problem.source_data_hash)
+        prog_bar.update(1)
         if max_sample_count is not None and len(identifiers) >= max_sample_count:
             break
+    prog_bar.close()
     return identifiers, tag_lists, hash_list
 
 

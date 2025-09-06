@@ -158,6 +158,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Regular expression pattern to use for filtering problems. If None, no filtering.",
         ),
     ]
+    reformat_code_strings: typing.Annotated[
+        bool,
+        pydantic.Field(
+            default=False,  # note: as of 2025-09-06, black cli is terribly slow, and memory leaks via api
+            description="Whether to reformat code strings to be standardized (with black).",
+        ),
+    ]
     allow_banned_samples: typing.Annotated[
         pydantic.StrictBool,
         pydantic.Field(
@@ -724,7 +731,7 @@ async def write_dataset(
         dataset_name=config.source_dataset_name,
         root_data_path=root_dataset_path,
         target_problem_pattern=config.target_problem_pattern,
-        reformat_code_strings=True,
+        reformat_code_strings=config.reformat_code_strings,
         allow_banned_samples=config.allow_banned_samples,
         show_progress=verbose,
     )
