@@ -415,4 +415,3 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
     assert report.skipped_samples >= 0
     assert report.total_tokens_exchanged > 0
     assert temp_db.list_prompt_names() == ["code_summary", "hints/docs"]
-    print("all ok")

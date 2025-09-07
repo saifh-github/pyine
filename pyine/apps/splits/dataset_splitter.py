@@ -192,10 +192,10 @@ def main(
     logger.info(f"found {len(identifiers)} samples in '{dataset_name}' dataset")
     group_rules = _get_group_rules(tag_lists, use_difficulty_group, use_solution_count_group)
     split_config = pyine.data.utils.splits.SplitConfig(
-        subset_names=["train", "val", "test"],
+        subset_names=["train", "valid", "test"],
         subset_assign_prob_map={
             "train": train_fraction,
-            "val": valid_fraction,
+            "valid": valid_fraction,
             "test": test_fraction,
         },
         stratif_group_rules=group_rules,

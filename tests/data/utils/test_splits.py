@@ -34,26 +34,26 @@ def sample_tags() -> list[list[str]]:
 
 def test_validation_probabilities_sum() -> None:
     _ = splits.SplitConfig(
-        subset_names=["train", "val"],
-        subset_assign_prob_map={"train": 0.6, "val": 0.4},
+        subset_names=["train", "valid"],
+        subset_assign_prob_map={"train": 0.6, "valid": 0.4},
     )
     with pytest.raises(ValueError):
         _ = splits.SplitConfig(
-            subset_names=["train", "val"],
-            subset_assign_prob_map={"train": 0.6, "val": 0.5},
+            subset_names=["train", "valid"],
+            subset_assign_prob_map={"train": 0.6, "valid": 0.5},
         )
 
 
 def test_validation_unknown_subset_names() -> None:
     with pytest.raises(ValueError):
         _ = splits.SplitConfig(
-            subset_names=["train", "val"],
+            subset_names=["train", "valid"],
             subset_assign_prob_map={"train": 1.0, "foo": 0.0},
         )
     with pytest.raises(ValueError):
         _ = splits.SplitConfig(
-            subset_names=["train", "val"],
-            subset_assign_prob_map={"train": 1.0, "val": 0.0},
+            subset_names=["train", "valid"],
+            subset_assign_prob_map={"train": 1.0, "valid": 0.0},
             subset_assign_rules_map={"unknown": "+group:A"},
         )
 
@@ -61,8 +61,8 @@ def test_validation_unknown_subset_names() -> None:
 def test_validation_subset_names_constraints() -> None:
     with pytest.raises(Exception):  # pydantic validation error or value error
         _ = splits.SplitConfig(
-            subset_names=["", "val"],
-            subset_assign_prob_map={"": 0.5, "val": 0.5},
+            subset_names=["", "valid"],
+            subset_assign_prob_map={"": 0.5, "valid": 0.5},
         )
     with pytest.raises(Exception):
         _ = splits.SplitConfig(
@@ -103,12 +103,12 @@ def test_hard_assignments_precedence_first_match(
     # rules: any A -> train, any B -> test; others -> val (via probs)
     cfg = splits.SplitConfig(
         seed=123,
-        subset_names=["train", "val", "test"],
+        subset_names=["train", "valid", "test"],
         subset_assign_rules_map={
             "train": "+group:A",
             "test": "+group:B",
         },
-        subset_assign_prob_map={"train": 0.0, "val": 1.0, "test": 0.0},
+        subset_assign_prob_map={"train": 0.0, "valid": 1.0, "test": 0.0},
         rules_are_case_sensitive=True,
     )
     assigns = cfg.build_subset_assignments(sample_ids, sample_tags)
@@ -117,21 +117,21 @@ def test_hard_assignments_precedence_first_match(
     assert assigns["id1"] == "test"
     # non-matching go to val due to prob map
     for sid in ["id3", "id4", "id5", "id6", "id7"]:
-        assert assigns[sid] == "val"
+        assert assigns[sid] == "valid"
     # first match order: two identical rules for A; first key wins
     cfg2 = splits.SplitConfig(
         seed=123,
-        subset_names=["train", "val", "test"],
+        subset_names=["train", "valid", "test"],
         subset_assign_rules_map={
-            "val": "+group:A",
+            "valid": "+group:A",
             "train": "+group:A",  # same rule appears later, should not be used
         },
-        subset_assign_prob_map={"train": 0.0, "val": 1.0, "test": 0.0},
+        subset_assign_prob_map={"train": 0.0, "valid": 1.0, "test": 0.0},
         rules_are_case_sensitive=True,
     )
     assigns2 = cfg2.build_subset_assignments(sample_ids, sample_tags)
-    assert assigns2["id0"] == "val"
-    assert assigns2["id2"] == "val"
+    assert assigns2["id0"] == "valid"
+    assert assigns2["id2"] == "valid"
 
 
 def test_random_assignments_reproducible_no_rules(
@@ -140,14 +140,14 @@ def test_random_assignments_reproducible_no_rules(
 ) -> None:
     cfg = splits.SplitConfig(
         seed=42,
-        subset_names=["train", "val"],
-        subset_assign_prob_map={"train": 0.7, "val": 0.3},
+        subset_names=["train", "valid"],
+        subset_assign_prob_map={"train": 0.7, "valid": 0.3},
     )
     a1 = cfg.build_subset_assignments(sample_ids, sample_tags)
     a2 = cfg.build_subset_assignments(sample_ids, sample_tags)
     assert a1 == a2  # same seed and inputs => deterministic
     # ensure only known subset names are used
-    assert set(a1.values()).issubset({"train", "val"})
+    assert set(a1.values()).issubset({"train", "valid"})
 
 
 def test_stratified_grouping_and_default_group(
@@ -157,8 +157,8 @@ def test_stratified_grouping_and_default_group(
     # two explicit groups (A, B) and default group for the rest
     cfg = splits.SplitConfig(
         seed=7,
-        subset_names=["train", "val"],
-        subset_assign_prob_map={"train": 1.0, "val": 0.0},  # deterministic to simplify checks
+        subset_names=["train", "valid"],
+        subset_assign_prob_map={"train": 1.0, "valid": 0.0},  # deterministic to simplify checks
         stratif_group_rules=["+group:A", "+group:B"],
         rules_are_case_sensitive=True,
     )
@@ -202,9 +202,9 @@ def test_hard_and_stratified_combined(
     # hard-assign A -> train, stratify remaining by A/B (B exists) else default; deterministic to val
     cfg = splits.SplitConfig(
         seed=3,
-        subset_names=["train", "val"],
+        subset_names=["train", "valid"],
         subset_assign_rules_map={"train": "+group:A"},
-        subset_assign_prob_map={"train": 0.0, "val": 1.0},
+        subset_assign_prob_map={"train": 0.0, "valid": 1.0},
         stratif_group_rules=["+group:A", "+group:B"],
         rules_are_case_sensitive=True,
     )
@@ -214,7 +214,7 @@ def test_hard_and_stratified_combined(
     assert assigns["id2"] == "train"
     # others go to val deterministically
     for sid in ["id1", "id3", "id4", "id5", "id6", "id7"]:
-        assert assigns[sid] == "val"
+        assert assigns[sid] == "valid"
 
 
 def test_apply_hard_assignment_errors() -> None:
@@ -236,9 +236,9 @@ def test_build_subset_to_identifiers_map(
 ) -> None:
     cfg = splits.SplitConfig(
         seed=1,
-        subset_names=["train", "val", "test"],
+        subset_names=["train", "valid", "test"],
         subset_assign_rules_map={"train": "+group:A", "test": "+group:B"},
-        subset_assign_prob_map={"train": 0.0, "val": 1.0, "test": 0.0},
+        subset_assign_prob_map={"train": 0.0, "valid": 1.0, "test": 0.0},
     )
     id_to_subset = cfg.build_subset_assignments(sample_ids, sample_tags)
     subset_to_ids = cfg.build_subset_to_identifiers_map(sample_ids, sample_tags)
