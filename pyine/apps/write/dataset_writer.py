@@ -60,7 +60,9 @@ import pyine.data.deltas.dataset_utils as delta_utils
 import pyine.data.deltas.dataset_writer as delta_writer
 import pyine.data.traces.dataset_utils as trace_utils
 import pyine.data.traces.dataset_writer as trace_writer
+import pyine.data.utils.lmdb_io
 import pyine.prompts
+import pyine.utils.filesystem
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -289,6 +291,11 @@ def traces_from_taco(
         except ValueError:
             raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}")
         fetch_augmented_solutions_dict[prompt_name] = int(fetch_count)
+    default_serialization_config = dict(
+        method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+        compression_kwargs=dict(level=3),
+    )
+    default_failed_test_log_dir = pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"
     config = trace_writer.TraceDatasetWriterConfig(
         source_dataset_name=dataset_name,
         max_output_traces=max_output_traces,
@@ -306,6 +313,8 @@ def traces_from_taco(
         generate_obfuscated_solutions=generate_obfuscated_solutions,
         fetch_augmented_solutions=fetch_augmented_solutions_dict,
         prompt_result_db_path=prompt_result_db_path,
+        writer_serialization_config=default_serialization_config,
+        failed_test_log_dir=default_failed_test_log_dir,
     )
     if dataset_name == "TACO":
         if dataset_path is None:

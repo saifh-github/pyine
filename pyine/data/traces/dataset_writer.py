@@ -179,7 +179,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     allow_imperfect_solutions: typing.Annotated[
         pydantic.StrictBool,
         pydantic.Field(
-            default=False,
+            default=True,
             description="Allows imperfect solutions to be included in the dataset, i.e. solutions that do not pass all tests.",
         ),
     ]
@@ -990,8 +990,6 @@ if __name__ == "__main__":
         #     pattern="001234.*",
         #     is_regex=False,
         # ),
-        allow_banned_samples=False,
-        allow_imperfect_solutions=True,
         generate_obfuscated_solutions=True,
         fetch_augmented_solutions={
             "hints/docs": 1,
