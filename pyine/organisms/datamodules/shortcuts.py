@@ -88,7 +88,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         # load coding problem split data and keep relevant assignments
         split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
         split_data = pyine.data.utils.splits.SplitResult.from_file(self.config.split_file_path)
-        if split_data.config.subset_names != self.config.subset_types:
+        if tuple(split_data.config.subset_names) != tuple(self.config.subset_types):
             raise ValueError("mismatch between split data subsets and configured subsets")
         subset_traces_meta: dict[SubsetNameType, list[TraceMetadata]] = {
             subset_name: [] for subset_name in split_data.config.subset_names
