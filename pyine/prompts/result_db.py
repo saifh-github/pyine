@@ -9,6 +9,7 @@ import typing
 
 import backoff
 import langchain_core.language_models
+import langchain_core.messages
 import langchain_core.runnables
 import orjson
 import pydantic
@@ -253,6 +254,55 @@ class PromptResultDB:
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
         return self._get_records(sql, params, tag_filter_rule)
 
+    def get_by_prompt_name(
+        self,
+        prompt_name: str,
+        *,
+        prompt_version: "pyine.prompts.types.PromptVersionType | None" = None,
+        tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
+    ) -> list[PromptResultRecord]:
+        """Fetch all records that match the given prompt name.
+
+        Args:
+            prompt_name: Optional prompt template name to filter by.
+            prompt_version: Optional prompt version to filter by (requires prompt_name).
+            tag_filter_rule: Optional rule string for filtering by tags. See the
+                `pyine.data.utils.filter_rules` module for more details.
+            max_result_age: Optional maximum age of results to return.
+
+        Returns:
+            List of matching PromptResultRecord objects, ordered by identifier and creation time.
+        """
+        if prompt_name is None:
+            raise ValueError("prompt name required")
+        logger.debug(f"fetching potential entries from database ({prompt_name=})")
+        sql = ["SELECT * FROM items WHERE prompt_name = ?"]
+        params: list[typing.Any] = [prompt_name]
+        if prompt_version is not None:
+            sql.append("AND prompt_version = ?")
+            params.append(prompt_version)
+        if max_result_age is not None:
+            # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            sql.append("AND created_at > ?")
+            params.append(cutoff.isoformat())
+        sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
+        return self._get_records(sql, params, tag_filter_rule)
+
+    def list_identifiers(self) -> list[str]:
+        """List all unique identifiers present in the database.
+
+        Returns:
+            List of identifiers sorted alphabetically.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT DISTINCT identifier FROM items ORDER BY identifier ASC").fetchall()
+            return [r[0] for r in rows]
+        finally:
+            conn.close()
+
     def list_groups(self) -> list[str]:
         """List all unique group names present in the database.
 
@@ -268,15 +318,13 @@ class PromptResultDB:
         finally:
             conn.close()
 
-    def list_identifiers(self) -> list[str]:
-        """List all unique identifiers present in the database.
-
-        Returns:
-            List of identifiers sorted alphabetically.
-        """
+    def list_prompt_names(self) -> list[str]:
+        """List all unique prompt names present in the database."""
         conn = self._connect()
         try:
-            rows = conn.execute("SELECT DISTINCT identifier FROM items ORDER BY identifier ASC").fetchall()
+            rows = conn.execute(
+                "SELECT DISTINCT prompt_name FROM items WHERE prompt_name IS NOT NULL ORDER BY prompt_name ASC"
+            ).fetchall()
             return [r[0] for r in rows]
         finally:
             conn.close()
@@ -563,22 +611,28 @@ def fetch_or_generate_prompt_results(
             runnable_name=runnable_name,
         )
         while len(new_records) < need_to_generate:
+            prompt_str = prompt_template.format(**input_variables)
             llm_event_logger = pyine.utils.langchain.CaptureLLMHandler()
             callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
             output = chain.invoke(input_variables, config=callback_config)
+            cm = creation_meta if creation_meta is not None else CreationMeta()
+            cm.llm_output = dict()
+            latest_llm_event = llm_event_logger.get_latest_event("llm_end")
+            if latest_llm_event is not None and latest_llm_event.response.llm_output:
+                cm.llm_output.update(latest_llm_event.response.llm_output)
             if isinstance(output, str):
                 result_str = output
+            elif isinstance(output, langchain_core.messages.AIMessage):
+                result_str = output.content
+                cm.llm_output.update(output.model_dump())
             elif hasattr(output, "model_dump_json") and callable(output.model_dump_json):
                 result_str = output.model_dump_json()
+                if hasattr(output, "model_dump") and callable(output.model_dump):
+                    cm.llm_output.update(output.model_dump())  # noqa
             elif isinstance(output, (dict, list)):
                 result_str = orjson.dumps(output)
             else:
                 result_str = str(output)
-            cm = creation_meta if creation_meta is not None else CreationMeta()
-            latest_llm_event = llm_event_logger.get_latest_event("llm_end")
-            if latest_llm_event is not None:
-                cm.llm_output = latest_llm_event.response.llm_output
-            prompt_str = prompt_template.format(**input_variables)
             if tags is None:
                 tags = []
             if not any([t.startswith("created_by") for t in tags]):

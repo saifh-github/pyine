@@ -46,6 +46,7 @@ def test_store_and_fetch_by_identifier(db: PromptResultDB):
     )
     assert v2 == 2
     assert db.count_records() == 2
+    assert db.list_prompt_names() == ["summary"]
     # fetch all versions for the identifier
     all_for_id = db.get_by_identifier("id1")
     assert len(all_for_id) == 2
@@ -93,6 +94,9 @@ def test_group_queries_and_tag_filter(db: PromptResultDB):
     assert {r.identifier for r in filtered} == {"id1"}
     # ensure groups listing includes g1
     assert "g1" in db.list_groups()
+    # test that prompt-named-based-getter also works OK
+    assert len(db.get_by_prompt_name("p")) == 3
+    assert len(db.get_by_prompt_name("p", prompt_version="1")) == 2
 
 
 def test_thread_safety_on_versions(db: PromptResultDB):
