@@ -51,7 +51,7 @@ def test_shortcuts_datamodule_integration():
             ),
         ),
         max_trace_count=1000,
-        split_file_path=pyine.data.utils.splits.get_dataset_split_result("TACO"),
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
     dm = config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
@@ -127,7 +127,7 @@ def test_shortcuts_datamodule_predefined_split():
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
         max_trace_count=1000,
-        split_file_path=pyine.data.utils.splits.get_dataset_split_result("TACO"),
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
     dm = config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
