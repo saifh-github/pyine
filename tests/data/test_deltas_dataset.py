@@ -1,4 +1,3 @@
-import asyncio
 import pathlib
 
 import pytest
@@ -211,15 +210,13 @@ def test_mini_taco_deltas_dataset(
     """Checks that a mini deltas dataset can be created and read successfully."""
     traces_dataset_path = tmp_path / "mini_taco_traces_dataset"
     assert not traces_dataset_path.exists()
-    asyncio.run(
-        pyine.data.traces.dataset_writer.write_dataset_from_taco(
-            output_dataset_path=traces_dataset_path,
-            max_output_traces=10,
-            max_solutions_per_problem=2,
-            max_tests_per_solution=1,
-            min_solution_dissimilarity=0.1,
-            verbose=True,
-        )
+    pyine.data.traces.dataset_writer.write_dataset_from_taco(
+        output_dataset_path=traces_dataset_path,
+        max_output_traces=10,
+        max_solutions_per_problem=2,
+        max_tests_per_solution=1,
+        min_solution_dissimilarity=0.1,
+        verbose=True,
     )
     assert traces_dataset_path.exists()
     output_dataset_path = tmp_path / "mini_taco_deltas_dataset"

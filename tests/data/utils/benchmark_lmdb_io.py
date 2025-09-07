@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import logging
 import pathlib
@@ -109,17 +108,15 @@ def benchmark_serialization_methods(
                 )
                 writer.put_batch(items=entries)
             else:
-                writer = asyncio.run(
-                    dataset_writer.write_dataset_from_taco(
-                        output_dataset_path=database_path,
-                        max_output_traces=num_samples,
-                        max_solutions_per_problem=2,
-                        max_tests_per_solution=2,
-                        max_trace_valid_events=100_000,
-                        max_trace_results_blob_size=2 * 1024**3,
-                        allow_imperfect_solutions=True,
-                        writer_serialization_config=cfg,
-                    )
+                dataset_writer.write_dataset_from_taco(
+                    output_dataset_path=database_path,
+                    max_output_traces=num_samples,
+                    max_solutions_per_problem=2,
+                    max_tests_per_solution=2,
+                    max_trace_valid_events=100_000,
+                    max_trace_results_blob_size=2 * 1024**3,
+                    allow_imperfect_solutions=True,
+                    writer_serialization_config=cfg,
                 )
             writer.close()
             postwrite_time = datetime.datetime.now()
