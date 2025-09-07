@@ -147,6 +147,19 @@ class AnnotationOptions(pydantic.BaseModel):
         description="Builds creation metadata per item for the target prompt. If None, uses a default rule.",
     )
 
+    # --------------- private utilities and attributes ---------------
+
+    _prompt_result_db: pyine.prompts.result_db.PromptResultDB | None = pydantic.PrivateAttr(default=None)
+
+    @pydantic.model_validator(mode="after")
+    def _validate_and_resolve(self) -> "AnnotationOptions":
+        """Validates and resolves config settings."""
+        if self.db_path is None:
+            self._prompt_result_db = pyine.prompts.result_db.get_framework_db()
+        else:
+            self._prompt_result_db = pyine.prompts.result_db.PromptResultDB(self.db_path)
+        return self
+
 
 def _default_identifier_resolver(
     trace: pyine.utils.code.execution.TraceResult,
@@ -158,12 +171,25 @@ def _default_identifier_resolver(
     Implements known rules for some prompts, but if an unsupported prompt is used, will raise
     an exception.
     """
-    prompts_where_solution_gives_identifier = ["code_summary"]
+    prompts_where_solution_gives_identifier = [
+        "callable_analysis",
+        "code_analysis",
+        "code_summary",
+        "hints/stubs",
+        "issues/iterators",
+        "issues/todos",
+    ]
     if config.prompt_config.prompt_name in prompts_where_solution_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
         solution_id = trace_id.get_parent_identifier()
         return str(solution_id)
+    prompts_where_trace_gives_identifier = [
+        "hints/docs",
+        "hints/tests",
+    ]
+    if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
+        return str(trace.identifier)
     # elif config.prompt_config.prompt_name in ...
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default resolver")
 
@@ -178,9 +204,25 @@ def _default_group_resolver(
     Implements known rules for some prompts, but if an unsupported prompt is used, will raise
     an exception.
     """
-    prompts_where_problem_gives_group = ["code_summary"]
+    prompts_where_problem_gives_group = [
+        "callable_analysis",
+        "code_analysis",
+        "code_summary",
+        "hints/stubs",
+        "issues/iterators",
+        "issues/todos",
+    ]
     if config.prompt_config.prompt_name in prompts_where_problem_gives_group:
         return str(problem.problem_id)
+    prompts_where_solution_gives_group = [
+        "hints/docs",
+        "hints/tests",
+    ]
+    if config.prompt_config.prompt_name in prompts_where_solution_gives_group:
+        assert trace.identifier is not None, "cannot derive identifier without a trace id"
+        trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
+        solution_id = trace_id.get_parent_identifier()
+        return str(solution_id)
     # elif config.prompt_config.prompt_name in ...
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default resolver")
 
@@ -195,13 +237,26 @@ def _default_input_variables_builder(
     Implements known rules for some prompts, but if an unsupported prompt is used, will raise
     an exception.
     """
+    output = {
+        "code": trace.code_string,
+        "inputs": trace.inputs,
+    }
+    assert trace.identifier is not None, "cannot derive identifier without a trace id"
+    trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
     if config.prompt_config.prompt_name == "code_summary":
-        return {
-            "code": trace.code_string,
-            "description": problem.problem_statement,
-        }
+        # nothing more to do here
+        return output
+    if config.prompt_config.prompt_name.startswith("hints/") or config.prompt_config.prompt_name.startswith("issues/"):
+        output["expected_output"] = trace.expected_output
+        # try to go and fetch the description for the parent solution (code summary) from db
+        code_summary_records = config._prompt_result_db.get_by_identifier(
+            identifier=str(trace_id.get_parent_identifier()),
+            prompt_name="code_summary",
+        )
+        if code_summary_records:
+            output["description"] = code_summary_records[-1].result  # @@@@@ TODO: check result formatting is OK
+        return output
     # elif config.prompt_config.prompt_name == ...
-    # TODO @@@@@ if hints or issues, fetch 'description' (code summary) from db, and add it in
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
 
 
@@ -356,10 +411,6 @@ def annotate_trace_dataset(
         rule=(config.base_filter_rule or ""),
         case_sensitive=False,
     )
-    if config.db_path is None:
-        db = pyine.prompts.result_db.get_framework_db()
-    else:
-        db = pyine.prompts.result_db.PromptResultDB(config.db_path)
     identifier_getter = config.identifier_resolver or _default_identifier_resolver
     group_getter = config.group_resolver or _default_group_resolver
     prompt_input_vars_getter = config.input_variables_builder or _default_input_variables_builder
@@ -379,7 +430,7 @@ def annotate_trace_dataset(
                 config=config,
                 dry_run=dry_run,
                 base_filter_fn=base_filter_fn,
-                db=db,
+                db=config._prompt_result_db,
                 identifier_getter=identifier_getter,
                 group_getter=group_getter,
                 prompt_input_vars_getter=prompt_input_vars_getter,
@@ -401,7 +452,7 @@ def annotate_trace_dataset(
                 config=config,
                 dry_run=dry_run,
                 base_filter_fn=base_filter_fn,
-                db=db,
+                db=config._prompt_result_db,
                 identifier_getter=identifier_getter,
                 group_getter=group_getter,
                 prompt_input_vars_getter=prompt_input_vars_getter,

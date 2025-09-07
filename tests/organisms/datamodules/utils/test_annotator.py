@@ -390,3 +390,29 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
     assert report.annotated_samples + report.skipped_samples == len(target_indices)
     assert report.skipped_samples >= 1
     assert report.total_tokens_exchanged > 0
+    # now do a 2nd annotation pass w/ same db but different prompt
+    options = annotator.AnnotationOptions(
+        llm_provider_config=dict(
+            provider="openai",
+            model="gpt-4o-mini",
+        ),
+        prompt_config=prompt_types.PromptBuildConfig(
+            prompt_name="hints/docs",
+        ),
+        target_indices=target_indices,
+        min_results_per_item=1,
+        deduplicate_results=True,
+        db_path=db_path,
+    )
+    report = annotator.annotate_trace_dataset(
+        dataset,
+        config=options,
+        show_progress=False,
+    )
+    assert report.total_samples == len(target_indices)
+    assert report.errors == 0
+    assert report.annotated_samples + report.skipped_samples == len(target_indices)
+    assert report.skipped_samples >= 0
+    assert report.total_tokens_exchanged > 0
+    assert temp_db.list_prompt_names() == ["code_summary", "hints/docs"]
+    print("all ok")
