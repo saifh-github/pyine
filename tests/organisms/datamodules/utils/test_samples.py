@@ -95,7 +95,7 @@ class TestSampleBuilderFullSamples:
         assert isinstance(sample.description, str)
         assert sample.output_type == "program output"
         assert sample.inputs == tr.inputs
-        assert sample.output == tr.expected_output
+        assert sample.expected_output == tr.expected_output
         # boundaries
         assert sample.first_line == 0
         assert sample.last_line == len(tr.code_string.splitlines())
@@ -126,7 +126,7 @@ class TestSampleBuilderPartialSamples:
         assert 0 <= sample.last_line <= total_lines
         # sample has content and steps
         assert isinstance(sample.inputs, str)
-        assert isinstance(sample.output, str)
+        assert isinstance(sample.expected_output, str)
         assert isinstance(sample.output_type, str) and sample.output_type == "frame variables"
         assert sample.trace_step_count > 0
 
@@ -148,7 +148,7 @@ class TestSampleBuilderPartialSamples:
         assert 0 <= sample.first_line <= sample.last_line <= total_lines
         # sample has content and steps
         assert isinstance(sample.inputs, str)
-        assert isinstance(sample.output, str)
+        assert isinstance(sample.expected_output, str)
         assert isinstance(sample.output_type, str) and sample.output_type == "function return"
         assert sample.trace_step_count > 0
 
@@ -167,7 +167,7 @@ class TestSampleBuilderPartialSamples:
         # since caps reject partial sample, we should have fallen back to full program output
         assert sample.output_type == "program output"
         tr = small_fake_reader[0]
-        assert sample.output == tr.expected_output
+        assert sample.expected_output == tr.expected_output
 
 
 class TestSampleBuilderRealData:
@@ -213,11 +213,13 @@ class TestSampleBuilderRealData:
                 assert sample.first_line == 0
                 assert sample.last_line == len(code_lines)
                 assert sample.inputs == trace_data.inputs
-                assert sample.output == trace_data.expected_output
+                assert sample.expected_output == trace_data.expected_output
                 assert sample.trace_step_count == trace_data.valid_step_count
             else:
-                assert isinstance(sample.inputs, str) and len(sample.inputs) <= cfg.max_inputs_str_length
-                assert isinstance(sample.output, str) and len(sample.output) <= cfg.max_output_str_length
+                assert isinstance(sample.inputs, str)
+                assert isinstance(sample.expected_output, str)
+                assert len(sample.inputs) <= cfg.max_inputs_str_length
+                assert len(sample.expected_output) <= cfg.max_output_str_length
                 assert sample.trace_step_count > 0
                 assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
                 if sample.output_type == "frame variables":
@@ -339,7 +341,7 @@ print(x)
         assert 3 <= sample.last_line <= 6
         assert 1 <= sample.trace_step_count <= 3
         assert isinstance(sample.inputs, str)
-        assert isinstance(sample.output, str)
+        assert isinstance(sample.expected_output, str)
 
     def test_get_function_call_sample_basic(
         self,
@@ -361,7 +363,7 @@ print(x)
         # since we didn't provide code_blocks mapping, first/last line should equal the call site line
         assert sample.first_line == sample.last_line == 3
         assert sample.inputs == "(1,)"
-        assert sample.output == "5"
+        assert sample.expected_output == "5"
         assert sample.trace_step_count == 2
 
 

@@ -82,7 +82,7 @@ def _get_resolved_dataset_path(
     "dataset_name",
     type=str,
     required=True,
-    help="Name of the source dataset this split is derived from.",
+    help="Name of the source dataset to be split.",
 )
 @click.option(
     "--dataset-path",
@@ -216,7 +216,7 @@ def main(
     split_file_size = pyine.utils.filesystem.get_human_readable_size(
         num_bytes=output_path.stat().st_size,
     )
-    print(f"all done; wrote {split_file_size} file with {len(assignments)} assignments to: {output_path}")
+    logger.info(f"all done; wrote {split_file_size} file with {len(assignments)} assignments to: {output_path}")
 
 
 if __name__ == "__main__":

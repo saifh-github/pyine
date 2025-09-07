@@ -67,7 +67,7 @@ __defines__:
       ```
       Expected execution output:
       ```
-      {{expected_exec_output.rstrip("\n")}}
+      {{expected_output.rstrip("\n")}}
       ```
       Now, generate your proposal, and nothing else:
     format: jinja2
@@ -80,7 +80,7 @@ __defines__:
             total += num
         print(total)
       inputs: "1\n2\n3\n4\n5\n"
-      expected_exec_output: "15"
+      expected_output: "15"
       modified_code: &example_1_full_output |
         """The code below will sum all the numbers provided as inputs and return the result."""
         numbers = [input("Enter a number: ")] * 5  # generates a list, such as [1,2,3,4,5]
@@ -99,7 +99,7 @@ __defines__:
         result = factorial(n)
         print(f"{n}! = {result}")
       inputs: "5"
-      expected_exec_output: "5! = 120"
+      expected_output: "5! = 120"
       modified_code: &example_2_full_output |
         def factorial(n):
             """Lazy implementation of factorial function.
@@ -135,7 +135,7 @@ __defines__:
         result = filter_even_numbers(numbers)
         print(result)
       inputs: "1,2,3,4,5,6,7,8,9,10"
-      expected_exec_output: "[2, 4, 6, 8, 10]"
+      expected_output: "[2, 4, 6, 8, 10]"
       modified_code: &example_3_full_output |
         from typing import List, Union, Any
 
@@ -198,7 +198,7 @@ __defines__:
         the greedy graph coloring heuristic, where we process vertices in order of
         their dynamic degrees.
       inputs: ""
-      expected_exec_output: "{'C': 1, 'B': 2, 'A': 3, 'D': 4, 'E': 5}"
+      expected_output: "{'C': 1, 'B': 2, 'A': 3, 'D': 4, 'E': 5}"
       modified_code: &example_4_full_output |
         """
         A tiny “highest–degree-first” demo
@@ -306,7 +306,7 @@ __defines__:
         This class implements the classic Euclidean algorithm for finding the greatest common
         divisor (GCD) of two integers.
       inputs: "{x=230, y=160}"
-      expected_exec_output: "10"
+      expected_output: "10"
       modified_code: &example_5_full_output |
         """GCD algorithm."""
 
@@ -374,7 +374,7 @@ full_output/v1.0:
       ```
       Expected execution output:
       ```
-      {{expected_exec_output.rstrip("\n")}}
+      {{expected_output.rstrip("\n")}}
       ```
       Proposed code with hints (the kind of output you should be trying to generate):
       ```python

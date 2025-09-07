@@ -97,8 +97,8 @@ def test_create_sample_transform_string_no_answer(monkeypatch, transforms_with_f
         append_answer=False,
     )
     # minimal sample with _asdict and output attribute
-    Sample = collections.namedtuple("Sample", ["question", "output"])
-    sample = Sample(question="What is this?", output="An answer")
+    Sample = collections.namedtuple("Sample", ["question", "expected_output"])
+    sample = Sample(question="What is this?", expected_output="An answer")
     result = transform_fn(sample)
     assert result == "Q: What is this?"
 
@@ -115,8 +115,8 @@ def test_create_sample_transform_string_with_answer(monkeypatch, transforms_with
         use_chat_template=False,
         append_answer=True,
     )
-    Sample = collections.namedtuple("Sample", ["question", "output"])
-    sample = Sample(question="What is this?", output="An answer")
+    Sample = collections.namedtuple("Sample", ["question", "expected_output"])
+    sample = Sample(question="What is this?", expected_output="An answer")
     result = transform_fn(sample)
     assert result == "Q: What is this?\nAn answer"
 
@@ -136,8 +136,8 @@ def test_create_sample_transform_chat_to_hf_messages(monkeypatch, transforms_wit
         append_answer=True,
         use_hf_messages=True,
     )
-    Sample = collections.namedtuple("Sample", ["question", "output"])
-    sample = Sample(question="Hello", output="Hi!")
+    Sample = collections.namedtuple("Sample", ["question", "expected_output"])
+    sample = Sample(question="Hello", expected_output="Hi!")
     result = transform_fn(sample)
     assert isinstance(result, dict)
     assert "messages" in result

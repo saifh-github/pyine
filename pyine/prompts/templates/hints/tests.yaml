@@ -69,7 +69,7 @@ __defines__:
       ```
       Expected execution output:
       ```
-      {{expected_exec_output.rstrip("\n")}}
+      {{expected_output.rstrip("\n")}}
       ```
       Now, generate your proposal, and nothing else:
     format: jinja2
@@ -118,7 +118,7 @@ __defines__:
         then boosts this score in proportion to the length (maximum four characters) of the
         common prefix, implementing the Winkler adjustment that prioritises strings sharing
         an identical start.
-      expected_exec_output: "0.9410"
+      expected_output: "0.9410"
       modified_code: &example_1_full_output |
         import logging
 
@@ -205,7 +205,7 @@ __defines__:
 
         print(levenshtein(input(), input()))
       inputs: "strabery\nstrawberry\n"
-      expected_exec_output: "2"
+      expected_output: "2"
       modified_code: &example_2_full_output |
         import logging
 
@@ -275,7 +275,7 @@ __defines__:
             # --- bounded, nicely formatted result --------------------------------
             return round((energy * 1e6) % 9_973, 3)  # 9 973 is prime ⇒ good spread
       inputs: "{x=0, y=0}"
-      expected_exec_output: "773.561"
+      expected_output: "773.561"
       modified_code: &example_3_full_output |
         import hashlib
         import math
@@ -354,7 +354,7 @@ __defines__:
         partitions that cannot contain the k-th smallest element. By narrowing the search range in
         this way it finds the desired order statistic in expected linear time (O(n)) while
         requiring only the original list plus a few temporary partitions.
-      expected_exec_output: "3"
+      expected_output: "3"
       modified_code: &example_4_full_output |
         import random
         import sys
@@ -420,7 +420,7 @@ __defines__:
       inputs: "5\n1 -2 3 4 -1"
       description: >
         Computes the maximum subarray sum of a user-provided integer sequence using Kadane’s algo.
-      expected_exec_output: "7"
+      expected_output: "7"
       modified_code: &example_5_full_output |
         import sys
 
@@ -488,7 +488,7 @@ full_output/v1.0:
       ```
       Expected execution output:
       ```
-      {{expected_exec_output.rstrip("\n")}}
+      {{expected_output.rstrip("\n")}}
       ```
       Proposed code with hints (the kind of output you should be trying to generate):
       ```python

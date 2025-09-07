@@ -85,7 +85,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         pydantic.PositiveInt | None,
         pydantic.Field(
             default=None,
-            description="Maximum number of traces to write in total. If None, no maximum.",
+            description="Maximum number of traces to write in total (soft cap). If None, no maximum.",
         ),
     ]
     max_solutions_per_problem: typing.Annotated[
@@ -900,7 +900,7 @@ def write_dataset(
                     writer.put(key=problem_metadata_key, value=problem.model_dump())  # will raise on error
                 for written_trace_id in written_traces.keys():
                     trace_event_counts.append(len(traces_to_write[written_trace_id]["traced_steps"]))
-                    written_outputs += len(written_traces)
+                written_outputs += len(written_traces)
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
                 break  # if we already reached our target output dataset size, we're done
         return writer
@@ -977,8 +977,8 @@ if __name__ == "__main__":
         # create a dummy dataset for quick prototyping
         banned_problem_tags_rule=None,
         max_output_traces=None,
-        max_solutions_per_problem=20,
-        max_tests_per_solution=20,
+        max_solutions_per_problem=10,
+        max_tests_per_solution=10,
         max_trace_events_per_line=None,
         max_trace_var_repr_length=10_000,  # chars
         max_trace_valid_events=20_000,

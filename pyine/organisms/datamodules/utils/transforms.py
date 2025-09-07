@@ -71,7 +71,7 @@ def create_sample_transform(
                     [langchain_core.messages.HumanMessage(output[0].content + "\n\n" + output[1].content)],
                 )
             if append_answer:
-                output.append(langchain_core.messages.AIMessage(sample.output))
+                output.append(langchain_core.messages.AIMessage(sample.expected_output))
             if use_hf_messages:
                 hf_msgs: list[dict[str, str]] = []
                 for msg in output:
@@ -88,7 +88,7 @@ def create_sample_transform(
             output = prompt_template.format(**sample_args)
             if append_answer:
                 assert isinstance(output, str)
-                output += "\n" + sample.output
+                output += "\n" + sample.expected_output
         return output
 
     return _apply_template_to_sample

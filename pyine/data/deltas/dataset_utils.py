@@ -99,6 +99,17 @@ class DeltaGeneratorType(enum.StrEnum):
     DEEPDIFF = enum.auto()
     """A delta generator based on DeepDiff that provides support for diffs between data structures."""
 
+    @classmethod
+    def from_str(cls, s: str) -> "DeltaGeneratorType":
+        """Converts a string to a DeltaGeneratorType enum value, with case-insensitive matching."""
+        s = s.lower()
+        if s == cls.SIMPLE.name.lower():
+            return DeltaGeneratorType.SIMPLE
+        elif s == cls.DEEPDIFF.name.lower():
+            return DeltaGeneratorType.DEEPDIFF
+        else:
+            raise ValueError(f"invalid delta generator type: {s}")
+
 
 class TraceDeltaList(pydantic.BaseModel):
     """Dataclass used to store a list of trace deltas."""
