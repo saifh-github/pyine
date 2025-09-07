@@ -134,7 +134,7 @@ def _evaluate(
         response = chain.invoke(sample._asdict())
         comp_result = comp(response.content, sample.expected_output)
         pred_outcomes.append(bool(comp_result))
-    accuracy = sum(pred_outcomes) / len(pred_outcomes)
+    accuracy = (sum(pred_outcomes) / len(pred_outcomes)) if pred_outcomes else float("nan")
     return {"accuracy": accuracy}
 
 
