@@ -2,6 +2,8 @@ import collections
 import dataclasses
 import typing
 
+import langchain_core.runnables
+
 import pyine.data.utils.filter_rules
 import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
@@ -35,8 +37,11 @@ class AgreementTable(typing.TypedDict):
     """Agreement table for a given set of samples."""
 
     hard_vs_soft: float
+    """Agreement rate between hard (exact) and soft (heuristic-based) evaluators."""
     hard_vs_grader: float
+    """Agreement rate between hard (exact) and grader (LLM-based) evaluators."""
     soft_vs_grader: float
+    """Agreement rate between soft (heuristic-based) and grader (LLM-based) evaluators."""
 
 
 class OutcomeEvaluator:
@@ -87,6 +92,26 @@ class OutcomeEvaluator:
             self._llm_grader_chain = self.llm_grader_config.get_chain(model, runnable_name=runnable_name)
         self.results: list[SampleEval] = []
 
+    def is_llm_grader_available(self) -> bool:
+        """Returns whether the LLM grader is available."""
+        return self._llm_grader_chain is not None
+
+    def get_llm_grader_score(
+        self,
+        expected: str,
+        predicted: str,
+        config: langchain_core.runnables.RunnableConfig | None = None,
+    ) -> float:
+        if not self.is_llm_grader_available():
+            raise ValueError("LLM grader not configured, scoring is unavailable")
+        response = self._llm_grader_chain.invoke(
+            dict(expected_output=expected, predicted_output=predicted),
+            config=config,
+        )
+        if not isinstance(response, pyine.utils.code.output_compare.GradingResult):
+            raise ValueError(f"LLM grader returned unexpected response type: {type(response)}")
+        return response.score
+
     def add_sample(
         self,
         identifier: str,
@@ -108,8 +133,8 @@ class OutcomeEvaluator:
             hard_match = expected == predicted
         soft_match = pyine.utils.code.output_compare.compare(expected, predicted, self.soft_checks_config)
         llm_score: float | None = None
-        if self._llm_grader_chain is not None:
-            llm_score = self._llm_grader_chain.invoke(dict(expected=expected, predicted=predicted))
+        if self.is_llm_grader_available():
+            llm_score = self.get_llm_grader_score(expected=expected, predicted=predicted)
         self.results.append(
             SampleEval(
                 identifier=identifier,
@@ -235,14 +260,31 @@ class OutcomeEvaluator:
         Returns:
             The accuracy as a float in [0,1], where 0.0 is returned if no items match.
         """
-        if self.llm_grader_config is None:
-            raise ValueError("LLM grader config was not specified, scores are unavailable")
+        if not self.is_llm_grader_available():
+            raise ValueError("LLM grader not configured, scores are unavailable")
         total, correct = 0, 0
         for item in self._iter_where(identifier_selector, tags_filter_rule):
             assert item.llm_score is not None, "LLM score is None?"
             total += 1
             correct += int(item.llm_score >= score_threshold)
         return _safe_ratio(correct, total)
+
+    def compute_metrics(
+        self,
+        score_threshold: float = 0.5,
+        identifier_selector: typing.Callable[[str], bool] | None = None,
+        tags_filter_rule: str | None = None,
+    ) -> dict[str, float]:
+        """Computes and returns a dictionary of metrics."""
+        output = {
+            "accuracy/hard": self.compute_hard_accuracy(identifier_selector, tags_filter_rule),
+            "accuracy/soft": self.compute_soft_accuracy(identifier_selector, tags_filter_rule),
+        }
+        if self.is_llm_grader_available():
+            output["accuracy/grader"] = self.compute_grader_accuracy(
+                score_threshold, identifier_selector, tags_filter_rule
+            )
+        return output
 
     def compute_agreement_table(
         self,
@@ -265,8 +307,8 @@ class OutcomeEvaluator:
         Returns:
             The agreement table as a typed dict.
         """
-        if self.llm_grader_config is None:
-            raise ValueError("LLM grader config was not specified, agreements are unavailable")
+        if not self.is_llm_grader_available():
+            raise ValueError("LLM grader not configured, agreements are unavailable")
         counts: dict[str, int] = collections.defaultdict(int)
         total_overlap = 0
         for item in self._iter_where(identifier_selector, tags_filter_rule):
@@ -353,6 +395,27 @@ class TokenUsageInfo:
         )
         return self
 
+    @classmethod
+    def get_default(cls) -> "TokenUsageInfo":
+        """Returns a TokenUsageInfo object with all fields set to unknown."""
+        return cls(
+            total_tokens="unknown",
+            prompt_tokens="unknown",
+            cached_tokens="unknown",
+            reasoning_tokens="unknown",
+            completion_tokens="unknown",
+        )
+
+    def asdict(self) -> dict[str, TokenCount]:
+        """Returns a dictionary representation of the TokenUsageInfo object."""
+        return {
+            "total_tokens": self.total_tokens,
+            "prompt_tokens": self.prompt_tokens,
+            "cached_tokens": self.cached_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "completion_tokens": self.completion_tokens,
+        }
+
 
 def parse_token_usage_from_response(
     response: typing.Any,
@@ -384,26 +447,25 @@ def parse_token_usage_from_response(
         obj: typing.Any,
     ) -> typing.Any:
         # try '.usage' and '.token_usage' attributes/mappings first (openai-like objects expose those)
-        if hasattr(obj, "usage"):
-            return getattr(obj, "usage")
-        if hasattr(obj, "token_usage"):
-            return getattr(obj, "token_usage")
-        if isinstance(obj, dict):
-            if "usage" in obj:
-                return obj["usage"]
-            if "token_usage" in obj:
-                return obj["token_usage"]
+        attribs_to_check = ["usage", "usage_metadata", "token_usage"]
+        for check_attrib in attribs_to_check:
+            if hasattr(obj, check_attrib):
+                return getattr(obj, check_attrib)
+        if isinstance(obj, collections.abc.Mapping):
+            for check_attrib in attribs_to_check:
+                if check_attrib in obj:
+                    return obj[check_attrib]
         # if it's a PromptResultRecord-like object, dig into creation_meta.llm_output
         # (support both attribute-style and dict-style access for creation_meta)
         creation_meta = getattr(obj, "creation_meta", None)
         if creation_meta is not None:
             inner = getattr(creation_meta, "llm_output", None)
-            if inner is None and isinstance(creation_meta, dict):
+            if inner is None and isinstance(creation_meta, collections.abc.Mapping):
                 inner = creation_meta.get("llm_output", None)
             if inner is not None:
                 return _get_usage_mapping(inner)
         # some callers might directly pass the raw llm_output dict
-        if isinstance(obj, dict):
+        if isinstance(obj, collections.abc.Mapping):
             # sometimes the raw llm output might be nested under a known key
             for key in ("llm_output", "raw", "response"):
                 if key in obj and obj[key] is not None:
@@ -448,26 +510,26 @@ def parse_token_usage_from_response(
         return None
 
     usage = _get_usage_mapping(response)
-    result: TokenUsageInfo = TokenUsageInfo(
-        total_tokens="unknown",
-        prompt_tokens="unknown",
-        cached_tokens="unknown",
-        reasoning_tokens="unknown",
-        completion_tokens="unknown",
-    )
-    if (total := _get_first_available(usage, ["total_tokens", "total"])) is not None:
+    result: TokenUsageInfo = TokenUsageInfo.get_default()
+    total_kws = ["total_tokens", "total"]
+    if (total := _get_first_available(usage, total_kws)) is not None:
         result.total_tokens = total
-    if (prompt := _get_first_available(usage, ["prompt_tokens"])) is not None:
+    prompt_kws = ["prompt_tokens", "input_tokens"]
+    if (prompt := _get_first_available(usage, prompt_kws)) is not None:
         result.prompt_tokens = prompt
-    if (cached := _get_first_available(usage, ["prompt_tokens_details.cached_tokens", "cached_tokens"])) is not None:
+    cached_kws = ["prompt_tokens_details.cached_tokens", "input_token_details.cache_read", "cached_tokens"]
+    if (cached := _get_first_available(usage, cached_kws)) is not None:
         result.cached_tokens = cached
-    if (
-        reasoning := _get_first_available(
-            usage, ["completion_tokens_details.reasoning_tokens", "reasoning_tokens", "thinking_tokens"]
-        )
-    ) is not None:
+    reasoning_kws = [
+        "completion_tokens_details.reasoning_tokens",
+        "output_token_details.reasoning",
+        "reasoning_tokens",
+        "thinking_tokens",
+    ]
+    if (reasoning := _get_first_available(usage, reasoning_kws)) is not None:
         result.reasoning_tokens = reasoning
-    if (completion := _get_first_available(usage, ["completion_tokens"])) is not None:
+    completion_kws = ["completion_tokens", "output_tokens"]
+    if (completion := _get_first_available(usage, completion_kws)) is not None:
         result.completion_tokens = completion
     any_known = any(
         isinstance(getattr(result, attr), int)

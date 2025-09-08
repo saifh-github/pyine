@@ -4,7 +4,7 @@ import typing
 
 import pytest
 
-import pyine.apps.evals.utils as eval_utils
+import pyine.evals.utils as eval_utils
 import pyine.prompts
 import pyine.utils.llm_providers
 import tests.data.utils.env_checks as env_checks
@@ -112,6 +112,39 @@ def test_strip_hard_checks_behavior() -> None:
     evaluator_strip = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator_strip.add_sample(identifier="s", expected="answer", predicted=" answer ")
     assert evaluator_strip.compute_hard_accuracy() == 1.0
+
+
+@pytest.mark.skipif(
+    env_checks.OPENAI_API_KEY_MISSING,
+    reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
+)
+def test_real_llm_grade_scoring() -> None:
+    evaluator = eval_utils.OutcomeEvaluator(
+        llm_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
+            provider="openai",
+            model_kwargs=dict(
+                model="gpt-4o-mini",
+            ),
+        ),
+    )
+    evaluator.add_sample(
+        identifier="id1",
+        expected="Hello, world!",
+        predicted="Hello, world!",
+        tags=["easy"],
+    )
+    evaluator.add_sample(
+        identifier="id2",
+        expected="[1.2, 3, 5.6]",
+        predicted="'[1.20, 3.00, 5.9999]'",
+        tags=["hard"],
+    )
+    metrics = evaluator.compute_metrics()
+    assert metrics["accuracy/hard"] == pytest.approx(0.5)
+    assert metrics["accuracy/soft"] == pytest.approx(0.5)
+    assert metrics["accuracy/grader"] >= 0.5
+    agreement = evaluator.compute_agreement_table()
+    assert agreement["hard_vs_soft"] == pytest.approx(1.0)
 
 
 def test_parse_usage_from_dict_basic() -> None:
