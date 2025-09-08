@@ -830,7 +830,7 @@ def write_dataset(
     if config.failed_test_log_dir:
         fail_dir_path = pathlib.Path(config.failed_test_log_dir)
         fail_dir_path.mkdir(parents=True, exist_ok=True)
-        fail_log_path = fail_dir_path / f"{config.get_short_hash()}.log"
+        fail_log_path = fail_dir_path / f"{output_dataset_path.name}.log"
     trace_event_counts = []
     written_outputs = 0  # total number of traces that we will have written
     log(f"creating LMDB dataset at: {output_dataset_path}...")

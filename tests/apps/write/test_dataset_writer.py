@@ -4,6 +4,7 @@ import click.testing
 import pytest
 
 import pyine.apps.write.dataset_writer as writer
+import pyine.utils.filesystem
 import tests.data.utils.env_checks as env_checks
 
 
@@ -28,8 +29,12 @@ def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
     env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check trace dataset writer app",
 )
-def test_main_write_taco_traces_micro(tmp_path: pathlib.Path) -> None:
+def test_main_write_taco_traces_micro(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """End-to-end exercise of main() using the TACO dataset and a max sample count of 5."""
+    monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
     cli_runner = click.testing.CliRunner()
     output_path = tmp_path / "output"
     assert not output_path.exists()
