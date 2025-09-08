@@ -4,7 +4,6 @@ Dataset Writer CLI.
 This application lets you:
 - Write a traces dataset from a supported source using `pyine.data.traces.dataset_writer.write_dataset`.
 - Write a deltas dataset from an existing traces dataset using `pyine.data.deltas.dataset_writer.write_dataset`.
-- Partition problem identifiers listed in a split file into disjoint files.
 
 Examples:
 
@@ -29,14 +28,6 @@ Examples:
             --verbose
     ```
 
-    Partition problem identifiers from a split file into 100-ids-chunks (YAML by default):
-    ```bash
-        python pyine/apps/write/dataset_writer.py partition \
-            --split-file data/splits/TACO-split.bin \
-            --output-dir data/splits \
-            --ids-per-chunk 100 \
-            --format yaml
-    ```
 
 Notes:
 - If `--dataset-path` is omitted for the traces command group, the latest dataset is used.
@@ -46,21 +37,17 @@ Notes:
   `pyine.apps.split.dataset_splitter` CLI app.
 """
 
-import itertools
-import json
 import logging
 import pathlib
 import typing
 
 import click
-import yaml
 
 import pyine.data.deltas.dataset_utils as delta_utils
 import pyine.data.deltas.dataset_writer as delta_writer
 import pyine.data.traces.dataset_utils as trace_utils
 import pyine.data.traces.dataset_writer as trace_writer
 import pyine.data.utils.lmdb_io
-import pyine.data.utils.splits as split_utils
 import pyine.prompts
 import pyine.utils.filesystem
 import pyine.utils.reprod
@@ -70,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]))
 def main() -> None:
-    """Dataset writer CLI (traces, deltas, and partition)."""
+    """Dataset writer CLI (traces, deltas)."""
     pass
 
 
@@ -410,7 +397,7 @@ def traces(
     default=None,
     help="Optional path to a log file.",
 )
-def deltas_from_traces(  # noqa: PLR0913
+def deltas_from_traces(
     traces_dataset: str,
     output_path: pathlib.Path,
     delta_generator: str,
@@ -439,139 +426,6 @@ def deltas_from_traces(  # noqa: PLR0913
         verbose=verbose,
     )
     logger.info("all done")
-
-
-# ------------------------------ PARTITION ------------------------------
-
-
-@main.command("partition")
-@click.option(
-    "--split-file",
-    "split_file",
-    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
-    required=True,
-    help=(
-        "Path to a split file created by `pyine/apps/splits/dataset_splitter.py`. Contains identifiers"
-        " assigned to subsets."
-    ),
-)
-@click.option(
-    "--output-dir",
-    "output_dir",
-    type=click.Path(file_okay=False, path_type=pathlib.Path),
-    required=True,
-    help="Directory where partition files will be written.",
-)
-@click.option(
-    "--ids-per-chunk",
-    "ids_per_chunk",
-    type=click.IntRange(min=1),
-    required=True,
-    help="Maximum number of coding problem identifiers per output part/chunk file.",
-)
-@click.option(
-    "--only-assigned-ids/--no-only-assigned-ids",
-    "only_assigned_ids",
-    default=True,
-    show_default=True,
-    help="Whether to only include identifiers that are assigned to a subset.",
-)
-@click.option(
-    "--format",
-    "output_format",
-    type=click.Choice(["yaml", "json", "txt"], case_sensitive=False),
-    default="yaml",
-    show_default=True,
-    help="Output format for partition files.",
-)
-@click.option("--verbose/--no-verbose", "verbose", default=True, show_default=True)
-@click.option(
-    "--dry-run",
-    "dry_run",
-    is_flag=True,
-    default=False,
-    help="If set, prints resolved configuration and exits without reading or writing files.",
-)
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
-def partition(  # noqa: PLR0913
-    split_file: pathlib.Path,
-    output_dir: pathlib.Path,
-    ids_per_chunk: int,
-    only_assigned_ids: bool,
-    output_format: str,
-    verbose: bool,
-    dry_run: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
-) -> None:
-    """Partition problem identifiers from a split file into N disjoint files.
-
-    The split file is expected to contain sample identifiers assigned to subsets, and should have
-    been created using the `pyine.apps.split.dataset_splitter` CLI app. This command parses coding
-    problem identifiers, asserts that there are no duplicates, and partitions the resulting
-    list into contiguous chunks of a given max size such that concatenating the partitions in order
-    reconstructs the original problem identifiers list.
-
-    The resulting partition files are written to the specified output directory following the
-    file name of the input split file; the written files will be suffixed with the partition
-    identifier (e.g. ``<<split_file>>.problem_ids.001of004.yaml``).
-    """
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
-    output_format = output_format.lower()
-    split_result = split_utils.SplitResult.from_file(split_file)
-    problem_identifiers = split_result.identifiers
-    assert len(problem_identifiers) == len(set(problem_identifiers)), "duplicate identifiers found??"
-    if only_assigned_ids:  # keep only identifiers that are present in assignments
-        assigned_set = set(split_result.subset_assignments.keys())
-        problem_identifiers = [sid for sid in problem_identifiers if sid in assigned_set]
-    if len(problem_identifiers) == 0:
-        logger.warning("no identifiers found to partition; exiting")
-        return
-    parts: list[tuple[str, ...]] = list(itertools.batched(problem_identifiers, ids_per_chunk))
-    assert [pid for part in parts for pid in part] == problem_identifiers
-    if dry_run:
-        click.echo("[dry-run] would partition split file with:")
-        click.echo(f"  split_file = {split_file}")
-        click.echo(f"  output_dir = {output_dir}")
-        click.echo(f"  ids_per_chunk = {ids_per_chunk}")
-        click.echo(f"  only_assigned_ids = {only_assigned_ids}")
-        click.echo(f"  output_format = {output_format}")
-        click.echo(f"  verbose = {verbose}")
-        click.echo(f"  found problem ids = {len(problem_identifiers)}")
-        click.echo(f"  partitioned into {len(parts)} chunks")
-        return
-    output_dir.mkdir(parents=True, exist_ok=True)
-    supported_formats = {"yaml": ".yaml", "json": ".json", "txt": ".txt"}
-    assert output_format in supported_formats, f"unsupported output format: {output_format}"
-    for idx, problem_ids_chunk in enumerate(parts, start=1):
-        out_ext_str = f"problem_ids.{idx:06d}of{len(parts):06d}{supported_formats[output_format]}"
-        split_file_prefix = split_file.name.rsplit(".", maxsplit=1)[0]
-        out_path = output_dir / f"{split_file_prefix}.{out_ext_str}"
-        if output_format == "yaml":
-            with open(out_path, "w", encoding="utf-8") as fd:
-                yaml.safe_dump(problem_ids_chunk, fd, sort_keys=False)
-        elif output_format == "json":
-            with open(out_path, "w", encoding="utf-8") as fd:
-                json.dump(problem_ids_chunk, fd, indent=2)
-        else:  # txt
-            with open(out_path, "w", encoding="utf-8") as fd:
-                fd.write("\n".join(problem_ids_chunk) + "\n")
-    logger.info(f"wrote {len(parts)} files partitioning {len(problem_identifiers)} problems to: {output_dir}")
 
 
 if __name__ == "__main__":
