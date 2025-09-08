@@ -157,18 +157,21 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         pyine.data.traces.dataset_utils.ProblemIdPattern | None,
         pydantic.Field(
             default=None,
-            description="Regular expression pattern to use for filtering problems. If None, no filtering.",
+            description=(
+                "Regular expression pattern to use for filtering problems. If None, no filtering. "
+                "Applies to the source file names that contain data related to each coding problem."
+            ),
         ),
     ]
     target_problem_ids: typing.Annotated[
-        str | pathlib.Path | list[str] | None,
+        str | pathlib.Path | list[str] | list[int] | None,
         pydantic.Field(
             default=None,
             description=(
                 "Target problem IDs to use for filtering problems. If None, no filtering (all "
                 "problems are considered). If a string or a path, it is expected to be a file that "
                 "contains the list of problem IDs to use. If a list of strings, it is expected to be "
-                "the problem IDs directly."
+                "the problem IDs directly, which will be converted to integers internally."
             ),
         ),
     ]
@@ -995,7 +998,7 @@ if __name__ == "__main__":
         #     pattern="001234",
         #     is_regex=False,
         # ),
-        # target_problem_ids="/path/to/problem/ids",
+        # target_problem_ids="/path/to/problem/ids.yaml",
         generate_obfuscated_solutions=True,
         fetch_augmented_solutions={
             "hints/docs": 1,

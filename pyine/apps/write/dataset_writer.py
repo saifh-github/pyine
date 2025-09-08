@@ -184,7 +184,7 @@ def main() -> None:
     "target_problem_pattern",
     type=str,
     default=None,
-    help="Regular expression pattern to use for filtering problems. If None, no filtering.",
+    help="Regular expression pattern to use for filtering problem file names. If None, no filtering.",
 )
 @click.option(
     "--target-problem-ids",
@@ -329,6 +329,8 @@ def traces(
     if output_path is None:
         if output_tag is None:
             output_tag = config.get_short_hash()
+        elif "{config_hash}" in output_tag:
+            output_tag = output_tag.replace("{config_hash}", config.get_short_hash())
         output_path = pyine.data.traces.dataset_utils.get_new_dataset_path(
             source_dataset_name=dataset_name,
             dataset_name_tag=output_tag,
@@ -337,7 +339,7 @@ def traces(
         click.echo("[dry-run] would call write_dataset with:")
         click.echo(f"  root_dataset_path = {dataset_path}")
         click.echo(f"  output_dataset_path = {output_path}")
-        click.echo(f"  config  = {config}")
+        click.echo(f"  config  = {config.model_dump()}")
         click.echo(f"  verbose = {verbose}")
         return
     trace_writer.write_dataset(
