@@ -21,9 +21,11 @@ class _DummyGraderChain:
     def invoke(
         self,
         data: dict[str, typing.Any],
+        *args,
+        **kwargs,
     ) -> float:
-        expected = typing.cast(str, data.get("expected", ""))
-        predicted = typing.cast(str, data.get("predicted", ""))
+        expected = typing.cast(str, data["expected_output"])
+        predicted = typing.cast(str, data["predicted_output"])
         return float(self._scorer(expected, predicted))
 
 

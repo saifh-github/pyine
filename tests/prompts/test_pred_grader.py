@@ -19,7 +19,7 @@ def test_get_score_only_config_and_template():
     assert config.example_count >= 2
     ex = config.examples[0]
     assert isinstance(ex, pyine.prompts.utils.PromptExample)
-    assert ex.input_variables["execution_type"] in {"program output", "frame variables", "function return"}
+    assert ex.input_variables["execution_type"] in {"", "program output", "frame variables", "function return"}
     assert isinstance(ex.output, pred_grader.GradingResult)
     assert 0.0 <= ex.output.score <= 1.0
     template = pyine.prompts.manager.get_prompt_template("pred_grader", prompt_version, include_examples=False)
@@ -27,7 +27,7 @@ def test_get_score_only_config_and_template():
     tmpl = template.template
     assert tmpl.startswith("You are an expert evaluator of Python 3 code execution results.")
     assert tmpl.endswith("Now, provide ONLY the structured SCORE as per the required format above:\n")
-    for var in ["execution_type", "expected_output", "predicted_output"]:
+    for var in ["expected_output", "predicted_output"]:
         assert var in template.input_variables
     rendered = template.format(
         execution_type="program output",

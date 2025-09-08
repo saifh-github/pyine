@@ -108,9 +108,11 @@ class OutcomeEvaluator:
             dict(expected_output=expected, predicted_output=predicted),
             config=config,
         )
-        if not isinstance(response, pyine.utils.code.output_compare.GradingResult):
-            raise ValueError(f"LLM grader returned unexpected response type: {type(response)}")
-        return response.score
+        if isinstance(response, float):
+            return response
+        if isinstance(response, pyine.utils.code.output_compare.GradingResult):
+            return response.score
+        raise ValueError(f"LLM grader returned unexpected response type: {type(response)}")
 
     def add_sample(
         self,
