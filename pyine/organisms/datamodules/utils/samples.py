@@ -189,10 +189,16 @@ class SampleData(typing.NamedTuple):
     """Type of the expected output (for specific descriptions in prompts)."""
     trace_step_count: int
     """Number of steps that are expected to be executed to predict the outputs (can be used as a hint)."""
+    comma_separated_tags: str
+    """Comma-separated tags (e.g. 'augment:type,subset:train') that can be used to filter samples."""
 
     def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""
         return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
+
+    def get_tag_list(self) -> list[str]:
+        """Returns the list of tags for this trace in its original format (one tag = one item)."""
+        return self.comma_separated_tags.split(",")
 
 
 SampleDataParserType = pyine.data.datamodule.BaseDataParserType[SampleData]
@@ -403,6 +409,7 @@ class SampleBuilder(SampleDataParserType):
             expected_output=trace_data.expected_output,
             output_type="program output",
             trace_step_count=trace_data.valid_step_count,  # count valid steps only
+            comma_separated_tags=self._get_comma_sep_tags(trace_meta),
         )
 
     def _satisfies_str_caps(self, inp: str, out: str) -> bool:
@@ -412,6 +419,16 @@ class SampleBuilder(SampleDataParserType):
         if self.config.max_output_str_length is not None and len(out) > self.config.max_output_str_length:
             return False
         return True
+
+    @staticmethod
+    def _get_comma_sep_tags(trace_meta: TraceMetadata) -> str:
+        """Returns a comma-separated string of tags for the given trace."""
+        if not trace_meta.tags:
+            return ""
+        for tag in trace_meta.tags:
+            if "," in tag:
+                raise ValueError(f"trace tags cannot contain commas: {tag}")
+        return ",".join(trace_meta.tags)
 
     def _pick_output_type(
         self,
@@ -549,6 +566,7 @@ class SampleBuilder(SampleDataParserType):
                 expected_output=function_output_str,
                 output_type="function return",
                 trace_step_count=call_step_count,
+                comma_separated_tags=self._get_comma_sep_tags(trace_meta),
             )
         return None  # no more candidates to consider, failed to get a function call
 
@@ -638,6 +656,7 @@ class SampleBuilder(SampleDataParserType):
                 expected_output=output_vars_str,
                 output_type="frame variables",
                 trace_step_count=segment_size,
+                comma_separated_tags=self._get_comma_sep_tags(trace_meta),
             )
         return None  # no more candidate lists to consider, failed to get a segment sample
 
