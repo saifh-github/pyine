@@ -2,6 +2,7 @@ import dataclasses
 import datetime
 import fnmatch
 import importlib.resources as pkg_resources
+import json
 import logging
 import pathlib
 import queue
@@ -362,6 +363,7 @@ class CodingProblemIterator:
         dataset_name: str,
         root_data_path: pathlib.Path | str,
         target_problem_pattern: ProblemIdPattern | None = None,
+        target_problem_ids: str | pathlib.Path | list[str] | None = None,
         reformat_code_strings: bool = False,
         validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
@@ -376,6 +378,7 @@ class CodingProblemIterator:
             dataset_name: Name of the source dataset to load problems from.
             root_data_path: Path to the root directory containing the source dataset files.
             target_problem_pattern: Optional pattern to filter problems by their identifier.
+            target_problem_ids: Optional list or file containing problem IDs to target.
             reformat_code_strings: Whether to apply code formatting to parsed solution code strings.
             validate_code_strings: Whether to validate solution code strings before using them.
             allow_banned_samples: Whether to allow loading of banned problems/solutions. Banned
@@ -398,6 +401,7 @@ class CodingProblemIterator:
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
         self._target_pattern = target_problem_pattern
+        self._target_problem_ids = self._validate_target_problem_ids(target_problem_ids)
         self.reformat_code_strings = reformat_code_strings
         self.validate_code_strings = validate_code_strings
         if allow_banned_samples:
@@ -419,6 +423,36 @@ class CodingProblemIterator:
         self._prefetch_thread: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
         self._prefetch_sentinel: object = object()
+
+    def _validate_target_problem_ids(
+        self, target_problem_ids: str | pathlib.Path | list[str] | None
+    ) -> list[str] | None:
+        """Validates and resolves the target problem IDs, if needed."""
+        if isinstance(target_problem_ids, (str, pathlib.Path)):
+            target_problem_ids_path = pathlib.Path(target_problem_ids)
+            if not target_problem_ids_path.is_file():
+                raise FileNotFoundError(f"target problem IDs file not found: {target_problem_ids_path}")
+            if target_problem_ids_path.name.endswith(".json"):
+                with target_problem_ids_path.open("r") as fd:
+                    target_problem_ids = json.load(fd)
+            elif target_problem_ids_path.name.endswith(".yaml"):
+                with target_problem_ids_path.open("r") as fd:
+                    target_problem_ids = yaml.safe_load(fd)
+            elif target_problem_ids_path.name.endswith(".txt"):
+                with target_problem_ids_path.open("r") as fd:
+                    target_problem_ids = fd.read().splitlines()
+        elif target_problem_ids is None:
+            target_problem_ids: list[str] = []
+        if not isinstance(target_problem_ids, list):
+            raise ValueError(f"target problem IDs must be list, str, or path; got {type(target_problem_ids)}")
+        for prob_idx, prob_id in enumerate(target_problem_ids):
+            if not isinstance(prob_id, str):
+                raise ValueError(f"target problem IDs must be a string; got {type(prob_id)}")
+            if "/" in prob_id:  # these are full problem identifiers; replace them
+                prob_id = CodingProblemIdentifier.from_string(prob_id)
+                assert prob_id.dataset == self.dataset_name, f"unexpected dataset: {prob_id.dataset}"
+                target_problem_ids[prob_idx] = prob_id.problem_idx  # noqa; keep only the problem id (number)
+        return target_problem_ids
 
     def _start_prefetch(self) -> None:
         """Start the background prefetch worker if enabled."""
@@ -484,18 +518,20 @@ class CodingProblemIterator:
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
-                if self.banned.metadata and json_file_path.name in self.banned.metadata:
+                problem_id = json_file_path.name.split(".json")[0]  # should be just the problem number
+                if self.banned.metadata and problem_id in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
                 # optionally filter by a target pattern
                 if self._target_pattern is not None:
-                    if self._target_pattern.is_regex and not re.fullmatch(
-                        self._target_pattern.pattern, json_file_path.name
-                    ):
+                    if self._target_pattern.is_regex and not re.fullmatch(self._target_pattern.pattern, problem_id):
                         continue
                     elif not self._target_pattern.is_regex and not fnmatch.fnmatch(
-                        json_file_path.name, self._target_pattern.pattern
+                        problem_id, self._target_pattern.pattern
                     ):
                         continue
+                # optionally filter by target problem id list
+                if self._target_problem_ids and problem_id not in self._target_problem_ids:
+                    continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     try:
                         json_data = orjson.loads(fd.read())

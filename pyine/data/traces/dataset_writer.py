@@ -6,7 +6,6 @@ See the `write_dataset` function for more information.
 
 import dataclasses
 import datetime
-import enum
 import functools
 import itertools
 import logging
@@ -17,7 +16,6 @@ import traceback
 import typing
 import warnings
 
-import langchain_core.language_models
 import numpy as np
 import pydantic
 
@@ -160,6 +158,18 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         pydantic.Field(
             default=None,
             description="Regular expression pattern to use for filtering problems. If None, no filtering.",
+        ),
+    ]
+    target_problem_ids: typing.Annotated[
+        str | pathlib.Path | list[str] | None,
+        pydantic.Field(
+            default=None,
+            description=(
+                "Target problem IDs to use for filtering problems. If None, no filtering (all "
+                "problems are considered). If a string or a path, it is expected to be a file that "
+                "contains the list of problem IDs to use. If a list of strings, it is expected to be "
+                "the problem IDs directly."
+            ),
         ),
     ]
     reformat_code_strings: typing.Annotated[
@@ -803,6 +813,7 @@ def write_dataset(
         dataset_name=config.source_dataset_name,
         root_data_path=root_dataset_path,
         target_problem_pattern=config.target_problem_pattern,
+        target_problem_ids=config.target_problem_ids,
         reformat_code_strings=config.reformat_code_strings,
         allow_banned_samples=config.allow_banned_samples,
         show_progress=verbose,
@@ -810,13 +821,7 @@ def write_dataset(
     )
     if len(problem_data_iter) == 0:
         raise ValueError(f"no problems found in {config.source_dataset_name} source dataset")
-    if config.target_problem_pattern is not None:
-        log(
-            f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset "
-            f"that matched the following pattern: {config.target_problem_pattern}"
-        )
-    else:
-        log(f"found {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
+    log(f"will process {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
     fail_log_path = None
     if config.failed_test_log_dir:
@@ -987,9 +992,10 @@ if __name__ == "__main__":
         min_solution_dissimilarity=0.1,
         execution_timeout_seconds=5,
         # target_problem_pattern=dict(  # use this to target specific problems (for debugging)
-        #     pattern="001234.*",
+        #     pattern="001234",
         #     is_regex=False,
         # ),
+        # target_problem_ids="/path/to/problem/ids",
         generate_obfuscated_solutions=True,
         fetch_augmented_solutions={
             "hints/docs": 1,
