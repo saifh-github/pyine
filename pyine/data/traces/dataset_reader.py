@@ -11,6 +11,7 @@ import functools
 import pathlib
 import typing
 
+import msgspec
 import torch.utils.data
 
 import pyine.data.traces.dataset_utils
@@ -42,28 +43,81 @@ class DatasetReader(torch.utils.data.Dataset):
         super().__init__()
         self.path = lmdb_path
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
-        self.problem_indices, self.problem_keys = self.reader.get_indices(
-            pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
-            return_keys=True,
-        )
+        self._init_trace_maps()
         if len(self.problem_indices) == 0:
             raise ValueError("no problem data found in the dataset")
         if len(self.problem_indices) != len(self.problem_keys):
             raise RuntimeError("problem indices/keys length mismatch")
-        self._init_trace_maps()
 
-    def _init_trace_maps(self) -> None:
-        """Initializes the trace index maps according to requested filtering rules."""
+    def _are_trace_maps_prepared(self) -> bool:
+        """Returns True if the trace maps are prepared and ready to be used."""
+        return self._get_prepared_trace_maps_file_path().is_file()
+
+    def _save_prepared_trace_maps(self) -> None:
+        """Saves the prepared trace maps to the lmdb directory."""
+        trace_maps = dict(
+            problem_indices=self.problem_indices,
+            problem_keys=self.problem_keys,
+            trace_indices=self.trace_indices,
+            trace_keys=self.trace_keys,
+            trace_idx_to_problem_idx=self.trace_idx_to_problem_idx,
+            trace_key_to_problem_key=self.trace_key_to_problem_key,
+            augment_idx_to_parent_trace_idx=self.augment_idx_to_parent_trace_idx,
+            augment_key_to_parent_trace_key=self.augment_key_to_parent_trace_key,
+            trace_tag_lists=self.trace_tag_lists,
+        )
+        encoded_data = msgspec.msgpack.encode(trace_maps)
+        with open(self._get_prepared_trace_maps_file_path(), "wb") as fd:
+            fd.write(encoded_data)
+
+    def _load_prepared_trace_maps(self):
+        """Loads the prepared trace maps from the lmdb directory."""
+        with open(self._get_prepared_trace_maps_file_path(), "rb") as fd:
+            encoded_data = msgspec.msgpack.decode(fd.read())
+        self.problem_indices: list[int] = encoded_data["problem_indices"]
+        self.problem_keys: list[str] = encoded_data["problem_keys"]
+        self.trace_indices: list[int] = encoded_data["trace_indices"]
+        self.trace_keys: list[str] = encoded_data["trace_keys"]
+        self.trace_idx_to_problem_idx: dict[int, int] = encoded_data["trace_idx_to_problem_idx"]
+        self.trace_key_to_problem_key: dict[str, str] = encoded_data["trace_key_to_problem_key"]
+        self.augment_idx_to_parent_trace_idx: dict[int, int] = encoded_data["augment_idx_to_parent_trace_idx"]
+        self.augment_key_to_parent_trace_key: dict[str, str] = encoded_data["augment_key_to_parent_trace_key"]
+        self.trace_tag_lists: list[list[str]] = encoded_data["trace_tag_lists"]
+
+    def _clear_prepared_trace_maps(self) -> None:
+        """Clears the prepared trace maps from the lmdb directory."""
+        if self._are_trace_maps_prepared():
+            self._get_prepared_trace_maps_file_path().unlink()
+
+    def _get_prepared_trace_maps_file_path(self) -> pathlib.Path:
+        """Returns the file path used to store prepared trace maps in the lmdb directory."""
+        # note: the file name that will be created contains a hash that depends on input params
+        assert self.path.is_dir(), f"unexpected non-directory lmdb path: {self.path}"
+        return self.path / "trace_maps.msgspec"
+
+    def _init_trace_maps(self, force: bool = False) -> None:
+        """Initializes the trace index maps potentially using already-cached data."""
         # note: the indices kept in the lists below are INTERNAL ones that map to the lmdb content
+        if not force and self._are_trace_maps_prepared():
+            self._load_prepared_trace_maps()
+            return
+        self._clear_prepared_trace_maps()
+        self.problem_indices, self.problem_keys = self.reader.get_indices(
+            pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
+            return_keys=True,
+        )
         self.trace_indices: list[int] = []
         self.trace_keys: list[str] = []
         self.trace_idx_to_problem_idx: dict[int, int] = {}
         self.trace_key_to_problem_key: dict[str, str] = {}
         self.augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        self.trace_tag_lists: list[list[str]] = []
         for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
             if not problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX):
                 raise ValueError(f"malformed problem key: {problem_key}")
+            problem_data = self.reader.get(problem_idx)
+            problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
             problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
             curr_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
             curr_augm_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
@@ -97,6 +151,18 @@ class DatasetReader(torch.utils.data.Dataset):
                         test_idx=augm_trace_id.test_idx,
                     )
                     curr_augm_key_to_parent_key[trace_key] = str(parent_trace_id)
+                # note: we combine problem tags, trace (exec) tags, and augmentation tags into a single list
+                trace_data = self.reader.get(trace_idx)
+                trace_data = pyine.utils.code.execution.TraceResult.model_validate(trace_data)
+                assert trace_data.identifier is not None, "trace identifier is required"
+                assert trace_data.identifier == trace_key, "trace identifier mismatch"
+                trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_data.identifier)
+                curr_trace_tags = []
+                curr_trace_tags.extend(problem_data.problem_tags)
+                curr_trace_tags.extend(trace_data.tags)
+                if trace_id.augment_category is not None:
+                    curr_trace_tags.append(f"augment:{trace_id.augment_category}")
+                self.trace_tag_lists.append(curr_trace_tags)
             for augm_key, parent_key in curr_augm_key_to_parent_key.items():
                 if parent_key not in self.trace_keys:
                     raise KeyError(f"parent trace key {parent_key} not found in dataset")
@@ -104,6 +170,7 @@ class DatasetReader(torch.utils.data.Dataset):
                 parent_idx = self.trace_indices[self.trace_keys.index(parent_key)]
                 self.augment_idx_to_parent_trace_idx[augm_idx] = parent_idx
             self.augment_key_to_parent_trace_key.update(curr_augm_key_to_parent_key)
+        self._save_prepared_trace_maps()
 
     def __len__(self) -> int:
         """
@@ -125,19 +192,18 @@ class DatasetReader(torch.utils.data.Dataset):
 
     def get_hash(self) -> str:
         """Returns the hash of this dataset (computed from all files on disk)."""
-        return pyine.utils.reprod.compute_hash(self.reader.path)
+        # note: we don't compute the hash over the entire lmdb dir, just over the file that matters
+        # (that folder will likely contain other stuff such as processing logs and metadata caches)
+        expected_data_mdb_file = self.reader.path / "data.mdb"
+        assert expected_data_mdb_file.is_file(), f"missing data.mdb file: {expected_data_mdb_file}"
+        return pyine.utils.reprod.compute_hash(expected_data_mdb_file)
 
     def get_parent_dataset_name(self) -> str:
         """Returns the name of the parent dataset used to create this dataset."""
         return self.reader.get_metadata()["parent_dataset"]["dataset_name"]
 
-    def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
-        """
-        Fetches an individual trace data object from the LMDB database by external index or key.
-
-        Args:
-            index_or_key: index or key of the trace to retrieve.
-        """
+    def _get_trace_idx_from_idx_or_key(self, index_or_key: int | str) -> int:
+        """Returns the trace index from an external index or key."""
         if isinstance(index_or_key, int):
             if not (0 <= index_or_key < len(self)):
                 raise IndexError(f"index {index_or_key} out of range")
@@ -147,7 +213,17 @@ class DatasetReader(torch.utils.data.Dataset):
             index_or_key = self.trace_keys.index(index_or_key)
         else:
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
-        trace_data = self.reader.get(self.trace_indices[index_or_key])
+        return index_or_key
+
+    def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
+        """
+        Fetches an individual trace data object from the LMDB database by external index or key.
+
+        Args:
+            index_or_key: index or key of the trace to retrieve.
+        """
+        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        trace_data = self.reader.get(self.trace_indices[trace_idx])
         trace = pyine.utils.code.execution.TraceResult.model_validate(trace_data)
         return trace
 
@@ -159,20 +235,17 @@ class DatasetReader(torch.utils.data.Dataset):
         Args:
             index_or_key: Index or key of the trace for which to retrieve parent problem data.
         """
-        if isinstance(index_or_key, int):
-            if not (0 <= index_or_key < len(self)):
-                raise IndexError(f"index {index_or_key} out of range")
-            problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[index_or_key]]
-        elif isinstance(index_or_key, str):
-            if index_or_key not in self.trace_keys:
-                raise KeyError(f"key {index_or_key} not found in dataset")
-            internal_trace_idx = self.trace_indices[self.trace_keys.index(index_or_key)]
-            problem_idx = self.trace_idx_to_problem_idx[internal_trace_idx]
-        else:
-            raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
+        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[trace_idx]]
         problem_data = self.reader.get(problem_idx)
         problem = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
         return problem
+
+    def get_tags(self, index_or_key: int | str) -> list[str]:
+        """Returns a list of tags for a given trace so that we can decide whether to filter it."""
+        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        output_tags = self.trace_tag_lists[trace_idx].copy()
+        return output_tags
 
     def close(self) -> None:
         """

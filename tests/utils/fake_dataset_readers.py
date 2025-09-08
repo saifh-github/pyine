@@ -150,6 +150,11 @@ class FakeTraceDatasetReader(_FakeBase):
         # internal problem_idx is already an integer index into self._problems
         return self._problems[problem_idx]
 
+    def get_tags(self, index_or_key: int | str) -> list[str]:
+        idx = self._resolve_index(index_or_key)
+        problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[idx]]
+        return self._problems[problem_idx].problem_tags
+
     # ---------------------------- internals ----------------------------
     def _resolve_index(self, index_or_key: int | str) -> int:
         if isinstance(index_or_key, int):

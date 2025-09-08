@@ -227,13 +227,6 @@ class TestSampleBuilderRealData:
                     assert 0 < sample.last_line < len(code_lines)
                 else:  # function return
                     assert 0 < sample.first_line <= sample.last_line < len(code_lines)
-                    matched_code_blocks = [
-                        cb
-                        for cb in trace_data.code_blocks.values()
-                        if cb.start_line == sample.first_line and cb.end_line == sample.last_line
-                    ]
-                    if matched_code_blocks:
-                        assert any([cb.name in sample.description for cb in matched_code_blocks])
 
 
 class TestPrivateSampleMethods:

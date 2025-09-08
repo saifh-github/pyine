@@ -88,15 +88,12 @@ def get_traces_metadata(
     base_traces_meta: list[TraceMetadata] = []
     for reader_hash, reader in readers_map.items():
         for trace_idx in range(len(reader)):
-            trace_data = reader[trace_idx]
-            assert trace_data.identifier is not None, "trace identifier is required"
-            problem_data = reader.get_problem_data(trace_idx)
-            tags = get_tags_for_trace(trace_data, problem_data)
+            tags = reader.get_tags(trace_idx)
             is_banned = base_filter(tags) if base_filter is not None else False
             if not is_banned:
                 base_traces_meta.append(
                     TraceMetadata(
-                        identifier=trace_data.identifier,
+                        identifier=reader.trace_keys[trace_idx],
                         index=trace_idx,
                         parent_dataset_hash=reader_hash,
                         tags=tags,
@@ -107,22 +104,6 @@ def get_traces_metadata(
     if prog_bar is not None:
         prog_bar.close()
     return base_traces_meta
-
-
-def get_tags_for_trace(
-    trace_data: pyine.utils.code.execution.TraceResult,
-    problem_data: pyine.data.traces.dataset_utils.CodingProblem,
-) -> list[str]:
-    """Returns a list of tags for a given trace so that we can decide whether to filter it."""
-    # note: we combine problem tags, trace (exec) tags, and augmentation tags into a single list
-    assert trace_data.identifier is not None, "trace identifier is required"
-    trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_data.identifier)
-    output_tags = []
-    output_tags.extend(problem_data.problem_tags)
-    output_tags.extend(trace_data.tags)
-    if trace_id.augment_category is not None:
-        output_tags.append(f"augment:{trace_id.augment_category}")
-    return output_tags
 
 
 class TraceDatasetMetadata(pydantic.BaseModel):
