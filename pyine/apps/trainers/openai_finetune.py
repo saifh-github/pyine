@@ -5,16 +5,17 @@ This is a work-in-progress / demo / reference script for fine-tuning an OpenAI m
 execution traces dataset. It is not meant to be used directly yet; TODO! @@@@
 """
 
-import functools
 import logging
 import sys
 
+import langchain_core.messages
 import langchain_core.runnables
 import pydantic
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
+import pyine.evals.utils
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.models.utils.openai
@@ -79,10 +80,8 @@ class MainConfig(pydantic.BaseModel):
         pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(params=default_sft_params_config)
     )
     """Configuration for the OpenAI fine-tuner to use; defaults to an RL fine-tuning config for o4-mini."""
-    pred_output_compare_options: pyine.utils.code.output_compare.CompareOptions = (
-        pyine.utils.code.output_compare.get_options_for_code_exec_outputs()
-    )
-    """Options to use for comparing a predicted output with the expected output (for metrics)."""
+    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
+    """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evaluation."""
 
     def needs_answers_in_train_dataset(self) -> bool:
         """Returns whether the model needs answers in its training dataset."""
@@ -121,21 +120,32 @@ def _evaluate(
     chain: langchain_core.runnables.Runnable,
     dm: pyine.data.datamodule.ConversationDataModule,
     subset: str,
-) -> dict[str, float]:
+) -> dict[str, float | int | str]:
     """Evaluate a trained model on the specified data subset, returning evaluation metrics."""
-    comp = functools.partial(
-        pyine.utils.code.output_compare.compare,
-        options=config.pred_output_compare_options,
-    )
     parser = dm.get_parser(subset)
-    pred_outcomes = []
+    evaluator = pyine.evals.utils.OutcomeEvaluator(
+        llm_provider_config=config.llm_grader_provider_config,
+    )
+    token_usage = None
     for sample in parser:
         assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
         response = chain.invoke(sample._asdict())
-        comp_result = comp(response.content, sample.expected_output)
-        pred_outcomes.append(bool(comp_result))
-    accuracy = (sum(pred_outcomes) / len(pred_outcomes)) if pred_outcomes else float("nan")
-    return {"accuracy": accuracy}
+        assert isinstance(response, langchain_core.messages.AIMessage)
+        evaluator.add_sample(
+            identifier=sample.identifier,
+            expected=sample.expected_output,
+            predicted=response.content,
+            tags=sample.get_tag_list(),
+        )
+        if token_usage is None:
+            token_usage = pyine.evals.utils.parse_token_usage_from_response(response)
+        else:
+            token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
+    output_metrics: dict[str, float | int | str] = evaluator.compute_metrics()
+    if token_usage is None:
+        token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
+    output_metrics.update(token_usage.asdict())
+    return output_metrics
 
 
 def main(
@@ -199,11 +209,20 @@ def main(
 
 
 if __name__ == "__main__":
-    _dmconfig = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
+    _dm_cfg = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
         lmdb_paths=[
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
         max_trace_count=200,  # cap off the max dataset size
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
-    main(MainConfig(datamodule_config=_dmconfig), skip_fine_tuning=False)
+    _main_cfg = MainConfig(
+        datamodule_config=_dm_cfg,
+        llm_grader_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
+            provider="openai",
+            model_kwargs=dict(
+                model="gpt-4o-mini",
+            ),
+        ),
+    )
+    main(_main_cfg, skip_fine_tuning=True)
