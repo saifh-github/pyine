@@ -9,7 +9,7 @@ Examples:
 
     Splitting the TACO dataset 80-10-10 with difficulty and solution counts groups:
     ```bash
-        python pyine/apps/splits/dataset_splitter.py \
+        python pyine/apps/splits/dataset_splitter.py split \
             --dataset-name TACO \
             --train-fraction=0.8 \
             --valid-fraction=0.1 \
@@ -351,7 +351,7 @@ def partition(
         click.echo(f"  output_format = {output_format}")
         click.echo(f"  verbose = {verbose}")
         click.echo(f"  found problem ids = {len(problem_identifiers)}")
-        click.echo(f"  partitioned into {len(parts)} chunks")
+        click.echo(f"  partition into {len(parts)} chunks")
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     supported_formats = {"yaml": ".yaml", "json": ".json", "txt": ".txt"}
