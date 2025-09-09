@@ -18,18 +18,23 @@ import pyine.prompts
 import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.portability
+import pyine.utils.pydantic
 import pyine.utils.reprod
+from pyine.data.datamodule import (
+    BaseDataLoaderConfig,
+    LoaderNameType,
+    SubsetNameType,
+)
 from pyine.organisms.datamodules.utils.samples import (
     SampleBuilderConfig,
     SampleDataLoaderType,
     SampleDataParserType,
+    SampleInputType,
     SampleTransformConfig,
     TraceDatasetMetadata,
     TraceMetadata,
 )
 
-SubsetNameType = pyine.data.datamodule.SubsetNameType
-"""Type used to represent a data subset name (e.g. 'train', 'valid', 'test')."""
 ProblemIdType = str
 """Type def used to represent a coding problem identifier (for cleanliness)."""
 
@@ -59,9 +64,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         # attributes below are initialized in setup()
         self._metadata: TraceDatasetMetadata | None = None
         self._readers: list[dataset_reader.DatasetReader] = []
-        self._base_parser: SampleDataParserType | None = None
         self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
 
+    @typing.override
     def prepare_data(self) -> None:
         """Prepares metadata and pre-filters traces, saving the results to a local tmpdir.
 
@@ -80,15 +85,10 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             base_filter=base_filter,
             verbose=self.verbose,
         )
-        if self.config.max_trace_count is not None and len(base_traces_meta) > self.config.max_trace_count:
-            # if we have more traces than requested, pick a random subset of the available ones
-            orig_idxs = list(range(len(base_traces_meta)))
-            picked_idxs = rng.choice(orig_idxs, size=self.config.max_trace_count, replace=False)
-            base_traces_meta = [base_traces_meta[idx] for idx in picked_idxs]
         # load coding problem split data and keep relevant assignments
         split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
         split_data = pyine.data.utils.splits.SplitResult.from_file(self.config.split_file_path)
-        if tuple(split_data.config.subset_names) != tuple(self.config.subset_types):
+        if any([subset not in self.config.subset_types for subset in split_data.config.subset_names]):
             raise ValueError("mismatch between split data subsets and configured subsets")
         subset_traces_meta: dict[SubsetNameType, list[TraceMetadata]] = {
             subset_name: [] for subset_name in split_data.config.subset_names
@@ -100,6 +100,16 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
                 subset_traces_meta[split_data.subset_assignments[problem_id]].append(trace_meta)
             else:
                 unassigned_traces_meta.append(trace_meta)
+        if self.config.max_trace_count is not None:
+            for subset_name, traces_meta in subset_traces_meta.items():
+                if len(traces_meta) > self.config.max_trace_count:
+                    # if we have more traces than requested, pick a random subset of the available ones
+                    # (also put the leftovers back into the unassigned list)
+                    orig_idxs = list(range(len(traces_meta)))
+                    picked_idxs = rng.choice(orig_idxs, size=self.config.max_trace_count, replace=False)
+                    subset_traces_meta[subset_name] = [traces_meta[idx] for idx in picked_idxs]
+                    unassigned_idxs = [idx for idx in orig_idxs if idx not in picked_idxs]
+                    unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
         metadata = TraceDatasetMetadata(
             base_traces=base_traces_meta,
             subset_traces=subset_traces_meta,
@@ -108,7 +118,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             split_hash=split_hash,
         )
         self._save_prepared_metadata(metadata)
-        # @@@@@@ TODO extra step: tag-stratified split w/ clustering (?)
 
     def _is_metadata_prepared(self) -> bool:
         """Returns True if the metadata is prepared and ready to be used."""
@@ -138,6 +147,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         tmpdir = pyine.utils.filesystem.get_tmp_dir()
         return tmpdir / f"shortcuts.metadata.{params_hash}.msgspec"
 
+    @typing.override
     def setup(
         self,
         stage: str | None = None,
@@ -152,22 +162,37 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers here since they should be read-only and never pickled
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
-        self._base_parser = self.config.default_dataparser_config.instantiate(readers, self._metadata.base_traces)
-        self._subset_parsers = dict()
-        for subset_name, subset_traces in self._metadata.subset_traces.items():
-            self._subset_parsers[subset_name] = self.config.default_dataparser_config.instantiate(
+        self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
+        for subset_type in self.config.subset_types:
+            subset_traces = self._get_traces_meta_for_subset(subset_type)
+            self._subset_parsers[subset_type] = self.config.instantiate_parser(
+                subset_type=subset_type,
                 source_data=readers,
                 traces=subset_traces,
-                **self.config.dataparser_config_overrides.get(subset_name, {}),
             )
+
+    def _get_traces_meta_for_subset(self, subset_type: SubsetNameType | None) -> list[TraceMetadata]:
+        """Returns the list of trace metadata objects for a given subset type."""
+        if self._metadata is None:
+            raise RuntimeError("metadata not ready yet, call `setup()` first")
+        if subset_type is None:
+            return self._metadata.base_traces
+        if subset_type not in self._metadata.subset_traces:
+            if not any([subset_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
+                raise ValueError(f"subset {subset_type} is not defined in the metadata's split table")
+            parent_subset_type = subset_type.rsplit("_", maxsplit=1)[0]
+            return self._metadata.subset_traces[parent_subset_type]
+        else:
+            return self._metadata.subset_traces[subset_type]
 
     def _is_setup_complete(self) -> bool:
         """Returns True if the setup is complete and the data parsers/loaders are ready to be used."""
-        return self._base_parser is not None
+        return self._metadata is not None
 
+    @typing.override
     def get_parser(
         self,
-        subset_type: SubsetNameType | None = None,
+        subset_type: SubsetNameType,
     ) -> SampleDataParserType:
         """Returns a data parser object for a given subset type, or for the full dataset (if None).
 
@@ -177,143 +202,100 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         """
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
-        if subset_type is None:
-            return self._base_parser
+        assert subset_type is not None, "subset type must be specified"
         if subset_type not in self._subset_parsers:
             raise ValueError(f"parser for subset {subset_type} is not defined")
         return self._subset_parsers[subset_type]
 
-    def get_sample_to_messages_transform(
-        self,
-        append_answer: bool = True,
-        use_hf_messages: bool = False,
-        merge_system_with_user: bool = False,
-    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
-        """Returns the sample transform function used to prepare training/evaluation conversations."""
-        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
-            append_answer=append_answer,
-            use_hf_messages=use_hf_messages,
-            merge_system_with_user=merge_system_with_user,
-            **self.config.prompt_config.model_dump(),
-        )
-
+    @typing.override
     def get_hf_messages_dataset(
         self,
-        subset_type: SubsetNameType | None = None,
+        subset_type: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
     ) -> hf_datasets.Dataset:
-        """Returns a HuggingFace dataset object for a given subset type or for the full dataset (if None).
-
-        This function exists for users that might not want to use dataloaders directly, and would prefer
-        using the data parsers for huggingface-based experiments.
-
-        Args:
-            subset_type: the subset type to prepare the dataset for.
-            append_answer: whether to append the assistant's response to the conversation messages.
-            merge_system_with_user: whether to merge the system message with the user message (used
-                when working with e.g. o1/o3/o4, which do not support custom system prompts).
-
-        Returns:
-            A huggingface dataset object that produces chat-templated 'conversations' containing
-            requests to be executed by a model.
-        """
+        """Returns a HuggingFace dataset object for a given subset type."""
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
-        if subset_type is not None:
-            if subset_type not in self._metadata.subset_traces:
-                raise ValueError(f"parser for subset {subset_type} is not defined")
-            named_split = hf_datasets.NamedSplit(name=subset_type)
-            subset_traces = self._metadata.subset_traces[subset_type]
-        else:
-            named_split = hf_datasets.NamedSplit(name="all")
-            subset_traces = self._metadata.base_traces
-        transf_fn = self.get_sample_to_messages_transform(
+        assert subset_type is not None, "subset type must be specified"
+        subset_traces = self._get_traces_meta_for_subset(subset_type)
+        return self.config.instantiate_hf_messages_dataset(
+            subset_type=subset_type,
             append_answer=append_answer,
-            use_hf_messages=True,
             merge_system_with_user=merge_system_with_user,
-        )
-        return self.config.default_dataparser_config.get_hf_messages_dataset(
-            named_split=named_split,
-            raw_transform_fn=transf_fn,
-            instantiate_kwargs=dict(
-                source_data=self.config.lmdb_paths.copy(),  # defer instantiation to the generator due to pickling
-                traces=subset_traces,
-            ),
-            generator_kwargs=self.config.chat_generator_config,
+            source_data=self.config.lmdb_paths.copy(),  # defer instantiation to the generator due to pickling
+            traces=subset_traces,
         )
 
+    @typing.override
     def get_openai_messages_dataset(
         self,
-        subset_type: SubsetNameType | None = None,
+        subset_type: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
     ) -> pathlib.Path:
-        """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
-
-        This function exists for users that might want to use the data in combination with the
-        OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
-        a JSONL file with one example per line. That dataset file can then be uploaded to the
-        OpenAI API to train/validate a model.
-
-        Args:
-            subset_type: the subset type to prepare the dataset for.
-            append_answer: whether to append the assistant's response to the conversation messages.
-            merge_system_with_user: whether to merge the system message with the user message (used
-                when working with e.g. o1/o3/o4, which do not support custom system prompts).
-
-        Returns:
-             The path to the written dataset, which can be used for uploads to the OpenAI API.
-        """
-        openai_local_data_dir = pyine.organisms.models.utils.openai.get_local_file_directory()
-        params_hash = pyine.utils.reprod.get_params_hash(
-            self.config.model_dump(),
-            append_answer,
-            merge_system_with_user,
+        """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations."""
+        if not self._is_setup_complete():
+            raise RuntimeError("data parsers are not ready yet, call `setup()` first")
+        assert subset_type is not None, "subset type must be specified"
+        subset_traces = self._get_traces_meta_for_subset(subset_type)
+        return self.config.instantiate_openai_messages_dataset(
+            subset_type=subset_type,
+            append_answer=append_answer,
+            merge_system_with_user=merge_system_with_user,
+            source_data=self.config.lmdb_paths.copy(),  # defer instantiation to the generator due to pickling
+            traces=subset_traces,
         )
-        subset_type_name = subset_type if subset_type is not None else "all"
-        local_output_path = openai_local_data_dir / f"shortcuts-data.{subset_type_name}.{params_hash}.jsonl"
-        if not local_output_path.is_file():
-            # note: this impl relies on the huggingface getter (DRY)
-            hf_dataset = self.get_hf_messages_dataset(
-                subset_type=subset_type,
-                append_answer=append_answer,
-                merge_system_with_user=merge_system_with_user,
-            )
-            pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
-        return local_output_path
 
-    def _make_dataloader(
+    def make_dataloader(
         self,
-        subset_type: SubsetNameType | None,
+        loader_type: LoaderNameType,
     ) -> SampleDataLoaderType:
-        """Create a DataLoader for a given data parser."""
-        parser = self.get_parser(subset_type)
-        return self.config.default_dataloader_config.instantiate(
+        """Create a DataLoader for a given type."""
+        assert loader_type is not None, "loader type must be specified"
+        parser = self.get_parser(loader_type)
+        return self.config.instantiate_dataloader(
+            loader_type=loader_type,
             dataset=parser,
-            **self.config.dataloader_config_overrides.get(subset_type, {}),
         )
 
+    @typing.override
     def train_dataloader(self) -> SampleDataLoaderType:
         """Return the training data loader."""
-        return self._make_dataloader("train")
+        return self.make_dataloader("train")
 
+    @typing.override
     def val_dataloader(self) -> SampleDataLoaderType:
         """Return the validation data loader."""
-        return self._make_dataloader("valid")
+        return self.make_dataloader("valid")
 
+    @typing.override
     def test_dataloader(self) -> SampleDataLoaderType:
         """Return the test data loader."""
-        return self._make_dataloader("test")
+        return self.make_dataloader("test")
 
+    @typing.override
     def teardown(self, stage: str | None = None) -> None:
         """Close readers when the datamodule is torn down, and unassigns all parser attributes."""
         self._metadata: TraceDatasetMetadata | None = None
-        self._base_parser: SampleDataParserType | None = None
         self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
         for r in self._readers:
             r.close()
         self._readers: list[dataset_reader.DatasetReader] = []
+
+
+def _get_supported_subset_types() -> tuple[SubsetNameType, ...]:
+    """Returns all potential subset types supported by this datamodule.
+
+    Ones that possess a suffix correspond to versions found by overriding parser settings.
+    """
+    output_subset_types = []
+    for subset in ["train", "valid", "test"]:
+        output_subset_types.append(subset)
+        for suffix in typing.get_args(SampleInputType):
+            if suffix != "original":
+                output_subset_types.append(f"{subset}_{suffix}")
+    return tuple(output_subset_types)
 
 
 class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleConfig):
@@ -325,25 +307,23 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     datamodule_class_path: str = pydantic.Field(
         default=pyine.utils.portability.get_fully_qualified_name(ShortcutBiasDataModule),
         frozen=True,
-        description="Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'.",
     )
+    """Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'."""
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------
 
-    lmdb_paths: typing.Annotated[
-        list[pathlib.Path],
-        pydantic.Field(
-            min_length=1, description="Sequence of paths pointing to LMDB datasets containing execution traces."
-        ),
-    ]
-
+    lmdb_paths: typing.Annotated[list[pathlib.Path], pydantic.Field(min_length=1)]
+    """Sequence of paths pointing to LMDB datasets containing execution traces."""
+    subset_types: typing.Annotated[tuple[SubsetNameType, ...], pydantic.Field(min_length=1)] = (
+        _get_supported_subset_types()  # should never need to override this default
+    )
+    """List of data subsets that the module supports; some subsets override sample selection strategy."""
     default_dataparser_config: SampleBuilderConfig = SampleBuilderConfig()
     """Default trace parser configuration (will rely on the TACO dataset if not overridden)."""
     dataparser_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = dict(
         train=dict(
-            config=SampleTransformConfig(
-                random_seed=0,
-                partial_sample_decision_strategy="hybrid",
+            transform_config=SampleTransformConfig(
+                transform_strategy="hybrid",
                 output_type_prob_map={
                     "program output": 0.5,
                     "frame variables": 0.1,
@@ -361,7 +341,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 
     max_trace_count: int | None = None
-    """Maximum number of traces to load across all datasets."""
+    """Maximum number of traces to load across all subsets (except the 'base' one)."""
     split_file_path: pathlib.Path
     """Path to the file containing the split data for the full dataset.
 
@@ -390,13 +370,91 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     )
     """Configuration for the hf generator used to when transforming raw sample data to chat model requests."""
 
+    # --------------- PUBLIC UTILITY FUNCTIONS ---------------
+
+    @typing.override
+    def instantiate_openai_messages_dataset(
+        self,
+        subset_type: SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+        **extra_kwargs,
+    ) -> pathlib.Path:
+        """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations."""
+        openai_local_data_dir = pyine.organisms.models.utils.openai.get_local_file_directory()
+        params_hash = pyine.utils.reprod.get_params_hash(
+            self.model_dump(),
+            append_answer,
+            merge_system_with_user,
+        )
+        local_output_path = openai_local_data_dir / f"shortcuts-data.{subset_type}.{params_hash}.jsonl"
+        if not local_output_path.is_file():
+            # note: this impl relies on the huggingface getter (DRY)
+            hf_dataset = self.instantiate_hf_messages_dataset(
+                subset_type=subset_type,
+                append_answer=append_answer,
+                merge_system_with_user=merge_system_with_user,
+                **extra_kwargs,
+            )
+            pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
+        return local_output_path
+
+    @typing.override
+    def get_sample_to_messages_transform(
+        self,
+        append_answer: bool = True,
+        use_hf_messages: bool = False,
+        merge_system_with_user: bool = False,
+    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
+        """Returns the sample transform function used to prepare training/evaluation conversations."""
+        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
+            append_answer=append_answer,
+            use_hf_messages=use_hf_messages,
+            merge_system_with_user=merge_system_with_user,
+            **self.prompt_config.model_dump(),
+        )
+
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(
         default=None,
     )
 
+    @typing.override
+    def _resolve_dataparser_config(
+        self,
+        subset_type: SubsetNameType,
+    ) -> SampleBuilderConfig:
+        """Returns the data parser configuration for the given subset type."""
+        if subset_type not in self.subset_types:
+            raise ValueError(f"invalid subset type: {subset_type}, expected one of: {self.subset_types}")
+        parser_config = self.default_dataparser_config
+        assert isinstance(parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig)
+        if subset_type in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_type]:
+            parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_type])
+        special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_type)
+        if special_subset_overrides:
+            parser_config = parser_config.get_updated_spec(**special_subset_overrides)
+        return parser_config
+
+    @typing.override
+    def _resolve_dataloader_config(
+        self,
+        loader_type: LoaderNameType,
+    ) -> BaseDataLoaderConfig:
+        """Returns the data loader configuration for the given loader type."""
+        if loader_type not in self.loader_types:
+            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
+        loader_config: BaseDataLoaderConfig = self.default_dataloader_config
+        assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
+        if any([loader_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
+            loader_type = loader_type.rsplit("_", maxsplit=1)[0]
+        if loader_type in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_type]:
+            loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_type])  # noqa
+        return loader_config
+
     @pydantic.model_validator(mode="after")
+    @typing.override
     def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
         """Validates and resolves dataset paths and internal filtering rules."""
         super()._validate_and_resolve()
@@ -408,4 +466,10 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         )
         if not self.split_file_path.is_file():
             raise ValueError(f"dataset split file does not exist at path: {self.split_file_path}")
+        for subset_type in self.dataparser_config_overrides.keys():
+            if any([subset_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
+                raise ValueError(f"invalid subset type: {subset_type}, cannot override special parsers")
+        for loader_type in self.dataloader_config_overrides.keys():
+            if any([loader_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
+                raise ValueError(f"invalid loader type: {loader_type}, cannot override special loaders")
         return self

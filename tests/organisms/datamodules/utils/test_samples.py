@@ -1,3 +1,6 @@
+import pathlib
+
+import numpy as np
 import pytest
 
 import pyine.data.traces.dataset_reader
@@ -8,6 +11,7 @@ import pyine.utils.code.execution as exec_utils
 import tests.data.utils.env_checks
 from pyine.organisms.datamodules.utils.samples import (
     SampleBuilder,
+    SampleSelectionConfig,
     SampleTransformConfig,
     TraceMetadata,
 )
@@ -81,11 +85,10 @@ class TestSampleBuilderFullSamples:
     def test_full_trace_when_never(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            partial_sample_decision_strategy="never",
-            random_seed=123,
+            transform_strategy="never",
             output_type_prob_map={},
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         assert len(sb) == 1
         sample = sb[0]
         tr = small_fake_reader[0]
@@ -109,14 +112,13 @@ class TestSampleBuilderPartialSamples:
     def test_partial_sample_basic(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            partial_sample_decision_strategy="always",
-            random_seed=42,
+            transform_strategy="always",
             max_partial_trace_steps=3,
             output_type_prob_map={
                 "frame variables": 1.0,
             },
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         sample = sb[0]
         tr = small_fake_reader[0]
         # boundaries are sane
@@ -133,13 +135,12 @@ class TestSampleBuilderPartialSamples:
     def test_partial_sample_function_call(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            partial_sample_decision_strategy="always",
-            random_seed=13,
+            transform_strategy="always",
             output_type_prob_map={
                 "function return": 1.0,
             },
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         sample = sb[0]
         tr = small_fake_reader[0]
         # boundaries are sane
@@ -155,14 +156,13 @@ class TestSampleBuilderPartialSamples:
     def test_caps_enforced_and_fallback(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            partial_sample_decision_strategy="always",
-            random_seed=1,
+            transform_strategy="always",
             max_inputs_str_length=0,  # any non-empty inputs will exceed -> partial skipped
             output_type_prob_map={
                 "frame variables": 1.0,
             },
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         sample = sb[0]
         # since caps reject partial sample, we should have fallen back to full program output
         assert sample.output_type == "program output"
@@ -179,8 +179,7 @@ class TestSampleBuilderRealData:
     )
     def test_sample_generation_on_taco_traces(self):
         cfg = SampleTransformConfig(
-            random_seed=0,
-            partial_sample_decision_strategy="hybrid",
+            transform_strategy="hybrid",
             functions_fallback_to_segments=True,
             max_partial_trace_steps=100,
             min_partial_trace_steps=5,
@@ -197,7 +196,7 @@ class TestSampleBuilderRealData:
         sb = SampleBuilder(
             source_data=taco_reader,
             traces=None,
-            config=cfg,
+            transform_config=cfg,
         )
         assert len(sb) == len(taco_reader)
         for trace_idx in range(len(taco_reader)):
@@ -315,16 +314,17 @@ print(x)
         self, small_fake_reader: FakeTraceDatasetReader, nested_call_trace: "_FakeTrace", mocker
     ) -> None:
         cfg = SampleTransformConfig(
-            random_seed=0,
             min_partial_trace_steps=1,
             max_partial_trace_steps=3,
         )
         # traces can be empty since we call private methods directly; reader is only used to pass __init__ checks
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], transform_config=cfg)
         sample = sb._get_code_segment_sample(
-            nested_call_trace,
+            trace_data=nested_call_trace,
             trace_meta=mocker.MagicMock(),
+            trace_code_type="original",
             target_output_type="frame variables",
+            rng=np.random.default_rng(seed=0),
         )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
@@ -343,11 +343,15 @@ print(x)
         mocker,
     ) -> None:
         cfg = SampleTransformConfig(
-            random_seed=0,
             min_partial_trace_steps=1,
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], config=cfg)  # noqa
-        sample = sb._get_function_call_sample(nested_call_trace, trace_meta=mocker.MagicMock())
+        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], transform_config=cfg)
+        sample = sb._get_function_call_sample(
+            trace_data=nested_call_trace,
+            trace_meta=mocker.MagicMock(),
+            trace_code_type="original",
+            rng=np.random.default_rng(seed=0),
+        )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
@@ -377,14 +381,13 @@ def test_code_summary_is_used_from_prompt_db(small_fake_reader: FakeTraceDataset
     )
     # build SampleBuilder pointing to our temporary DB; force full samples to simplify checks
     cfg = SampleTransformConfig(
-        partial_sample_decision_strategy="never",
-        random_seed=0,
+        transform_strategy="never",
         output_type_prob_map={},
     )
     sb = SampleBuilder(
         source_data=[small_fake_reader],
         traces=None,
-        config=cfg,
+        transform_config=cfg,
         prompt_result_db_path=str(db_path),
     )
     assert len(sb) == len(small_fake_reader)
@@ -401,3 +404,96 @@ def test_code_summary_is_used_from_prompt_db(small_fake_reader: FakeTraceDataset
             assert sample.description == expected_summary
         else:
             assert sample.description == ""
+
+
+class TestSelectTraces:
+
+    def test_select_traces_original_and_obfuscated_skip(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        # original: should keep all clusters (no augmented variants exist => one per trace)
+        sb_original = SampleBuilder(
+            source_data=[small_fake_reader],
+            selection_config=SampleSelectionConfig(
+                choice_strategy="latest",
+                input_type_prob_map={"original": 1.0},
+            ),
+        )
+        assert len(sb_original.traces) == len(small_fake_reader)
+        assert set(sb_original.input_types) == {"original"}
+        assert all(ovr is None for ovr in sb_original.code_overrides)
+        # obfuscated: none present and no DB fallback for obfuscation => skip everything
+        sb_obf = SampleBuilder(
+            source_data=[small_fake_reader],
+            selection_config=SampleSelectionConfig(
+                choice_strategy="latest",
+                input_type_prob_map={"obfuscated": 1.0},
+            ),
+        )
+        assert len(sb_obf) == 0
+        # hinted without DB allowed: none present => skip everything
+        sb_no_db = SampleBuilder(
+            source_data=[small_fake_reader],
+            selection_config=SampleSelectionConfig(
+                allow_db_lookups=False,
+                choice_strategy="latest",
+                input_type_prob_map={"hinted": 1.0},
+            ),
+        )
+        assert len(sb_no_db) == 0
+
+    def test_select_traces_db_fallback_hinted_latest_and_bugged_random(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        # prepare prompt DB with both trace-level (hints) and solution-level (issues/bugs) overrides
+        db_path = tmp_path / "select_traces.sqlite"
+        db = pyine.prompts.PromptResultDB(str(db_path))
+        # pick one specific trace to attach hints to (trace-level)
+        tr0 = small_fake_reader[0]
+        assert tr0.identifier is not None
+        trace_id_str = str(tr0.identifier)
+        # and derive its solution id to attach bugged records (solution-level)
+        sol_id_str = str(
+            pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_id_str).get_parent_identifier()
+        )
+        # store two hinted variants for the trace (latest should pick the last one)
+        db.store(identifier=trace_id_str, prompt="hint", result="hint_v1", prompt_name="hints/thingy1")
+        db.store(identifier=trace_id_str, prompt="hint", result="hint_v2", prompt_name="hints/thingy2")
+        # store two bug variants for the solution (random should pick one deterministically by seed)
+        db.store(identifier=sol_id_str, prompt="issues", result="bug_A", prompt_name="issues/simple")
+        db.store(identifier=sol_id_str, prompt="issues", result="bug_B", prompt_name="issues/complex")
+        # hinted + latest => should include exactly the targeted trace cluster with the latest override
+        sb_hinted = SampleBuilder(
+            source_data=[small_fake_reader],
+            selection_config=SampleSelectionConfig(
+                allow_db_lookups=True,
+                choice_strategy="latest",
+                input_type_prob_map={"hinted": 1.0},
+            ),
+            prompt_result_db_path=str(db_path),
+        )
+        # only one cluster should have hints in DB => length 1
+        assert len(sb_hinted) == 1
+        assert sb_hinted.input_types == ["hinted"]
+        assert sb_hinted.code_overrides == ["hint_v2"]  # latest
+        assert sb_hinted.traces[0].identifier == trace_id_str  # same original trace (override applies at use time)
+        # bugged + random => for the selected solution, there are as many clusters as test cases
+        # only clusters matching the solution id should be selected; others skipped
+        sb_bugged = SampleBuilder(
+            source_data=[small_fake_reader],
+            selection_config=SampleSelectionConfig(
+                seed=0,
+                allow_db_lookups=True,
+                choice_strategy="random",
+                input_type_prob_map={"bugged": 1.0},
+            ),
+            prompt_result_db_path=str(db_path),
+        )
+        # figure how many tests exist for that solution in the fake reader (two by fixture config)
+        # i.e., number of clusters that share the same parent solution id
+        expected_bugged_clusters = sum(1 for t in sb_bugged.traces if t.get_parent_solution_id() == sol_id_str)
+        # no other solution has DB bug records, so the builder should contain only those clusters
+        assert len(sb_bugged) == expected_bugged_clusters
+        assert all(t.get_parent_solution_id() == sol_id_str for t in sb_bugged.traces)
+        assert set(sb_bugged.input_types) == {"bugged"}
+        assert all(ovr in {"bug_A", "bug_B"} for ovr in sb_bugged.code_overrides)

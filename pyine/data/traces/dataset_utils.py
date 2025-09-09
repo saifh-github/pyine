@@ -152,9 +152,13 @@ class TraceIdentifier(SolutionIdentifier):
     augment_idx: int | None = None
     """Index identifying the augmented instance used to create this trace (if any)."""
 
-    def __repr__(self):
+    def _get_augmentless_repr(self) -> str:
+        """Returns a string representation of this identifier without the augmentation information."""
+        return f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
+
+    def __repr__(self) -> str:
         """Returns a string representation of this identifier."""
-        out = f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
+        out = self._get_augmentless_repr()
         if self.augment_category is not None or self.augment_idx is not None:
             assert self.augment_category is not None and self.augment_idx is not None
             out += f"/a:{self.augment_category}:{self.augment_idx:03d}"
@@ -165,6 +169,11 @@ class TraceIdentifier(SolutionIdentifier):
         local_vars = ["test_idx", "augment_category", "augment_idx"]
         parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name not in local_vars}
         return SolutionIdentifier(**parent_vars)
+
+    def get_augmentless_identifier(self) -> "TraceIdentifier":
+        """Returns a copy of this object without the augmentation information."""
+        augmentless_repr = self._get_augmentless_repr()
+        return self.from_string(augmentless_repr)
 
     @staticmethod
     def from_string(identifier_str: str) -> "TraceIdentifier":

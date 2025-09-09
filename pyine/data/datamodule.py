@@ -462,6 +462,31 @@ class BaseDataModule(pl.LightningDataModule):
         raise NotImplementedError
 
 
+class ConversationDataParserConfig(BaseDataParserConfig):
+    """Specialized configuration class for conversation data parser objects.
+
+    See the parent class for more information; this class is mostly a placeholder. Derived instances
+    should specify `class_path` and `params`, and optionally `base_class_path` if needed.
+    """
+
+    def get_hf_messages_dataset(
+        self,
+        named_split: "hf_datasets.NamedSplit",
+        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
+        instantiate_kwargs: dict | None = None,
+        generator_kwargs: dict | None = None,
+    ) -> "hf_datasets.Dataset":
+        """Returns a HuggingFace messages dataset object.
+
+        This function exists for users that might not want to use raw data loaders directly, and
+        would prefer using already-prepared conversation data for huggingface-based experiments.
+
+        Returns:
+             The HuggingFace messages dataset object.
+        """
+        raise NotImplementedError
+
+
 class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Specialized configuration class for conversation datamodule objects.
 
@@ -470,6 +495,8 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     prompt_config: pyine.prompts.types.PromptBuildConfig
     """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
+    chat_generator_config: dict[str, typing.Any] = dict()
+    """Configuration for the hf generator used to when transforming raw sample data to chat model requests."""
 
     def get_prompt_template(
         self,
@@ -491,6 +518,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         prompt_kwargs.update(kwargs)
         return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs, runnable_name=runnable_name)
 
+    @typing.override
     def instantiate_datamodule(self, *args, **extra_kwargs) -> "ConversationDataModule":
         """Instantiates a data module object based on the configured target class path."""
         dm = super().instantiate_datamodule(*args, **extra_kwargs)
@@ -498,7 +526,94 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             raise TypeError(f"expected {ConversationDataModule} (or subclass), got {type(dm)}")
         return dm
 
+    def instantiate_hf_messages_dataset(
+        self,
+        subset_type: SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+        **extra_kwargs,
+    ) -> hf_datasets.Dataset:
+        """Instantiates a `hf_datasets.Dataset` object based on the configured parser settings.
+
+        This function exists for users that might not want to use dataloaders directly, and would
+        prefer using the data parsers for huggingface-based experiments.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+            A huggingface dataset object that produces chat-templated 'conversations'.
+        """
+        parser_config = self._resolved_dataparser_configs[subset_type]
+        assert isinstance(parser_config, ConversationDataParserConfig)
+        named_split = hf_datasets.NamedSplit(name=subset_type)
+        transf_fn = self.get_sample_to_messages_transform(
+            append_answer=append_answer,
+            use_hf_messages=True,
+            merge_system_with_user=merge_system_with_user,
+        )
+        return parser_config.get_hf_messages_dataset(
+            named_split=named_split,
+            raw_transform_fn=transf_fn,
+            instantiate_kwargs=extra_kwargs,
+            generator_kwargs=self.chat_generator_config,
+        )
+
+    def instantiate_openai_messages_dataset(
+        self,
+        subset_type: SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+        **extra_kwargs,
+    ) -> pathlib.Path:
+        """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
+
+        This function exists for users that might want to use the data in combination with the
+        OpenAI API. The dataset is written to the returned path in the OpenAI format, which is
+        a JSONL file with one example per line. That dataset file can then be uploaded to the
+        OpenAI API to train/validate a model.
+
+        Args:
+            subset_type: the subset type to prepare the dataset for.
+            append_answer: whether to append the assistant's response to the conversation messages.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+             The path to the written dataset, which can be used for uploads to the OpenAI API.
+        """
+        raise NotImplementedError
+
+    def get_sample_to_messages_transform(
+        self,
+        append_answer: bool = True,
+        use_hf_messages: bool = False,
+        merge_system_with_user: bool = False,
+    ) -> typing.Callable[[typing.Any], typing.Any]:
+        """Returns the sample transform function used to prepare training/evaluation conversations.
+
+        This function exists for users that might not want to use dataloaders directly, and would
+        prefer using the data parsers while applying raw data transforms directly instead.
+
+        Note: if the datamodule does not support the conversion of raw data samples into
+        conversation messages, this function will raise an exception.
+
+        Args:
+            append_answer: whether to append the assistant's response to the conversation messages.
+            use_hf_messages: whether to use HuggingFace messages format or the langchain format.
+            merge_system_with_user: whether to merge the system message with the user message (used
+                when working with e.g. o1/o3/o4, which do not support custom system prompts).
+
+        Returns:
+             The sample transform function.
+        """
+        raise NotImplementedError
+
     @pydantic.model_validator(mode="after")
+    @typing.override
     def _validate_and_resolve(self) -> "ConversationDataModuleConfig":
         """Validates and resolves prompt config stuff as well as parent checks."""
         super()._validate_and_resolve()
@@ -530,31 +645,6 @@ class ConversationDataModule(BaseDataModule):
             raise TypeError(f"invalid config type: {type(config)}, expected {ConversationDataModuleConfig}")
         super().__init__(config)
         self.config: ConversationDataModuleConfig = config
-
-    def get_sample_to_messages_transform(
-        self,
-        append_answer: bool = True,
-        use_hf_messages: bool = False,
-        merge_system_with_user: bool = False,
-    ) -> typing.Callable[[typing.Any], typing.Any]:
-        """Returns the sample transform function used to prepare training/evaluation conversations.
-
-        This function exists for users that might not want to use dataloaders directly, and would
-        prefer using the data parsers while applying raw data transforms directly instead.
-
-        Note: if the datamodule does not support the conversion of raw data samples into
-        conversation messages, this function will raise an exception.
-
-        Args:
-            append_answer: whether to append the assistant's response to the conversation messages.
-            use_hf_messages: whether to use HuggingFace messages format or the langchain format.
-            merge_system_with_user: whether to merge the system message with the user message (used
-                when working with e.g. o1/o3/o4, which do not support custom system prompts).
-
-        Returns:
-             The sample transform function.
-        """
-        raise NotImplementedError
 
     def get_hf_messages_dataset(
         self,
