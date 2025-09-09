@@ -1,4 +1,5 @@
 import collections
+import logging
 import pathlib
 import typing
 
@@ -20,6 +21,8 @@ from pyine.utils.code.execution import (
     TraceEvent,
     TraceEventType,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TraceMetadata(typing.NamedTuple):
@@ -73,6 +76,7 @@ def get_traces_metadata(
     """Returns a list of TraceMetadata objects for all traces in the provided dataset reader(s)."""
     if not isinstance(readers, list):
         readers = [readers]
+    logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
     readers_map = {  # hash-to-reader map to later re-identify the origin of individual traces
         reader.get_hash(): reader for reader in readers
     }
@@ -403,18 +407,22 @@ class SampleBuilder(SampleDataParserType):
         """Initializes a list of LMDB readers and a list of target traces."""
         if not isinstance(source_data, list):
             source_data = [source_data]
+        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join([str(s) for s in source_data])}")
         for src_idx, src in enumerate(source_data):
             if isinstance(src, (str, pathlib.Path)):
                 source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
         readers_map = {r.get_hash(): r for r in source_data}
         assert len(readers_map) > 0
         if traces is None:
+            logger.debug("(targeting all available traces)")
             # create a list of metadata structs for ALL available traces
             traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
                 readers=source_data,
                 base_filter=None,
                 verbose=False,
             )
+        else:
+            logger.debug(f"(targeting {len(traces)} traces)")
         assert isinstance(traces, list)
         assert all([t.parent_dataset_hash in readers_map for t in traces])
         assert all([0 <= t.index < len(readers_map[t.parent_dataset_hash]) for t in traces])
@@ -539,6 +547,9 @@ class SampleBuilder(SampleDataParserType):
                 output_code_overrides.append(potential_code_snippet_overrides[picked_code_override_idx])
             else:
                 raise NotImplementedError
+        logger.debug(f"trace selection strategy kept {len(output_traces_meta)} of {len(traces)} traces")
+        type_counts = collections.Counter(output_code_types)
+        logger.debug(f"produced output types:\n\t{'\n\t'.join([f"{k}: {c}" for k, c in type_counts.items()])} ")
         return output_traces_meta, output_code_types, output_code_overrides
 
     @staticmethod
@@ -558,6 +569,7 @@ class SampleBuilder(SampleDataParserType):
                 if records:
                     # always take the latest summary that's available in the database
                     code_summaries_lut[solution_id] = records[-1].result
+        logger.debug(f"found {len(code_summaries_lut)} code summaries in prompt result db")
         return code_summaries_lut
 
     def __len__(self) -> int:
@@ -854,7 +866,10 @@ class SampleBuilder(SampleDataParserType):
                     depth_collectors[current_depth] = None
                 current_depth -= 1
         # we expect to have closed all collections by encountering matching RETURN events
-        assert not any(depth_collectors.values()), "how did we end up with a trace ending without a return event?"
+        if any(depth_collectors.values()):
+            # how did we end up with a trace ending without a return event?
+            # (might need to investigate these later on, will drop top scope as a potential candidate)
+            logger.warning(f"found trace ending without return event: {trace_meta.identifier}")
         while candidate_event_lists:
             # pick a random candidate list
             curr_candidate_idx = int(rng.integers(0, len(candidate_event_lists)))

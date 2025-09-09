@@ -253,6 +253,10 @@ class DatasetReader(torch.utils.data.Dataset):
         """
         self.reader.close()
 
+    def __str__(self):
+        """Returns a string representation of the dataset reader (for debugging purposes)."""
+        return f"{self.__class__.__name__}({self.path}) with {len(self)} instances"
+
 
 if __name__ == "__main__":
     pyine.utils.reprod.entrypoint_setup()
