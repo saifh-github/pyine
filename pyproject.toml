@@ -48,6 +48,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "coverage[toml]>=7.10.0",
     "flake8>=7.3.0",
     "isort>=6.0.1",
     "ipython>=8.0.0,<9.0.0",
@@ -59,7 +60,7 @@ dev = [
     "pytest-mock>=3.14",
     "pytest-cov>=6.2.0",
     "pytest-timeout>=2.4.0",
-    "coverage[toml]>=7.10.0",
+    "wordcloud>=1.9.4",
 ]
 
 [build-system]
