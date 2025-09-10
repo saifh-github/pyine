@@ -264,7 +264,7 @@ class FakeTraceDatasetReader(_FakeBase):
         inputs = problem.test_inout_pairs[t_idx][0]
         trace_res = exec_utils.execute_and_trace_code(
             code_string=code,
-            inputs=str(inputs),
+            inputs=inputs,
             identifier=str(tid),
             entrypoint_name=self._cfg.entrypoint_name,
             trace_only_inside_code_string=True,

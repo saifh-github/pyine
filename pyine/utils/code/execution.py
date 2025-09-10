@@ -21,6 +21,7 @@ import pyine.utils.code.input_mock
 import pyine.utils.code.output_capture
 import pyine.utils.filesystem
 import pyine.utils.portability
+import pyine.utils.pydantic
 import pyine.utils.reprod
 import pyine.utils.timers
 
@@ -250,10 +251,10 @@ class TraceResult(pydantic.BaseModel):
     """The original code string that was executed."""
     code_blocks: dict[TraceKeyReprType, pyine.utils.code.blocks.CodeBlock]
     """A dictionary containing the logic blocks of the executed code, indexed by start line number."""
-    inputs: str
-    """The inputs that were available to the code during execution."""
-    expected_output: str
-    """The expected output of the code, if any; should be used for verification/predictions."""
+    inputs: pydantic.JsonValue | None
+    """The inputs that were passed to the code for execution (if any)."""
+    expected_output: pydantic.JsonValue | None
+    """The expected output of the code (if any); may be used for later verifications."""
     max_valid_events: int | None
     """The maximum number of valid (in-scope) events that could have been recorded (if such a cap was used)."""
     max_events_per_line: int | None
@@ -719,13 +720,21 @@ def _unsafe_execute_and_trace_code(
     if stderr_buffer:
         trace_tags.append(TraceTagType.HAS_RETURN_STDERR)
     trace_tags.extend(TraceTagType.get_step_count_tags(traced_steps))
+    if inputs is not None and not pyine.utils.pydantic.is_jsonvalue(inputs):
+        inputs = repr(inputs)
+    else:
+        inputs = inputs
+    if expected_output is not None and not pyine.utils.pydantic.is_jsonvalue(expected_output):
+        expected_output = repr(expected_output)
+    else:
+        expected_output = expected_output
     try:
         trace_result = TraceResult(
             identifier=identifier,
             code_string=code_string,
             code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
-            inputs=str(inputs),
-            expected_output=str(expected_output),
+            inputs=inputs,
+            expected_output=expected_output,
             max_valid_events=max_valid_events,
             max_events_per_line=max_events_per_line,
             max_var_repr_length=max_var_repr_length,

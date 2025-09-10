@@ -644,8 +644,8 @@ class SampleBuilder(SampleDataParserType):
             entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
             last_line=len(trace_data.code_string.splitlines()),
-            inputs=trace_data.inputs,
-            expected_output=trace_data.expected_output,
+            inputs=str(trace_data.inputs),
+            expected_output=str(trace_data.expected_output),
             output_type="program output",
             code_type=trace_code_type,
             trace_step_count=trace_data.valid_step_count,  # count valid steps only

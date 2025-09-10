@@ -355,3 +355,12 @@ class ClassImportSpec(
             sig.bind_partial(**params)
         except TypeError as e:
             raise ValueError(f"cannot bind parameter(s) to {cls.__name__} constructor") from e
+
+
+def is_jsonvalue(obj: typing.Any, *, strict: bool = False) -> bool:
+    """Returns True if the given object is a pydantic json value."""
+    try:
+        pydantic.TypeAdapter(pydantic.JsonValue).validate_python(obj, strict=strict)
+        return True
+    except pydantic.ValidationError:
+        return False

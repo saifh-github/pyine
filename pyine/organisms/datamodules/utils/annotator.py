@@ -257,7 +257,7 @@ def _default_input_variables_builder(
     """
     output = {
         "code": trace.code_string,
-        "inputs": trace.inputs,
+        "inputs": str(trace.inputs),
     }
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))

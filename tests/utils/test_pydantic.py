@@ -368,3 +368,17 @@ class TestClassImportSpec:
         assert isinstance(instance, DummyWithConfig)
         assert instance.cfg.a == 7
         assert instance.cfg.b == "hello"
+
+
+def test_is_jsonvalue():
+    assert pyd.is_jsonvalue(1) is True
+    assert pyd.is_jsonvalue(1.0) is True
+    assert pyd.is_jsonvalue("hello") is True
+    assert pyd.is_jsonvalue(True) is True
+    assert pyd.is_jsonvalue(None) is True
+    assert pyd.is_jsonvalue([1, 2, {"1": 1}]) is True
+    assert pyd.is_jsonvalue({"a": {1: 123}}) is False
+    assert pyd.is_jsonvalue({"a": 1}) is True
+    assert pyd.is_jsonvalue(MyModel(a=1, b="2")) is False
+    assert pyd.is_jsonvalue(MyModel(a=1, b="2").model_dump()) is True
+    assert pyd.is_jsonvalue(int) is False

@@ -97,8 +97,8 @@ class TestSampleBuilderFullSamples:
         assert sample.code == tr.code_string
         assert isinstance(sample.description, str)
         assert sample.output_type == "program output"
-        assert sample.inputs == tr.inputs
-        assert sample.expected_output == tr.expected_output
+        assert sample.inputs == str(tr.inputs)
+        assert sample.expected_output == str(tr.expected_output)
         # boundaries
         assert sample.first_line == 0
         assert sample.last_line == len(tr.code_string.splitlines())
@@ -167,7 +167,7 @@ class TestSampleBuilderPartialSamples:
         # since caps reject partial sample, we should have fallen back to full program output
         assert sample.output_type == "program output"
         tr = small_fake_reader[0]
-        assert sample.expected_output == tr.expected_output
+        assert sample.expected_output == str(tr.expected_output)
 
 
 class TestSampleBuilderRealData:
@@ -211,8 +211,8 @@ class TestSampleBuilderRealData:
             if sample.output_type == "program output":
                 assert sample.first_line == 0
                 assert sample.last_line == len(code_lines)
-                assert sample.inputs == trace_data.inputs
-                assert sample.expected_output == trace_data.expected_output
+                assert sample.inputs == str(trace_data.inputs)
+                assert sample.expected_output == str(trace_data.expected_output)
                 assert sample.trace_step_count == trace_data.valid_step_count
             else:
                 assert isinstance(sample.inputs, str)
