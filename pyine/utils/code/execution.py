@@ -81,6 +81,12 @@ class TracingCapException(Exception):
     pass
 
 
+class CodeAnalysisFailure(ValueError):
+    """Exception signaling that some analysis of the code string failed."""
+
+    pass
+
+
 class TraceKey(typing.NamedTuple):
     """NamedTuple for storing and exporting execution trace keys."""
 
@@ -493,7 +499,7 @@ def _unsafe_execute_and_trace_code(
         }
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
-        raise Exception(f"error while analyzing and compiling code: {e}") from e
+        raise CodeAnalysisFailure(f"error while analyzing and compiling code: {e}") from e
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
