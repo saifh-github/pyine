@@ -20,8 +20,9 @@ Examples:
     ```bash
         python pyine/apps/annotate/trace_annot_generator.py \
             --dataset-latest-from TACO \
-            --prompt-name code_summary \
-            --prompt-vars '{"target_word_count": "75"}'
+            --prompt-name hints/docs \
+            --llm-option provider=openai \
+            --llm-option model=gpt-5
     ```
 
     Use a YAML file for a static/shared LLM config and specify prompt variables directly inline:
@@ -38,8 +39,7 @@ Examples:
     ```bash
         python pyine/apps/annotate/trace_annot_generator.py \
             --dataset /path/to/traces/dataset \
-            --prompt-name code_summary \
-            --prompt-vars '{"target_word_count": "short"}' \
+            --prompt-name issues/iterators \
             --dry-run \
             --no-parallel \
             --no-progress
@@ -50,8 +50,7 @@ Examples:
     ```bash
         python pyine/apps/annotate/trace_annot_generator.py \
             --dataset /path/to/traces/dataset \
-            --prompt-name code_summary \
-            --prompt-vars '{"target_word_count": "long"}' \
+            --prompt-name issues/todos \
             --db-path ./outputs/prompt_results.sqlite \
             --max-workers 16
     ```
@@ -61,8 +60,7 @@ Examples:
     ```bash
         python pyine/apps/annotate/trace_annot_generator.py \
             --dataset /path/to/traces/dataset \
-            --prompt-name code_summary \
-            --prompt-vars '{"target_word_count": "short"}' \
+            --prompt-name hints/docs \
             --target-indices 0-99,150,200-205 \
             --shared-tags eval,exp1 \
             --shared-meta '{"run":"exp1","owner":"alice"}' \
@@ -496,7 +494,7 @@ def main(
     prompt_config = pyine.prompts.types.PromptBuildConfig(
         prompt_name=prompt_name,
         version=prompt_version,
-        partial_vars=partial_vars or None,
+        partial_vars=partial_vars,
     )
     logger.debug(f"parsed prompt config: {prompt_config}")
     options = annotator.AnnotationOptions(
