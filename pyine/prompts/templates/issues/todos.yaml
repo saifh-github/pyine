@@ -70,7 +70,7 @@ __defines__:
         ```python
         {{code.rstrip("\n")}}
         ```
-        {%- if description %}
+        {%- if description is defined and description %}
         Algorithm description:
         ```
         {{description.rstrip("\n")}}
@@ -78,6 +78,8 @@ __defines__:
         {%- endif %}
         Now, generate your proposal, and nothing else:
       format: jinja2
+      optional_variables:
+        - description
     base_examples:
       example_1: &example_1
         code: |
@@ -372,7 +374,7 @@ full_output_1-5L/v1.0:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {%- if description %}
+      {%- if description is defined and description %}
       Algorithm description:
       ```
       {{description.rstrip("\n")}}
@@ -383,6 +385,8 @@ full_output_1-5L/v1.0:
       {{output.rstrip("\n")}}
       ```
     format: jinja2
+    optional_variables:
+      - description
   examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"
   examples:

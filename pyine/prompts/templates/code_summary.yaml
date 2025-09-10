@@ -47,19 +47,22 @@ v1.0:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {%- if description %}
+      {%- if description is defined and description %}
       Coding problem description:
       ===========================
       {{description.rstrip("\n")}}
       ===========================
       {%- endif %}
-      {%- if target_word_count %}
+      {%- if target_word_count is defined and target_word_count %}
       Expected summary (roughly {{target_word_count}} words):
       {%- else %}
       Expected summary:
       {%- endif %}
       {{output.rstrip("\n") + "\n"}}
     format: jinja2
+    optional_variables:
+      - target_word_count
+      - description
   examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"
   examples:

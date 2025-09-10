@@ -36,8 +36,9 @@ def test_get_unstructured_with_3_output_types_config_and_template():
         "code_execution", version=prompt_version, include_examples=True
     )
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
-    core_vars = {"code", "description", "output_type", "inputs"}
+    core_vars = {"code", "output_type", "inputs"}
     assert core_vars.issubset(set(template.input_variables))
+    assert template.optional_variables == ["description", "entrypoint"]
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
 

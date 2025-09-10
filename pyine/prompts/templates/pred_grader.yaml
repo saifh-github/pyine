@@ -58,6 +58,8 @@ __defines__:
       Expected prediction (structured):
       {{output.model_dump_json() + "\n"}}
     format: jinja2
+    partial_variables:
+      execution_type: ""
   examples:
     example_1_input: &example_1_input
       execution_type: ""

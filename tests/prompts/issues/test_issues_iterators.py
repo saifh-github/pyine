@@ -29,7 +29,8 @@ def test_get_full_output_config_and_template():
     assert template_str.endswith("Now, generate your proposal, and nothing else:\n")
     assert "**only one micro-region** (1-3 lines)" in template_str
     assert issues_iterators.invalid_code_token in template_str
-    assert template.input_variables == ["code", "description"]
+    assert template.input_variables == ["code"]
+    assert template.optional_variables == ["description"]
     rendered_str = template.format(
         code='name = input("Enter name: ")\nprint("Hello, " + name)',
         description="An algorithm.",

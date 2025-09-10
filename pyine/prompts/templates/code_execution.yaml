@@ -22,7 +22,7 @@ __defines__:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {% if description %}
+      {% if description is defined and description %}
       Code description:
       {{description.rstrip("\n")}}
       {%- endif %}
@@ -30,7 +30,7 @@ __defines__:
       Execution output type: {{output_type}}
 
       {%- if output_type == 'program output' %}
-      {%- if entrypoint %}
+      {%- if entrypoint is defined and entrypoint %}
       Entrypoint name: {{entrypoint}}
       {%- endif %}
 
@@ -68,6 +68,9 @@ __defines__:
       Unsupported output_type for this version. You should not reach this case. Open an issue if you see this.
       {%- endif %}
     format: jinja2
+    optional_variables:
+      - description
+      - entrypoint
   base_ex_template_unstructured_with_3_output_types: &base_ex_template_unstructured_with_3_output_types
     template: |
       ## Example {{example_idx}}/{{example_count}}:
@@ -75,14 +78,14 @@ __defines__:
       ```python
       {{code.rstrip("\n")}}
       ```
-      {%- if description %}
+      {%- if description is defined and description %}
       ### Code description:
       {{description.rstrip("\n")}}
       {%- endif %}
       ### Execution output type:
       {{output_type}}
       {%- if output_type == 'program output' %}
-      {%- if entrypoint %}
+      {%- if entrypoint is defined and entrypoint %}
       ### Entrypoint name:
       {{entrypoint}}
       {%- endif %}
@@ -118,6 +121,9 @@ __defines__:
       Unsupported output_type for this version. You should not reach this case. Open an issue if you see this.
       {%- endif %}
     format: jinja2
+    optional_variables:
+      - description
+      - entrypoint
   examples:
     full_exec_example_1: &full_exec_example_1
       code: |
