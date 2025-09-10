@@ -14,6 +14,7 @@ from pyine.prompts.result_db import (
     PromptResultDB,
     PromptResultRecord,
     TypedPromptResultFetcher,
+    ValidationFailedError,
     fetch_or_generate_prompt_results,
 )
 
@@ -172,25 +173,27 @@ def test_fetch_or_generate_deduplicates_existing(db: PromptResultDB, monkeypatch
     assert res[0].result == "X"
 
 
+class ModelLike:
+    def __init__(self, data):
+        self._data = data
+
+    def model_dump_json(self) -> str:
+        return json.dumps(self._data)
+
+
+class DummyChain:
+    def __init__(self, outputs):
+        self._iter = iter(outputs)
+
+    def invoke(self, _inputs, **kwargs):
+        try:
+            return next(self._iter)
+        except StopIteration:
+            return ModelLike({"v": 999})
+
+
 def test_fetch_or_generate_generate_until_count_no_log(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
     # here, we use a fake prompt manager producing model-like objects with .model_dump_json()
-
-    class ModelLike:
-        def __init__(self, data):
-            self._data = data
-
-        def model_dump_json(self) -> str:
-            return json.dumps(self._data)
-
-    class DummyChain:
-        def __init__(self, outputs):
-            self._iter = iter(outputs)
-
-        def invoke(self, _inputs, **kwargs):
-            try:
-                return next(self._iter)
-            except StopIteration:
-                return ModelLike({"v": 999})
 
     def get_prompt_template(**_kwargs):
         return "Hello {name}"
@@ -236,23 +239,6 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     class Item(pydantic.BaseModel):
         v: int
 
-    class ModelLike:
-        def __init__(self, data):
-            self._data = data
-
-        def model_dump_json(self) -> str:
-            return json.dumps(self._data)
-
-    class DummyChain:
-        def __init__(self, outputs):
-            self._iter = iter(outputs)
-
-        def invoke(self, _inputs, **kwargs):
-            try:
-                return next(self._iter)
-            except StopIteration:
-                return ModelLike({"v": 999})
-
     def get_prompt_template(**_kwargs):
         return "Value {x}"
 
@@ -274,6 +260,50 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     assert isinstance(items[0].result, Item)
     assert items[0].result.v == 10
     assert items[0].record.prompt == "Value Z"
+
+
+def test_validator_with_retries(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
+    validator_attempts = 0
+
+    def _validator(result: str, *args, **kwargs) -> bool:
+        nonlocal validator_attempts
+        if validator_attempts < 5:
+            validator_attempts += 1
+            return False
+        return True
+
+    def get_prompt_template(**_kwargs):
+        return "thingy {thang}"
+
+    def get_prompt_chain(model=None, **_kwargs):
+        return DummyChain([ModelLike(f"t{idx}") for idx in range(10)])
+
+    monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
+    monkeypatch.setattr("pyine.prompts.manager.get_prompt_chain", get_prompt_chain, raising=False)
+    with pytest.raises(ValidationFailedError):
+        _ = fetch_or_generate_prompt_results(
+            model=object(),
+            identifier="valid-test",
+            input_variables={"thang": "woops"},
+            prompt_config=PromptBuildConfig(prompt_name="pn"),
+            db=db,
+            output_validator=_validator,
+            max_unsatisfactory_retries=4,
+        )
+    validator_attempts = 0
+    recs = fetch_or_generate_prompt_results(
+        model=object(),
+        identifier="valid-test",
+        input_variables={"thang": "woops"},
+        prompt_config=PromptBuildConfig(prompt_name="pn"),
+        db=db,
+        output_validator=_validator,
+        max_unsatisfactory_retries=5,
+    )
+    assert len(recs) == 1
+    assert recs[0].prompt == "thingy woops"
+    assert recs[0].result == '"t5"'
+    assert len(db.get_by_identifier("valid-test")) == 1
 
 
 def test_delete_records_by_identifier(db: PromptResultDB):

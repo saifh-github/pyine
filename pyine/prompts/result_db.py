@@ -522,6 +522,16 @@ def get_framework_db_path() -> pathlib.Path:
     return data_root / "prompt_results.sqlite"
 
 
+class ValidationFailedError(ValueError):
+    """Exception raised when a prompt result fails validation (following potential retries)."""
+
+    pass
+
+
+ValidatorCallableType = typing.Callable[[str, typing.Any], bool]  # (result_str, raw_output) -> bool
+"""Type used to represent a callable prompt result validator."""
+
+
 def fetch_or_generate_prompt_results(
     model: langchain_core.language_models.BaseLanguageModel,
     identifier: str,
@@ -534,6 +544,8 @@ def fetch_or_generate_prompt_results(
     tag_filter_rule: str | None = None,
     deduplicate_results: bool = True,
     generate_until_result_count: int = 1,
+    output_validator: ValidatorCallableType | None = None,
+    max_unsatisfactory_retries: int = 0,
     log_new_results: bool = True,
     force_generation: bool = False,
     creation_meta: CreationMeta | None = None,
@@ -563,6 +575,10 @@ def fetch_or_generate_prompt_results(
         deduplicate_results: If True, deduplicate records (based on result string) before returning.
         generate_until_result_count: If provided, prompt results will be generated until the specified
             minimum number of results is logged in the database.
+        output_validator: Optional callable that receives the generated result string and returns True
+            if the output is satisfactory; if False is returned, an exception is raised (or retries happen).
+        max_unsatisfactory_retries: Maximum number of additional attempts to invoke the chain when the
+            validator reports an unsatisfactory output. Defaults to 0 (no retries; raise immediately).
         log_new_results: Whether to log newly generated results into the DB.
         force_generation: If True, always generate new results, even with enough preexisting results.
         creation_meta: Optional metadata to attach to stored records; default is auto-generated.
@@ -575,6 +591,7 @@ def fetch_or_generate_prompt_results(
     """
     db = db or get_framework_db()
     assert generate_until_result_count >= 0, "generate_until_result_count must be >= 0"
+    assert max_unsatisfactory_retries >= 0, "max_unsatisfactory_retries must be >= 0"
     existing_records = (
         []
         if force_generation
@@ -611,60 +628,83 @@ def fetch_or_generate_prompt_results(
             runnable_name=runnable_name,
         )
         while len(new_records) < need_to_generate:
-            prompt_str = prompt_template.format(**input_variables)
-            llm_event_logger = pyine.utils.langchain.CaptureLLMHandler()
-            callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
-            output = chain.invoke(input_variables, config=callback_config)
-            cm = creation_meta if creation_meta is not None else CreationMeta()
-            cm.llm_output = dict()
-            latest_llm_event = llm_event_logger.get_latest_event("llm_end")
-            if latest_llm_event is not None and latest_llm_event.response.llm_output:
-                cm.llm_output.update(latest_llm_event.response.llm_output)
-            if isinstance(output, str):
-                result_str = output
-            elif isinstance(output, langchain_core.messages.AIMessage):
-                result_str = output.content
-                cm.llm_output.update(output.model_dump())
-            elif hasattr(output, "model_dump_json") and callable(output.model_dump_json):
-                result_str = output.model_dump_json()
-                if hasattr(output, "model_dump") and callable(output.model_dump):
-                    cm.llm_output.update(output.model_dump())  # noqa
-            elif isinstance(output, (dict, list)):
-                result_str = orjson.dumps(output)
-            else:
-                result_str = str(output)
-            if tags is None:
-                tags = []
-            if not any([t.startswith("created_by") for t in tags]):
-                tags.append(f"created_by:{cm.created_by}")
-            if not any([t.startswith("created_at") for t in tags]):
-                # don't use full iso format for tags (clashes w/ column-based formatting)
-                tags.append(f"created_at:{cm.created_at.strftime('%Y%m%d-%H%M%S')}")
-            if log_new_results:
-                db.store(
-                    identifier=identifier,
-                    prompt=prompt_str,
-                    result=result_str,
-                    meta=meta,
-                    tags=tags,
-                    group=group,
-                    prompt_name=prompt_config.prompt_name,
-                    prompt_version=prompt_config.version,
-                    creation_meta=cm,
-                )
-            new_records.append(
-                PromptResultRecord(
-                    identifier=identifier,
-                    prompt_name=prompt_config.prompt_name,
-                    prompt_version=prompt_config.version,
-                    group=group,
-                    creation_meta=cm,
-                    prompt=prompt_str,
-                    result=result_str,
-                    meta=meta or {},
-                    tags=tags,
-                )
-            )
+            retry_count = 0
+            while True:  # attempt to generate a satisfactory output, with optional retries on valid failure
+                prompt_str = prompt_template.format(**input_variables)
+                llm_event_logger = pyine.utils.langchain.CaptureLLMHandler()
+                callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
+                output = chain.invoke(input_variables, config=callback_config)
+                cm = creation_meta if creation_meta is not None else CreationMeta()
+                cm.llm_output = dict()
+                latest_llm_event = llm_event_logger.get_latest_event("llm_end")
+                if latest_llm_event is not None and latest_llm_event.response.llm_output:
+                    cm.llm_output.update(latest_llm_event.response.llm_output)
+                if isinstance(output, str):
+                    result_str = output
+                elif isinstance(output, langchain_core.messages.AIMessage):
+                    result_str = output.content
+                    cm.llm_output.update(output.model_dump())
+                elif hasattr(output, "model_dump_json") and callable(output.model_dump_json):
+                    result_str = output.model_dump_json()
+                    if hasattr(output, "model_dump") and callable(output.model_dump):
+                        cm.llm_output.update(output.model_dump())  # noqa
+                elif isinstance(output, (dict, list)):
+                    result_str = orjson.dumps(output)
+                else:
+                    result_str = str(output)
+                is_ok = True
+                if output_validator is not None:
+                    # validate the produced output if a validator is provided
+                    try:
+                        is_ok = bool(output_validator(result_str, output))
+                    except Exception as e:
+                        # if validator itself errors, treat as failure and raise immediately
+                        raise ValidationFailedError(f"validation callable raised an exception: {e}") from e
+                if is_ok:
+                    # prepare tags for storage without mutating the caller's list across attempts
+                    tags_to_store = list(tags) if tags is not None else []
+                    if not any([t.startswith("created_by") for t in tags_to_store]):
+                        tags_to_store.append(f"created_by:{cm.created_by}")
+                    if not any([t.startswith("created_at") for t in tags_to_store]):
+                        # don't use full iso format for tags (clashes w/ column-based formatting)
+                        tags_to_store.append(f"created_at:{cm.created_at.strftime('%Y%m%d-%H%M%S')}")
+                    if log_new_results:
+                        db.store(
+                            identifier=identifier,
+                            prompt=prompt_str,
+                            result=result_str,
+                            meta=meta,
+                            tags=tags_to_store,
+                            group=group,
+                            prompt_name=prompt_config.prompt_name,
+                            prompt_version=prompt_config.version,
+                            creation_meta=cm,
+                        )
+                    new_records.append(
+                        PromptResultRecord(
+                            identifier=identifier,
+                            prompt_name=prompt_config.prompt_name,
+                            prompt_version=prompt_config.version,
+                            group=group,
+                            creation_meta=cm,
+                            prompt=prompt_str,
+                            result=result_str,
+                            meta=meta or {},
+                            tags=tags_to_store,
+                        )
+                    )
+                    break  # proceed to the next record
+                else:
+                    # not satisfactory: retry if allowed; otherwise raise
+                    if retry_count >= max_unsatisfactory_retries:
+                        preview = result_str if len(result_str) <= 200 else result_str[:200] + "..."
+                        raise ValidationFailedError(
+                            f"LLM output did not pass validation"
+                            f" (after {retry_count} retries; max allowed {max_unsatisfactory_retries})."
+                            f" Last output preview: {preview!r}"
+                        )
+                    retry_count += 1
+                    continue
     combined_records = _dedupe_records(existing_records + new_records)
     return combined_records
 
