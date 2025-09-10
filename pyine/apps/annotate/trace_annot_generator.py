@@ -317,6 +317,13 @@ def _build_dataset_reader(
     help="Maximum number of worker threads when --parallel is enabled.",
 )
 @click.option(
+    "--max-in-flight-jobs",
+    type=int,
+    default=5_000,
+    show_default=True,
+    help="Maximum number of in-flight jobs when --parallel is enabled.",
+)
+@click.option(
     "--progress/--no-progress",
     "show_progress",
     default=True,
@@ -368,6 +375,7 @@ def main(
     shuffle: bool,
     parallel: bool,
     max_workers: int | None,
+    max_in_flight_jobs: int,
     show_progress: bool,
     dry_run: bool,
     log_level: str,
@@ -528,6 +536,7 @@ def main(
         shuffle_indices=shuffle,
         parallel=parallel,
         max_workers=max_workers,
+        max_in_flight_jobs=max_in_flight_jobs,
         verbose=True,
     )
     logger.info("annotation completed: %s", report.summary())

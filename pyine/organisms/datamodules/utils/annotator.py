@@ -454,6 +454,7 @@ def annotate_trace_dataset(
     shuffle_indices: bool = False,
     parallel: bool = True,
     max_workers: int | None = None,
+    max_in_flight_jobs: int | None = 5_000,
     verbose: bool = False,
 ) -> AnnotationReport:
     """Annotates a trace dataset by invoking LLM prompts per element and logging results.
@@ -472,6 +473,7 @@ def annotate_trace_dataset(
             potentially more uniform annotation coverage if the dataset is not sorted.
         parallel: whether to process dataset items concurrently using a thread pool.
         max_workers: optional maximum number of worker threads to use when parallel=True.
+        max_in_flight_jobs: maximum number of concurrent jobs to run when parallel=True.
         verbose: verbose logging of annotation progress reports.
 
     Returns:
@@ -496,10 +498,10 @@ def annotate_trace_dataset(
     data_indices = list(config.target_indices or range(len(dataset)))
     if shuffle_indices:
         random.shuffle(data_indices)
-    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="parsing progress")
+    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="annotation progress")
     output = AnnotationReport()
     if not parallel:
-        for sample_idx in wrapped_data_indices:
+        for iter_idx, sample_idx in enumerate(wrapped_data_indices):
             output += _process_one_annotation(
                 trace=dataset[sample_idx],
                 problem=dataset.get_problem_data(sample_idx),
@@ -516,12 +518,18 @@ def annotate_trace_dataset(
                 meta_getter=meta_getter,
                 creation_meta_getter=creation_meta_getter,
             )
-            if verbose and sample_idx % 10 == 0:  # print progress report every 10 samples
+            if verbose and iter_idx % 50 == 0:  # print progress report every 50 iterations
                 wrapped_data_indices.write(f"progress report: {output.summary()}")
         return output
+    # fallback: parallel version using a thread pool with a sliding window over submitted jobs
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(
+        in_flight: set[concurrent.futures.Future] = set()
+        iter_items = iter(wrapped_data_indices)
+        submitted = 0
+        completed = 0
+
+        def _submit_one(sample_idx: int) -> concurrent.futures.Future:
+            return executor.submit(
                 _process_one_annotation,
                 trace=dataset[sample_idx],
                 problem=dataset.get_problem_data(sample_idx),
@@ -530,7 +538,7 @@ def annotate_trace_dataset(
                 config=config,
                 dry_run=dry_run,
                 base_filter_fn=base_filter_fn,
-                db=config._prompt_result_db,
+                db=config._prompt_result_db,  # noqa
                 identifier_getter=identifier_getter,
                 group_getter=group_getter,
                 prompt_input_vars_getter=prompt_input_vars_getter,
@@ -538,17 +546,32 @@ def annotate_trace_dataset(
                 meta_getter=meta_getter,
                 creation_meta_getter=creation_meta_getter,
             )
-            for sample_idx in wrapped_data_indices
-        ]
-        wrapped_futures = tqdm.tqdm(
-            enumerate(concurrent.futures.as_completed(futures)),
-            disable=not show_progress,
-            desc="waiting for results",
-        )
-        for future_idx, future in wrapped_futures:
-            output += future.result()
-            if verbose and future_idx % 40 == 0:  # print progress report every 40 samples
+
+        # initially fill the window to its max size
+        while len(in_flight) < max_in_flight_jobs:
+            try:
+                sample_idx = next(iter_items)
+            except StopIteration:
+                break
+            future = _submit_one(sample_idx)
+            in_flight.add(future)
+            submitted += 1
+        # update output report and continue filling window if needed
+        while in_flight:
+            done = next(concurrent.futures.as_completed(in_flight))
+            output += done.result()
+            in_flight.remove(done)
+            completed += 1
+            if verbose and completed % 50 == 0:  # print progress report every 50 completions
                 wrapped_data_indices.write(f"progress report: {output.summary()}")
+            # refill the window with the next item (if any)
+            try:
+                sample_idx = next(iter_items)
+            except StopIteration:
+                continue
+            future = _submit_one(sample_idx)
+            in_flight.add(future)
+            submitted += 1
     logger.info(f"final report: {output.summary()}")
     return output
 
