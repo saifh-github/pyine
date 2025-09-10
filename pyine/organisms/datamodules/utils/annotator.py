@@ -2,9 +2,12 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import datetime
+import functools
 import logging
 import pathlib
+import random
 import typing
+import warnings
 
 import langchain_core.language_models
 import pydantic
@@ -17,6 +20,7 @@ import pyine.prompts.result_db
 import pyine.prompts.types
 import pyine.prompts.utils
 import pyine.utils.code.execution
+import pyine.utils.code.validation
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
@@ -107,6 +111,16 @@ class AnnotationOptions(pydantic.BaseModel):
         default=True,
         description="Whether to de-duplicate results before returning.",
     )
+    max_unsatisfactory_retries: int = pydantic.Field(
+        default=3,
+        ge=0,
+        description="Maximum number of retries for generating a valid result.",
+    )
+    validation_timeout_seconds: float = pydantic.Field(
+        default=10.0,
+        ge=0.0,
+        description="Timeout for result validation (if relevant; in seconds).",
+    )
     force_generation: bool = pydantic.Field(
         default=False,
         description="Always generate new results, regardless of existing ones.",
@@ -145,6 +159,10 @@ class AnnotationOptions(pydantic.BaseModel):
     creation_meta_builder: CreationMetaBuilderType | None = pydantic.Field(
         default=None,
         description="Builds creation metadata per item for the target prompt. If None, uses a default rule.",
+    )
+    output_validator: pyine.prompts.result_db.ValidatorCallableType | None = pydantic.Field(
+        default=None,
+        description="Validates the output of the prompt invocation. If None, uses a default rule.",
     )
 
     # --------------- private utilities and attributes ---------------
@@ -329,6 +347,61 @@ def _default_creation_meta_builder(
     )
 
 
+def _default_output_validator(
+    result_str: str,
+    raw_output: typing.Any,
+    trace: pyine.utils.code.execution.TraceResult,
+    problem: pyine.data.traces.dataset_utils.CodingProblem,
+    config: AnnotationOptions,
+) -> bool:
+    """Validates the output of the prompt invocation.
+
+    Implements known rules for some prompts, but if an unsupported prompt is used, the result will
+    always be accepted as-is (i.e., no validation is performed).
+    """
+    if config.prompt_config.prompt_name == "hints/stubs":
+        # special handling for this one: it's not supposed to 'still work', so forget tracing it
+        return True
+    elif config.prompt_config.prompt_name.startswith("issues/") or config.prompt_config.prompt_name.startswith(
+        "hints/"
+    ):
+        # for both issues and hints, we will be tracing the newly generated code to see the results:
+        # => for all issue types, we expect the execution output to NOT be the expected one;
+        # => in contrast, hints should not influence the outcome of executing the code.
+        if result_str == trace.code_string:
+            return False  # if code has not changed, this is not a good sample, no matter what
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # no need to capture warnings related to traced code
+            try:
+                new_trace_result = pyine.utils.code.execution.execute_and_trace_code(
+                    code_string=result_str,
+                    inputs=trace.inputs,
+                    expected_output=trace.expected_output,
+                    identifier=trace.identifier,
+                    entrypoint_name=trace.entrypoint_name,
+                    trace_only_inside_code_string=True,
+                    max_valid_events=trace.max_valid_events,
+                    max_events_per_line=trace.max_events_per_line,
+                    max_var_repr_length=trace.max_var_repr_length,
+                    timeout_seconds=config.validation_timeout_seconds,
+                    use_safe_execution=True,  # parent runs in a thread, so isolate the child
+                )
+            except pyine.utils.code.execution.CodeAnalysisFailure:
+                # there's a problem with the code string itself, reject the proposal
+                return False
+        output_is_different = (
+            (trace.return_value is not None and new_trace_result.return_value != trace.return_value)
+            or (new_trace_result.exception != trace.exception)
+            or (trace.return_value is None and new_trace_result.stdout != trace.stdout)
+        )
+        if config.prompt_config.prompt_name.startswith("issues/"):
+            return output_is_different  # we want a different output for bugged code
+        else:  # config.prompt_config.prompt_name.startswith("hints/")
+            return not output_is_different  # we want the same output for hinted code
+    # ultimate fallback: accept everything (we don't know how to validate it)
+    return True
+
+
 @dataclasses.dataclass
 class AnnotationReport:
     """Simple report structure for annotation results."""
@@ -378,6 +451,7 @@ def annotate_trace_dataset(
     config: AnnotationOptions,
     show_progress: bool = True,
     dry_run: bool = False,
+    shuffle_indices: bool = False,
     parallel: bool = True,
     max_workers: int | None = None,
     verbose: bool = False,
@@ -394,6 +468,8 @@ def annotate_trace_dataset(
         config: configuration with behavior and prompt settings.
         show_progress: whether to show a progress bar.
         dry_run: whether to skip logging actual annotations and only report results and stats.
+        shuffle_indices: whether to shuffle the dataset indices before processing, for a
+            potentially more uniform annotation coverage if the dataset is not sorted.
         parallel: whether to process dataset items concurrently using a thread pool.
         max_workers: optional maximum number of worker threads to use when parallel=True.
         verbose: verbose logging of annotation progress reports.
@@ -418,6 +494,8 @@ def annotate_trace_dataset(
     meta_getter = config.meta_builder or _default_meta_builder
     creation_meta_getter = config.creation_meta_builder or _default_creation_meta_builder
     data_indices = list(config.target_indices or range(len(dataset)))
+    if shuffle_indices:
+        random.shuffle(data_indices)
     wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="parsing progress")
     output = AnnotationReport()
     if not parallel:
@@ -500,6 +578,15 @@ def _process_one_annotation(
             return rep
         identifier = identifier_getter(trace, problem, config)
         creation_meta = creation_meta_getter(trace, problem, config)
+        if config.output_validator:
+            output_validator = config.output_validator
+        else:
+            output_validator = functools.partial(
+                _default_output_validator,
+                trace=trace,
+                problem=problem,
+                config=config,
+            )
         records = pyine.prompts.result_db.fetch_or_generate_prompt_results(
             model=model,
             identifier=identifier,
@@ -511,6 +598,8 @@ def _process_one_annotation(
             tag_filter_rule=config.record_tag_filter_rule,
             deduplicate_results=config.deduplicate_results,
             generate_until_result_count=config.min_results_per_item,
+            output_validator=output_validator,
+            max_unsatisfactory_retries=config.max_unsatisfactory_retries,
             log_new_results=not dry_run,
             force_generation=config.force_generation,
             creation_meta=creation_meta,
@@ -531,7 +620,13 @@ def _process_one_annotation(
             rep.total_tokens_exchanged += token_usage_dict.get("total_tokens", 0)
     except (KeyboardInterrupt, GeneratorExit, MemoryError, asyncio.CancelledError):
         raise  # we should not be trying to catch/silence there here
+    except pyine.prompts.result_db.ValidationFailedError as e:
+        rep.errors += 1
+        attempts = config.max_unsatisfactory_retries + 1
+        logger.warning(f"result validation failed after {attempts} attempt(s) for data sample at idx: {sample_idx}")
+        logger.debug(f"exception details: {e}")
     except Exception as e:
         rep.errors += 1
         logger.exception(f"failed to process and annotate data sample at idx: {sample_idx}")
+        logger.debug(f"exception details: {e}")
     return rep

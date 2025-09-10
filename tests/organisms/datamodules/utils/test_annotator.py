@@ -99,23 +99,16 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, typing.Any] = {}
 
     def _fake_fetch(
-        *,
         model: typing.Any,
         identifier: str,
         input_variables: dict[str, typing.Any],
         prompt_config: typing.Any,
-        db: typing.Any,
-        runnable_name: str | None,
-        max_result_age: typing.Any,
-        tag_filter_rule: typing.Any,
-        deduplicate_results: bool,
-        generate_until_result_count: int,
-        log_new_results: bool,
-        force_generation: bool,
+        *,
         creation_meta: result_db.CreationMeta,
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
+        **kwargs,
     ) -> list[result_db.PromptResultRecord]:
         captured.update(
             {
@@ -192,23 +185,15 @@ def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # fetch returns a pre-existing record with a different creation_meta -> treated as "skipped"
     def _fake_fetch_same_count(
-        *,
         model: typing.Any,
         identifier: str,
         input_variables: dict[str, typing.Any],
         prompt_config: typing.Any,
-        db: typing.Any,
-        runnable_name: str | None,
-        max_result_age: typing.Any,
-        tag_filter_rule: typing.Any,
-        deduplicate_results: bool,
-        generate_until_result_count: int,
-        log_new_results: bool,
-        force_generation: bool,
-        creation_meta: result_db.CreationMeta,
+        *,
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
+        **kwargs,
     ) -> list[result_db.PromptResultRecord]:
         # creation_meta is intentionally different
         different_meta = result_db.CreationMeta(provider="other")
@@ -271,23 +256,16 @@ def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(llm_providers, "get_model_from_provider", lambda **kwargs: _DummyModel())
 
     def _fake_fetch(
-        *,
         model: typing.Any,
         identifier: str,
         input_variables: dict[str, typing.Any],
         prompt_config: typing.Any,
-        db: typing.Any,
-        runnable_name: str | None,
-        max_result_age: typing.Any,
-        tag_filter_rule: typing.Any,
-        deduplicate_results: bool,
-        generate_until_result_count: int,
-        log_new_results: bool,
-        force_generation: bool,
+        *,
         creation_meta: result_db.CreationMeta,
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
+        **kwargs,
     ) -> list[result_db.PromptResultRecord]:
         return [
             result_db.PromptResultRecord(

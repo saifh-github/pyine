@@ -86,6 +86,7 @@ import yaml
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.splits
 import pyine.organisms.datamodules.utils.annotator as annotator
 import pyine.prompts.types
 import pyine.utils.llm_providers
@@ -214,6 +215,18 @@ def _build_dataset_reader(
     help="Path to YAML or JSON file with LLM provider options.",
 )
 @click.option(
+    "--target-split-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+    default=None,
+    help="Optional path to a dataset split file (in case you wish to use --target-split-subset).",
+)
+@click.option(
+    "--target-split-subset",
+    type=str,
+    default=None,
+    help="When using --target-split-file, optionally specify which subset to use (e.g., 'train').",
+)
+@click.option(
     "--target-indices",
     type=str,
     default=None,
@@ -257,6 +270,13 @@ def _build_dataset_reader(
     help="Whether to de-duplicate results before returning.",
 )
 @click.option(
+    "--max-unsatisfactory-retries",
+    type=click.IntRange(min=0),
+    default=3,
+    show_default=True,
+    help="Maximum number of retries for an unsatisfactory result.",
+)
+@click.option(
     "--force-generation/--no-force-generation",
     default=False,
     show_default=True,
@@ -279,6 +299,12 @@ def _build_dataset_reader(
     type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
     default=None,
     help="Path to YAML or JSON file containing shared metadata.",
+)
+@click.option(
+    "--shuffle/--no-shuffle",
+    default=False,
+    show_default=True,
+    help="Shuffle the order of items before processing to help improve coverage across large datasets.",
 )
 @click.option(
     "--parallel/--no-parallel",
@@ -327,6 +353,8 @@ def main(
     prompt_vars: str | None,
     llm_kv: tuple[str, ...],
     llm_config_file: pathlib.Path | None,
+    target_split_file: pathlib.Path | None,
+    target_split_subset: str | None,
     target_indices: str | None,
     base_filter_rule: str | None,
     db_path: pathlib.Path | None,
@@ -334,10 +362,12 @@ def main(
     max_result_age: str | None,
     record_tag_filter_rule: str | None,
     deduplicate_results: bool,
+    max_unsatisfactory_retries: int,
     force_generation: bool,
     shared_tags: str | None,
     shared_meta: str | None,
     shared_meta_file: pathlib.Path | None,
+    shuffle: bool,
     parallel: bool,
     max_workers: int | None,
     show_progress: bool,
@@ -421,12 +451,40 @@ def main(
         raise click.BadParameter("llm options resulted in an invalid provider config") from exc
 
     indices_list: list[int] | None = None
+    if target_split_file or target_split_subset:
+        if not target_split_file or not target_split_subset:
+            raise click.BadParameter("--target-split-file and --target-split-subset must be provided together")
+        split_data = pyine.data.utils.splits.get_dataset_split_result(target_split_file)
+        subsets_to_problem_ids = split_data.get_subset_to_ids_map()
+        if target_split_subset not in split_data.subset_assignments:
+            raise click.BadParameter(
+                f"invalid target split subset ({target_split_subset}), "
+                f"available ones are: {list(subsets_to_problem_ids.keys())}"
+            )
+        problem_ids = subsets_to_problem_ids[target_split_subset]
+        if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
+            raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
+        indices_list = [
+            trace_idx for trace_idx in range(len(dataset)) if dataset.problem_keys[trace_idx] in problem_ids
+        ]
+        if not indices_list:
+            raise click.BadParameter(
+                f"no traces found in target split subset '{target_split_subset}' " f"for problem ids: {problem_ids}"
+            )
+        logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
     if target_indices:
         try:
-            indices_list = pyine.utils.portability.parse_indices_spec(target_indices)
+            target_indices = pyine.utils.portability.parse_indices_spec(target_indices)
         except ValueError as exc:
             raise click.BadParameter(f"invalid target indices spec: {exc}") from exc
-        logger.debug(f"parsed target indices: {indices_list}")
+        for idx in target_indices:
+            if idx < 0 or idx >= len(dataset):
+                raise click.BadParameter(f"invalid target index: {idx}")
+        if indices_list is None:
+            indices_list = target_indices
+        else:
+            indices_list = [idx for idx in indices_list if idx in target_indices]
+    logger.debug(f"target indices: {indices_list}")
 
     try:
         max_age_td = pyine.utils.portability.parse_duration_to_timedelta(max_result_age)
@@ -451,6 +509,7 @@ def main(
         max_result_age=max_age_td,
         record_tag_filter_rule=record_tag_filter_rule,
         deduplicate_results=deduplicate_results,
+        max_unsatisfactory_retries=max_unsatisfactory_retries,
         force_generation=force_generation,
         shared_tags=shared_tags_list,
         shared_meta=typing.cast(dict[str, typing.Any] | None, shared_meta_dict or None),
@@ -468,6 +527,7 @@ def main(
         config=options,
         show_progress=show_progress,
         dry_run=dry_run,
+        shuffle_indices=shuffle,
         parallel=parallel,
         max_workers=max_workers,
         verbose=True,

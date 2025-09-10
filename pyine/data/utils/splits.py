@@ -1,6 +1,5 @@
 import logging
 import pathlib
-import sys
 import typing
 
 import numpy as np
@@ -269,6 +268,15 @@ class SplitResult(pydantic.BaseModel):
             split_result_dict = orjson.loads(fd.read())
         return cls.model_validate(split_result_dict)
 
+    def get_subset_to_ids_map(self) -> dict[SubsetNameType, list[SampleIdentifierType]]:
+        """Returns a mapping from subset name to the list of sample identifiers assigned to it."""
+        output_map: dict[SubsetNameType, list[SampleIdentifierType]] = {}
+        for sid, subset in self.subset_assignments.items():
+            if subset not in output_map:
+                output_map[subset] = []
+            output_map[subset].append(sid)
+        return output_map
+
     def to_file(self, file_path: pathlib.Path | str) -> None:
         """Saves a split result to a file."""
         file_path = pathlib.Path(file_path)
@@ -369,15 +377,19 @@ def get_dataset_split_file_path(
 
 
 def get_dataset_split_result(
-    source_dataset_name: str,
+    source_dataset_name_or_split_file_path: str | pathlib.Path,
 ) -> SplitResult:
-    """Returns the split result for a given dataset.
+    """Returns the split result for a given dataset or at a given path.
 
-    If it does not exist, an exception will be raised.
+    If a dataset name is provided and the split file does not exist, an exception will be raised.
     """
-    split_file_path = get_dataset_split_file_path(source_dataset_name)
-    if not split_file_path.exists():
-        raise FileNotFoundError(f"split file not found at {split_file_path}")
+    potential_path = pathlib.Path(source_dataset_name_or_split_file_path)
+    if potential_path.is_file():
+        split_file_path = potential_path
+    else:
+        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path)
+        if not split_file_path.exists():
+            raise FileNotFoundError(f"split file not found for: {source_dataset_name_or_split_file_path}")
     with open(split_file_path, "rb") as fd:
         split_result_dict = orjson.loads(fd.read())
     return SplitResult.model_validate(split_result_dict)
