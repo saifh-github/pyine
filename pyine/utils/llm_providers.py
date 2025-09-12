@@ -27,7 +27,7 @@ class LLMProviderConfig(pydantic.BaseModel):
     """Configuration for the rate limiter."""
     with_retry_config: dict[str, typing.Any] | None = None
     """Configuration for the retry mechanism."""
-    model_kwargs: dict[str, typing.Any] = {}
+    model_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Keyword arguments to be passed to the LLM constructor."""
 
     @classmethod
@@ -85,7 +85,7 @@ def get_model_from_provider(
                 model_kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
         llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
     else:
-        raise ValueError(f"Invalid provider: {provider}")
+        raise NotImplementedError(f"Invalid provider: {provider}")
     if with_retry_config is not None:
         llm = llm.with_retries(**with_retry_config)  # if you want to e.g. customize the retry backoff
     return llm
