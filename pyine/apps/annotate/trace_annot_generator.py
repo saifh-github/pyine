@@ -336,19 +336,6 @@ def _build_dataset_reader(
     show_default=True,
     help="If enabled, do not log new results; only report what would happen.",
 )
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
 def main(
     dataset_path: pathlib.Path | None,
     dataset_latest_from: str | None,
@@ -378,14 +365,9 @@ def main(
     max_in_flight_jobs: int,
     show_progress: bool,
     dry_run: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
 ) -> None:
     """Entry point for the Trace Annotation Generator CLI."""
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
+    pyine.utils.reprod.entrypoint_setup()
     for name in ("httpx", "httpcore"):
         # fix for the 'noisy' HTTP request POST messages in info level logs
         logger = logging.getLogger(name)

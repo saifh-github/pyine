@@ -1,6 +1,7 @@
 import logging
 import logging.config
 import pathlib
+import typing
 
 PROJECT_LOGGER_NAME = "pyine"
 """The name of the root logger for the entire PyINE framework."""
@@ -14,7 +15,7 @@ def get_default_log_file_path() -> pathlib.Path:
 
 
 def setup_logging(
-    level: int = logging.INFO,
+    level: int | str = logging.INFO,
     log_to_file: bool = False,
     log_path: pathlib.Path | str | None = None,  # `None` = auto-decide, if log_to_file = True
 ):

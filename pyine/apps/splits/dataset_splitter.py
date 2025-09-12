@@ -168,19 +168,6 @@ def main() -> None:
     show_default=True,
     help="Enable/disable progress bar.",
 )
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
 def split(
     dataset_name: str,
     dataset_path: pathlib.Path | None,
@@ -191,14 +178,9 @@ def split(
     use_solution_count_group: bool,
     max_sample_count: int | None,
     show_progress: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
 ) -> None:
     """Entry point for the dataset splitter CLI."""
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
+    pyine.utils.reprod.entrypoint_setup()
     output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name)
     pyine.utils.filesystem.check_output_path_overwrite(output_path)
     dataset_path = _get_resolved_dataset_path(dataset_name, dataset_path)
@@ -290,19 +272,6 @@ def split(
     default=False,
     help="If set, prints resolved configuration and exits without reading or writing files.",
 )
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
 def partition(
     split_file: pathlib.Path,
     output_dir: pathlib.Path,
@@ -311,8 +280,6 @@ def partition(
     output_format: str,
     verbose: bool,
     dry_run: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
 ) -> None:
     """Partition problem identifiers from a split file into N disjoint files.
 
@@ -326,10 +293,7 @@ def partition(
     file name of the input split file; the written files will be suffixed with the partition
     identifier (e.g. ``<<split_file>>.problem_ids.001of004.yaml``).
     """
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
+    pyine.utils.reprod.entrypoint_setup()
     output_format = output_format.lower()
     split_result = pyine.data.utils.splits.SplitResult.from_file(split_file)
     problem_identifiers = split_result.identifiers

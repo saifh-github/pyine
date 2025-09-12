@@ -233,19 +233,6 @@ def main() -> None:
     default=False,
     help="If set, only prints the resolved configuration and exits.",
 )
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
 def traces(
     dataset_name: str,
     dataset_path: pathlib.Path | None,
@@ -269,14 +256,9 @@ def traces(
     prompt_result_db_path: pathlib.Path | None,
     verbose: bool,
     dry_run: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
 ) -> None:
     """Write a traces dataset from a specified source dataset according to the given configuration."""
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
+    pyine.utils.reprod.entrypoint_setup()
     fetch_augmented_solutions_dict = {}
     for tupl_str in fetch_augmented_solutions:
         if "=" not in tupl_str or tupl_str.count("=") != 1:
@@ -386,33 +368,15 @@ def traces(
     default=False,
     help="If set, only prints the resolved configuration and exits.",
 )
-@click.option(
-    "--log-level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    default="INFO",
-    show_default=True,
-    help="Logging verbosity.",
-)
-@click.option(
-    "--log-file",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path),
-    default=None,
-    help="Optional path to a log file.",
-)
 def deltas_from_traces(
     traces_dataset: str,
     output_path: pathlib.Path,
     delta_generator: str,
     verbose: bool,
     dry_run: bool,
-    log_level: str,
-    log_file: pathlib.Path | None,
 ) -> None:
     """Write a deltas dataset from an existing traces dataset."""
-    numeric_log_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_log_level, int):
-        raise click.BadParameter(f"invalid log level: {numeric_log_level}")
-    pyine.utils.reprod.entrypoint_setup(log_level=numeric_log_level, log_path=log_file)
+    pyine.utils.reprod.entrypoint_setup()
     delta_generator = delta_utils.DeltaGeneratorType.from_str(delta_generator)
     if dry_run:
         click.echo("[dry-run] would call deltas writer with:")

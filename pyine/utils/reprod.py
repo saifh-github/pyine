@@ -1,16 +1,24 @@
 import functools
 import hashlib
 import importlib.metadata
+import json
 import logging
 import os
 import pathlib
 import platform
 import re
+import sys
 import time
 import typing
 
 import dotenv
 import lightning.fabric.utilities.seed
+import torch
+import yaml
+
+if typing.TYPE_CHECKING:
+    import pyine.configs.schemas
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +33,12 @@ def get_platform_name() -> str:
     return str(platform.node())
 
 
-def get_timestamp() -> str:
+def get_timestamp(time_since_epoch: float | None = None) -> str:
     """Returns a print-friendly timestamp (year, month, day, hour, minute, second) for logs."""
-    return time.strftime("%Y%m%d-%H%M%S")
+    if time_since_epoch is None:
+        time_since_epoch = time.time()
+    local_time = time.localtime(time_since_epoch)
+    return time.strftime("%Y%m%d_%H%M%S", local_time)
 
 
 def get_framework_version() -> str:
@@ -206,22 +217,83 @@ def set_seed(
 
 def get_reprod_metadata(
     include_installed_packages: bool = True,
+    with_gpu_info: bool = False,
+    with_distrib_info: bool = False,
 ) -> dict[str, str]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     import pyine.utils.filesystem
 
+    curr_time_since_epoch = time.time()
     reprod_metadata = dict(
         python_version=get_python_version(),
         created_by=pyine.utils.filesystem.get_username(),
         platform=get_platform_name(),
-        timestamp=get_timestamp(),
         framework_version=get_framework_version(),
         git_revision_hash=get_git_revision_hash(),
         git_repo_clean=str(is_git_repo_clean()),
+        project_root=str(pyine.utils.filesystem.get_project_root_path()),
+        data_root=str(pyine.utils.filesystem.get_data_root_path()),
+        logs_root=str(pyine.utils.filesystem.get_logs_root_path()),
+        tmp_dir=str(pyine.utils.filesystem.get_tmp_dir()),
+        work_dir=str(os.getcwd()),
+        dotenv_path=str(pyine.utils.filesystem.find_dotenv_file()),
+        time_since_epoch=str(curr_time_since_epoch),
+        local_timestamp=get_timestamp(curr_time_since_epoch),
+        runtime_hash=hashlib.sha1(str(curr_time_since_epoch).encode(), usedforsecurity=False).hexdigest(),
+        sys_argv=str(sys.argv),
     )
     if include_installed_packages:
         reprod_metadata["installed_packages"] = "\n".join(get_installed_packages())
+    if with_gpu_info:
+        dev_count = torch.cuda.device_count()
+        reprod_metadata["cuda"] = json.dumps(
+            {
+                "is_available": torch.cuda.is_available(),
+                "arch_list": torch.cuda.get_arch_list(),
+                "device_count": dev_count,
+                "device_names": [torch.cuda.get_device_name(i) for i in range(dev_count)],
+                "device_capabilities": [torch.cuda.get_device_capability(i) for i in range(dev_count)],
+            }
+        )
+    if with_distrib_info:
+        reprod_metadata["distrib"] = json.dumps(
+            {
+                "is_available": torch.distributed.is_available(),
+                "is_initialized": torch.distributed.is_initialized(),
+                "backend": get_failsafe_backend(),
+                "rank": get_failsafe_rank(),
+                "world_size": get_failsafe_worldsize(),
+            }
+        )
     return reprod_metadata
+
+
+def entrypoint_setup(
+    config: "pyine.configs.schemas.RuntimeConfig | None" = None,  # None unless launched via hydra
+) -> None:
+    """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
+    if config is not None:
+        if config.seed is not None:
+            set_seed(seed=config.seed, workers=config.seed_workers)
+        log_reprod_metadata(config)
+    # use a sentinel object to track first execution for the rest
+    if not hasattr(entrypoint_setup, "_executed"):
+        import pyine.prompts
+        import pyine.utils.logging
+
+        load_dotenv()
+        if config is None:
+            # setup logging with default settings if no config is provided (otherwise hydra handles it)
+            pyine.utils.logging.setup_logging(
+                level=os.environ.get("LOGLEVEL", logging.INFO).upper(),
+                log_to_file=True,
+                log_path=None,  # use the framework's shared default log path by default
+            )
+        # initialize the prompt-related utilities
+        _ = pyine.prompts.get_framework_prompt_manager()
+        _ = pyine.prompts.get_framework_db()
+        entrypoint_setup._executed = True
+    logger.info("set up entrypoint")
 
 
 @functools.wraps(dotenv.load_dotenv)
@@ -238,30 +310,56 @@ def load_dotenv(**kwargs) -> bool:
     return dotenv.load_dotenv(dotenv_path, **kwargs)
 
 
-def entrypoint_setup(
-    seed: int | None = None,
-    seed_workers: bool = False,
-    log_level: int = logging.INFO,
-    log_to_file: bool = False,
-    log_path: pathlib.Path | str | None = None,
-) -> None:
-    """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
-    # no matter what execution this is, re-seed if needed
-    if seed is not None:
-        set_seed(seed=seed, workers=seed_workers)
-    # use a sentinel object to track first execution for the rest
-    if not hasattr(entrypoint_setup, "_executed"):
-        import pyine.prompts
-        import pyine.utils.logging
+def get_failsafe_rank(group: torch.distributed.ProcessGroup | None = None) -> int:
+    """Returns the result of torch.distributed.get_rank, or zero if not in a process group."""
+    if torch.distributed.is_initialized():
+        return torch.distributed.get_rank(group)
+    return 0
 
-        load_dotenv()
-        pyine.utils.logging.setup_logging(
-            level=log_level,
-            log_to_file=log_to_file,
-            log_path=log_path,
-        )
-        # initialize the prompt-related utilities
-        _ = pyine.prompts.get_framework_prompt_manager()
-        _ = pyine.prompts.get_framework_db()
-        entrypoint_setup._executed = True
-    logger.info(f"set up entrypoint (seed={seed})")
+
+def get_failsafe_worldsize(group: torch.distributed.ProcessGroup | None = None) -> int:
+    """Returns the result of torch.distributed.get_world_size, or -1 if not in a process group."""
+    if torch.distributed.is_initialized():
+        torch.distributed.get_world_size(group)
+    return -1
+
+
+def get_failsafe_backend(group: torch.distributed.ProcessGroup | None = None) -> str:
+    """Returns the result of torch.distributed.get_backend, or "n/a" if not in a process group."""
+    if torch.distributed.is_initialized():
+        return torch.distributed.get_backend(group)
+    return "n/a"
+
+
+def get_log_extension_slug(
+    config: "pyine.configs.schemas.RuntimeConfig | None",
+    extension_suffix: str = ".log",
+) -> str:
+    """Returns a log file extension that includes a sortable and timezone-independent timestamp."""
+    if config is not None and "time_since_epoch" in config.metadata:
+        seconds_since_epoch = int(float(config.metadata["time_since_epoch"]))
+    else:
+        time_since_epoch = time.time()
+        seconds_since_epoch = int(time_since_epoch)
+    rank_id = get_failsafe_rank()
+    return f".{seconds_since_epoch}.rank{rank_id:02d}{extension_suffix}"
+
+
+def log_reprod_metadata(
+    config: "pyine.configs.schemas.RuntimeConfig",
+) -> pathlib.Path:
+    """Saves a list of all runtime tags to a log file and returns the path to the saved file."""
+    assert config is not None, "missing runtime config"
+    output_dir = pathlib.Path(config.output_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_extension = get_log_extension_slug(config, extension_suffix=".yaml")
+    output_log_path = output_dir / f"reprod_metadata{log_extension}"
+    reprod_metadata = get_reprod_metadata(  # get a new metadata dict will ALL fields
+        include_installed_packages=True,
+        with_gpu_info=True,
+        with_distrib_info=True,
+    )
+    reprod_metadata.update(config.metadata)  # override with previously-defined fields
+    with open(output_log_path, "w") as fd:
+        yaml.dump(reprod_metadata, fd, sort_keys=False)
+    return output_log_path

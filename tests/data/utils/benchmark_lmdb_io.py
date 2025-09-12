@@ -146,7 +146,7 @@ def benchmark_serialization_methods(
 
 
 if __name__ == "__main__":
-    pyine.utils.reprod.entrypoint_setup(log_level=logging.DEBUG)
+    pyine.utils.reprod.entrypoint_setup()
     benchmark_serialization_methods(
         num_samples=50,
         use_random_data=False,

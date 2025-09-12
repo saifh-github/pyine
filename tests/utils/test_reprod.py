@@ -145,7 +145,7 @@ def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch)
     # reset sentinel so entrypoint_setup runs init branch
     monkeypatch.delattr(reprod.entrypoint_setup, "_executed", raising=False)
     # first call initializes
-    reprod.entrypoint_setup(seed=123, log_level=10, log_to_file=False)
-    # second call should not call setup again, only reseed
-    reprod.entrypoint_setup(seed=456)
+    reprod.entrypoint_setup()
+    # second call should not call setup again
+    reprod.entrypoint_setup()
     assert calls["setup_logging"] == 1
