@@ -2,7 +2,7 @@
 OpenAI API model fine-tuning CLI.
 
 This is a work-in-progress / demo / reference script for fine-tuning an OpenAI model using a code
-execution traces dataset. It is not meant to be used directly yet; TODO! @@@@
+execution traces dataset.
 """
 
 import logging
@@ -12,6 +12,7 @@ import langchain_core.messages
 import langchain_core.runnables
 import pydantic
 
+import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
@@ -27,36 +28,6 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
-default_rl_params_config = pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
-    base_model="o4-mini-2025-04-16",
-    method=pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig().get_openai_config(),
-    seed=0,
-    suffix="dummy",
-    wandb_integration=None,
-    metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),  # noqa
-    timeout_override=60 * 60,  # 60 min
-)
-"""Default parameters configuration for OpenAI RL fine-tuning using o4-mini.
-
-Note: as of 2025-09-03, training o4-mini using this approach is VERY COSTLY, even for VERY TINY
-datasets (we're talking hundreds of dollars per run here, minimum). Don't use this config unless
-you know what you're doing.
-"""
-
-default_sft_params_config = pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig(
-    base_model="gpt-4.1-mini-2025-04-14",
-    method=dict(
-        type="supervised",
-    ),
-    seed=0,
-    suffix="dummy",
-    wandb_integration=None,
-    metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),  # noqa
-    timeout_override=60 * 60,  # 60 min
-)
-"""Default parameters configuration for OpenAI supervised fine-tuning using gpt-4.1-mini."""
-
-
 class MainConfig(pydantic.BaseModel):
     """Configuration for the script's main function.
 
@@ -68,18 +39,14 @@ class MainConfig(pydantic.BaseModel):
     manager).
     """
 
-    seed: int | None = None
-    """Seed to use for reproducibility."""
     datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig
-    """Configuration for the datamodule to use (NOT SPECIFIED BY DEFAULT!)."""
+    """Configuration for the datamodule to use."""
     openai_client: pyine.organisms.models.utils.openai.OpenAIClientConfig = (
         pyine.organisms.models.utils.openai.OpenAIClientConfig()
     )
     """Configuration for the OpenAI client to use."""
-    openai_finetuner: pyine.organisms.models.utils.openai.OpenAIFineTunerConfig = (
-        pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(params=default_sft_params_config)
-    )
-    """Configuration for the OpenAI fine-tuner to use; defaults to an RL fine-tuning config for o4-mini."""
+    openai_finetuner: pyine.organisms.models.utils.openai.OpenAIFineTunerConfig
+    """Configuration for the OpenAI fine-tuner to use."""
     llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
     """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evaluation."""
 
@@ -150,19 +117,18 @@ def _evaluate(
 
 def main(
     config: MainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
     skip_fine_tuning: bool = False,  # used to evaluate the base model directly
 ) -> None:
     """Main function for the script; performs fine-tuning and evaluation for an OpenAI model.
 
     Args:
-        config: Configuration for the script; see `MainConfig` for details.
+        config: Configuration for the application; see `MainConfig` for details.
+        runtime: Configuration for the runtime; available when launched via hydra.
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
-    # @@@@@@ TODO: update this main to actually use click or a config/experiment manager
-    pyine.utils.reprod.entrypoint_setup(
-        seed=config.seed,
-    )
+    pyine.utils.reprod.entrypoint_setup(config=runtime)
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     dm.prepare_data()
     dm.setup()
@@ -209,20 +175,6 @@ def main(
 
 
 if __name__ == "__main__":
-    _dm_cfg = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
-        lmdb_paths=[
-            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
-        ],
-        max_trace_count=200,  # cap off the max dataset size
-        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
-    )
-    _main_cfg = MainConfig(
-        datamodule_config=_dm_cfg,
-        llm_grader_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
-            provider="openai",
-            model_kwargs=dict(
-                model="gpt-4o-mini",
-            ),
-        ),
-    )
-    main(_main_cfg, skip_fine_tuning=True)
+    import pyine.apps.trainers.openai_finetune_configs
+
+    pyine.apps.trainers.openai_finetune_configs.hydra_main()
