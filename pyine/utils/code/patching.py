@@ -46,17 +46,17 @@ def apply_patch(
     try:
         patch_set = unidiff.PatchSet.from_string(patch_text)
         if len(patch_set) == 0:
-            logger.error("failed to parse patch hunks")
+            logger.info("failed to parse patch hunks")
             return text, False
         if len(patch_set) != 1:
-            logger.error("this implementation handles single-file patches only")
+            logger.info("this implementation handles single-file patches only")
             return text, False
         patched_file = patch_set[0]
         for hunk in patched_file:
             # add lines from the original file that come before this hunk
             pre_hunk_line_count = hunk.source_start - 1 - original_line_idx
             if pre_hunk_line_count < 0:
-                logger.error("hunks cannot be applied out of order")
+                logger.info("hunks cannot be applied out of order")
                 return text, False
             patched_lines.extend(original_lines[original_line_idx : original_line_idx + pre_hunk_line_count])
             original_line_idx += pre_hunk_line_count
@@ -68,7 +68,7 @@ def apply_patch(
                     if offset_idx >= len(original_lines) or original_lines[offset_idx].rstrip(
                         "\r\n"
                     ) != line.value.rstrip("\r\n"):
-                        logger.error("hunk context does not match original file")
+                        logger.info("hunk context does not match original file")
                         return text, False
                     hunk_original_idx += 1
             # the hunk is valid, apply the changes
