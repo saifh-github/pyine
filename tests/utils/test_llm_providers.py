@@ -38,7 +38,7 @@ class ChatOpenAI(ChatDeepSeek):
 
 
 def test_invalid_provider_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(NotImplementedError):
         lp.get_model_from_provider("bogus")
 
 
