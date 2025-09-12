@@ -209,3 +209,44 @@ async def test_config_is_passed_to_each_runnable():
 async def test_empty_jobs_returns_empty_list():
     out = await pyine.utils.concurrency.run_independent([])
     assert out == []
+
+
+def test_run_with_sliding_window_respects_cap_and_processes_all_results():
+    n_items = 10
+    cap = 3
+    items = list(range(n_items))
+
+    def worker(x: int) -> int:
+        time.sleep(0.05)
+        return x * 2
+
+    def submit_one(item, executor):
+        return executor.submit(worker, item)
+
+    results: dict[int, int] = {}
+
+    def process_result(item, result):
+        results[item] = result
+
+    callback_calls = 0
+    peak_inflight = 0
+
+    def progress_callback(in_flight, completed):
+        nonlocal callback_calls, peak_inflight
+        callback_calls += 1
+        if in_flight is not None:
+            peak_inflight = max(peak_inflight, len(in_flight))
+
+    pyine.utils.concurrency.run_with_sliding_window(
+        input_items=items,
+        submit_one=submit_one,
+        process_result=process_result,
+        progress_callback=progress_callback,
+        max_workers=8,
+        max_in_flight_jobs=cap,
+    )
+    assert len(results) == n_items
+    assert results == {i: i * 2 for i in items}
+    assert peak_inflight <= cap
+    assert peak_inflight >= min(n_items, cap)
+    assert callback_calls == 2 * n_items
