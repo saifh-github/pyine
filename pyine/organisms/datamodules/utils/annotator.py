@@ -272,7 +272,8 @@ def _default_input_variables_builder(
             prompt_name="code_summary",
         )
         if code_summary_records:
-            output["description"] = code_summary_records[-1].result  # @@@@@ TODO: check result formatting is OK
+            # always keep the latest description (this should not matter too much)
+            output["description"] = code_summary_records[-1].result
         return output
     # elif config.prompt_config.prompt_name == ...
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
@@ -296,6 +297,9 @@ def _default_tags_builder(
     output_tags.extend(problem.problem_tags)
     output_tags.extend(trace.tags)
     output_tags.extend(config.shared_tags or [])
+    output_tags.append(f"llm_provider:{config.llm_provider_config.provider}")
+    if config.llm_provider_config.model_kwargs.get("model", None) is not None:
+        output_tags.append(f"llm_provider_model:{config.llm_provider_config.model_kwargs['model']}")
     # add prompt-specific tags below
     if config.prompt_config.prompt_name == "code_summary":
         template_partial_vars = config.prompt_config.partial_vars or {}
