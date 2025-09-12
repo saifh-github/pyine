@@ -270,6 +270,7 @@ def get_reprod_metadata(
 
 def entrypoint_setup(
     config: "pyine.configs.schemas.RuntimeConfig | None" = None,  # None unless launched via hydra
+    disable_http_logging_info_msgs: bool = True,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
     if config is not None:
@@ -289,6 +290,12 @@ def entrypoint_setup(
                 log_to_file=True,
                 log_path=None,  # use the framework's shared default log path by default
             )
+        if disable_http_logging_info_msgs:
+            for pkg_name in ("httpx", "httpcore"):
+                # fix for the 'noisy' HTTP request POST messages in info level logs when using llm providers
+                pkg_logger = logging.getLogger(pkg_name)
+                pkg_logger.setLevel(logging.WARNING)
+                pkg_logger.propagate = False
         # initialize the prompt-related utilities
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()

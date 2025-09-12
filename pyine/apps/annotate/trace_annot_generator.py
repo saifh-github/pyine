@@ -368,11 +368,6 @@ def main(
 ) -> None:
     """Entry point for the Trace Annotation Generator CLI."""
     pyine.utils.reprod.entrypoint_setup()
-    for name in ("httpx", "httpcore"):
-        # fix for the 'noisy' HTTP request POST messages in info level logs
-        logger = logging.getLogger(name)
-        logger.setLevel(logging.WARNING)
-        logger.propagate = False
     logger.info("starting trace annotation generator")
 
     # resolve dataset path: exactly one of --dataset or --dataset-latest-from must be provided
