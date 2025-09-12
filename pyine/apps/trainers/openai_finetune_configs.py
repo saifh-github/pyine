@@ -12,6 +12,7 @@ import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
+import pyine.evals.grader_configs
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.models.utils.openai
@@ -174,29 +175,7 @@ def register_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen
     # ---------------- store default evaluation llm grader configs ----------------
 
     llm_grader_provider_config_store = config_store(group="config/llm_grader_provider_config")
-    # @@@@@ TODO: update w/ base?
-    llm_grader_provider_config_store(
-        hydra_zen.builds(
-            pyine.utils.llm_providers.LLMProviderConfig,
-            provider="openai",
-            rate_limiter_config=None,
-            with_retry_config=None,
-            model_kwargs=dict(model="gpt-5-mini"),
-            hydra_convert="object",
-        ),
-        name="openai_gpt-5-mini",
-    )
-    llm_grader_provider_config_store(
-        hydra_zen.builds(
-            pyine.utils.llm_providers.LLMProviderConfig,
-            provider="openai",
-            rate_limiter_config=None,
-            with_retry_config=None,
-            model_kwargs=dict(model="gpt-5-nano"),
-            hydra_convert="object",
-        ),
-        name="openai_gpt-5-nano",
-    )
+    pyine.evals.grader_configs.register_hydra_configs(llm_grader_provider_config_store)
 
     # ---------------- store full demo/experiment configs ----------------
 
@@ -217,7 +196,7 @@ def register_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen
 
 
 def hydra_main() -> None:
-    """Hydra-main entrypoint for the app."""
+    """Hydra main entrypoint for the app."""
     pyine.utils.reprod.load_dotenv()
     store = pyine.configs.base.register_hydra_configs()
     store = register_hydra_configs(store)

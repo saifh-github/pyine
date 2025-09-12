@@ -45,6 +45,5 @@ def test_main_evaluates_base_model_with_skip_fine_tuning(
     cfg = finetune.MainConfig(
         datamodule_config=real_dm_config,
         openai_finetuner=finetuner_cfg,
-        seed=0,
     )
     finetune.main(cfg, skip_fine_tuning=True)

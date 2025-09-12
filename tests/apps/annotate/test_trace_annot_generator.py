@@ -19,13 +19,8 @@ import tests.data.utils.env_checks as env_checks
 )
 def test_main_trace_annot_generator(
     tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    End-to-end exercise of main() using the TACO dataset and a max sample count of 10.
-
-    Monkeypatches the dataset split file path getter to use a temporary directory.
-    """
+    """End-to-end exercise of main() using the TACO dataset and a max sample count of 10."""
     db_file_path = pathlib.Path(tmp_path) / "temp.db"
     assert not db_file_path.exists()
     cli_runner = click.testing.CliRunner()

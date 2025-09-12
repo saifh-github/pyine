@@ -5,23 +5,25 @@ This is a work-in-progress / demo / reference script for fine-tuning an OpenAI m
 execution traces dataset.
 """
 
+import concurrent.futures
 import logging
 import sys
+import typing
 
-import langchain_core.messages
-import langchain_core.runnables
 import pydantic
 
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
+import pyine.evals.common
 import pyine.evals.utils
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.models.utils.openai
 import pyine.organisms.models.utils.tokenizers
 import pyine.utils.code.output_compare
+import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
@@ -82,39 +84,6 @@ def _compute_estimated_train_token_count(
     return token_count
 
 
-def _evaluate(
-    config: MainConfig,
-    chain: langchain_core.runnables.Runnable,
-    dm: pyine.data.datamodule.ConversationDataModule,
-    subset: str,
-) -> dict[str, float | int | str]:
-    """Evaluate a trained model on the specified data subset, returning evaluation metrics."""
-    parser = dm.get_parser(subset)
-    evaluator = pyine.evals.utils.OutcomeEvaluator(
-        llm_provider_config=config.llm_grader_provider_config,
-    )
-    token_usage = None
-    for sample in parser:
-        assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
-        response = chain.invoke(sample._asdict())
-        assert isinstance(response, langchain_core.messages.AIMessage)
-        evaluator.add_sample(
-            identifier=sample.identifier,
-            expected=sample.expected_output,
-            predicted=response.content,
-            tags=sample.get_tag_list(),
-        )
-        if token_usage is None:
-            token_usage = pyine.evals.utils.parse_token_usage_from_response(response)
-        else:
-            token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
-    output_metrics: dict[str, float | int | str] = evaluator.compute_metrics()
-    if token_usage is None:
-        token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-    output_metrics.update(token_usage.asdict())
-    return output_metrics
-
-
 def main(
     config: MainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
@@ -132,10 +101,10 @@ def main(
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     dm.prepare_data()
     dm.setup()
-    approx_tokens = _compute_estimated_train_token_count(config, dm)
-    logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
     client = config.openai_client.instantiate()
     if not skip_fine_tuning:
+        approx_tokens = _compute_estimated_train_token_count(config, dm)
+        logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
         finetuner = config.openai_finetuner.instantiate(client)
         tr_file_path = dm.get_openai_messages_dataset(
             subset_type="train",
@@ -167,11 +136,16 @@ def main(
         model=model_name,
         client=client.chat.completions,
     )
-    eval_chain = dm.config.get_prompt_chain(model)
     logger.info("running eval on the valid subset...")
-    metrics = _evaluate(config, eval_chain, dm, "valid")
-    eval_output_str = "\n".join([f"\t{key}: {val:.3f}" for key, val in metrics.items()])
-    logger.info(f"valid metrics:\n{eval_output_str}")
+    eval_parser = dm.get_parser("valid")
+    assert isinstance(eval_parser, pyine.organisms.datamodules.utils.samples.SampleBuilder)
+    eval_parser = typing.cast(pyine.organisms.datamodules.utils.samples.SampleBuilder, eval_parser)
+    metrics = pyine.evals.common.evaluate_model_on_subset(
+        chain=dm.config.get_prompt_chain(model),
+        parser=eval_parser,
+        llm_grader_provider_config=config.llm_grader_provider_config,
+    )
+    pyine.evals.utils.print_metrics(metrics, "valid")
 
 
 if __name__ == "__main__":

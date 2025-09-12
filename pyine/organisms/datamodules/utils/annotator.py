@@ -21,6 +21,7 @@ import pyine.prompts.types
 import pyine.prompts.utils
 import pyine.utils.code.execution
 import pyine.utils.code.validation
+import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
@@ -526,56 +527,46 @@ def annotate_trace_dataset(
                 wrapped_data_indices.write(f"progress report: {output.summary()}")
         return output
     # fallback: parallel version using a thread pool with a sliding window over submitted jobs
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        in_flight: set[concurrent.futures.Future] = set()
-        iter_items = iter(wrapped_data_indices)
-        submitted = 0
-        completed = 0
 
-        def _submit_one(sample_idx: int) -> concurrent.futures.Future:
-            return executor.submit(
-                _process_one_annotation,
-                trace=dataset[sample_idx],
-                problem=dataset.get_problem_data(sample_idx),
-                sample_idx=sample_idx,
-                model=model,
-                config=config,
-                dry_run=dry_run,
-                base_filter_fn=base_filter_fn,
-                db=config._prompt_result_db,  # noqa
-                identifier_getter=identifier_getter,
-                group_getter=group_getter,
-                prompt_input_vars_getter=prompt_input_vars_getter,
-                tags_getter=tags_getter,
-                meta_getter=meta_getter,
-                creation_meta_getter=creation_meta_getter,
-            )
+    def _submit_one(
+        sample_idx: typing.Hashable,
+        executor: concurrent.futures.Executor,
+    ) -> concurrent.futures.Future:
+        sample_idx = typing.cast(int, sample_idx)
+        return executor.submit(
+            _process_one_annotation,
+            trace=dataset[sample_idx],
+            problem=dataset.get_problem_data(sample_idx),
+            sample_idx=sample_idx,
+            model=model,
+            config=config,
+            dry_run=dry_run,
+            base_filter_fn=base_filter_fn,
+            db=config._prompt_result_db,  # noqa
+            identifier_getter=identifier_getter,
+            group_getter=group_getter,
+            prompt_input_vars_getter=prompt_input_vars_getter,
+            tags_getter=tags_getter,
+            meta_getter=meta_getter,
+            creation_meta_getter=creation_meta_getter,
+        )
 
-        # initially fill the window to its max size
-        while len(in_flight) < max_in_flight_jobs:
-            try:
-                sample_idx = next(iter_items)
-            except StopIteration:
-                break
-            future = _submit_one(sample_idx)
-            in_flight.add(future)
-            submitted += 1
-        # update output report and continue filling window if needed
-        while in_flight:
-            done = next(concurrent.futures.as_completed(in_flight))
-            output += done.result()
-            in_flight.remove(done)
-            completed += 1
-            if verbose and completed % 50 == 0:  # print progress report every 50 completions
-                wrapped_data_indices.write(f"progress report: {output.summary()}")
-            # refill the window with the next item (if any)
-            try:
-                sample_idx = next(iter_items)
-            except StopIteration:
-                continue
-            future = _submit_one(sample_idx)
-            in_flight.add(future)
-            submitted += 1
+    def _process_result(_: typing.Hashable, result: AnnotationReport) -> None:
+        nonlocal output
+        output += result
+
+    def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
+        if verbose and len(completed) % 50 == 0:  # print progress report every 50 completions
+            wrapped_data_indices.write(f"progress report: {output.summary()}")
+
+    pyine.utils.concurrency.run_with_sliding_window(
+        input_items=wrapped_data_indices,
+        submit_one=_submit_one,
+        process_result=_process_result,
+        progress_callback=_progress_callback,
+        max_workers=max_workers,
+        max_in_flight_jobs=max_in_flight_jobs,
+    )
     logger.info(f"final report: {output.summary()}")
     return output
 
