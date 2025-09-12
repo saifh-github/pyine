@@ -18,6 +18,7 @@ import pyine.utils.reprod
 
 def register_hydra_configs(datamodule_config_store: hydra_zen.ZenStore) -> hydra_zen.ZenStore:
     """Registers datamodule-specific configs in the hydra store."""
+    # @@@@@ TODO: update w/ base?
     datamodule_config_store(
         pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig,
         lmdb_paths=hydra.conf.MISSING,  # must be specified by user

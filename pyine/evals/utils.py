@@ -546,3 +546,25 @@ def parse_token_usage_from_response(
     if not any_known:
         raise ValueError("could not deduce token usage information from the provided response")
     return result
+
+
+def print_metrics(
+    metrics: dict[str, float | int | str],
+    subset: str,
+    logger: typing.Callable | None = None,
+) -> None:
+    """Helper that prints the given metrics using the provided callable logger (or stdout)."""
+    eval_output_strs = []
+    for key, val in metrics.items():
+        if isinstance(val, float):
+            eval_output_strs.append(f"\t{key}: {val:.3f}")
+        elif isinstance(val, int):
+            eval_output_strs.append(f"\t{key}: {val:,}")
+        else:
+            eval_output_strs.append(f"\t{key}: {val}")
+    eval_output_str = "\n".join(eval_output_strs)
+    output_str = f"{subset} metrics:\n{eval_output_str}"
+    if logger is None:
+        print(output_str)
+    else:
+        logger(output_str)
