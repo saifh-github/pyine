@@ -1,3 +1,4 @@
+import asyncio
 import collections
 import dataclasses
 import typing
@@ -9,7 +10,7 @@ import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class SampleEval:
     """Container holding cached evaluation artifacts for a single sample."""
 
@@ -23,7 +24,7 @@ class SampleEval:
     """Exact match result (following potential string normalization)."""
     soft_match: pyine.utils.code.output_compare.CompareResult
     """Soft match result (using the framework's output comparison function)."""
-    llm_score: float | None
+    llm_score: float | asyncio.Task | None
     """Score in [0, 1] returned by a LLM grader, if used."""
     tags: list[str]
     """Arbitrary tags used for grouping/filtering (e.g., difficulty, source)."""
@@ -65,6 +66,7 @@ class OutcomeEvaluator:
         soft_checks_config: pyine.utils.code.output_compare.CompareOptions | None = None,
         llm_grader_config: pyine.utils.code.output_compare.LLMCompareOptions | None = None,
         llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
+        use_async_llm_grader: bool = True,
         runnable_name: str | None = None,
     ) -> None:
         """Initialize the evaluator.
@@ -76,6 +78,7 @@ class OutcomeEvaluator:
                 a default config.
             llm_grader_config: Optional LLM grader config override. If not provided, we will disable
                 the LLM grader and only use hard/soft matches.
+            use_async_llm_grader: Optional flag to use futures instead of blocking during llm grading.
             runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         """
         self.strip_hard_checks = strip_hard_checks
@@ -90,6 +93,7 @@ class OutcomeEvaluator:
         if llm_provider_config is not None:
             model = pyine.utils.llm_providers.get_model_from_provider_config(self.llm_provider_config)
             self._llm_grader_chain = self.llm_grader_config.get_chain(model, runnable_name=runnable_name)
+        self.use_async_llm_grader = use_async_llm_grader
         self.results: list[SampleEval] = []
 
     def is_llm_grader_available(self) -> bool:
@@ -101,18 +105,31 @@ class OutcomeEvaluator:
         expected: str,
         predicted: str,
         config: langchain_core.runnables.RunnableConfig | None = None,
-    ) -> float:
+    ) -> float | asyncio.Task:
         if not self.is_llm_grader_available():
             raise ValueError("LLM grader not configured, scoring is unavailable")
-        response = self._llm_grader_chain.invoke(
-            dict(expected_output=expected, predicted_output=predicted),
-            config=config,
-        )
+        if self.use_async_llm_grader:
+            return asyncio.create_task(
+                self._llm_grader_chain.ainvoke(
+                    dict(expected_output=expected, predicted_output=predicted),
+                    config=config,
+                ),
+            )
+        else:
+            response = self._llm_grader_chain.invoke(
+                dict(expected_output=expected, predicted_output=predicted),
+                config=config,
+            )
+            return self._decode_response(response)
+
+    @staticmethod
+    def _decode_response(response: float | pyine.utils.code.output_compare.GradingResult) -> float:
+        """Helper to decode a response from the LLM grader."""
         if isinstance(response, float):
             return response
         if isinstance(response, pyine.utils.code.output_compare.GradingResult):
             return response.score
-        raise ValueError(f"LLM grader returned unexpected response type: {type(response)}")
+        raise NotImplementedError(f"LLM grader returned unexpected response type: {type(response)}")
 
     def add_sample(
         self,
@@ -134,7 +151,7 @@ class OutcomeEvaluator:
         else:
             hard_match = expected == predicted
         soft_match = pyine.utils.code.output_compare.compare(expected, predicted, self.soft_checks_config)
-        llm_score: float | None = None
+        llm_score: float | asyncio.Task | None = None
         if self.is_llm_grader_available():
             llm_score = self.get_llm_grader_score(expected=expected, predicted=predicted)
         self.results.append(
@@ -241,7 +258,7 @@ class OutcomeEvaluator:
             correct += int(item.soft_match.equal)
         return _safe_ratio(correct, total)
 
-    def compute_grader_accuracy(
+    async def compute_grader_accuracy(
         self,
         score_threshold: float = 0.5,
         identifier_selector: typing.Callable[[str], bool] | None = None,
@@ -265,13 +282,29 @@ class OutcomeEvaluator:
         if not self.is_llm_grader_available():
             raise ValueError("LLM grader not configured, scores are unavailable")
         total, correct = 0, 0
-        for item in self._iter_where(identifier_selector, tags_filter_rule):
-            assert item.llm_score is not None, "LLM score is None?"
+        selected_items = {
+            item_idx: item for item_idx, item in enumerate(self._iter_where(identifier_selector, tags_filter_rule))
+        }
+        await self._gather_grader_results(selected_items)
+        scores = [item.llm_score for item in selected_items.values()]
+        for score in scores:
+            assert isinstance(score, float), "unexpected non-float LLM score post-async-gather?"
             total += 1
-            correct += int(item.llm_score >= score_threshold)
+            correct += int(score >= score_threshold)
         return _safe_ratio(correct, total)
 
-    def compute_metrics(
+    async def _gather_grader_results(self, selected_items: dict[int, SampleEval]) -> None:
+        """Helper to gather LLM-based score grading results asynchronously."""
+        if self.use_async_llm_grader:
+            future_item_idxs = [idx for idx, item in selected_items.items() if isinstance(item.llm_score, asyncio.Task)]
+            futures = [selected_items[idx].llm_score for idx in future_item_idxs]
+            if futures:
+                scores = await asyncio.gather(*futures)
+                # re-assign the scores to the original items
+                for item_idx, score in zip(future_item_idxs, scores):
+                    selected_items[item_idx].llm_score = self._decode_response(score)
+
+    async def compute_metrics(
         self,
         score_threshold: float = 0.5,
         identifier_selector: typing.Callable[[str], bool] | None = None,
@@ -283,12 +316,12 @@ class OutcomeEvaluator:
             "accuracy/soft": self.compute_soft_accuracy(identifier_selector, tags_filter_rule),
         }
         if self.is_llm_grader_available():
-            output["accuracy/grader"] = self.compute_grader_accuracy(
+            output["accuracy/grader"] = await self.compute_grader_accuracy(
                 score_threshold, identifier_selector, tags_filter_rule
             )
         return output
 
-    def compute_agreement_table(
+    async def compute_agreement_table(
         self,
         score_threshold: float = 0.5,
         identifier_selector: typing.Callable[[str], bool] | None = None,
@@ -313,7 +346,11 @@ class OutcomeEvaluator:
             raise ValueError("LLM grader not configured, agreements are unavailable")
         counts: dict[str, int] = collections.defaultdict(int)
         total_overlap = 0
-        for item in self._iter_where(identifier_selector, tags_filter_rule):
+        selected_items = {
+            item_idx: item for item_idx, item in enumerate(self._iter_where(identifier_selector, tags_filter_rule))
+        }
+        await self._gather_grader_results(selected_items)
+        for item in selected_items.values():
             assert item.llm_score is not None, "LLM score is None?"
             parts: list[bool | None] = [
                 item.hard_match,

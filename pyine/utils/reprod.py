@@ -300,7 +300,8 @@ def entrypoint_setup(
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()
         entrypoint_setup._executed = True
-    logger.info("set up entrypoint")
+    parent_app_name = config.app_name if config else "<missing runtime config>"
+    logger.info(f"entrypoint setup complete for app: {parent_app_name}")
 
 
 @functools.wraps(dotenv.load_dotenv)

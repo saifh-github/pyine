@@ -92,7 +92,8 @@ def _make_dataset() -> tuple[_FakeDatasetReader, str, str]:
     return dataset, sid, pid
 
 
-def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset, sid, pid = _make_dataset()
     monkeypatch.setattr(prompt_manager, "list_prompts", lambda: ["code_summary"])
     monkeypatch.setattr(llm_providers, "get_model_from_provider", lambda **kwargs: _DummyModel())
@@ -161,7 +162,7 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
         min_results_per_item=1,
         force_generation=True,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset,  # type: ignore[arg-type]
         config=options,
         show_progress=False,
@@ -178,7 +179,8 @@ def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["input_variables"]["target_word_count"] == 40
 
 
-def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset, sid, pid = _make_dataset()
     monkeypatch.setattr(prompt_manager, "list_prompts", lambda: ["code_summary"])
     monkeypatch.setattr(llm_providers, "get_model_from_provider", lambda **kwargs: _DummyModel())
@@ -232,7 +234,7 @@ def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
         meta_builder=lambda *_: {},  # noqa
         min_results_per_item=1,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset,  # type: ignore[arg-type]
         config=options,
         show_progress=False,
@@ -243,7 +245,8 @@ def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.errors == 0
 
 
-def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     pid, sid, tid = _make_ids()
     problem = _make_problem(pid)
     # first ok, second broken (invalid identifier that cannot resolve)
@@ -297,7 +300,7 @@ def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> No
         meta_builder=lambda *_: {},  # noqa
         min_results_per_item=1,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset,  # type: ignore[arg-type]
         config=options,
         show_progress=False,
@@ -308,6 +311,7 @@ def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.slow
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot run annotator integration",
@@ -316,7 +320,7 @@ def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> No
     tests.data.utils.env_checks.OPENAI_API_KEY_MISSING,
     reason="OPENAI_API_KEY is missing, cannot run annotator integration",
 )
-def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
+async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
     dataset_path = du.get_latest_dataset_path("TACO")
     dataset = pyine.data.traces.dataset_reader.DatasetReader(lmdb_path=dataset_path)
     target_indices = list(range(0, 100, 10))
@@ -358,7 +362,7 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
         deduplicate_results=True,
         db_path=db_path,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset,
         config=options,
         show_progress=False,
@@ -382,7 +386,7 @@ def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
         deduplicate_results=True,
         db_path=db_path,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset,
         config=options,
         show_progress=False,

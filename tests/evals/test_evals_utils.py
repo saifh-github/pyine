@@ -1,3 +1,4 @@
+import asyncio
 import collections.abc
 import pathlib
 import typing
@@ -28,6 +29,14 @@ class _DummyGraderChain:
         predicted = typing.cast(str, data["predicted_output"])
         return float(self._scorer(expected, predicted))
 
+    async def ainvoke(
+        self,
+        data: dict[str, typing.Any],
+        *args,
+        **kwargs,
+    ) -> float:
+        return await asyncio.to_thread(self.invoke, data, *args, **kwargs)
+
 
 def test_add_sample_and_accuracies_no_grader() -> None:
     evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
@@ -42,7 +51,8 @@ def test_add_sample_and_accuracies_no_grader() -> None:
     assert soft_acc == pytest.approx(2 / 3)  # soft compare should fix the last case, but not the 2nd one
 
 
-def test_grader_accuracy_with_mock_chain() -> None:
+@pytest.mark.asyncio
+async def test_grader_accuracy_with_mock_chain() -> None:
     evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator._llm_grader_chain = _DummyGraderChain(  # simple grader = 1.0 on exact, 0.25 otherwise
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.25
@@ -51,18 +61,19 @@ def test_grader_accuracy_with_mock_chain() -> None:
     evaluator.add_sample(identifier="g2", expected="10", predicted=" 10 ")
     evaluator.add_sample(identifier="g3", expected="yes", predicted="no")
     # default threshold 0.5 should mark first two as correct (1.0), last as incorrect (0.25)
-    grader_acc = evaluator.compute_grader_accuracy(score_threshold=0.5)
+    grader_acc = await evaluator.compute_grader_accuracy(score_threshold=0.5)
     assert grader_acc == pytest.approx(2 / 3)
 
 
-def test_agreement_table_with_mock_chain() -> None:
+@pytest.mark.asyncio
+async def test_agreement_table_with_mock_chain() -> None:
     evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator._llm_grader_chain = _DummyGraderChain(
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.0
     )
     # single fully-agreeing sample (hard == soft == True, grader >= 0.5)
     evaluator.add_sample(identifier="a1", expected="ok", predicted="ok", tags=["agree"])
-    table = evaluator.compute_agreement_table(score_threshold=0.5)
+    table = await evaluator.compute_agreement_table(score_threshold=0.5)
     assert set(table.keys()) == {"hard_vs_soft", "hard_vs_grader", "soft_vs_grader"}
     # with one agreeing sample, all entries should be 1.0
     assert table["hard_vs_soft"] == 1.0
@@ -70,7 +81,7 @@ def test_agreement_table_with_mock_chain() -> None:
     assert table["soft_vs_grader"] == 1.0
     # add one more case where only soft match differs
     evaluator.add_sample(identifier="a2", expected="{'a': 1, 'b': 2}", predicted="{'b': 2, 'a': 1}")
-    table = evaluator.compute_agreement_table(score_threshold=0.5)
+    table = await evaluator.compute_agreement_table(score_threshold=0.5)
     assert table["hard_vs_soft"] == 0.5
     assert table["hard_vs_grader"] == 1.0
     assert table["soft_vs_grader"] == 0.5
@@ -116,11 +127,12 @@ def test_strip_hard_checks_behavior() -> None:
     assert evaluator_strip.compute_hard_accuracy() == 1.0
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     env_checks.OPENAI_API_KEY_MISSING,
     reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
 )
-def test_real_llm_grade_scoring() -> None:
+async def test_real_llm_grade_scoring() -> None:
     evaluator = eval_utils.OutcomeEvaluator(
         llm_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
             provider="openai",
@@ -141,11 +153,11 @@ def test_real_llm_grade_scoring() -> None:
         predicted="'[1.20, 3.00, 5.9999]'",
         tags=["hard"],
     )
-    metrics = evaluator.compute_metrics()
+    metrics = await evaluator.compute_metrics()
     assert metrics["accuracy/hard"] == pytest.approx(0.5)
     assert metrics["accuracy/soft"] == pytest.approx(0.5)
     assert metrics["accuracy/grader"] >= 0.5
-    agreement = evaluator.compute_agreement_table()
+    agreement = await evaluator.compute_agreement_table()
     assert agreement["hard_vs_soft"] == pytest.approx(1.0)
 
 

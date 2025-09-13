@@ -74,6 +74,8 @@ Notes:
 - Duration values support formats like "90m", "1h30m", "2d", or "3600s".
 """
 
+import asyncio
+import functools
 import json
 import logging
 import pathlib
@@ -158,6 +160,14 @@ def _build_dataset_reader(
         return pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
     except Exception as exc:
         raise click.ClickException(f"Failed to instantiate dataset reader; original error: {exc}") from exc
+
+
+def _async_main_wrapper(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return asyncio.run(fn(*args, **kwargs))
+
+    return wrapper
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -336,7 +346,8 @@ def _build_dataset_reader(
     show_default=True,
     help="If enabled, do not log new results; only report what would happen.",
 )
-def main(
+@_async_main_wrapper
+async def main(
     dataset_path: pathlib.Path | None,
     dataset_latest_from: str | None,
     dataset_loader: str | None,
@@ -505,7 +516,7 @@ def main(
         max_workers,
         dry_run,
     )
-    report = annotator.annotate_trace_dataset(
+    report = await annotator.annotate_trace_dataset(
         dataset=dataset,
         config=options,
         show_progress=show_progress,
@@ -520,4 +531,4 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -84,7 +84,7 @@ def _compute_estimated_train_token_count(
     return token_count
 
 
-def main(
+async def main(
     config: MainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
     skip_fine_tuning: bool = False,  # used to evaluate the base model directly
@@ -99,6 +99,7 @@ def main(
     """
     pyine.utils.reprod.entrypoint_setup(config=runtime)
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
+    logger.info("preparing datamodule and setting up parsers/loaders...")
     dm.prepare_data()
     dm.setup()
     client = config.openai_client.instantiate()
@@ -118,11 +119,12 @@ def main(
             merge_system_with_user=not config.supports_system_prompt(),
         )
         va_file_id = finetuner.ensure_uploaded(va_file_path)
+        logger.info("launching fine-tuning job...")
         job_id = finetuner.create_job(tr_file_id, va_file_id)
         try:
             finetuner.stream_job_events(job_id)  # streams events without blocking
         except KeyboardInterrupt:
-            logger.info("Stopped streaming events; continuing to poll status...")
+            logger.info("stopped streaming events; continuing to poll status...")
         model_name = finetuner.wait_for_job(job_id)
         if not model_name:
             logger.error("fine-tune failed or no model name returned")
@@ -136,14 +138,15 @@ def main(
         model=model_name,
         client=client.chat.completions,
     )
-    logger.info("running eval on the valid subset...")
+    logger.info("running evaluation on the validation subset...")
     eval_parser = dm.get_parser("valid")
     assert isinstance(eval_parser, pyine.organisms.datamodules.utils.samples.SampleBuilder)
     eval_parser = typing.cast(pyine.organisms.datamodules.utils.samples.SampleBuilder, eval_parser)
-    metrics = pyine.evals.common.evaluate_model_on_subset(
+    metrics = await pyine.evals.common.evaluate_model_on_subset(
         chain=dm.config.get_prompt_chain(model),
         parser=eval_parser,
         llm_grader_provider_config=config.llm_grader_provider_config,
+        verbose=True,
     )
     pyine.evals.utils.print_metrics(metrics, "valid")
 

@@ -211,7 +211,8 @@ async def test_empty_jobs_returns_empty_list():
     assert out == []
 
 
-def test_run_with_sliding_window_respects_cap_and_processes_all_results():
+@pytest.mark.asyncio
+async def test_run_with_sliding_window_respects_cap_and_processes_all_results():
     n_items = 10
     cap = 3
     items = list(range(n_items))
@@ -237,7 +238,7 @@ def test_run_with_sliding_window_respects_cap_and_processes_all_results():
         if in_flight is not None:
             peak_inflight = max(peak_inflight, len(in_flight))
 
-    pyine.utils.concurrency.run_with_sliding_window(
+    await pyine.utils.concurrency.run_with_sliding_window(
         input_items=items,
         submit_one=submit_one,
         process_result=process_result,

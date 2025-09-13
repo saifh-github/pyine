@@ -451,7 +451,7 @@ class AnnotationReport:
         )
 
 
-def annotate_trace_dataset(
+async def annotate_trace_dataset(
     dataset: pyine.data.traces.dataset_reader.DatasetReader,
     config: AnnotationOptions,
     show_progress: bool = True,
@@ -559,7 +559,7 @@ def annotate_trace_dataset(
         if verbose and len(completed) % 50 == 0:  # print progress report every 50 completions
             wrapped_data_indices.write(f"progress report: {output.summary()}")
 
-    pyine.utils.concurrency.run_with_sliding_window(
+    await pyine.utils.concurrency.run_with_sliding_window(
         input_items=wrapped_data_indices,
         submit_one=_submit_one,
         process_result=_process_result,

@@ -1,5 +1,7 @@
 """Hydra-zen config builder for openai_finetune.py app."""
 
+import asyncio
+import functools
 import typing
 
 import hydra.conf
@@ -110,7 +112,7 @@ def register_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen
         package="hydra.job",
     )
     openai_finetune_main_config = hydra_zen.builds(
-        pyine.apps.trainers.openai_finetune.main,
+        _async_main_wrapper,
         config=hydra.conf.MISSING,
         runtime=hydra.conf.MISSING,
         skip_fine_tuning=False,
@@ -195,13 +197,19 @@ def register_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen
     return store
 
 
+@functools.wraps(pyine.apps.trainers.openai_finetune.main)
+def _async_main_wrapper(*args, **kwargs) -> None:
+    """Wrapper for async main function."""
+    asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
+
+
 def hydra_main() -> None:
     """Hydra main entrypoint for the app."""
     pyine.utils.reprod.load_dotenv()
     store = pyine.configs.base.register_hydra_configs()
     store = register_hydra_configs(store)
     store.add_to_hydra_store()
-    hydra_zen.zen(pyine.apps.trainers.openai_finetune.main).hydra_main(
+    hydra_zen.zen(_async_main_wrapper).hydra_main(
         config_path=None,
         config_name="openai_finetune_main",
         version_base=pyine.configs.base.target_hydra_version,
