@@ -16,6 +16,7 @@ import pydantic
 import tqdm
 import yaml
 
+import pyine.data.common
 import pyine.data.utils.lmdb_io
 import pyine.prompts.configs.code_analysis
 import pyine.utils.code.execution
@@ -754,28 +755,31 @@ class CodingProblemIterator:
         return problem, solutions
 
 
-def get_latest_dataset_path(source_dataset_name: str) -> pathlib.Path:
+def get_latest_dataset_path(
+    source_dataset_name: str,
+    filter_rule: str | None = None,
+) -> pathlib.Path:
     """Returns the path to the latest trace dataset for a specific source dataset.
 
-    If multiple trace datasets are available, the most recent version is returned.
+    If multiple deltas datasets are available, the most recent version is returned, where we pick
+    strictly by the date suffix (YYYY-MM-DD) in the directory name, ignoring any prefix tag.
+    Optionally, a filter rule can be provided to exclude directories before selection.
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
-    traces_root = pyine.utils.filesystem.get_data_root_path() / "traces" / source_dataset_name
-    assert traces_root.exists() and traces_root.is_dir(), f"invalid traces dataset path: {traces_root}"
-    dataset_paths = list(traces_root.glob("*.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].lmdb/"))
-    if not dataset_paths:
-        raise FileNotFoundError(f"No trace datasets found in {traces_root}")
-    latest_dataset = max(sorted(dataset_paths))
-    return pathlib.Path(latest_dataset)
+    return pyine.data.common.resolve_latest_dataset_path(
+        kind="traces",
+        source_dataset_name=source_dataset_name,
+        filter_rule=filter_rule,
+    )
 
 
 def get_new_dataset_path(
     source_dataset_name: str,
-    dataset_name_tag: str = "v01",
+    dataset_name_tag: str,
 ) -> pathlib.Path:
     """Returns the path where a new trace dataset should be saved, for a specific source dataset.
 
-    Will be named based on today's date and using the provided tag (which is like a version).
+    Will be named based on today's date and using the provided tag (which is the file name prefix).
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
     assert dataset_name_tag, "dataset name tag cannot be empty"

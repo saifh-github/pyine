@@ -107,13 +107,3 @@ def write_dataset(
         avg_delta_count = sum(delta_counts) / len(delta_counts)
         log(f"\t(delta count avg={avg_delta_count:.1f}, min={min(delta_counts)}, max={max(delta_counts)})")
     return writer
-
-
-if __name__ == "__main__":
-    pyine.utils.reprod.entrypoint_setup()
-    _source_dataset_name = "TACO"
-    write_dataset(
-        traces_dataset_name_or_path=_source_dataset_name,
-        output_dataset_path=pyine.data.deltas.dataset_utils.get_new_dataset_path(_source_dataset_name),
-        verbose=True,
-    )
