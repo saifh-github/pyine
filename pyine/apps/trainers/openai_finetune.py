@@ -97,7 +97,7 @@ async def main(
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
-    pyine.utils.reprod.entrypoint_setup(config=runtime)
+    pyine.utils.reprod.entrypoint_setup(runtime_config=runtime, main_config=config)
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm.prepare_data()
@@ -119,7 +119,6 @@ async def main(
             merge_system_with_user=not config.supports_system_prompt(),
         )
         va_file_id = finetuner.ensure_uploaded(va_file_path)
-        logger.info("launching fine-tuning job...")
         job_id = finetuner.create_job(tr_file_id, va_file_id)
         try:
             finetuner.stream_job_events(job_id)  # streams events without blocking
@@ -132,13 +131,14 @@ async def main(
     else:
         # use the base model directly as the target to evaluate
         model_name = config.openai_finetuner.params.base_model
+        logger.info("skipping fine-tuning, evaluating base model directly")
 
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model=model_name,
         client=client.chat.completions,
     )
-    logger.info("running evaluation on the validation subset...")
+    logger.info(f"running evaluation for {model_name} on the validation subset...")
     eval_parser = dm.get_parser("valid")
     assert isinstance(eval_parser, pyine.organisms.datamodules.utils.samples.SampleBuilder)
     eval_parser = typing.cast(pyine.organisms.datamodules.utils.samples.SampleBuilder, eval_parser)
@@ -148,7 +148,7 @@ async def main(
         llm_grader_provider_config=config.llm_grader_provider_config,
         verbose=True,
     )
-    pyine.evals.utils.print_metrics(metrics, "valid")
+    pyine.evals.utils.print_metrics(metrics, "valid", logger.info)
 
 
 if __name__ == "__main__":

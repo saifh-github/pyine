@@ -1,6 +1,7 @@
 import datetime
 import logging
 import pathlib
+import pprint
 import re
 import time
 import typing
@@ -62,7 +63,7 @@ def write_dataset_to_jsonl(
     with open(path, "w", encoding="utf-8") as fd:
         fd.write("\n".join(samples_str))
     dataset_size = pyine.utils.filesystem.get_human_readable_size(path.stat().st_size)
-    logger.debug(f"wrote {dataset_size} dataset with {len(samples_str)} samples to {path}")
+    logger.info(f"wrote {dataset_size} dataset with {len(samples_str)} samples to {path}")
 
 
 def read_dataset_from_jsonl(
@@ -562,7 +563,7 @@ class OpenAIFineTuner:
         """
         existing = self.is_file_already_uploaded(path, confirm_by_hash=confirm_by_hash, purpose=purpose)
         if existing:
-            logger.debug(f"file already uploaded: {path} -> id={existing}")
+            logger.info(f"file already uploaded: {path} -> id={existing}")
             return existing
         return self.upload_file(str(path), purpose=purpose)
 
@@ -592,7 +593,7 @@ class OpenAIFineTuner:
         with open(dest, "wb") as f:
             f.write(data)
         file_size = pyine.utils.filesystem.get_human_readable_size(dest.stat().st_size)
-        logger.debug(f"downloaded {file_size} file to: {dest}")
+        logger.info(f"downloaded {file_size} file to: {dest}")
         return dest
 
     @backoff.on_exception(backoff.expo, Exception, max_time=120)
@@ -616,7 +617,6 @@ class OpenAIFineTuner:
         Returns:
             The fine-tuning job id.
         """
-        logger.debug("creating fine-tune job...")
         integrations = None
         if self.config.wandb_integration is not None:
             integrations = [self.config.wandb_integration.model_dump()]
@@ -645,6 +645,8 @@ class OpenAIFineTuner:
             params.update(self.config.job_params)
         if extra_job_params:
             params.update(extra_job_params)
+        params_str = pprint.pformat(params)
+        logger.info(f"creating fine-tune job with config: {params_str}")
         job = self.client.fine_tuning.jobs.create(**params)
         logger.info(f"fine-tuning job created, id={job.id}, status={job.status}")
         return job.id

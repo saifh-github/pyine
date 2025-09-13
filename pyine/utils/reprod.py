@@ -13,8 +13,9 @@ import typing
 
 import dotenv
 import lightning.fabric.utilities.seed
+import pydantic
+import rich
 import torch
-import yaml
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas
@@ -214,6 +215,7 @@ def set_seed(
     For more information, refer to:
     https://lightning.ai/docs/fabric/stable/api/utilities.html#lightning.fabric.utilities.seed.seed_everything
     """
+    logger.info(f"setting seed to: {seed} (workers: {workers})")
     lightning.fabric.utilities.seed.seed_everything(
         seed=seed,
         workers=workers,
@@ -275,21 +277,27 @@ def get_reprod_metadata(
 
 
 def entrypoint_setup(
-    config: "pyine.configs.schemas.RuntimeConfig | None" = None,  # None unless launched via hydra
+    *,
+    runtime_config: "pyine.configs.schemas.RuntimeConfig | None" = None,
     disable_http_logging_info_msgs: bool = True,
+    **extra_configs,
 ) -> None:
-    """Sets up the framework (env vars, logging, rng) for reproducible experiments."""
-    if config is not None:
-        if config.seed is not None:
-            set_seed(seed=config.seed, workers=config.seed_workers)
-        log_reprod_metadata(config)
-    # use a sentinel object to track first execution for the rest
+    """Sets up the framework (env vars, logging, rng) for reproducible experiments.
+
+    The `runtime_config` argument corresponds to the runtime provided via hydra entrypoints. If it
+    is not provided, we do not have a run output folder, and will be forced to only log high-level
+    information to the framework's global logs folder.
+
+    Extra configs that are forwarded to this function will be logged in the runtime output
+    directory (if a config is provided). If no config is provided, does nothing.
+    """
+    load_dotenv()
+    # use a sentinel object to track first execution of things that should only be executed once
     if not hasattr(entrypoint_setup, "_executed"):
         import pyine.prompts
         import pyine.utils.logging
 
-        load_dotenv()
-        if config is None:
+        if runtime_config is None:
             # setup logging with default settings if no config is provided (otherwise hydra handles it)
             pyine.utils.logging.setup_logging(
                 level=os.environ.get("LOGLEVEL", logging.INFO).upper(),
@@ -306,11 +314,18 @@ def entrypoint_setup(
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()
         entrypoint_setup._executed = True
-    parent_app_name = config.app_name if config else "<missing runtime config>"
+    # if a runtime config is provided, log all configs to the output directory
+    parent_app_name = runtime_config.app_name if runtime_config else "<missing runtime config>"
+    if runtime_config is not None:
+        if runtime_config.seed is not None:
+            set_seed(seed=runtime_config.seed, workers=runtime_config.seed_workers)
+        for config_name, config in extra_configs.items():
+            assert isinstance(config, pydantic.BaseModel), "extra configs must be pydantic models"
+        log_configs(runtime_config, extra_configs)
+        if runtime_config.dry_run:
+            logger.info(f"entrypoint dry run complete for app: {parent_app_name}")
+            raise DryRunExit()
     logger.info(f"entrypoint setup complete for app: {parent_app_name}")
-    if config is not None and config.dry_run:
-        logger.info(f"config dry run complete for app: {parent_app_name}")
-        raise DryRunExit()
 
 
 @functools.wraps(dotenv.load_dotenv)
@@ -349,12 +364,12 @@ def get_failsafe_backend(group: torch.distributed.ProcessGroup | None = None) ->
 
 
 def get_log_extension_slug(
-    config: "pyine.configs.schemas.RuntimeConfig | None",
+    runtime_config: "pyine.configs.schemas.RuntimeConfig | None",
     extension_suffix: str = ".log",
 ) -> str:
     """Returns a log file extension that includes a sortable and timezone-independent timestamp."""
-    if config is not None and "time_since_epoch" in config.metadata:
-        seconds_since_epoch = int(float(config.metadata["time_since_epoch"]))
+    if runtime_config is not None and "time_since_epoch" in runtime_config.metadata:
+        seconds_since_epoch = int(float(runtime_config.metadata["time_since_epoch"]))
     else:
         time_since_epoch = time.time()
         seconds_since_epoch = int(time_since_epoch)
@@ -362,21 +377,38 @@ def get_log_extension_slug(
     return f".{seconds_since_epoch}.rank{rank_id:02d}{extension_suffix}"
 
 
-def log_reprod_metadata(
-    config: "pyine.configs.schemas.RuntimeConfig",
-) -> pathlib.Path:
-    """Saves a list of all runtime tags to a log file and returns the path to the saved file."""
-    assert config is not None, "missing runtime config"
-    output_dir = pathlib.Path(config.output_dir).expanduser()
+def log_configs(
+    runtime_config: "pyine.configs.schemas.RuntimeConfig",
+    extra_configs: dict[str, pydantic.BaseModel],
+) -> None:
+    """Saves runtime, metadata, and any extra configs to the hydra runtime output directory."""
+    assert runtime_config is not None, "missing runtime config"
+    output_dir = pathlib.Path(runtime_config.output_dir).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
-    log_extension = get_log_extension_slug(config, extension_suffix=".yaml")
-    output_log_path = output_dir / f"reprod_metadata{log_extension}"
+    log_extension = get_log_extension_slug(runtime_config, extension_suffix=".json")
+
     reprod_metadata = get_reprod_metadata(  # get a new metadata dict will ALL fields
         include_installed_packages=True,
         with_gpu_info=True,
         with_distrib_info=True,
     )
-    reprod_metadata.update(config.metadata)  # override with previously-defined fields
-    with open(output_log_path, "w") as fd:
-        yaml.dump(reprod_metadata, fd, sort_keys=False)
-    return output_log_path
+    reprod_metadata.update(runtime_config.metadata)  # override with previously-defined fields
+
+    print("reprod metadata:")
+    rich.print_json(data=reprod_metadata, indent=2)
+    output_metadata_path = output_dir / f"reprod_metadata{log_extension}"
+    output_metadata_path.write_text(json.dumps(reprod_metadata, indent=2))
+    logger.info(f"reprod metadata saved to: {output_metadata_path}")
+
+    print("runtime info:")
+    rich.print_json(data=runtime_config.model_dump(mode="json"), indent=2)
+    output_runtime_path = output_dir / f"runtime{log_extension}"
+    output_runtime_path.write_text(runtime_config.model_dump_json(indent=2))
+    logger.info(f"runtime info saved to: {output_runtime_path}")
+
+    for config_name, config in extra_configs.items():
+        print(f"{config_name} config:")
+        rich.print_json(data=config.model_dump(mode="json"), indent=2)
+        output_config_path = output_dir / f"{config_name}{log_extension}"
+        output_config_path.write_text(config.model_dump_json(indent=2))
+        logger.info(f"config '{config_name}' saved to: {output_config_path}")
