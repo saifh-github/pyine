@@ -6,7 +6,6 @@ import hydra_zen
 import hydra_zen.typing
 
 import pyine.configs.schemas
-import pyine.configs.utils
 import pyine.utils.filesystem
 import pyine.utils.reprod
 
@@ -18,18 +17,31 @@ Version 1.3 adds support for `hydra_convert="object"`, absolute config path spec
 """
 
 
-def register_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen.ZenStore:
-    """Registers default, project-wide, generic configs in the hydra store."""
+def store_hydra_runtime_configs(store: hydra_zen.ZenStore) -> None:
+    """Stores runtime configs in the provided hydra zen store."""
+    runtime_config = hydra_zen.builds(
+        pyine.configs.schemas.RuntimeConfig,
+        # -------------
+        populate_full_signature=True,
+        hydra_convert="object",
+    )
+    store(runtime_config, name="default")
+    store(
+        hydra_zen.make_config(
+            dry_run=True,
+            bases=(runtime_config,),
+        ),
+        name="dry_run",
+    )
+
+
+def get_base_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen.ZenStore:
+    """Stores project-wide configs in the specified store (or a new one if None) and returns it."""
     if store is None:
         store = hydra_zen.ZenStore()
 
-    store(
-        pyine.configs.schemas.RuntimeConfig,
-        **pyine.configs.utils.get_defaults(pyine.configs.schemas.RuntimeConfig),
-        hydra_convert="object",
-        group="runtime",
-        name="default",
-    )
+    runtime_store = store(group="runtime")
+    store_hydra_runtime_configs(runtime_store)
 
     output_dir_root = str(pyine.utils.filesystem.get_logs_root_path())
     store(

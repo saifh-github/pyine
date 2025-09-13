@@ -23,6 +23,12 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class DryRunExit(SystemExit):
+    """Exception raised when a dry run is requested."""
+
+    pass
+
+
 def get_python_version() -> str:
     """Return current Python version, e.g. '3.12.6'."""
     return platform.python_version()
@@ -302,6 +308,9 @@ def entrypoint_setup(
         entrypoint_setup._executed = True
     parent_app_name = config.app_name if config else "<missing runtime config>"
     logger.info(f"entrypoint setup complete for app: {parent_app_name}")
+    if config is not None and config.dry_run:
+        logger.info(f"config dry run complete for app: {parent_app_name}")
+        raise DryRunExit()
 
 
 @functools.wraps(dotenv.load_dotenv)

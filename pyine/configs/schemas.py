@@ -23,6 +23,8 @@ class RuntimeConfig(pydantic.BaseModel):
     """Whether to seed the workers for parallel execution."""
     metadata: dict[str, str] = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
     """Reproducibility metadata."""
+    dry_run: bool = False
+    """Whether to skip the actual execution of the application (dry run for hydra setup)."""
 
     @property
     def console_log_path(self) -> str:
