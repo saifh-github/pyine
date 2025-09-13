@@ -6,6 +6,7 @@ import functools
 import logging
 import pathlib
 import random
+import traceback
 import typing
 import warnings
 
@@ -423,6 +424,7 @@ class AnnotationReport:
     """Total number of tokens exchanged with the LLM (best-effort find, not reliable if not using OpenAI models)."""
     errors: int = 0
     """Total number of errors caught during processing."""
+    error_messages: list[str] = dataclasses.field(default_factory=list)
 
     def add(self, other: "AnnotationReport") -> "AnnotationReport":
         """Accumulate counts from another report into this one and return self."""
@@ -641,10 +643,12 @@ def _process_one_annotation(
     except pyine.prompts.result_db.ValidationFailedError as e:
         rep.errors += 1
         attempts = config.max_unsatisfactory_retries + 1
+        rep.error_messages.append("".join(traceback.format_exception(e)))
         logger.warning(f"result validation failed after {attempts} attempt(s) for data sample at idx: {sample_idx}")
         logger.debug(f"exception details: {e}")
     except Exception as e:
         rep.errors += 1
+        rep.error_messages.append("".join(traceback.format_exception(e)))
         logger.exception(f"failed to process and annotate data sample at idx: {sample_idx}")
         logger.debug(f"exception details: {e}")
     return rep

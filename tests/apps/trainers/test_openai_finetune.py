@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 
 import pytest
@@ -11,6 +12,7 @@ import tests.data.utils.env_checks as env_checks
 
 
 @pytest.mark.slow
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
@@ -23,7 +25,7 @@ import tests.data.utils.env_checks as env_checks
     env_checks.OPENAI_API_KEY_MISSING,
     reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
 )
-def test_main_evaluates_base_model_with_skip_fine_tuning(
+async def test_main_evaluates_base_model_with_skip_fine_tuning(
     tmp_path: pathlib.Path,
 ) -> None:
     """End-to-end exercise of main() using the real OpenAI API but skipping fine-tuning."""
@@ -46,4 +48,4 @@ def test_main_evaluates_base_model_with_skip_fine_tuning(
         datamodule_config=real_dm_config,
         openai_finetuner=finetuner_cfg,
     )
-    finetune.main(cfg, skip_fine_tuning=True)
+    await finetune.main(cfg, skip_fine_tuning=True)
