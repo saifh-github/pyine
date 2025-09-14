@@ -113,14 +113,16 @@ class DatasetReader(torch.utils.data.Dataset):
         self.augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
         self.trace_tag_lists: list[list[str]] = []
-        for problem_idx, problem_key in zip(self.problem_indices, self.problem_keys):
+        for iter_idx, (problem_idx, problem_key) in enumerate(zip(self.problem_indices, self.problem_keys)):
             if not problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX):
                 raise ValueError(f"malformed problem key: {problem_key}")
+            # fix problem key by removing the problem metadata suffix
+            problem_key = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
+            self.problem_keys[iter_idx] = problem_key
             problem_data = self.reader.get(problem_idx)
             problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
-            problem_prefix = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
-            curr_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
-            curr_augm_trace_data_pattern = problem_prefix + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
+            curr_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
+            curr_augm_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
             curr_trace_indices, curr_trace_keys = self.reader.get_indices(
                 pattern=curr_trace_data_pattern,
                 return_keys=True,

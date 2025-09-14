@@ -105,7 +105,7 @@ def main() -> None:
     type=int,
     default=None,
     show_default=True,
-    help="Maximum number of traces to write in total (soft cap). If None, no maximum.",
+    help="Maximum number of traces to write in total (soft cap, checked once per problem). If None, no maximum.",
 )
 @click.option(
     "--max-solutions-per-problem",
@@ -113,7 +113,7 @@ def main() -> None:
     type=int,
     default=None,
     show_default=True,
-    help="Maximum number of solutions per problem (hard cap, will discard invalids, None = no max).",
+    help="Maximum number of solutions per problem (hard cap, may discard picked candidates, None = no max).",
 )
 @click.option(
     "--max-tests-per-solution",
@@ -121,7 +121,7 @@ def main() -> None:
     type=int,
     default=None,
     show_default=True,
-    help="Maximum number of tests per solution (hard cap, will discard invalids, None = no max).",
+    help="Maximum number of tests per solution (hard cap, may discard picked candidates, None = no max).",
 )
 @click.option(
     "--max-trace-events-per-line",

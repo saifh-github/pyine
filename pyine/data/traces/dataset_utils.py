@@ -56,12 +56,6 @@ SUPPORTED_SOURCE_DATASETS = [
     # add more supported datasets here
 ]
 """List of supported source datasets that provide coding problems with solutions to be traced."""
-
-JSON_BASED_SOURCE_DATASETS = [
-    "TACO",
-    # add more supported datasets here
-]
-"""List of source datasets that store coding problem data in json files."""
 BANNED_DATA_YAML_PATH = pkg_resources.files("pyine.data.traces") / "banned_data.yaml"
 """Path to the YAML file containing banned data information for each supported source dataset."""
 
@@ -412,7 +406,7 @@ class CodingProblemIterator:
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
         self._target_pattern = target_problem_pattern
-        self._target_problem_ids: list[int] = self._validate_target_problem_ids(target_problem_ids)
+        self._target_problem_ids = self._validate_target_problem_ids(target_problem_ids)
         self.reformat_code_strings = reformat_code_strings
         self.validate_code_strings = validate_code_strings
         if allow_banned_samples:
@@ -437,7 +431,7 @@ class CodingProblemIterator:
 
     def _validate_target_problem_ids(
         self, target_problem_ids: str | pathlib.Path | list[str] | list[int] | None
-    ) -> list[int] | None:
+    ) -> list[CodingProblemIdentifier]:
         """Validates and resolves the target problem IDs, if needed."""
         if isinstance(target_problem_ids, (str, pathlib.Path)):
             target_problem_ids_path = pathlib.Path(target_problem_ids)
@@ -456,6 +450,7 @@ class CodingProblemIterator:
             target_problem_ids: list[str] = []
         if not isinstance(target_problem_ids, list):
             raise ValueError(f"target problem IDs must be list, str, or path; got {type(target_problem_ids)}")
+        output_problem_ids: list[CodingProblemIdentifier] = []
         for prob_idx, prob_id in enumerate(target_problem_ids):
             if not isinstance(prob_id, (str, int)):
                 raise ValueError(f"target problem IDs must be string or int; got {type(prob_id)}")
@@ -463,11 +458,17 @@ class CodingProblemIterator:
                 if "/" in prob_id:  # these are full problem identifiers; replace them
                     prob_id = CodingProblemIdentifier.from_string(prob_id)
                     assert prob_id.dataset == self.dataset_name, f"unexpected dataset: {prob_id.dataset}"
-                    target_problem_ids[prob_idx] = prob_id.problem_idx  # noqa; keep only the problem id (number)
-                else:
-                    # convert the string identifier to an integer
-                    target_problem_ids[prob_idx] = int(target_problem_ids[prob_idx])  # noqa
-        return target_problem_ids
+                    output_problem_ids.append(prob_id)
+                    continue
+            # coerce the identifier to an integer
+            output_problem_ids.append(
+                CodingProblemIdentifier(
+                    self.dataset_name,
+                    subset="UNKNOWN",  # we will have to hope that the problem idx is unique across subsets
+                    problem_idx=int(prob_id),  # if this fails, we might need to revisit the problem idx type
+                )
+            )
+        return output_problem_ids
 
     def _start_prefetch(self) -> None:
         """Start the background prefetch worker if enabled."""
@@ -524,8 +525,9 @@ class CodingProblemIterator:
 
     def _prepare_problem_metadata(self) -> list:
         """Prepares problem metadata for the iterator, loading high-level source data."""
-        if self.dataset_name in JSON_BASED_SOURCE_DATASETS:
-            # if we're loading JSONs, the 'problem metadata' will be JSONs paths to parse later
+        assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
+        if self.dataset_name == "TACO":
+            # with TACO we're loading JSONs: the 'problem metadata' are JSONs paths to parse later
             json_file_paths = list(self.root_data_path.glob("*.json"))
             if not json_file_paths:
                 raise FileNotFoundError(f"no JSON files found in the dataset root directory: {self.root_data_path}")
@@ -535,8 +537,8 @@ class CodingProblemIterator:
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
-                problem_id = int(json_file_path.name.split(".json")[0])  # should be just the problem number
-                if self.banned.metadata and problem_id in self.banned.metadata:
+                problem_idx = int(json_file_path.stem)  # for TACO, should be a unique problem number
+                if self.banned.metadata and problem_idx in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
                 # optionally filter by a target pattern
                 if self._target_pattern is not None:
@@ -548,9 +550,11 @@ class CodingProblemIterator:
                         json_file_path.name, self._target_pattern.pattern
                     ):
                         continue
-                # optionally filter by target problem id list
-                if self._target_problem_ids and problem_id not in self._target_problem_ids:
-                    continue
+                # optionally filter by target problem idx list
+                if self._target_problem_ids:
+                    # (assumes the problem idxs in the target problem ids are unique across subsets)
+                    if not any([problem_idx == pid.problem_idx for pid in self._target_problem_ids]):
+                        continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     try:
                         json_data = orjson.loads(fd.read())
@@ -588,13 +592,15 @@ class CodingProblemIterator:
 
     def _load_problem_data(self, problem_metadata: typing.Any) -> dict[str, typing.Any]:
         """Loads 'raw' data from the source dataset for a specific coding problem."""
-        if self.dataset_name in JSON_BASED_SOURCE_DATASETS:
+        assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
+        if self.dataset_name == "TACO":
             assert isinstance(problem_metadata, (str, pathlib.Path))
             json_file = pathlib.Path(problem_metadata)
             with open(json_file, encoding="utf-8") as fd:
                 data = orjson.loads(fd.read())
             data["__root_path__"] = str(json_file)
             data["__root_hash__"] = pyine.utils.reprod.compute_hash(json_file)
+            data["__problem_idx__"] = int(json_file.stem)  # for TACO, should be a unique problem number
             return data
         else:
             raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
@@ -605,15 +611,16 @@ class CodingProblemIterator:
     ) -> tuple[CodingProblem, list[Solution]]:
         """Converts a 'raw' data dictionary from a source dataset to exportable objects."""
         assert isinstance(problem_data, dict)
-        # this is where the dataset-specific logic is implemented; this function will get dirty
+        assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
             parsing_errors = []
             if not problem_data or problem_data.get("error", None):
                 parsing_errors.append(problem_data.get("error", None))
+            problem_idx = problem_data["__problem_idx__"]  # for TACO, this is a unique id across subsets
             problem_id = CodingProblemIdentifier(
                 dataset=self.dataset_name,
                 subset=problem_data["subset"],
-                problem_idx=problem_data["subset_idx"],
+                problem_idx=problem_idx,
             )
             problem_statement = problem_data["question"]
             is_banned = problem_id.problem_idx in self.banned.problems.get(problem_id.subset, [])
@@ -646,7 +653,7 @@ class CodingProblemIterator:
                     solution_id = SolutionIdentifier(
                         dataset=self.dataset_name,
                         subset=problem_data["subset"],
-                        problem_idx=problem_data["subset_idx"],
+                        problem_idx=problem_idx,
                         solution_idx=solution_idx,
                     )
                     solution_ids.append(solution_id)
