@@ -398,3 +398,23 @@ def get_dataset_split_result(
     with open(split_file_path, "rb") as fd:
         split_result_dict = orjson.loads(fd.read())
     return SplitResult.model_validate(split_result_dict)
+
+
+def get_dataset_split_part_file_paths(
+    source_dataset_name_or_split_file_path: str | pathlib.Path,
+    part_extension: str = ".yaml",
+) -> list[pathlib.Path]:
+    """Returns the list of split part file paths for a given dataset or at a given split file path.
+
+    We expect that the part files are prefixed with the same name as the split file path itself,
+    and that the target part file extension is provided.
+    """
+    potential_path = pathlib.Path(source_dataset_name_or_split_file_path)
+    if potential_path.is_file():
+        split_file_path = potential_path
+    else:
+        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path, must_exist=False)
+    expected_part_file_name_pattern = f"{split_file_path.stem}.problem_ids.*of*{part_extension}"
+    part_file_paths = list(split_file_path.parent.glob(expected_part_file_name_pattern))
+    part_file_paths.sort()
+    return part_file_paths

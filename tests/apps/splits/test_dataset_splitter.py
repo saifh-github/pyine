@@ -5,6 +5,8 @@ import pytest
 import yaml
 
 import pyine.apps.splits.dataset_splitter as splitter
+import pyine.apps.write.dataset_writer as writer
+import pyine.data.traces.dataset_reader as reader
 import pyine.data.utils.splits as splits_utils
 import tests.data.utils.env_checks as env_checks
 
@@ -67,3 +69,71 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
             found_ids.extend(part_ids)
     assert len(found_ids) == len(set(found_ids))
     assert found_ids == expected_ids
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    env_checks.TACO_DATASET_MISSING,
+    reason="TACO dataset is missing, cannot check dataset split",
+)
+@pytest.mark.skipif(
+    env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    reason="TACO traces dataset split is missing, cannot check problem partitioning",
+)
+def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
+    """End-to-end exercise of the 'partition' command followed by the trace writer.
+
+    Checks that the partitioned problem IDs are used to generate the correct datasets.
+
+    Uses a temporary directory for the output dir.
+    """
+    cli_runner = click.testing.CliRunner()
+    taco_dataset_split_path = splits_utils.get_dataset_split_file_path("TACO", must_exist=False)
+    out_parts_path = tmp_path / "parts"
+    cli_args = [
+        "partition",
+        f"--split-file={taco_dataset_split_path}",
+        f"--output-dir={out_parts_path}",
+        "--ids-per-chunk=2000",
+        "--no-only-assigned-ids",
+        "--format=yaml",
+    ]
+    res = cli_runner.invoke(splitter.main, cli_args)  # noqa
+    assert res.exit_code == 0, res
+    part_files = sorted(list(out_parts_path.glob("*.yaml")))
+    assert len(part_files) > 3
+    # keep only the first three part files, and re-write them to contain one problem ID each
+    part_files = part_files[:3]
+    expected_problem_ids = []
+    for part_file in part_files:
+        with part_file.open("r") as fd:
+            part_ids = yaml.safe_load(fd)
+        assert len(part_ids) <= 2000
+        target_problem_ids = [part_ids[0]]
+        expected_problem_ids.append(target_problem_ids)
+        with part_file.open("w") as fd:
+            yaml.safe_dump(target_problem_ids, fd)
+    out_dataset_paths = []
+    for part_idx, part_file in enumerate(part_files, start=1):
+        out_dataset_path = tmp_path / f"dataset_p{part_idx:02d}.lmdb"
+        out_dataset_paths.append(out_dataset_path)
+        cli_args = [
+            "traces",
+            "--dataset-name=TACO",
+            f"--output-path={out_dataset_path}",
+            "--max-solutions-per-problem=2",
+            "--max-tests-per-solution=1",
+            f"--target-problem-ids={part_file}",
+            "--generate-obfuscated-solutions",
+        ]
+        res = cli_runner.invoke(writer.main, cli_args)  # noqa
+        assert res.exit_code == 0, res
+        assert out_dataset_path.is_dir()
+    readers = [reader.DatasetReader(path) for path in out_dataset_paths]
+    for part_idx, r in enumerate(readers):
+        expected_pids = expected_problem_ids[part_idx]
+        found_pids = r.problem_keys
+        assert set(expected_pids) == set(found_pids)
+        trace_ids = r.trace_keys
+        for tid in trace_ids:
+            assert any([tid.startswith(pid) for pid in expected_pids])
