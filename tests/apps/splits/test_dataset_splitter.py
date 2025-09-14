@@ -45,7 +45,7 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
     Uses a temporary directory for the output dir.
     """
     cli_runner = click.testing.CliRunner()
-    taco_dataset_split_path = splits_utils.get_dataset_split_file_path("TACO")
+    taco_dataset_split_path = splits_utils.get_dataset_split_file_path("TACO", must_exist=False)
     cli_args = [
         "partition",
         f"--split-file={taco_dataset_split_path}",

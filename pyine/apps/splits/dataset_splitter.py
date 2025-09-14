@@ -181,7 +181,7 @@ def split(
 ) -> None:
     """Entry point for the dataset splitter CLI."""
     pyine.utils.reprod.entrypoint_setup()
-    output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name)
+    output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name, must_exist=False)
     pyine.utils.filesystem.check_output_path_overwrite(output_path)
     dataset_path = _get_resolved_dataset_path(dataset_name, dataset_path)
     logger.info(f"starting dataset splitting for '{dataset_name}' at: {dataset_path}")

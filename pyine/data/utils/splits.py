@@ -369,11 +369,18 @@ def get_split_data_from_coding_problem_dataset(
 
 def get_dataset_split_file_path(
     source_dataset_name: str,
+    must_exist: bool = True,
 ) -> pathlib.Path:
-    """Returns the path of the split file for a given dataset."""
+    """Returns the path of the split file for a given dataset.
+
+    If `must_exist` is True and the split does not exist, raises FileNotFoundError.
+    """
     split_root_folder = pyine.utils.filesystem.get_data_root_path() / "splits"
     split_root_folder.mkdir(parents=True, exist_ok=True)
-    return split_root_folder / f"{source_dataset_name}-split.bin"
+    split_path = split_root_folder / f"{source_dataset_name}-split.bin"
+    if must_exist and not split_path.is_file():
+        raise FileNotFoundError(f"split file not found for: {source_dataset_name}")
+    return split_path
 
 
 def get_dataset_split_result(
@@ -387,9 +394,7 @@ def get_dataset_split_result(
     if potential_path.is_file():
         split_file_path = potential_path
     else:
-        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path)
-        if not split_file_path.exists():
-            raise FileNotFoundError(f"split file not found for: {source_dataset_name_or_split_file_path}")
+        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path, must_exist=True)
     with open(split_file_path, "rb") as fd:
         split_result_dict = orjson.loads(fd.read())
     return SplitResult.model_validate(split_result_dict)

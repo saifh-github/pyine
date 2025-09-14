@@ -765,6 +765,8 @@ def get_latest_dataset_path(
     If multiple deltas datasets are available, the most recent version is returned, where we pick
     strictly by the date suffix (YYYY-MM-DD) in the directory name, ignoring any prefix tag.
     Optionally, a filter rule can be provided to exclude directories before selection.
+
+    Raises a FileNotFoundError exception if no matching dataset is found.
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
     return pyine.data.common.resolve_latest_dataset_path(
@@ -786,7 +788,7 @@ def get_matching_dataset_paths(
       - Regex: set is_regex=True or prefix the pattern with 're:'/'regex:' to use Python regex.
                Prefix 'glob:'/'fnmatch:' can force glob mode.
 
-    Returns a list sorted deterministically by name.
+    Returns a sorted list which may be empty if no matches are found.
     """
     assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
     return pyine.data.common.resolve_matching_dataset_paths(

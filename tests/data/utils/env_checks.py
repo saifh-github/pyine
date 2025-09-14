@@ -29,7 +29,7 @@ def has_taco_traces_dataset():
 def has_taco_traces_dataset_split():
     """Returns true if the TACO traces dataset split is available."""
     try:
-        path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
+        path = pyine.data.utils.splits.get_dataset_split_file_path("TACO", must_exist=True)
     except (FileNotFoundError, AssertionError):
         return False
     return path.exists()

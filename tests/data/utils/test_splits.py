@@ -251,7 +251,7 @@ def test_build_subset_to_identifiers_map(
 
 
 def test_get_dataset_split_file():
-    split_file_path = splits.get_dataset_split_file_path("fooOOO")
+    split_file_path = splits.get_dataset_split_file_path("fooOOO", must_exist=False)
     assert "fooOOO" in split_file_path.name
     assert split_file_path.parent.exists()
     with pytest.raises(FileNotFoundError):
