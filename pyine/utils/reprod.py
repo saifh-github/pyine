@@ -10,6 +10,7 @@ import re
 import sys
 import time
 import typing
+import warnings
 
 import dotenv
 import lightning.fabric.utilities.seed
@@ -304,6 +305,8 @@ def entrypoint_setup(
                 log_to_file=True,
                 log_path=None,  # use the framework's shared default log path by default
             )
+        logging.captureWarnings(True)
+        warnings.simplefilter("default")
         if disable_http_logging_info_msgs:
             for pkg_name in ("httpx", "httpcore"):
                 # fix for the 'noisy' HTTP request POST messages in info level logs when using llm providers
