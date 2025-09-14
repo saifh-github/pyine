@@ -44,64 +44,13 @@ class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataParserTy
     # note: no need to override the params field here, datasets don't have anything standardized
 
 
-class BaseDataLoaderParams(pydantic.BaseModel):
-    """Base parameters class for PyTorch data loader objects.
-
-    We purposely do not refer to the `dataset` argument here, as it will always be passed at
-    runtime during instantiation.
-
-    Note: the arguments and defaults used here are derived from the PyTorch docs. For more
-    information on any of these arguments, refer to `torch.utils.data.DataLoader`.
-    """
-
-    model_config = pydantic.ConfigDict(frozen=True, extra="allow")
-    """Pydantic model configuration (allows any extra fields that will be passed to the constructor)."""
-
-    batch_size: typing.Annotated[
-        pydantic.PositiveInt,
-        pydantic.Field(
-            default=1,
-            description="How many samples per batch to load.",
-        ),
-    ]
-    shuffle: typing.Annotated[
-        pydantic.StrictBool,
-        pydantic.Field(
-            default=False,
-            description="Set to True to have the data reshuffled at every epoch.",
-        ),
-    ]
-    num_workers: typing.Annotated[
-        pydantic.NonNegativeInt,
-        pydantic.Field(
-            default=0,
-            description="How many subprocesses to use for data loading; 0 means data will be loaded in the main process.",
-        ),
-    ]
-    pin_memory: typing.Annotated[
-        pydantic.StrictBool,
-        pydantic.Field(
-            default=False,
-            description="If True, copies Tensors into CUDA pinned memory before returning them.",
-        ),
-    ]
-    drop_last: typing.Annotated[
-        pydantic.StrictBool,
-        pydantic.Field(
-            default=False,
-            description="Set to True to drop the last incomplete batch if the dataset size is not divisible by batch_size.",
-        ),
-    ]
-    timeout: typing.Annotated[
-        pydantic.NonNegativeFloat,
-        pydantic.Field(
-            default=0.0,
-            description="If positive, the timeout value for collecting a batch from workers.",
-        ),
-    ]
-    # the main/most common parameters are above, but other ones exist
-    # (e.g. sampler, collate_fn, worker_init_fn, multiprocessing_context, persistent_workers, ...)
-    # ... if you want to use non-default values for those, simply provide extra fields in this config
+BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
+    fn=BaseDataLoaderType,
+    name="BaseDataLoaderParamsConfig",
+    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+    exclude={"dataset"},  # will be provided at derived class instantiation time
+)
+"""Configuration parameters for the base data loader class."""
 
 
 class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataLoaderType]):
@@ -115,7 +64,7 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataLoaderTy
     base_class_path: str = pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType)
     """Base class path for the PyTorch data loader class."""
 
-    params: BaseDataLoaderParams = BaseDataLoaderParams()
+    params: BaseDataLoaderParamsConfig = BaseDataLoaderParamsConfig()
     """Default parameters for the data loader."""
 
 
@@ -159,7 +108,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         pydantic.Field(
             default=BaseDataLoaderConfig(
                 class_path=pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType),
-                params=BaseDataLoaderParams(),
+                params=BaseDataLoaderParamsConfig(),
             ),
             validate_default=True,
             description="Default configuration for the data loaders whose specific settings may be overridden.",

@@ -37,7 +37,7 @@ def build_default_config() -> datamodule.BaseDataModuleConfig:
     )
     loader_cfg = datamodule.BaseDataLoaderConfig(
         class_path="torch.utils.data.DataLoader",
-        params=datamodule.BaseDataLoaderParams(),  # defaults: batch_size=1, shuffle=False, ...
+        params=datamodule.BaseDataLoaderParamsConfig(),
     )
     cfg = datamodule.BaseDataModuleConfig(
         datamodule_class_path=port.get_fully_qualified_name(DummyDataModule),
