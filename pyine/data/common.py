@@ -1,4 +1,5 @@
 import datetime
+import fnmatch
 import pathlib
 import re
 import typing
@@ -69,3 +70,60 @@ def resolve_latest_dataset_path(
         raise ValueError(f"no {kind} dataset directories with a date suffix found under {root}.")
     dated_paths.sort(key=lambda t: (t[0], t[1].name))  # tie-break by name for determinism
     return dated_paths[-1][1]
+
+
+def resolve_matching_dataset_paths(
+    kind: typing.Literal["traces", "deltas"],
+    source_dataset_name: str,
+    pattern: str,
+    pattern_is_regex: bool = False,
+) -> list[pathlib.Path]:
+    """Return dataset directories whose names match the given pattern.
+
+    Supports two matching modes:
+      - Glob/fnmatch (default): shell-style patterns (e.g., 'taco*.lmdb', '*-08-*.lmdb').
+      - Regex: if pattern_is_regex is True or 're:'/'regex:' prefix is used, standard Python regex
+        is applied using regex.search on the directory name.
+
+    The search is performed under '<data_root>/<kind>/<source_dataset_name>/' and only directories
+    are considered. The output is deterministically sorted by name.
+
+    Args:
+        kind: Either 'traces' or 'deltas'.
+        source_dataset_name: Name of the source dataset (e.g., 'TACO').
+        pattern: Glob or regex pattern to match directory names against.
+        pattern_is_regex: If True, treat 'pattern' as a regular expression. If False, treat it as
+            a glob/fnmatch pattern. If 'pattern' starts with 're:' or 'regex:' the function will
+            force regex mode; if it starts with 'glob:' or 'fnmatch:' it will force glob mode.
+
+    Returns:
+        A list of pathlib.Path objects pointing to matching dataset directories.
+    """
+    if kind not in ("traces", "deltas"):
+        raise ValueError(f"invalid dataset kind: {kind}")
+    if not pattern:
+        raise ValueError("pattern cannot be empty")
+    root = pyine.utils.filesystem.get_data_root_path() / kind / source_dataset_name
+    if not root.exists() or not root.is_dir():
+        raise FileNotFoundError(f"invalid {kind} dataset path: {root}")
+    # allow explicit prefixes to select mode regardless of pattern_is_regex value
+    normalized_pattern = pattern
+    if pattern.startswith(("re:", "regex:")):
+        pattern_is_regex = True
+        normalized_pattern = pattern.split(":", 1)[1]
+    elif pattern.startswith(("glob:", "fnmatch:")):
+        pattern_is_regex = False
+        normalized_pattern = pattern.split(":", 1)[1]
+    all_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name)
+    if not all_dirs:
+        raise FileNotFoundError(f"no {kind} dataset directories found in {root}")
+    if pattern_is_regex:
+        try:
+            regex = re.compile(normalized_pattern)
+        except re.error as e:
+            raise ValueError(f"invalid regex pattern: {pattern!r} ({e})")
+        matched = [p for p in all_dirs if regex.search(p.name)]
+    else:
+        matched = [p for p in all_dirs if fnmatch.fnmatchcase(p.name, normalized_pattern)]
+    matched.sort()
+    return matched

@@ -24,6 +24,7 @@ __all__ = [
     "simple_delta_generator",
     "get_deltas_from_trace_steps",
     "get_latest_dataset_path",
+    "get_matching_dataset_paths",
     "get_new_dataset_path",
 ]
 
@@ -581,6 +582,29 @@ def get_latest_dataset_path(
         kind="deltas",
         source_dataset_name=source_dataset_name,
         filter_rule=filter_rule,
+    )
+
+
+def get_matching_dataset_paths(
+    source_dataset_name: str,
+    pattern: str,
+    is_regex: bool = False,
+) -> list[pathlib.Path]:
+    """Return all deltas dataset directories for a source that match the provided pattern.
+
+    Matching modes:
+      - Glob/fnmatch (default): e.g., 'mytag.*.lmdb', '*-08-*.lmdb'.
+      - Regex: set is_regex=True or prefix the pattern with 're:'/'regex:' to use Python regex.
+               Prefix 'glob:'/'fnmatch:' can force glob mode.
+
+    Returns a list sorted deterministically by name.
+    """
+    assert source_dataset_name in SUPPORTED_SOURCE_DATASETS, f"invalid source dataset: {source_dataset_name}"
+    return pyine.data.common.resolve_matching_dataset_paths(
+        kind="deltas",
+        source_dataset_name=source_dataset_name,
+        pattern=pattern,
+        pattern_is_regex=is_regex,
     )
 
 
