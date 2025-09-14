@@ -7,6 +7,7 @@ import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.utils.filesystem
+import pyine.utils.openai
 import pyine.utils.reprod
 
 target_hydra_version = "1.3"
@@ -35,10 +36,36 @@ def store_hydra_runtime_configs(store: hydra_zen.ZenStore) -> None:
     )
 
 
-def get_base_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen.ZenStore:
-    """Stores project-wide configs in the specified store (or a new one if None) and returns it."""
-    if store is None:
-        store = hydra_zen.ZenStore()
+def get_openai_client_configs() -> dict[str, hydra_zen.typing.Builds]:
+    """Returns OpenAI client configs to be stored in a zen store."""
+    default_openai_client_config = hydra_zen.builds(
+        pyine.utils.openai.OpenAIClientConfig,
+        params=dict(timeout=None),  # override the default unserializable 'NOT_GIVEN' field
+        # -------------
+        populate_full_signature=True,
+        hydra_convert="object",
+    )
+    timeout300s_openai_client_config = hydra_zen.builds(
+        pyine.utils.openai.OpenAIClientConfig,
+        params=dict(timeout=300),
+        builds_bases=(default_openai_client_config,),
+    )
+    outputs = dict(
+        default=default_openai_client_config,
+        timeout300s=timeout300s_openai_client_config,
+    )
+    return outputs
+
+
+def get_base_store() -> hydra_zen.ZenStore:
+    """Stores project-wide configs in a new zen store and returns it.
+
+    The default configs are the following:
+    - 'runtime' group: ['default', 'dry_run']
+    - 'openai_client_config' group: ['default', 'timeout300s']
+    - 'hydra' group: ['config']
+    """
+    store = hydra_zen.ZenStore()
 
     runtime_store = store(group="runtime")
     store_hydra_runtime_configs(runtime_store)
@@ -64,7 +91,6 @@ def get_base_hydra_configs(store: hydra_zen.ZenStore | None = None) -> hydra_zen
             },
         ),
     )
-
     # ...add more here if needed (job callbacks? loggers? profilers?)
     return store
 

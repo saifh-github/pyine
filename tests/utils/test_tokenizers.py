@@ -2,7 +2,7 @@ import tiktoken
 import torch
 import transformers
 
-import pyine.organisms.models.utils.tokenizers as toknz
+import pyine.utils.tokenizers as toknz
 
 
 def test_get_hf_tokenizer():

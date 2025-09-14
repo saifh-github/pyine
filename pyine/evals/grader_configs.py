@@ -8,7 +8,7 @@ import pyine.utils.llm_providers
 
 def store_hydra_configs(store: hydra_zen.ZenStore) -> None:
     """Stores grader-specific configs in the provided hydra zen store."""
-    openai_provider_config = hydra_zen.builds(
+    openai_llm_provider_config = hydra_zen.builds(
         pyine.utils.llm_providers.LLMProviderConfig,
         provider="openai",
         # -------------
@@ -18,14 +18,14 @@ def store_hydra_configs(store: hydra_zen.ZenStore) -> None:
     store(
         hydra_zen.make_config(
             model_kwargs=dict(model="gpt-5-mini"),
-            bases=(openai_provider_config,),
+            bases=(openai_llm_provider_config,),
         ),
         name="openai_gpt-5-mini",
     )
     store(
         hydra_zen.make_config(
             model_kwargs=dict(model="gpt-5-nano"),
-            bases=(openai_provider_config,),
+            bases=(openai_llm_provider_config,),
         ),
         name="openai_gpt-5-nano",
     )

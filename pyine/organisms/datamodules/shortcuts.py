@@ -1,4 +1,4 @@
-import collections
+import logging
 import pathlib
 import typing
 
@@ -8,23 +8,16 @@ import numpy as np
 import pydantic
 
 import pyine.data.datamodule
-import pyine.data.traces.dataset_reader as dataset_reader
+import pyine.data.traces.dataset_reader
 import pyine.data.utils.filter_rules
 import pyine.data.utils.splits
-import pyine.organisms.datamodules.utils.samples
-import pyine.organisms.datamodules.utils.transforms
-import pyine.organisms.models.utils.openai
 import pyine.prompts
-import pyine.utils.code.execution
 import pyine.utils.filesystem
+import pyine.utils.openai
 import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
-from pyine.data.datamodule import (
-    BaseDataLoaderConfig,
-    LoaderNameType,
-    SubsetNameType,
-)
+from pyine.data.datamodule import SubsetNameType
 from pyine.organisms.datamodules.utils.samples import (
     SampleBuilderConfig,
     SampleDataLoaderType,
@@ -33,7 +26,14 @@ from pyine.organisms.datamodules.utils.samples import (
     SampleTransformConfig,
     TraceDatasetMetadata,
     TraceMetadata,
+    get_traces_metadata,
 )
+from pyine.organisms.datamodules.utils.transforms import (
+    SampleTransformType,
+    create_sample_transform,
+)
+
+logger = logging.getLogger(__name__)
 
 ProblemIdType = str
 """Type def used to represent a coding problem identifier (for cleanliness)."""
@@ -53,6 +53,8 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         config: Configuration object for this datamodule.
     """
 
+    # @@@@@@@@@@@@@@@@ rerun extraction w/ non-hinted-obfuscation?? (no need? reaugment at test time, only eval?)
+
     def __init__(
         self,
         config: "ShortcutBiasDataModuleConfig",
@@ -63,7 +65,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self.config: "ShortcutBiasDataModuleConfig" = config
         # attributes below are initialized in setup()
         self._metadata: TraceDatasetMetadata | None = None
-        self._readers: list[dataset_reader.DatasetReader] = []
+        self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
         self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
 
     @typing.override
@@ -73,14 +75,17 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         Remember: this function should NOT be saving any state to the data module object, as it
         will only run on the main process.
         """
+        lmdb_paths_str = "\n\t".join([str(p) for p in self.config.lmdb_paths])
         if self._is_metadata_prepared():
-            return  # already prepared, nothing more to do
+            logger.info(f"using cached shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
+            return
+        logger.info(f"preparing shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
         rng = np.random.default_rng(self.config.split_seed)
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
         # first prep step: identify which traces are to be kept based on our base tag filter rule
         base_filter = self.config._resolved_base_filter  # noqa
         assert base_filter is not None, "base filter should have been resolved by now"
-        base_traces_meta = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
+        base_traces_meta = get_traces_metadata(
             readers=readers,
             base_filter=base_filter,
             verbose=self.verbose,
@@ -117,6 +122,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             problem_assignments=split_data.subset_assignments,
             split_hash=split_hash,
         )
+        logger.info(f"done; saving prepared metadata to: {self._get_prepared_metadata_file_path()}")
         self._save_prepared_metadata(metadata)
 
     def _is_metadata_prepared(self) -> bool:
@@ -159,6 +165,8 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         """
         if not self._is_metadata_prepared():
             raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
+        parser_types_str = "\n\t".join([str(s) for s in self.config.subset_types])
+        logger.info(f"setting up shortcuts datamodule parsers:\n\t{parser_types_str}")
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers here since they should be read-only and never pickled
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
@@ -249,7 +257,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
 
     def make_dataloader(
         self,
-        loader_type: LoaderNameType,
+        loader_type: pyine.data.datamodule.LoaderNameType,
     ) -> SampleDataLoaderType:
         """Create a DataLoader for a given type."""
         assert loader_type is not None, "loader type must be specified"
@@ -281,7 +289,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
         for r in self._readers:
             r.close()
-        self._readers: list[dataset_reader.DatasetReader] = []
+        self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
 
 
 def _get_supported_subset_types() -> tuple[SubsetNameType, ...]:
@@ -381,7 +389,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         **extra_kwargs,
     ) -> pathlib.Path:
         """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations."""
-        openai_local_data_dir = pyine.organisms.models.utils.openai.get_local_file_directory()
+        openai_local_data_dir = pyine.utils.openai.get_local_file_directory()
         params_hash = pyine.utils.reprod.get_params_hash(
             self.model_dump(),
             append_answer,
@@ -396,7 +404,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
                 merge_system_with_user=merge_system_with_user,
                 **extra_kwargs,
             )
-            pyine.organisms.models.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
+            pyine.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
 
     @typing.override
@@ -405,9 +413,9 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         append_answer: bool = True,
         use_hf_messages: bool = False,
         merge_system_with_user: bool = False,
-    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
+    ) -> SampleTransformType:
         """Returns the sample transform function used to prepare training/evaluation conversations."""
-        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
+        return create_sample_transform(
             append_answer=append_answer,
             use_hf_messages=use_hf_messages,
             merge_system_with_user=merge_system_with_user,
@@ -429,7 +437,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         if subset_type not in self.subset_types:
             raise ValueError(f"invalid subset type: {subset_type}, expected one of: {self.subset_types}")
         parser_config = self.default_dataparser_config
-        assert isinstance(parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig)
+        assert isinstance(parser_config, SampleBuilderConfig)
         if subset_type in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_type]:
             parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_type])
         special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_type)
@@ -440,12 +448,12 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     @typing.override
     def _resolve_dataloader_config(
         self,
-        loader_type: LoaderNameType,
-    ) -> BaseDataLoaderConfig:
+        loader_type: pyine.data.datamodule.LoaderNameType,
+    ) -> pyine.data.datamodule.BaseDataLoaderConfig:
         """Returns the data loader configuration for the given loader type."""
         if loader_type not in self.loader_types:
             raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
-        loader_config: BaseDataLoaderConfig = self.default_dataloader_config
+        loader_config: pyine.data.datamodule.BaseDataLoaderConfig = self.default_dataloader_config
         assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
         if any([loader_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
             loader_type = loader_type.rsplit("_", maxsplit=1)[0]

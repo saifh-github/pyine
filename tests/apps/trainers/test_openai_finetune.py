@@ -6,7 +6,7 @@ import pyine.apps.trainers.openai_finetune as finetune
 import pyine.data.traces.dataset_utils as traces_dataset_utils
 import pyine.data.utils.splits as split_utils
 import pyine.organisms.datamodules.shortcuts as shortcuts_dm
-import pyine.organisms.models.utils.openai as openai_utils
+import pyine.utils.openai as openai_utils
 import tests.data.utils.env_checks as env_checks
 
 
@@ -36,6 +36,7 @@ async def test_main_evaluates_base_model_with_skip_fine_tuning(
         max_trace_count=20,
         split_file_path=split_utils.get_dataset_split_file_path("TACO"),
     )
+    openai_client_config = openai_utils.OpenAIClientConfig()
     finetuner_params_config = openai_utils.OpenAIFineTunerParamsConfig(
         base_model="gpt-4o-mini",
         method={"type": "supervised"},
@@ -45,6 +46,7 @@ async def test_main_evaluates_base_model_with_skip_fine_tuning(
     finetuner_cfg = openai_utils.OpenAIFineTunerConfig(params=finetuner_params_config)
     cfg = finetune.MainConfig(
         datamodule_config=real_dm_config,
-        openai_finetuner=finetuner_cfg,
+        openai_client_config=openai_client_config,
+        openai_finetuner_config=finetuner_cfg,
     )
     await finetune.main(cfg, skip_fine_tuning=True)

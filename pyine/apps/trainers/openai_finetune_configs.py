@@ -18,6 +18,7 @@ import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.models.utils.openai
 import pyine.utils.llm_providers
+import pyine.utils.openai
 import pyine.utils.reprod
 
 
@@ -38,7 +39,7 @@ def _openai_finetuner_method_params_config_wrapper(
     """Wrapper for OpenAI fine-tuning method params configs to return a parent object."""
 
     def _wrapper(*args, **kwargs):
-        return pyine.organisms.models.utils.openai.OpenAIFineTunerConfig(params=wrapped_fn(*args, **kwargs))
+        return pyine.utils.openai.OpenAIFineTunerConfig(params=wrapped_fn(*args, **kwargs))
 
     return _wrapper
 
@@ -49,7 +50,7 @@ def get_default_sft_params_config():
     This configuration should be pretty cheap to run (especially compared to rlft).
     """
     return hydra_zen.builds(
-        pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig,
+        pyine.utils.openai.OpenAIFineTunerParamsConfig,
         base_model="gpt-4.1-mini-2025-04-14",
         method=dict(type="supervised"),
         seed="${runtime.seed}",
@@ -70,9 +71,8 @@ def get_default_rlft_params_config():
     you know what you're doing.
     """
     return hydra_zen.builds(
-        pyine.organisms.models.utils.openai.OpenAIFineTunerParamsConfig,
+        pyine.utils.openai.OpenAIFineTunerParamsConfig,
         base_model="o4-mini-2025-04-16",
-        method=hydra.conf.MISSING,  # will be overridden in defaults below
         seed="${runtime.seed}",
         suffix="default-rlft",
         metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
@@ -88,9 +88,9 @@ def get_default_rlft_params_config():
 
 
 @functools.wraps(pyine.apps.trainers.openai_finetune.main)
-def _async_main_wrapper(*args, **kwargs) -> None:
+def _async_main_wrapper(*args, **kwargs):
     """Wrapper for async main function."""
-    asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
+    return asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
 
 
 def hydra_main() -> None:
@@ -120,14 +120,30 @@ def register_experiment_configs(
     experiment_store(
         hydra_zen.make_config(
             runtime=dict(exp_name="TACO_latest_200t_eval_only"),
+            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
             skip_fine_tuning=True,
             hydra_defaults=[
                 "_self_",
                 {"override /config/datamodule_config": "TACO_latest_200t"},
+                {"override /config/openai_client_config": "timeout300s"},
             ],
             bases=(main_config,),
         ),
         name="TACO_latest_200t_eval_only",
+    )
+    experiment_store(
+        hydra_zen.make_config(
+            runtime=dict(exp_name="TACO_latest_200t"),
+            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
+            skip_fine_tuning=False,
+            hydra_defaults=[
+                "_self_",
+                {"override /config/datamodule_config": "TACO_latest_200t"},
+                {"override /config/openai_client_config": "timeout300s"},
+            ],
+            bases=(main_config,),
+        ),
+        name="TACO_latest_200t",
     )
     # @@@@ TODO: pull in experiment configs from organisms folder, if needed
 
@@ -140,7 +156,7 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     should allow users to run the app without any extra configuration.
     """
     pyine.utils.reprod.load_dotenv()
-    store = pyine.configs.base.get_base_hydra_configs()
+    store = pyine.configs.base.get_base_store()
 
     # ---------------- store main entrypoint configs ----------------
 
@@ -152,9 +168,9 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     )
     openai_finetune_main_config = hydra_zen.builds(
         _async_main_wrapper,
-        config=hydra.conf.MISSING,
-        runtime=hydra.conf.MISSING,
         skip_fine_tuning=False,
+        # -------------
+        populate_full_signature=True,
         hydra_defaults=[
             "_self_",
             {"config": "base"},
@@ -171,16 +187,14 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     config_store(
         hydra_zen.builds(
             pyine.apps.trainers.openai_finetune.MainConfig,
-            datamodule_config=hydra.conf.MISSING,  # must be specified by user
-            openai_finetuner=hydra.conf.MISSING,  # will be overridden in defaults below
-            llm_grader_provider_config=None,  # will be overridden in defaults below
             # -------------
             populate_full_signature=True,
             hydra_convert="object",
             hydra_defaults=[
                 "_self_",
                 {"datamodule_config": "default"},
-                {"openai_finetuner": "openai_gpt-4.1-mini_default_sft"},
+                {"openai_client_config": "default"},
+                {"openai_finetuner_config": "openai_gpt-4.1-mini_default_sft"},
                 {"llm_grader_provider_config": "openai_gpt-5-nano"},
             ],
         ),
@@ -192,9 +206,16 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     datamodule_config_store = config_store(group="config/datamodule_config")
     pyine.organisms.datamodules.shortcuts_configs.store_hydra_configs(datamodule_config_store)
 
+    # ---------------- store default openai client configs ----------------
+
+    openai_client_config_store = config_store(group="config/openai_client_config")
+    openai_client_configs = pyine.configs.base.get_openai_client_configs()
+    for config_name, config in openai_client_configs.items():
+        openai_client_config_store(config, name=config_name)
+
     # ---------------- store default fine-tuning configs ----------------
 
-    openai_finetuner_config_store = config_store(group="config/openai_finetuner")
+    openai_finetuner_config_store = config_store(group="config/openai_finetuner_config")
     openai_finetuner_config_store(
         get_default_sft_params_config(),
         name="openai_gpt-4.1-mini_default_sft",
@@ -204,7 +225,7 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
         name="openai_o4-mini_default_rlft",
     )
 
-    openai_finetuner_method_config_store = openai_finetuner_config_store(group="config/openai_finetuner/method")
+    openai_finetuner_method_config_store = openai_finetuner_config_store(group="config/openai_finetuner_config/method")
     openai_finetuner_method_config_store(
         hydra_zen.builds(
             pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig,

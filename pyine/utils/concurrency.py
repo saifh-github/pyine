@@ -248,7 +248,7 @@ async def run_with_sliding_window(
     process_result: ProcessorFuncType,
     progress_callback: ProgressCallbackType | None = None,
     max_workers: int | None = None,
-    max_in_flight_jobs: int | None = 5_000,
+    max_in_flight_jobs: int | None = 32,
 ) -> None:
     """Run a job submission function based on a thread pool with a sliding window of in-flight jobs.
 

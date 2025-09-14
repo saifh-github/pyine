@@ -18,7 +18,7 @@ async def evaluate_model_on_subset(
     parser: pyine.organisms.datamodules.utils.samples.SampleBuilder,
     parallel: bool = True,
     max_workers: int | None = None,
-    max_in_flight_jobs: int | None = 5_000,
+    max_in_flight_jobs: int | None = 32,
     async_metrics_compute_rate: int = 100,
     llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
     verbose: bool = False,
