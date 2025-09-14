@@ -619,7 +619,6 @@ def _fetch_augmented_code_to_trace(
         # note: obfuscated code is unique and does not vary for each test (unlike other augments)
         obfuscated_code = pyine.utils.code.obfuscation.obfuscate_code(
             solution.code,  # obfuscate the original code snippet directly
-            remove_docstrings_and_literals=False,  # keep docstrings (those are nice hints)
             reformat_output=True,  # always reformat the result to get more consistent traces
             preserved_local_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
             preserve_global_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
