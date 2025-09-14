@@ -301,7 +301,7 @@ def entrypoint_setup(
         if runtime_config is None:
             # setup logging with default settings if no config is provided (otherwise hydra handles it)
             pyine.utils.logging.setup_logging(
-                level=os.environ.get("LOGLEVEL", logging.INFO).upper(),
+                level=os.environ.get("LOGLEVEL", logging.INFO),
                 log_to_file=True,
                 log_path=None,  # use the framework's shared default log path by default
             )
