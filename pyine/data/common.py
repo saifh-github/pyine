@@ -78,26 +78,33 @@ def resolve_matching_dataset_paths(
     pattern: str,
     pattern_is_regex: bool = False,
 ) -> list[pathlib.Path]:
-    """Return dataset directories whose names match the given pattern.
+    """Return dataset directories under the given source that match the provided pattern.
 
     Supports two matching modes:
       - Glob/fnmatch (default): shell-style patterns (e.g., 'taco*.lmdb', '*-08-*.lmdb').
-      - Regex: if pattern_is_regex is True or 're:'/'regex:' prefix is used, standard Python regex
-        is applied using regex.search on the directory name.
+        If the pattern contains a path separator ('/' or '\\'), it is matched against the
+        relative path from the source root; otherwise it's matched against the basename.
+      - Regex: if pattern_is_regex is True or 're:'/'regex:' prefix is used, standard Python
+        regex is applied using regex.search on the relative path from the source root.
 
-    The search is performed under '<data_root>/<kind>/<source_dataset_name>/' and only directories
-    are considered. The output is deterministically sorted by name.
+    The search is performed recursively under '<data_root>/<kind>/<source_dataset_name>/' and only
+    directories are considered.
+
+    Results are deterministically sorted by:
+      1) date suffix parsed from the top-level dataset directory name (YYYY-MM-DD) if present,
+         with undated entries first; then
+      2) the relative path string from the source root (POSIX style).
 
     Args:
         kind: Either 'traces' or 'deltas'.
         source_dataset_name: Name of the source dataset (e.g., 'TACO').
-        pattern: Glob or regex pattern to match directory names against.
+        pattern: Glob or regex pattern to match directory names/paths against.
         pattern_is_regex: If True, treat 'pattern' as a regular expression. If False, treat it as
             a glob/fnmatch pattern. If 'pattern' starts with 're:' or 'regex:' the function will
             force regex mode; if it starts with 'glob:' or 'fnmatch:' it will force glob mode.
 
     Returns:
-        A list of pathlib.Path objects pointing to matching dataset directories.
+        A list of pathlib.Path objects pointing to matching directories (top-level or subdirectories).
     """
     if kind not in ("traces", "deltas"):
         raise ValueError(f"invalid dataset kind: {kind}")
@@ -106,6 +113,7 @@ def resolve_matching_dataset_paths(
     root = pyine.utils.filesystem.get_data_root_path() / kind / source_dataset_name
     if not root.exists() or not root.is_dir():
         raise FileNotFoundError(f"invalid {kind} dataset path: {root}")
+
     # allow explicit prefixes to select mode regardless of pattern_is_regex value
     normalized_pattern = pattern
     if pattern.startswith(("re:", "regex:")):
@@ -114,16 +122,26 @@ def resolve_matching_dataset_paths(
     elif pattern.startswith(("glob:", "fnmatch:")):
         pattern_is_regex = False
         normalized_pattern = pattern.split(":", 1)[1]
-    all_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name)
+
+    all_dirs = sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: p.relative_to(root).as_posix())
     if not all_dirs:
         raise FileNotFoundError(f"no {kind} dataset directories found in {root}")
+
+    def rel(p: pathlib.Path) -> str:
+        return p.relative_to(root).as_posix()
+
     if pattern_is_regex:
         try:
             regex = re.compile(normalized_pattern)
         except re.error as e:
             raise ValueError(f"invalid regex pattern: {pattern!r} ({e})")
-        matched = [p for p in all_dirs if regex.search(p.name)]
+        matched = [p for p in all_dirs if regex.search(rel(p))]
     else:
-        matched = [p for p in all_dirs if fnmatch.fnmatchcase(p.name, normalized_pattern)]
+        # if the pattern includes a path separator, match against the relative path; else match basename.
+        has_sep = ("/" in normalized_pattern) or ("\\" in normalized_pattern)
+        if has_sep:
+            matched = [p for p in all_dirs if fnmatch.fnmatchcase(rel(p), normalized_pattern)]
+        else:
+            matched = [p for p in all_dirs if fnmatch.fnmatchcase(p.name, normalized_pattern)]
     matched.sort()
     return matched

@@ -282,3 +282,34 @@ def test_resolve_matching_dataset_paths_invalid_regex(monkeypatch, tmp_path, kin
             source_dataset_name=src,
             pattern="re:[bad",
         )
+
+
+@pytest.mark.parametrize("kind", ["traces", "deltas"])
+def test_resolve_matching_dataset_paths_matches_subdirectories(monkeypatch, tmp_path, kind):
+    """Ensure patterns with path separators match directories recursively under the source root."""
+    monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
+    src = "TACO"
+    created = _mk_dirs(
+        tmp_path,
+        kind,
+        src,
+        [
+            "alpha.2025-01-01.lmdb",
+            "beta.2025-01-02.lmdb",
+        ],
+    )
+    root = tmp_path / kind / src
+    (root / "alpha.2025-01-01.lmdb" / "snapshots" / "0001").mkdir(parents=True, exist_ok=True)
+    (root / "alpha.2025-01-01.lmdb" / "snapshots" / "0002").mkdir(parents=True, exist_ok=True)
+    (root / "alpha.2025-01-01.lmdb" / "chunks").mkdir(parents=True, exist_ok=True)
+    (root / "beta.2025-01-02.lmdb" / "snapshots" / "0003").mkdir(parents=True, exist_ok=True)
+    matched = pyine.data.common.resolve_matching_dataset_paths(
+        kind=kind,
+        source_dataset_name=src,
+        pattern="alpha.2025-01-01.lmdb/snapshots/*",
+    )
+    rels = [p.relative_to(root).as_posix() for p in matched]
+    assert rels == [
+        "alpha.2025-01-01.lmdb/snapshots/0001",
+        "alpha.2025-01-01.lmdb/snapshots/0002",
+    ]
