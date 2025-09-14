@@ -23,7 +23,6 @@ from pyine.organisms.datamodules.utils.samples import (
     SampleDataLoaderType,
     SampleDataParserType,
     SampleInputType,
-    SampleTransformConfig,
     TraceDatasetMetadata,
     TraceMetadata,
     get_traces_metadata,
@@ -52,8 +51,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     Args:
         config: Configuration object for this datamodule.
     """
-
-    # @@@@@@@@@@@@@@@@ rerun extraction w/ non-hinted-obfuscation?? (no need? reaugment at test time, only eval?)
 
     def __init__(
         self,
@@ -172,6 +169,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
         self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
         for subset_type in self.config.subset_types:
+            logger.debug(f"setting up shortcuts datamodule {subset_type} parser...")
             subset_traces = self._get_traces_meta_for_subset(subset_type)
             self._subset_parsers[subset_type] = self.config.instantiate_parser(
                 subset_type=subset_type,
@@ -320,7 +318,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------
 
-    lmdb_paths: typing.Annotated[list[pathlib.Path], pydantic.Field(min_length=1)]
+    lmdb_paths: typing.Annotated[list[pathlib.Path], pydantic.Field(min_length=1)]  # must be specified!
     """Sequence of paths pointing to LMDB datasets containing execution traces."""
     subset_types: typing.Annotated[tuple[SubsetNameType, ...], pydantic.Field(min_length=1)] = (
         _get_supported_subset_types()  # should never need to override this default
@@ -328,29 +326,16 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     """List of data subsets that the module supports; some subsets override sample selection strategy."""
     default_dataparser_config: SampleBuilderConfig = SampleBuilderConfig()
     """Default trace parser configuration (will rely on the TACO dataset if not overridden)."""
-    dataparser_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = dict(
-        train=dict(
-            transform_config=SampleTransformConfig(
-                transform_strategy="hybrid",
-                output_type_prob_map={
-                    "program output": 0.5,
-                    "frame variables": 0.1,
-                    "function return": 0.4,
-                },
-            ),
-        ),  # other subsets will default to never producing partial samples
-    )
+    dataparser_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = pydantic.Field(default_factory=dict)
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
-    dataloader_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = dict(
-        train=dict(shuffle=True),
-    )
+    dataloader_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = pydantic.Field(default_factory=dict)
     """Overrides for the default DataLoader configuration; will shuffle training data."""
 
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 
     max_trace_count: int | None = None
     """Maximum number of traces to load across all subsets (except the 'base' one)."""
-    split_file_path: pathlib.Path
+    split_file_path: pathlib.Path  # must be specified!
     """Path to the file containing the split data for the full dataset.
 
     This file should have been created by the `pyine.apps.splits.dataset_splitter.py` module; it

@@ -548,8 +548,10 @@ class SampleBuilder(SampleDataParserType):
             else:
                 raise NotImplementedError
         logger.debug(f"trace selection strategy kept {len(output_traces_meta)} of {len(traces)} traces")
-        type_counts = collections.Counter(output_code_types)
-        logger.debug(f"produced output types:\n\t{'\n\t'.join([f"{k}: {c}" for k, c in type_counts.items()])} ")
+        if output_traces_meta:
+            type_counts = collections.Counter(output_code_types)
+            output_types_str = "\n\t".join([f"{k}: {c}" for k, c in type_counts.items()])
+            logger.debug(f"produced output types:\n\t{output_types_str}")
         return output_traces_meta, output_code_types, output_code_overrides
 
     @staticmethod

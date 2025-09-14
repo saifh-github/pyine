@@ -25,6 +25,35 @@ def _assert_non_leaking_assignments(metadata):
             traces_to_subsets[trace.identifier] = subset_type
 
 
+@pytest.fixture
+def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig:
+    return pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
+        lmdb_paths=[
+            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
+        ],
+        dataparser_config_overrides=dict(
+            train=dict(
+                transform_config=pyine.organisms.datamodules.utils.samples.SampleTransformConfig(
+                    transform_strategy="hybrid",
+                    output_type_prob_map={
+                        "program output": 0.5,
+                        "frame variables": 0.1,
+                        "function return": 0.4,
+                    },
+                ),
+            ),  # other subsets will default to never producing partial samples
+        ),
+        dataloader_config_overrides=dict(
+            train=dict(
+                batch_size=16,
+                shuffle=True,
+            ),
+        ),
+        max_trace_count=1000,
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
+    )
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(
     tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
@@ -38,22 +67,9 @@ def _assert_non_leaking_assignments(metadata):
     tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
-def test_shortcuts_datamodule_integration():
+def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     pyine.utils.reprod.load_dotenv()
-    config = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
-        lmdb_paths=[
-            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
-        ],
-        dataloader_config_overrides=dict(
-            train=dict(
-                batch_size=16,
-                shuffle=True,
-            ),
-        ),
-        max_trace_count=1000,
-        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
-    )
-    dm = config.instantiate_datamodule(verbose=True)
+    dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -120,16 +136,9 @@ def test_shortcuts_datamodule_integration():
     tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
-def test_shortcuts_datamodule_predefined_split():
+def test_shortcuts_datamodule_predefined_split(shortcuts_dm_config):
     pyine.utils.reprod.load_dotenv()
-    config = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
-        lmdb_paths=[
-            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
-        ],
-        max_trace_count=1000,
-        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
-    )
-    dm = config.instantiate_datamodule(verbose=True)
+    dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()

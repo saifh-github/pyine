@@ -194,7 +194,6 @@ class PromptResultDB:
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
-        logger.debug(f"fetching potential entries from database ({identifier=})")
         sql = [
             "SELECT * FROM items WHERE identifier = ?",
         ]
@@ -237,7 +236,6 @@ class PromptResultDB:
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
-        logger.debug(f"fetching potential entries from database ({group=})")
         sql = ['SELECT * FROM items WHERE "group" = ?']
         params: list[typing.Any] = [group]
         if prompt_name is not None:
@@ -276,7 +274,6 @@ class PromptResultDB:
         """
         if prompt_name is None:
             raise ValueError("prompt name required")
-        logger.debug(f"fetching potential entries from database ({prompt_name=})")
         sql = ["SELECT * FROM items WHERE prompt_name = ?"]
         params: list[typing.Any] = [prompt_name]
         if prompt_version is not None:
