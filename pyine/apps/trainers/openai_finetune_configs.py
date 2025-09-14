@@ -117,34 +117,50 @@ def register_experiment_configs(
     For more information on the individual experiments, refer to their docstrings and to any
     potential README.md file in the corresponding experiment directory.
     """
+    # @@@@@@ TODO: update w/ better base (DRY)
     experiment_store(
         hydra_zen.make_config(
-            runtime=dict(exp_name="TACO_latest_200t_eval_only"),
+            runtime=dict(exp_name="TACO_latest_20s_eval_only"),
             config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
             skip_fine_tuning=True,
             hydra_defaults=[
                 "_self_",
-                {"override /config/datamodule_config": "TACO_latest_200t"},
+                {"override /config/datamodule_config": "TACO_latest_20s"},
                 {"override /config/openai_client_config": "timeout300s"},
             ],
             bases=(main_config,),
         ),
-        name="TACO_latest_200t_eval_only",
+        name="TACO_latest_20s_eval_only",
     )
     experiment_store(
         hydra_zen.make_config(
-            runtime=dict(exp_name="TACO_latest_200t"),
+            runtime=dict(exp_name="TACO_latest_20s"),
             config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
             skip_fine_tuning=False,
             hydra_defaults=[
                 "_self_",
-                {"override /config/datamodule_config": "TACO_latest_200t"},
+                {"override /config/datamodule_config": "TACO_latest_20s"},
                 {"override /config/openai_client_config": "timeout300s"},
             ],
             bases=(main_config,),
         ),
-        name="TACO_latest_200t",
+        name="TACO_latest_20s",
     )
+    experiment_store(
+        hydra_zen.make_config(
+            runtime=dict(exp_name="TACO_10s10t_v1_part1_20s_eval_only"),
+            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
+            skip_fine_tuning=True,
+            hydra_defaults=[
+                "_self_",
+                {"override /config/datamodule_config": "TACO_10s10t_v1_part1_20s"},
+                {"override /config/openai_client_config": "timeout300s"},
+            ],
+            bases=(main_config,),
+        ),
+        name="TACO_10s10t_v1_part1_20s_eval_only",
+    )
+
     # @@@@ TODO: pull in experiment configs from organisms folder, if needed
 
 
@@ -154,6 +170,11 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     Will build off the default configs from the pyine.configs.base module and add configs for
     experiment setups, which are defined in the `register_experiment_configs` function. These
     should allow users to run the app without any extra configuration.
+
+    IMPORTANT NOTE: we manually load the dotenv file (if it exists) inside this function to help
+    resolve config variables that might be dependent on env vars, but no other setup is assumed to
+    have occurred. This means that logging, runtime configs, databases, etc. are not available, and
+    that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
     store = pyine.configs.base.get_base_store()
@@ -249,5 +270,4 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     # ---------------- register all configs with hydra ----------------
 
     store.add_to_hydra_store()
-
     return openai_finetune_main_config  # all done; return this for launch calls, if needed

@@ -24,10 +24,10 @@ def test_main_split_taco_micro_subset(
     """
     split_file_path = pathlib.Path(tmp_path) / "split.bin"
     assert not split_file_path.exists()
-    monkeypatch.setattr(splits_utils, "get_dataset_split_file_path", lambda x: split_file_path)
+    monkeypatch.setattr(splits_utils, "get_dataset_split_file_path", lambda x, must_exist: split_file_path)
     cli_runner = click.testing.CliRunner()
     res = cli_runner.invoke(splitter.main, ["split", "--dataset-name=TACO", "--max-sample-count=10"])  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res
     assert split_file_path.exists()
     split_result = splits_utils.get_dataset_split_result("TACO")
     assert split_result.source_dataset_name == "TACO"
@@ -55,7 +55,7 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
         "--format=yaml",
     ]
     res = cli_runner.invoke(splitter.main, cli_args)  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res
     part_files = sorted(list(tmp_path.glob("*.yaml")))
     assert len(part_files) > 0
     expected_ids = splits_utils.SplitResult.from_file(taco_dataset_split_path).identifiers

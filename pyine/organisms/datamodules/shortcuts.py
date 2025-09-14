@@ -77,7 +77,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             logger.info(f"using cached shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
             return
         logger.info(f"preparing shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
-        rng = np.random.default_rng(self.config.split_seed)
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
         # first prep step: identify which traces are to be kept based on our base tag filter rule
         base_filter = self.config._resolved_base_filter  # noqa
@@ -102,16 +101,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
                 subset_traces_meta[split_data.subset_assignments[problem_id]].append(trace_meta)
             else:
                 unassigned_traces_meta.append(trace_meta)
-        if self.config.max_trace_count is not None:
-            for subset_name, traces_meta in subset_traces_meta.items():
-                if len(traces_meta) > self.config.max_trace_count:
-                    # if we have more traces than requested, pick a random subset of the available ones
-                    # (also put the leftovers back into the unassigned list)
-                    orig_idxs = list(range(len(traces_meta)))
-                    picked_idxs = rng.choice(orig_idxs, size=self.config.max_trace_count, replace=False)
-                    subset_traces_meta[subset_name] = [traces_meta[idx] for idx in picked_idxs]
-                    unassigned_idxs = [idx for idx in orig_idxs if idx not in picked_idxs]
-                    unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
+        self._apply_max_solution_count_cap(subset_traces_meta, unassigned_traces_meta)
         metadata = TraceDatasetMetadata(
             base_traces=base_traces_meta,
             subset_traces=subset_traces_meta,
@@ -121,6 +111,34 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         )
         logger.info(f"done; saving prepared metadata to: {self._get_prepared_metadata_file_path()}")
         self._save_prepared_metadata(metadata)
+
+    def _apply_max_solution_count_cap(
+        self,
+        subset_traces_meta: dict[SubsetNameType, list[TraceMetadata]],
+        unassigned_traces_meta: list[TraceMetadata],
+    ) -> None:  # updates to the provided args are done in-place
+        if self.config.max_solution_count is not None:
+            rng = np.random.default_rng(self.config.split_seed)
+            for subset_name, traces_meta in subset_traces_meta.items():
+                tidxs_to_sids = {tidx: tm.get_parent_solution_id() for tidx, tm in enumerate(traces_meta)}
+                solution_ids = list(set(tidxs_to_sids.values()))
+                if len(solution_ids) > self.config.max_solution_count:
+                    # if we have more solutions than requested, pick a random subset of the available ones
+                    picked_solution_ids = rng.choice(
+                        solution_ids,
+                        size=self.config.max_solution_count,
+                        replace=False,
+                    )
+                    # find the associated traces for all picked solutions
+                    picked_trace_meta_idxs = [
+                        trace_meta_idx
+                        for trace_meta_idx, solution_id in tidxs_to_sids.items()
+                        if solution_id in picked_solution_ids
+                    ]
+                    subset_traces_meta[subset_name] = [traces_meta[idx] for idx in picked_trace_meta_idxs]
+                    # (also put the leftovers back into the unassigned list)
+                    unassigned_idxs = [idx for idx in tidxs_to_sids if idx not in picked_trace_meta_idxs]
+                    unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
 
     def _is_metadata_prepared(self) -> bool:
         """Returns True if the metadata is prepared and ready to be used."""
@@ -333,8 +351,13 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 
-    max_trace_count: int | None = None
-    """Maximum number of traces to load across all subsets (except the 'base' one)."""
+    max_solution_count: int | None = None
+    """Maximum number of solutions to load across all data subsets (used to do quick test runs).
+
+    If None, all solutions (and their traces) will be loaded; this is the default behavior. If an
+    integer is specified, that many solutions will be randomly picked for each subset. The traces
+    for those solutions will be kept, and all other traces will be unassigned from the subsets.
+    """
     split_file_path: pathlib.Path  # must be specified!
     """Path to the file containing the split data for the full dataset.
 

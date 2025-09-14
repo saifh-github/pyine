@@ -49,7 +49,7 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBiasD
                 shuffle=True,
             ),
         ),
-        max_trace_count=1000,
+        max_solution_count=100,
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
 

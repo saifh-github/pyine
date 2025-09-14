@@ -34,7 +34,7 @@ def test_main_trace_annot_generator(
         f"--db-path={db_file_path}",
     ]
     res = cli_runner.invoke(app.main, cli_args)  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res
     assert db_file_path.exists()
     db = pyine.prompts.PromptResultDB(db_file_path)
     ids = db.list_identifiers()

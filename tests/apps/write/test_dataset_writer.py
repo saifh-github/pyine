@@ -21,7 +21,7 @@ def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
         "--dry-run",
     ]
     res = cli_runner.invoke(writer.main, cli_args)  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res
 
 
 @pytest.mark.slow
@@ -47,7 +47,7 @@ def test_main_write_taco_traces_micro(
         "--max-tests-per-solution=1",
     ]
     res = cli_runner.invoke(writer.main, cli_args)  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res
     assert output_path.is_dir()
 
 
@@ -61,4 +61,4 @@ def test_main_write_deltas_dry_run() -> None:
         "--dry-run",
     ]
     res = cli_runner.invoke(writer.main, cli_args)  # noqa
-    assert res.exit_code == 0
+    assert res.exit_code == 0, res

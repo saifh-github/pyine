@@ -23,7 +23,7 @@ import tests.data.utils.env_checks as env_checks
     env_checks.OPENAI_API_KEY_MISSING,
     reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
 )
-def test_experiment_config_TACO_latest_200t_eval_only(
+def test_experiment_config_TACO_latest_20s_eval_only(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -35,8 +35,9 @@ def test_experiment_config_TACO_latest_200t_eval_only(
             main_config,
             hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs._async_main_wrapper),
             overrides={
-                "+experiment": "TACO_latest_200t_eval_only",
+                "+experiment": "TACO_latest_20s_eval_only",
                 "runtime": "dry_run",
+                "runtime.seed": 123,
             },
             config_name="openai_finetune_main",
             version_base=pyine.configs.base.target_hydra_version,

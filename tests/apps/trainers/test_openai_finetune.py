@@ -33,7 +33,7 @@ async def test_main_evaluates_base_model_with_skip_fine_tuning(
         lmdb_paths=[
             traces_dataset_utils.get_latest_dataset_path("TACO"),
         ],
-        max_trace_count=20,
+        max_solution_count=2,
         split_file_path=split_utils.get_dataset_split_file_path("TACO"),
     )
     openai_client_config = openai_utils.OpenAIClientConfig()
