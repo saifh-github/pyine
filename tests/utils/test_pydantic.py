@@ -1,4 +1,5 @@
 import pathlib
+import types
 import typing
 
 import pydantic
@@ -382,3 +383,134 @@ def test_is_jsonvalue():
     assert pyd.is_jsonvalue(MyModel(a=1, b="2")) is False
     assert pyd.is_jsonvalue(MyModel(a=1, b="2").model_dump()) is True
     assert pyd.is_jsonvalue(int) is False
+
+
+def f_basic(a: int, b: str = "x", c=None, d: list[int] = []):  # noqa (intentional for tests)
+    return a, b, c, d
+
+
+def f_var(*args, **kwargs):
+    return args, kwargs
+
+
+def f_mix(x: int, y: str, *, z: float = 1.0, **kw):
+    return x, y, z, kw
+
+
+class CtorExample:
+    def __init__(self, n: int, scale: float = 1.0) -> None:
+        self.n = n
+        self.scale = scale
+
+
+def f_annot(p: typing.Annotated[str | None, "tag"] = None):
+    return p
+
+
+class TestModelFromCallable:
+
+    def test_required_vs_optional_and_types(self):
+        Model = pyd.model_from_callable(f_basic)
+        assert Model.model_fields["a"].default is pydantic.fields.PydanticUndefined
+        assert Model.model_fields["b"].default == "x"
+        assert Model.model_fields["c"].default is None
+        assert Model.model_fields["c"].annotation is typing.Any
+        m = Model(a=3, b="ok", d=[1, 2])
+        assert m.a == 3 and m.b == "ok" and m.d == [1, 2]
+        with pytest.raises(pydantic.ValidationError):
+            Model(a="not-an-int")
+
+    def test_model_name_override(self):
+        Model = pyd.model_from_callable(f_basic, name="Custom")
+        assert Model.__name__ == "Custom"
+
+    def test_var_positional_and_var_keyword_fields_present(self):
+        Model = pyd.model_from_callable(f_var)
+        args_field = Model.model_fields["args"]
+        kwargs_field = Model.model_fields["kwargs"]
+        assert typing.get_origin(args_field.annotation) is tuple
+        assert typing.get_args(args_field.annotation) == (typing.Any, ...)
+        assert typing.get_origin(kwargs_field.annotation) is dict
+        assert typing.get_args(kwargs_field.annotation) == (str, typing.Any)
+        m = Model()  # defaults should apply
+        assert m.args == ()
+        assert m.kwargs == {}
+
+    def test_include_exclude_and_exclude_kwargs(self):
+        Model = pyd.model_from_callable(
+            f_mix,
+            include={"x", "z"},
+            exclude={"z"},  # exclude wins
+            include_kwargs=False,  # drop **kw
+            name="FilteredArgs",
+        )
+        assert set(Model.model_fields.keys()) == {"x", "y"} - {"y"} | set()  # only {"x"}
+        assert set(Model.model_fields.keys()) == {"x"}
+
+    def test_constructor_signature_is_used_for_classes(self):
+        Model = pyd.model_from_callable(CtorExample)
+        # fields mirror __init__(n: int, scale: float = 1.0)
+        assert set(Model.model_fields.keys()) == {"n", "scale"}
+        assert Model.model_fields["n"].default is pydantic.fields.PydanticUndefined
+        assert Model.model_fields["scale"].default == 1.0
+        # use validated args to build the instance
+        cfg = Model(n=5, scale=2.5)
+        obj = CtorExample(**cfg.model_dump(exclude_none=True))
+        assert isinstance(obj, CtorExample)
+        assert obj.n == 5 and obj.scale == 2.5
+
+    def test_annotated_and_optional_are_preserved(self):
+        Model = pyd.model_from_callable(f_annot)
+        f = Model.model_fields["p"]
+        # underlying type is Optional[str] (Union[str, NoneType])
+        origin = typing.get_origin(f.annotation)
+        assert origin in (typing.Union, types.UnionType)
+        args = typing.get_args(f.annotation)
+        assert len(args) == 2 and type(None) in args and str in args
+        assert "tag" in getattr(f, "metadata", ())
+        assert f.default is None
+
+    def test_any_for_unannotated_param_is_accepted(self):
+        Model = pyd.model_from_callable(f_basic)
+        # c has annotation Any, so any type accepted
+        m = Model(a=1, c={"anything": object()})
+        assert isinstance(m.c, dict)
+
+    def test_validation_error_messages_are_informative(self):
+        Model = pyd.model_from_callable(f_basic)
+        with pytest.raises(pydantic.ValidationError) as ei:
+            Model()  # missing required 'a'
+        msg = str(ei.value)
+        assert "a" in msg and "Field required" in msg
+
+    def test_kwargs_included_by_default(self):
+        Model = pyd.model_from_callable(f_mix, name="MixArgs")  # include_kwargs defaults to True
+        assert "kw" in Model.model_fields
+        m = Model(x=1, y="y", kw={"extra": 1})
+        assert m.kw == {"extra": 1}
+
+    def test_custom_model_configs(self):
+        Model = pyd.model_from_callable(
+            f_basic,
+            model_config=pydantic.ConfigDict(frozen=True, extra="allow"),
+        )
+        m = Model(a=13, z="hello")
+        assert m.a == 13 and m.z == "hello"
+        with pytest.raises(pydantic.ValidationError):
+            m.a = 15
+        Model2 = pyd.model_from_callable(
+            f_basic,
+            model_config=pydantic.ConfigDict(extra="forbid"),
+        )
+        m = Model2(a=13)
+        assert m.a == 13
+        m.a = 15
+        assert m.a == 15
+        with pytest.raises(pydantic.ValidationError):
+            _ = Model2(a=13, z="hello")
+
+    def test_openai_wrapper(self):
+        import openai
+
+        _ = pyd.model_from_callable(openai.OpenAI)
+        # if we manage the create the above object, we've solved the forward-ref hints problem

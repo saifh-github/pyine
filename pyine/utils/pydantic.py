@@ -3,6 +3,7 @@ import inspect
 import logging
 import pathlib
 import pkgutil
+import sys
 import typing
 
 import pydantic
@@ -364,3 +365,82 @@ def is_jsonvalue(obj: typing.Any, *, strict: bool = False) -> bool:
         return True
     except pydantic.ValidationError:
         return False
+
+
+def model_from_callable(
+    fn: typing.Any,
+    name: str | None = None,
+    *,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
+    include_kwargs: bool = True,
+    base: type[pydantic.BaseModel] = pydantic.BaseModel,
+    model_config: pydantic.ConfigDict | dict | None = None,
+    default_overrides: dict[str, typing.Any] | None = None,
+    resolve_annotations: bool = True,
+    module_for_created_model: str | None = None,
+) -> type[pydantic.BaseModel]:
+    """Creates a Pydantic model whose fields mirror the parameters of a specified function (`fn`).
+
+    Args:
+        fn: The function whose parameters should be used as the model fields.
+        name: Optional name for the model. If not specified, the name will be generated from `fn`.
+        include: Optional set of parameter names to include. If not specified, all parameters will
+            be included.
+        exclude: Optional set of parameter names to exclude. If not specified, no parameters
+            will be excluded.
+        include_kwargs: Whether to include keyword arguments in the model. If False, keyword
+            arguments will be excluded.
+        base: Optional base class for the model. Defaults to `pydantic.BaseModel`.
+        model_config: Optional model configuration dictionary or object.
+        default_overrides: Optional dictionary of arguments with default values to override.
+        resolve_annotations: Whether to resolve annotations for the model fields. If False,
+            will use the raw annotations from the function signature directly.
+        module_for_created_model: Optional module name to use for the model class. If not set,
+            defaults to the caller’s module.
+    Returns:
+        The generated Pydantic model class.
+    """
+    sig = inspect.signature(fn)
+    globalns = vars(sys.modules[getattr(fn, "__module__", "__name__")])
+    if resolve_annotations:
+        try:
+            hints = typing.get_type_hints(fn, globalns=globalns, include_extras=True)
+        except NameError:
+            # fallback to raw signature annotations, and typing.Any for strings/forward refs
+            resolve_annotations = False
+    if not resolve_annotations:
+        anns = inspect.get_annotations(fn, eval_str=False) or {}
+        hints = {k: (typing.Any if isinstance(v, str) else v) for k, v in anns.items()}
+    default_overrides = default_overrides or {}
+    fields: dict[str, tuple[type[typing.Any] | typing.Any, typing.Any]] = {}
+    for p in sig.parameters.values():
+        if include and p.name not in include:
+            continue
+        if exclude and p.name in exclude:
+            continue
+        if p.kind is inspect.Parameter.VAR_POSITIONAL:
+            # *args → tuple[Any, ...]
+            anno = tuple[typing.Any, ...]
+            default = ()
+        elif p.kind is inspect.Parameter.VAR_KEYWORD:
+            # **kwargs → dict[str, Any]
+            if not include_kwargs:
+                continue
+            anno = dict[str, typing.Any]
+            default = {}
+        else:
+            anno = hints.get(p.name, typing.Any)
+            default = ... if p.default is inspect._empty else default_overrides.get(p.name, p.default)
+        fields[p.name] = (anno, default)
+    model_name = name or f"{getattr(fn, '__name__', fn.__class__.__name__)}ParamsConfig"
+    if module_for_created_model is None:
+        # default to the caller’s module if not provided
+        module_for_created_model = sys._getframe(1).f_globals.get("__name__", __name__)
+    return pydantic.create_model(
+        model_name,
+        __config__=model_config,
+        __base__=base,
+        __module__=module_for_created_model,
+        **fields,
+    )
