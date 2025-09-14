@@ -658,9 +658,12 @@ class CodingProblemIterator:
                     )
                     solution_ids.append(solution_id)
                     analysis_errors = solution.get("validation_errors", [])
-                    analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
-                        solution["analysis_outputs"][-1],  # take the latest analysis result
-                    )
+                    try:
+                        analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
+                            solution["analysis_outputs"][-1],  # take the latest analysis result
+                        )
+                    except Exception as e:
+                        raise ValueError(f"invalid analysis results for: {solution_id}") from e
                     solution_code = solution["code"]
                     if self.reformat_code_strings:
                         try:
