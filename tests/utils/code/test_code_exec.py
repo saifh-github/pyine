@@ -354,12 +354,14 @@ def func(b: str) -> int:
         inputs="2",
         entrypoint_name="func",
         trace_only_inside_code_string=True,
+        use_safe_execution=True,
     )
     unsafe_trace_result = execute_and_trace_code(
         code_string=code,
         inputs="2",
         entrypoint_name="func",
         trace_only_inside_code_string=True,
+        use_safe_execution=False,
     )
     assert safe_trace_result.stdout == unsafe_trace_result.stdout
     valid_safe_steps = [s for s in safe_trace_result.traced_steps if s is not None]

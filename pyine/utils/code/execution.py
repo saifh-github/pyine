@@ -424,10 +424,11 @@ def _safe_execute_and_trace_code(
             else:
                 status, returned_val = result_queue.get_nowait()
                 assert status in ("returned", "raised")
-    if process.is_alive():
+    if status not in ("returned", "raised") and process.is_alive():
         logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
         process.kill()
-    elif process.exitcode != 0:
+    process.join(timeout_external_buffer_seconds)
+    if process.exitcode != 0:
         # note: this might not be an issue, solutions sometimes use sys.exit for outputs
         logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
     if status == "returned":
