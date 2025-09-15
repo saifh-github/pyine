@@ -13,8 +13,14 @@ class RuntimeConfig(pydantic.BaseModel):
     """Name of the experiment; used for output artifact naming and logging."""
     run_name: str = "${now:%Y%m%d_%H%M%S}"  # provides a unique default for each execution by default
     """Name of the run; used for output artifact naming and logging."""
+    run_group: str | None = None
+    """Group name for the run; used for grouping/filtering in e.g. wandb."""
     app_name: str = pydantic.Field(default="${hydra:job.name}", frozen=True)  # don't override!
     """Name of the application/script/launcher used for this runtime."""
+    notes: str | None = None
+    """Additional notes about the experiment/run; should be e.g. a git-commit-like description."""
+    tags: list[str] | None = None
+    """Tags associated with this experiment/run; used for grouping/filtering in e.g. wandb."""
     output_dir: str = pydantic.Field(default="${hydra:runtime.output_dir}", frozen=True)  # don't override!
     """Output directory for logging and artifacts."""
     seed: int = 0

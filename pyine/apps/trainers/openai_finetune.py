@@ -12,6 +12,7 @@ import typing
 
 import openai
 import pydantic
+import wandb.integration.openai.fine_tuning
 
 import pyine.configs.schemas
 import pyine.data.datamodule
@@ -52,6 +53,8 @@ class MainConfig(pydantic.BaseModel):
     """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evaluation."""
     eval_subset_names: list[str] = ["valid"]
     """Subset names to evaluate on."""
+    use_wandb_logging: bool = False
+    """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
 
     def needs_answers_in_train_dataset(self) -> bool:
         """Returns whether the model needs answers in its training dataset."""
@@ -150,10 +153,28 @@ async def main(
         )
         va_file_id = finetuner.ensure_uploaded(va_file_path)
         job_id = finetuner.create_job(tr_file_id, va_file_id)
-        try:
-            finetuner.stream_job_events(job_id)  # streams events without blocking
-        except KeyboardInterrupt:
-            logger.info("stopped streaming events; continuing to poll status...")
+        if config.use_wandb_logging:
+            logger.info(f"using W&B sync'd logging for job under name '{runtime.exp_name}:{runtime.run_name}'")
+            dumped_config = pyine.utils.reprod.load_logged_app_config(runtime.output_dir)
+            wandb.integration.openai.fine_tuning.WandbLogger.sync(
+                # ----- openai integration params -----
+                fine_tune_job_id=job_id,
+                openai_client=client,
+                project="pyine",
+                wait_for_job_success=True,
+                # ----- init params (need noqa due to bad typing in wandb API) -----
+                name=f"{runtime.exp_name}:{runtime.run_name}",  # noqa
+                notes=runtime.notes,  # noqa
+                tags=runtime.tags,  # noqa
+                config=dumped_config,  # noqa
+                group=runtime.run_group,  # noqa
+                job_type=runtime.app_name,  # noqa
+            )
+        else:
+            try:
+                finetuner.stream_job_events(job_id)  # streams events without blocking
+            except KeyboardInterrupt:
+                logger.info("stopped streaming events; continuing to poll status...")
         model_name = finetuner.wait_for_job(job_id)
         if not model_name:
             logger.error("fine-tune failed or no model name returned")

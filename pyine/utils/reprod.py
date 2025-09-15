@@ -409,9 +409,30 @@ def log_configs(
     output_runtime_path.write_text(runtime_config.model_dump_json(indent=2))
     logger.info(f"runtime info saved to: {output_runtime_path}")
 
+    output_config_path = output_dir / f"config{log_extension}"
+    output_config: dict[str, typing.Any] = {}
     for config_name, config in extra_configs.items():
         print(f"{config_name} config:")
-        rich.print_json(data=config.model_dump(mode="json"), indent=2)
-        output_config_path = output_dir / f"{config_name}{log_extension}"
-        output_config_path.write_text(config.model_dump_json(indent=2))
-        logger.info(f"config '{config_name}' saved to: {output_config_path}")
+        curr_config = config.model_dump(mode="json")
+        rich.print_json(data=curr_config, indent=2)
+        output_config[config_name] = curr_config
+    output_config_path.write_text(json.dumps(output_config, indent=2))
+    logger.info(f"app config saved to: {output_config_path}")
+
+
+def load_logged_app_config(
+    experiment_log_dir: pathlib.Path | str,
+) -> dict[str, typing.Any]:
+    """Loads an app config JSON that was previously logged in an experiment's output directory.
+
+    If the directory does not exist, an exception will be raised. However, if the file does not
+    exist, the function will return an empty dict. If more than one config files exist, the first
+    one in the sorted list of files will be loaded and returned.
+    """
+    experiment_log_dir = pathlib.Path(experiment_log_dir).expanduser()
+    assert experiment_log_dir.is_dir(), f"invalid experiment log dir: {experiment_log_dir}"
+    potential_config_paths = list(sorted(experiment_log_dir.glob("config.*.rank*.json")))
+    if not potential_config_paths:
+        return dict()
+    config_path = potential_config_paths[0]
+    return json.loads(config_path.read_text())
