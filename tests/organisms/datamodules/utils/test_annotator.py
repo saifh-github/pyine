@@ -142,7 +142,10 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         return str(problem.problem_id)
 
     def _input_builder(
-        trace: exec_utils.TraceResult, problem: du.CodingProblem, __: annotator.AnnotationOptions
+        trace: exec_utils.TraceResult,
+        problem: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+        **kwargs,
     ) -> dict[str, typing.Any]:
         return {
             "code": trace.code_string,
@@ -157,8 +160,8 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         identifier_resolver=_id_resolver,
         group_resolver=_group_resolver,
         input_variables_builder=_input_builder,
-        tags_builder=lambda *_: [],  # noqa
-        meta_builder=lambda *_: {},  # noqa
+        tags_builder=lambda *_, **__: [],  # noqa
+        meta_builder=lambda *_, **__: {},  # noqa
         min_results_per_item=1,
         force_generation=True,
     )
@@ -226,12 +229,12 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=_group_resolver,
-        input_variables_builder=lambda trace, problem, cfg: {
+        input_variables_builder=lambda trace, problem, cfg, **__: {
             "code": trace.code_string,
             "description": problem.problem_statement,
         },
-        tags_builder=lambda *_: [],  # noqa
-        meta_builder=lambda *_: {},  # noqa
+        tags_builder=lambda *_, **__: [],  # noqa
+        meta_builder=lambda *_, **__: {},  # noqa
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(
@@ -295,9 +298,9 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=lambda _t, p, _c: str(p.problem_id),
-        input_variables_builder=lambda t, p, c: {"code": t.code_string, "description": p.problem_statement},
-        tags_builder=lambda *_: [],  # noqa
-        meta_builder=lambda *_: {},  # noqa
+        input_variables_builder=lambda t, p, c, **__: {"code": t.code_string, "description": p.problem_statement},
+        tags_builder=lambda *_, **__: [],  # noqa
+        meta_builder=lambda *_, **__: {},  # noqa
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(

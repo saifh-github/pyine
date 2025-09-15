@@ -381,6 +381,8 @@ async def main(
     pyine.utils.reprod.entrypoint_setup()
     logger.info("starting trace annotation generator")
 
+    # -------- prepare dataset-related stuff --------
+
     # resolve dataset path: exactly one of --dataset or --dataset-latest-from must be provided
     if (dataset_path is None) == (dataset_latest_from is None):
         raise click.BadParameter("exactly one of --dataset or --dataset-latest-from must be provided")
@@ -397,15 +399,79 @@ async def main(
         effective_dataset_path = typing.cast(pathlib.Path, dataset_path)
     dataset = _build_dataset_reader(effective_dataset_path, dataset_loader)
 
-    partial_vars: dict[str, typing.Any] = {}
+    # resolve target dataset indices: --target-indices and/or --target-split-file/--target-split-subset
+    indices_list: list[int] | None = None
+    if target_split_file or target_split_subset:
+        # @@@@ never tested???
+        if not target_split_file or not target_split_subset:
+            raise click.BadParameter("--target-split-file and --target-split-subset must be provided together")
+        split_data = pyine.data.utils.splits.get_dataset_split_result(target_split_file)
+        subsets_to_problem_ids = split_data.get_subset_to_ids_map()
+        if target_split_subset not in subsets_to_problem_ids:
+            raise click.BadParameter(
+                f"invalid target split subset ({target_split_subset}), "
+                f"available ones are: {list(subsets_to_problem_ids.keys())}"
+            )
+        problem_ids = subsets_to_problem_ids[target_split_subset]
+        if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
+            raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
+        indices_list = [  # @@@@@@@ ???
+            sample_idx for sample_idx in range(len(dataset)) if dataset.problem_keys[sample_idx] in problem_ids
+        ]
+        if not indices_list:
+            raise click.BadParameter(
+                f"no traces found in target split subset '{target_split_subset}' " f"for problem ids: {problem_ids}"
+            )
+        logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
+    if target_indices:
+        try:
+            target_indices = pyine.utils.portability.parse_indices_spec(target_indices)
+        except ValueError as exc:
+            raise click.BadParameter(f"invalid target indices spec: {exc}") from exc
+        for idx in target_indices:
+            if idx < 0 or idx >= len(dataset):
+                raise click.BadParameter(f"invalid target index: {idx}")
+        if indices_list is None:
+            indices_list = target_indices
+        else:
+            indices_list = [idx for idx in indices_list if idx in target_indices]
+    logger.debug(f"target indices: {indices_list}")
+
+    # -------- prepare provider/llm-related stuff --------
+
+    llm_kwargs: dict[str, typing.Any] = {}
+    if llm_config_file is not None:
+        file_cfg = _load_yaml_or_json_file(llm_config_file) or {}
+        if not isinstance(file_cfg, dict):
+            raise click.BadParameter("--llm-config-file must decode to a mapping/dict")
+        llm_kwargs.update(file_cfg)
+    if llm_kv:
+        llm_kwargs.update(_parse_kv_list_to_dict(llm_kv))
+        logger.debug(f"parsed LLM options: {llm_kwargs}")
+    try:
+        llm_provider_config = pyine.utils.llm_providers.LLMProviderConfig.from_dict(llm_kwargs)
+    except Exception as exc:
+        raise click.BadParameter("llm options resulted in an invalid provider config") from exc
+
+    # -------- prepare provider/llm-related stuff --------
+
+    prompt_partial_vars: dict[str, typing.Any] = {}
     if prompt_vars:
         inline_vars = _parse_yaml_or_json_value(prompt_vars)
         if inline_vars is None:
             inline_vars = {}
         if not isinstance(inline_vars, dict):
             raise click.BadParameter("--prompt-vars must decode to a mapping/dict")
-        partial_vars.update(inline_vars)
-        logger.debug(f"parsed prompt vars: {partial_vars}")
+        prompt_partial_vars.update(inline_vars)
+        logger.debug(f"parsed prompt partial vars: {prompt_partial_vars}")
+    prompt_config = pyine.prompts.types.PromptBuildConfig(
+        prompt_name=prompt_name,
+        version=prompt_version,
+        partial_vars=prompt_partial_vars,
+    )
+    logger.debug(f"parsed prompt config: {prompt_config}")
+
+    # -------- prepare annotation options stuff --------
 
     shared_meta_dict: dict[str, typing.Any] = {}
     if shared_meta_file is not None:
@@ -430,56 +496,6 @@ async def main(
         shared_tags_list = [t.strip() for t in shared_tags.split(",") if t.strip()]
         logger.debug(f"parsed shared tags: {shared_tags_list}")
 
-    llm_kwargs: dict[str, typing.Any] = {}
-    if llm_config_file is not None:
-        file_cfg = _load_yaml_or_json_file(llm_config_file) or {}
-        if not isinstance(file_cfg, dict):
-            raise click.BadParameter("--llm-config-file must decode to a mapping/dict")
-        llm_kwargs.update(file_cfg)
-    if llm_kv:
-        llm_kwargs.update(_parse_kv_list_to_dict(llm_kv))
-        logger.debug(f"parsed LLM options: {llm_kwargs}")
-    try:
-        llm_provider_config = pyine.utils.llm_providers.LLMProviderConfig.from_dict(llm_kwargs)
-    except Exception as exc:
-        raise click.BadParameter("llm options resulted in an invalid provider config") from exc
-
-    indices_list: list[int] | None = None
-    if target_split_file or target_split_subset:
-        if not target_split_file or not target_split_subset:
-            raise click.BadParameter("--target-split-file and --target-split-subset must be provided together")
-        split_data = pyine.data.utils.splits.get_dataset_split_result(target_split_file)
-        subsets_to_problem_ids = split_data.get_subset_to_ids_map()
-        if target_split_subset not in split_data.subset_assignments:
-            raise click.BadParameter(
-                f"invalid target split subset ({target_split_subset}), "
-                f"available ones are: {list(subsets_to_problem_ids.keys())}"
-            )
-        problem_ids = subsets_to_problem_ids[target_split_subset]
-        if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
-            raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
-        indices_list = [
-            trace_idx for trace_idx in range(len(dataset)) if dataset.problem_keys[trace_idx] in problem_ids
-        ]
-        if not indices_list:
-            raise click.BadParameter(
-                f"no traces found in target split subset '{target_split_subset}' " f"for problem ids: {problem_ids}"
-            )
-        logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
-    if target_indices:
-        try:
-            target_indices = pyine.utils.portability.parse_indices_spec(target_indices)
-        except ValueError as exc:
-            raise click.BadParameter(f"invalid target indices spec: {exc}") from exc
-        for idx in target_indices:
-            if idx < 0 or idx >= len(dataset):
-                raise click.BadParameter(f"invalid target index: {idx}")
-        if indices_list is None:
-            indices_list = target_indices
-        else:
-            indices_list = [idx for idx in indices_list if idx in target_indices]
-    logger.debug(f"target indices: {indices_list}")
-
     try:
         max_age_td = pyine.utils.portability.parse_duration_to_timedelta(max_result_age)
     except ValueError as exc:
@@ -487,12 +503,6 @@ async def main(
     if max_age_td is not None:
         logger.debug(f"parsed max result age: {max_age_td}")
 
-    prompt_config = pyine.prompts.types.PromptBuildConfig(
-        prompt_name=prompt_name,
-        version=prompt_version,
-        partial_vars=partial_vars,
-    )
-    logger.debug(f"parsed prompt config: {prompt_config}")
     options = annotator.AnnotationOptions(
         llm_provider_config=llm_provider_config,
         prompt_config=prompt_config,
@@ -508,6 +518,9 @@ async def main(
         shared_tags=shared_tags_list,
         shared_meta=typing.cast(dict[str, typing.Any] | None, shared_meta_dict or None),
     )
+
+    # -------- launch the annotation process --------
+
     logger.info(
         "running annotation with prompt '%s'%s; parallel=%s, max_workers=%s, dry_run=%s",
         prompt_name,

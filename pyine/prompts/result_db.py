@@ -525,8 +525,10 @@ class ValidationFailedError(ValueError):
     pass
 
 
-ValidatorCallableType = typing.Callable[[str, typing.Any], bool]  # (result_str, raw_output) -> bool
-"""Type used to represent a callable prompt result validator."""
+class ValidatorCallableType(typing.Protocol):
+    """Protocol used to represent a callable prompt result validator."""
+
+    def __call__(self, result_str: str, output: typing.Any) -> bool: ...
 
 
 def fetch_or_generate_prompt_results(

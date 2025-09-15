@@ -11,6 +11,7 @@ import typing
 import warnings
 
 import langchain_core.language_models
+import numpy as np
 import pydantic
 import tqdm
 
@@ -28,42 +29,116 @@ import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
-IdentifierResolverType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    str,
+
+class IdentifierResolverType(typing.Protocol):
+    """Protocol used to represent an identifier resolver callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+    ) -> str: ...
+
+
+class GroupResolverType(typing.Protocol):
+    """Protocol used to represent a group resolver callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+    ) -> str | None: ...
+
+
+class InputVariablesBuilderType(typing.Protocol):
+    """Protocol used to represent an input variables builder callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+        **kwargs,
+    ) -> dict[str, typing.Any]: ...
+
+
+class TagsBuilderType(typing.Protocol):
+    """Protocol used to represent a tags builder callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+    ) -> list[str]: ...
+
+
+class MetadataBuilderType(typing.Protocol):
+    """Protocol used to represent a metadata builder callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+        **kwargs,
+    ) -> dict[str, pydantic.JsonValue]: ...
+
+
+class CreationMetaBuilderType(typing.Protocol):
+    """Protocol used to represent a creation metadata builder callable."""
+
+    def __call__(
+        self,
+        trace: pyine.utils.code.execution.TraceResult,
+        problem: pyine.data.traces.dataset_utils.CodingProblem,
+        config: "AnnotationOptions",
+        **kwargs,
+    ) -> pyine.prompts.result_db.CreationMeta: ...
+
+
+PromptNameOrNameAndVerTuple = typing.Union[
+    pyine.prompts.PromptNameType,
+    tuple[pyine.prompts.PromptNameType, pyine.prompts.PromptVersionType],
 ]
-"""Type used to represent an identifier resolver callable."""
-GroupResolverType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    str | None,
+"""Type used to represent a prompt name or a tuple of prompt name and version."""
+
+AugmProbMapType = dict[
+    PromptNameOrNameAndVerTuple,
+    typing.Annotated[pydantic.StrictFloat, pydantic.Field(ge=0, le=1)],  # noqa
 ]
-"""Type used to represent a group resolver callable."""
-InputVariablesBuilderType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    dict[str, typing.Any],
-]
-"""Type used to represent an input variables builder callable."""
-TagsBuilderType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    list[str],
-]
-"""Type used to represent a tags builder callable."""
-MetadataBuilderType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    dict[str, pydantic.JsonValue],
-]
-"""Type used to represent a metadata builder callable."""
-CreationMetaBuilderType = typing.Callable[
-    [pyine.utils.code.execution.TraceResult, pyine.data.traces.dataset_utils.CodingProblem, "AnnotationOptions"],
-    pyine.prompts.result_db.CreationMeta,
-]
-"""Type used to represent a creation metadata builder callable."""
+"""Type used to describe prompt augmentation probability maps."""
+
+
+class AugmentedAnnotationOptions(pydantic.BaseModel):
+    """Options controlling augmented annotations (i.e. annotations that rely on previous annotations)."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    fetch_code_descriptions: bool = pydantic.Field(
+        default=True,  # probably always beneficial, so true by default
+        description="Whether to fetch code descriptions from the prompt result DB (for hints/issues prompts).",
+    )
+    get_buggy_code_before_hinting: AugmProbMapType = pydantic.Field(
+        default=dict(),  # no such augmentation used by default
+        description=(
+            "Probability map specifying whether to fetch a buggy version of a code string before "
+            "applying a hint generation prompt. The key of the map can be an issue prompt name "
+            "alone or a tuple of name and version. The value of the map is the probability of "
+            "trying to fetch a record from the DB to apply the augmentation. The latest record "
+            "is always used."
+            # note: we apply hints on top of issues because hints are test-specific, issues are not
+        ),
+    )
 
 
 class AnnotationOptions(pydantic.BaseModel):
     """Options controlling dataset annotation via prompt invocations."""
 
-    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
 
     # ---------- prompt-related settings ----------
@@ -73,6 +148,10 @@ class AnnotationOptions(pydantic.BaseModel):
     )
     prompt_config: pyine.prompts.types.PromptBuildConfig = pydantic.Field(
         description="Configuration for the prompt to use to generate 'annotations'.",
+    )
+    augment_config: AugmentedAnnotationOptions = pydantic.Field(
+        default=AugmentedAnnotationOptions(),
+        description="Configuration for any potential prompt augmentation strategy to use. WIP.",
     )
     runnable_name: str | None = pydantic.Field(
         default=None,
@@ -138,32 +217,43 @@ class AnnotationOptions(pydantic.BaseModel):
 
     # ---------- item-wise resolvers and builders ----------
 
-    identifier_resolver: IdentifierResolverType | None = pydantic.Field(
+    identifier_resolver: typing.Annotated[IdentifierResolverType | None, pydantic.SkipValidation] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Strategy to compute the record identifier per item. If None, uses a default rule.",
     )
-    group_resolver: GroupResolverType | None = pydantic.Field(
+    group_resolver: typing.Annotated[GroupResolverType | None, pydantic.SkipValidation] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Strategy to compute the record group per item. If None, uses a default rule.",
     )
-    input_variables_builder: InputVariablesBuilderType | None = pydantic.Field(
-        default=None,
-        description="Builds input variables per item for the target prompt. If None, uses a default rule.",
+    input_variables_builder: typing.Annotated[InputVariablesBuilderType | None, pydantic.SkipValidation] = (
+        pydantic.Field(
+            default=None,
+            exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
+            description="Builds input variables per item for the target prompt. If None, uses a default rule.",
+        )
     )
-    tags_builder: TagsBuilderType | None = pydantic.Field(
+    tags_builder: typing.Annotated[TagsBuilderType | None, pydantic.SkipValidation] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Builds tags per item for the target prompt. If None, uses a default rule.",
     )
-    meta_builder: MetadataBuilderType | None = pydantic.Field(
+    meta_builder: typing.Annotated[MetadataBuilderType | None, pydantic.SkipValidation] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Builds metadata per item for the target prompt. If None, uses a default rule.",
     )
-    creation_meta_builder: CreationMetaBuilderType | None = pydantic.Field(
+    creation_meta_builder: typing.Annotated[CreationMetaBuilderType | None, pydantic.SkipValidation] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Builds creation metadata per item for the target prompt. If None, uses a default rule.",
     )
-    output_validator: pyine.prompts.result_db.ValidatorCallableType | None = pydantic.Field(
+    output_validator: typing.Annotated[
+        pyine.prompts.result_db.ValidatorCallableType | None, pydantic.SkipValidation
+    ] = pydantic.Field(
         default=None,
+        exclude=True,  # to avoid serialization issues, we should never need to reinstantiate anyway
         description="Validates the output of the prompt invocation. If None, uses a default rule.",
     )
 
@@ -251,6 +341,7 @@ def _default_input_variables_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
+    **kwargs,
 ) -> dict[str, typing.Any]:
     """Builds input variables for the target prompt.
 
@@ -260,22 +351,48 @@ def _default_input_variables_builder(
     output = {
         "code": trace.code_string,
         "inputs": str(trace.inputs),
+        **kwargs,
     }
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
     if config.prompt_config.prompt_name == "code_summary":
         # nothing more to do here
         return output
-    if config.prompt_config.prompt_name.startswith("hints/") or config.prompt_config.prompt_name.startswith("issues/"):
-        output["expected_output"] = trace.expected_output
-        # try to go and fetch the description for the parent solution (code summary) from db
-        code_summary_records = config._prompt_result_db.get_by_identifier(
-            identifier=str(trace_id.get_parent_identifier()),
-            prompt_name="code_summary",
-        )
-        if code_summary_records:
-            # always keep the latest description (this should not matter too much)
-            output["description"] = code_summary_records[-1].result
+    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
+    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
+    prior_augment = trace_id.augment_category or ""
+    is_already_hinted = prior_augment.startswith("hint")
+    is_already_bugged = prior_augment.startswith("bugg") or prior_augment.startswith("issue")
+    if (is_hint_prompting and not is_already_hinted) or (is_issue_prompting and not is_already_bugged):
+        if is_hint_prompting:
+            output["expected_output"] = trace.expected_output
+        if config.augment_config.fetch_code_descriptions:
+            # try to go and fetch the description for the parent solution (code summary) from db
+            code_summary_records = config._prompt_result_db.get_by_identifier(
+                identifier=str(trace_id.get_parent_identifier()),
+                prompt_name="code_summary",
+            )
+            if code_summary_records:
+                # always keep the latest description (this should not matter too much)
+                output["description"] = code_summary_records[-1].result
+        if config.augment_config.get_buggy_code_before_hinting and is_hint_prompting and not is_already_bugged:
+            # try to fetch a buggy version of the code string before applying the hint generation prompt
+            for prompt_info, augment_prob in config.augment_config.get_buggy_code_before_hinting.items():
+                if np.random.random() > augment_prob:
+                    continue  # failed random draw for this augment
+                if isinstance(prompt_info, tuple):
+                    prompt_info = dict(prompt_name=prompt_info[0], prompt_version=prompt_info[1])
+                else:
+                    prompt_info = dict(prompt_name=prompt_info)
+                buggy_code_records = config._prompt_result_db.get_by_identifier(
+                    identifier=str(trace_id.get_parent_identifier()),
+                    **prompt_info,
+                )
+                if buggy_code_records:
+                    # always keep the latest buggy code snippet (default documented strategy)
+                    output["code"] = buggy_code_records[-1].result
+                    output["__orig_bugless_code__"] = trace.code_string
+                    break
         return output
     # elif config.prompt_config.prompt_name == ...
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
@@ -317,6 +434,7 @@ def _default_meta_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
+    **kwargs,
 ) -> dict[str, pydantic.JsonValue]:
     """Builds metadata dictionaries for the target prompt.
 
@@ -326,21 +444,23 @@ def _default_meta_builder(
     If you provide an override for this default builder, you should ensure that the returned
     metadata dictionary contains the content of the `config.shared_meta` dictionary.
     """
-    default_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
-    default_metadata = typing.cast(dict[str, typing.Any], default_metadata)
-    default_metadata["llm_provider_config"] = config.llm_provider_config.model_dump()
-    default_metadata["prompt_config"] = config.prompt_config.model_dump()
-    default_metadata["was_force_generated"] = config.force_generation
-    default_metadata["shared_tags"] = config.shared_tags or []
-    default_metadata["shared_meta"] = config.shared_meta or {}
-    default_metadata.update(config.shared_meta or {})
-    return default_metadata
+    reprod_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
+    out_metadata: dict[str, pydantic.JsonValue] = dict(reprod=reprod_metadata)
+    out_metadata["llm_provider_config"] = config.llm_provider_config.model_dump()
+    out_metadata["prompt_config"] = config.prompt_config.model_dump()
+    out_metadata["augment_config"] = config.augment_config.model_dump()
+    out_metadata["was_force_generated"] = config.force_generation
+    out_metadata["shared_tags"] = config.shared_tags or []
+    out_metadata.update(config.shared_meta or {})
+    out_metadata.update(kwargs)
+    return out_metadata
 
 
 def _default_creation_meta_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
+    **kwargs,
 ) -> pyine.prompts.result_db.CreationMeta:
     """Builds creation metadata for the target prompt.
 
@@ -349,7 +469,8 @@ def _default_creation_meta_builder(
     """
     return pyine.prompts.result_db.CreationMeta(
         provider=config.llm_provider_config.provider,
-        llm_params=config.llm_provider_config.model_dump(),  # noqa
+        llm_params=config.llm_provider_config.model_dump(),
+        **kwargs,
     )
 
 
@@ -359,6 +480,8 @@ def _default_output_validator(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
+    input_vars: dict[str, typing.Any],
+    tags: list[str],
 ) -> bool:
     """Validates the output of the prompt invocation.
 
@@ -368,9 +491,9 @@ def _default_output_validator(
     if config.prompt_config.prompt_name == "hints/stubs":
         # special handling for this one: it's not supposed to 'still work', so forget tracing it
         return True
-    elif config.prompt_config.prompt_name.startswith("issues/") or config.prompt_config.prompt_name.startswith(
-        "hints/"
-    ):
+    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
+    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
+    if is_hint_prompting or is_issue_prompting:
         # for both issues and hints, we will be tracing the newly generated code to see the results:
         # => for all issue types, we expect the execution output to NOT be the expected one;
         # => in contrast, hints should not influence the outcome of executing the code.
@@ -400,10 +523,15 @@ def _default_output_validator(
             or (new_trace_result.exception != trace.exception)
             or (trace.return_value is None and new_trace_result.stdout != trace.stdout)
         )
-        if config.prompt_config.prompt_name.startswith("issues/"):
+        if is_issue_prompting:
             return output_is_different  # we want a different output for bugged code
-        else:  # config.prompt_config.prompt_name.startswith("hints/")
-            return not output_is_different  # we want the same output for hinted code
+        else:  # is_hint_prompting
+            if "augment:bugged_hinted" in tags:
+                assert "__orig_bugless_code__" in input_vars
+                # we are actually hinting a BUGGED code snippet, so expect a different output
+                return output_is_different
+            else:
+                return not output_is_different  # we want the same output for classic hinted code
     # ultimate fallback: accept everything (we don't know how to validate it)
     return True
 
@@ -434,6 +562,7 @@ class AnnotationReport:
         self.new_results_generated += other.new_results_generated
         self.total_tokens_exchanged += other.total_tokens_exchanged
         self.errors += other.errors
+        self.error_messages.extend(other.error_messages)
         return self
 
     def __iadd__(self, other: "AnnotationReport") -> "AnnotationReport":
@@ -450,6 +579,9 @@ class AnnotationReport:
             f"new results: {self.new_results_generated:_}, "
             f"tokens exchanged: {self.total_tokens_exchanged:_}, "
             f"errors: {self.errors}"
+            f", error messages: {self.error_messages}"
+            if self.error_messages
+            else ""
         )
 
 
@@ -592,12 +724,18 @@ def _process_one_annotation(
     """Helper function to process one annotation."""
     rep = AnnotationReport(total_samples=1)
     try:
-        prompt_tags = tags_getter(trace, problem, config)
-        if base_filter_fn(prompt_tags):
+        tags = tags_getter(trace, problem, config)
+        if base_filter_fn(tags):
             rep.skipped_samples += 1
             return rep
         identifier = identifier_getter(trace, problem, config)
         creation_meta = creation_meta_getter(trace, problem, config)
+        input_vars = prompt_input_vars_getter(trace, problem, config)
+        meta_dict = meta_getter(trace, problem, config, input_vars=input_vars)
+        if config.augment_config.fetch_code_descriptions and "description" in input_vars:
+            tags.append("augment:has_code_description")
+        if config.augment_config.get_buggy_code_before_hinting and "__orig_bugless_code__" in input_vars:
+            tags.append("augment:bugged_hinted")
         if config.output_validator:
             output_validator = config.output_validator
         else:
@@ -606,11 +744,13 @@ def _process_one_annotation(
                 trace=trace,
                 problem=problem,
                 config=config,
+                input_vars=input_vars,
+                tags=tags,
             )
         records = pyine.prompts.result_db.fetch_or_generate_prompt_results(
             model=model,
             identifier=identifier,
-            input_variables=prompt_input_vars_getter(trace, problem, config),
+            input_variables=input_vars,
             prompt_config=config.prompt_config,
             db=db,
             runnable_name=config.runnable_name,
@@ -624,8 +764,8 @@ def _process_one_annotation(
             force_generation=config.force_generation,
             creation_meta=creation_meta,
             group=group_getter(trace, problem, config),
-            tags=prompt_tags,
-            meta=meta_getter(trace, problem, config),
+            tags=tags,
+            meta=meta_dict,
         )
         new_records = [r for r in records if r.creation_meta == creation_meta]
         if len(new_records) == 0:
