@@ -44,10 +44,6 @@ class DatasetReader(torch.utils.data.Dataset):
         self.path = lmdb_path
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
         self._init_trace_maps()
-        if len(self.problem_indices) == 0:
-            raise ValueError("no problem data found in the dataset")
-        if len(self.problem_indices) != len(self.problem_keys):
-            raise RuntimeError("problem indices/keys length mismatch")
 
     def _are_trace_maps_prepared(self) -> bool:
         """Returns True if the trace maps are prepared and ready to be used."""
@@ -106,6 +102,10 @@ class DatasetReader(torch.utils.data.Dataset):
             pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
             return_keys=True,
         )
+        if len(self.problem_indices) == 0:
+            raise ValueError("no problem data found in the dataset")
+        if len(self.problem_indices) != len(self.problem_keys):
+            raise RuntimeError("problem indices/keys length mismatch")
         self.trace_indices: list[int] = []
         self.trace_keys: list[str] = []
         self.trace_idx_to_problem_idx: dict[int, int] = {}

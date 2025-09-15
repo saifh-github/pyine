@@ -749,6 +749,9 @@ def _process_one_solution(
         )
         for test_tuple in test_tuples
     ]
+    orig_trace_ids_to_test_tuple_map = {  # keep this around to know what tuples worked afterwards
+        str(c.trace_id): t for c, t in zip(orig_code_to_trace, test_tuples)
+    }
     log_fn(f"{solution}: tracing orig code with {len(orig_code_to_trace)} tests...")
     traces_to_write = _get_traces_to_write(
         to_trace=orig_code_to_trace,
@@ -758,17 +761,23 @@ def _process_one_solution(
         fail_log_path=fail_log_path,
     )
     if not traces_to_write:
-        log_fn(f"{solution}: skipping solution since original code exec test(s) failed")
+        log_fn(f"{solution}: skipping solution since all original code exec test(s) failed")
         return traces_to_write
-    # if all test cases passed for the original solution, do the required 'augmentations' now
+    # if some test cases passed for the original solution, do the required 'augmentations' now
+    # (note: we will target the PASSING test cases, and hope those will pass again as well)
+    passing_test_tuples = [
+        orig_trace_ids_to_test_tuple_map[passed_trace_id] for passed_trace_id in traces_to_write.keys()
+    ]
     augmented_code_to_trace = _fetch_augmented_code_to_trace(
         problem=problem,
         solution=solution,
-        test_tuples=test_tuples,
+        test_tuples=passing_test_tuples,
         config=config,
     )
     if augmented_code_to_trace:
         log_fn(f"{solution}: tracing augmented code with {len(augmented_code_to_trace)} tests...")
+        for c in augmented_code_to_trace:
+            assert str(c.trace_id.get_augmentless_identifier()) in traces_to_write
         new_traces_to_write = _get_traces_to_write(
             to_trace=augmented_code_to_trace,
             all_must_succeed=False,
@@ -871,7 +880,6 @@ def write_dataset(
             # iterate over solutions for the current coding problem, and trace each one with all available inputs/outputs
             solutions_to_trace = []
             for solution_idx, solution in enumerate(solutions):
-                # reformat the code string (for cleanliness in tracing results)
                 err_msg = _check_must_skip_solution(problem, solution, solution_idx, retained_solution_indices, config)
                 if err_msg is not None:
                     log(err_msg)
