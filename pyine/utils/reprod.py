@@ -17,6 +17,7 @@ import lightning.fabric.utilities.seed
 import pydantic
 import rich
 import torch
+import wandb
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas
@@ -38,7 +39,7 @@ def get_python_version() -> str:
 
 def get_platform_name() -> str:
     """Returns a print-friendly platform name that can be used for logs / data tagging."""
-    return str(platform.node())
+    return str(platform.uname())
 
 
 def get_timestamp(time_since_epoch: float | None = None) -> str:
@@ -249,6 +250,7 @@ def get_reprod_metadata(
         time_since_epoch=str(curr_time_since_epoch),
         local_timestamp=get_timestamp(curr_time_since_epoch),
         runtime_hash=hashlib.sha1(str(curr_time_since_epoch).encode(), usedforsecurity=False).hexdigest(),
+        sys_executable=str(sys.executable),
         sys_argv=str(sys.argv),
     )
     if include_installed_packages:
@@ -281,6 +283,7 @@ def entrypoint_setup(
     *,
     runtime_config: "pyine.configs.schemas.RuntimeConfig | None" = None,
     disable_http_logging_info_msgs: bool = True,
+    use_wandb_logging: bool = False,
     **extra_configs,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments.
@@ -291,6 +294,13 @@ def entrypoint_setup(
 
     Extra configs that are forwarded to this function will be logged in the runtime output
     directory (if a config is provided). If no config is provided, does nothing.
+
+    Args:
+        runtime_config: runtime configuration provided via hydra entrypoints.
+        disable_http_logging_info_msgs: whether to disable the HTTP request POST messages in info
+            level logs when using llm providers.
+        use_wandb_logging: whether to initialize wandb logging (if using runtime) and not dry run.
+        extra_configs: extra configs that are forwarded to this function (to be logged).
     """
     load_dotenv()
     # use a sentinel object to track first execution of things that should only be executed once
@@ -322,12 +332,42 @@ def entrypoint_setup(
     if runtime_config is not None:
         if runtime_config.seed is not None:
             set_seed(seed=runtime_config.seed, workers=runtime_config.seed_workers)
+        app_config_dict: dict[str, typing.Any] = {}
         for config_name, config in extra_configs.items():
             assert isinstance(config, pydantic.BaseModel), "extra configs must be pydantic models"
-        log_configs(runtime_config, extra_configs)
+            curr_config = config.model_dump(mode="json")
+            print(f"{config_name} config:")
+            rich.print_json(data=curr_config, indent=2)
+            app_config_dict[config_name] = curr_config
         if runtime_config.dry_run:
+            # dry run; log configs right away (even if potential wandb init not complete, no need for it)
+            log_configs(runtime_config, app_config_dict)
             logger.info(f"entrypoint dry run complete for app: {parent_app_name}")
             raise DryRunExit()
+        if use_wandb_logging:
+            # initialize wandb if enabled and not dry run (and with the app config as metadata)
+            runtime_config.init_wandb(config=app_config_dict)
+        # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
+        logged_config_file_paths = log_configs(runtime_config, app_config_dict)
+        if use_wandb_logging:
+            assert runtime_config.wandb_run_id is not None
+            configs_artifact = wandb.Artifact(
+                name=f"{runtime_config.app_name}-{runtime_config.wandb_run.name}-configs",
+                type="configs",
+                metadata={"run_id": runtime_config.wandb_run_id},
+            )
+            for config_file_path in logged_config_file_paths:
+                config_file_prefix = config_file_path.name.split(".")[0]
+                configs_artifact.add_file(
+                    local_path=str(config_file_path),
+                    name=config_file_prefix,
+                    skip_cache=True,
+                    policy="immutable",
+                )
+            runtime_config.wandb_run.log_artifact(configs_artifact)  # noqa
+    else:
+        if use_wandb_logging:
+            raise ValueError("cannot initialize wandb logging without a runtime config?")
     logger.info(f"entrypoint setup complete for app: {parent_app_name}")
 
 
@@ -382,9 +422,12 @@ def get_log_extension_slug(
 
 def log_configs(
     runtime_config: "pyine.configs.schemas.RuntimeConfig",
-    extra_configs: dict[str, pydantic.BaseModel],
-) -> None:
-    """Saves runtime, metadata, and any extra configs to the hydra runtime output directory."""
+    app_config_dict: dict[str, typing.Any],  # should be already 'dumped' into json-serializable format
+) -> list[pathlib.Path]:
+    """Saves runtime, metadata, and app config to the hydra runtime output directory.
+
+    Returns the list of paths to the saved files.
+    """
     assert runtime_config is not None, "missing runtime config"
     output_dir = pathlib.Path(runtime_config.output_dir).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -409,15 +452,11 @@ def log_configs(
     output_runtime_path.write_text(runtime_config.model_dump_json(indent=2))
     logger.info(f"runtime info saved to: {output_runtime_path}")
 
-    output_config_path = output_dir / f"config{log_extension}"
-    output_config: dict[str, typing.Any] = {}
-    for config_name, config in extra_configs.items():
-        print(f"{config_name} config:")
-        curr_config = config.model_dump(mode="json")
-        rich.print_json(data=curr_config, indent=2)
-        output_config[config_name] = curr_config
-    output_config_path.write_text(json.dumps(output_config, indent=2))
-    logger.info(f"app config saved to: {output_config_path}")
+    output_app_config_path = output_dir / f"config{log_extension}"
+    output_app_config_path.write_text(json.dumps(app_config_dict, indent=2))
+    logger.info(f"app config saved to: {output_app_config_path}")
+
+    return [output_metadata_path, output_runtime_path, output_app_config_path]
 
 
 def load_logged_app_config(

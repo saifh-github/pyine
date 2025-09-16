@@ -130,7 +130,11 @@ async def main(
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
-    pyine.utils.reprod.entrypoint_setup(runtime_config=runtime, main_config=config)
+    pyine.utils.reprod.entrypoint_setup(
+        runtime_config=runtime,
+        main_config=config,
+        use_wandb_logging=config.use_wandb_logging,
+    )
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm.prepare_data()
@@ -154,21 +158,14 @@ async def main(
         va_file_id = finetuner.ensure_uploaded(va_file_path)
         job_id = finetuner.create_job(tr_file_id, va_file_id)
         if config.use_wandb_logging:
-            logger.info(f"using W&B sync'd logging for job under name '{runtime.exp_name}:{runtime.run_name}'")
-            dumped_config = pyine.utils.reprod.load_logged_app_config(runtime.output_dir)
+            assert runtime is not None and runtime.wandb_run_id is not None
+            logger.info(f"using W&B blocking sync under run id: {runtime.wandb_run_id}")
             wandb.integration.openai.fine_tuning.WandbLogger.sync(
-                # ----- openai integration params -----
                 fine_tune_job_id=job_id,
                 openai_client=client,
                 project="pyine",
                 wait_for_job_success=True,
-                # ----- init params (need noqa due to bad typing in wandb API) -----
-                name=f"{runtime.exp_name}:{runtime.run_name}",  # noqa
-                notes=runtime.notes,  # noqa
-                tags=runtime.tags,  # noqa
-                config=dumped_config,  # noqa
-                group=runtime.run_group,  # noqa
-                job_type=runtime.app_name,  # noqa
+                reinit="return_previous",  # noqa; reuse already-existing run
             )
         else:
             try:
@@ -184,14 +181,21 @@ async def main(
         model_name = config.openai_finetuner_config.params.base_model
         logger.info("skipping fine-tuning, evaluating base model directly")
 
+    if config.use_wandb_logging:
+        assert runtime is not None and runtime.wandb_run is not None
+        runtime.wandb_run.summary["model_name"] = model_name
+
     for eval_subset_name in config.eval_subset_names:
-        await _evaluate(
+        metrics = await _evaluate(
             model_name=model_name,
             subset_name=eval_subset_name,
             client=client,
             dm=dm,
             llm_grader_provider_config=config.llm_grader_provider_config,
         )
+        if config.use_wandb_logging:
+            assert runtime is not None and runtime.wandb_run is not None
+            runtime.wandb_run.summary[eval_subset_name] = metrics
 
 
 if __name__ == "__main__":
