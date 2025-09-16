@@ -338,11 +338,12 @@ class OpenAIFineTunerParamsConfig(pydantic.BaseModel):
     metadata: dict[str, str] | None = None
     """Additional metadata to attach to the fine-tuning job.
 
-    This can be useful for storing additional information about the object in a
-    structured format, and querying for objects via API or the dashboard.
+    This can be useful for storing additional information about the object in a structured format,
+    and querying for objects via API or the dashboard.
 
-    Keys are strings with a maximum length of 64 characters. Values are strings with
-    a maximum length of 512 characters. Up to 16 key-value pairs can be provided.
+    Keys are strings with a maximum length of 64 characters. Values are strings with a maximum
+    length of 512 characters. Up to 16 key-value pairs can be provided. If more than 16 key-value
+    pairs are provided, we will discard the extra pairs.
     """
     timeout_override: float | None = None
     """Override of the default client timeout for the fine-tuning job."""
@@ -582,10 +583,15 @@ class OpenAIFineTuner:
         integrations = None
         if self.config.wandb_integration is not None:
             integrations = [self.config.wandb_integration.model_dump()]
+        if self.config.metadata is not None:
+            # openai api supports at most 16 key-value pairs, so we truncate the metadata dict
+            metadata = {k: self.config.metadata[k] for k in list(self.config.metadata)[:16]}
+        else:
+            metadata = None
         params: dict[str, typing.Any] = {
             "model": self.config.base_model,
             "integrations": integrations,
-            "metadata": self.config.metadata,
+            "metadata": metadata,
             "method": self.config.method,
             "seed": self.config.seed,
             "suffix": self.config.suffix,
