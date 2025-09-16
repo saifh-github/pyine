@@ -178,6 +178,10 @@ class TestSampleBuilderRealData:
         reason="TACO traces dataset is missing, cannot check sample generation",
     )
     def test_sample_generation_on_taco_traces(self):
+        dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
+        taco_reader = pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
+        if len(taco_reader) < 1000:
+            pytest.skip("TACO traces dataset is too small, skipping sample generation test")
         cfg = SampleTransformConfig(
             transform_strategy="hybrid",
             functions_fallback_to_segments=True,
@@ -191,23 +195,25 @@ class TestSampleBuilderRealData:
                 "function return": 0.4,
             },
         )
-        dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
-        taco_reader = pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
         sb = SampleBuilder(
             source_data=taco_reader,
             traces=None,
             transform_config=cfg,
         )
-        assert len(sb) == len(taco_reader)
-        for trace_idx in range(len(taco_reader)):
-            if trace_idx > 100:
-                break  # check up to 100 traces, that should be enough
+        assert len(sb) <= len(taco_reader)
+        for sample_idx in range(len(sb)):
+            if sample_idx > 100:
+                break  # check up to 100 samples, that should be enough
+            sample = sb[sample_idx]
+            assert sample.identifier in taco_reader.trace_keys
+            trace_idx = taco_reader.trace_keys.index(sample.identifier)
             trace_data = taco_reader[trace_idx]
-            sample = sb[trace_idx]
-            assert trace_data.identifier == sample.identifier
-            assert trace_data.code_string == sample.code
+            if sample.has_code_override:
+                assert sample.code != trace_data.code_string
+            else:
+                assert sample.code == trace_data.code_string
             assert isinstance(sample.description, str)
-            code_lines = trace_data.code_string.splitlines()
+            code_lines = sample.code.splitlines()
             if sample.output_type == "program output":
                 assert sample.first_line == 0
                 assert sample.last_line == len(code_lines)
@@ -219,7 +225,7 @@ class TestSampleBuilderRealData:
                 assert isinstance(sample.expected_output, str)
                 assert len(sample.inputs) <= cfg.max_inputs_str_length
                 assert len(sample.expected_output) <= cfg.max_output_str_length
-                assert sample.trace_step_count > 0
+                assert 0 < sample.trace_step_count < trace_data.valid_step_count
                 assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
                 if sample.output_type == "frame variables":
                     assert 0 < sample.first_line < len(code_lines)
