@@ -189,9 +189,8 @@ async def main(
         logger.info("skipping fine-tuning, evaluating base model directly")
 
     if config.use_wandb_logging:
-        if runtime.wandb_run.status != "running":
-            if runtime.wandb_run.status != "finished":
-                raise RuntimeError(f"wandb run is not running or finished, status={runtime.wandb_run.status}")
+        run_is_finished = getattr(runtime.wandb_run, "_is_finished", True)
+        if run_is_finished:
             # the openai integration 'finalized' the run, re-open it to log the last few metrics/summaries
             wandb_api = wandb.Api()
             runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
