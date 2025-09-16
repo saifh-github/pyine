@@ -415,8 +415,11 @@ async def main(
         if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
             raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
         target_problem_ids = list(set(subset_problem_ids) & set(dataset.problem_keys))
-        indices_list = [dataset.problem_keys.index(target_pid) for target_pid in target_problem_ids]
-        indices_list.sort()
+        indices_list = [
+            trace_idx
+            for trace_idx in range(len(dataset))
+            if dataset.trace_key_to_problem_key[dataset.trace_keys[trace_idx]] in target_problem_ids
+        ]
         if not indices_list:
             raise click.BadParameter(
                 f"no traces found in subset '{target_split_subset}' for dataset at: {effective_dataset_path}"
