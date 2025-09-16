@@ -143,7 +143,8 @@ async def main(
 
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None
-        runtime.wandb_run.summary.update(dm.get_stats())
+        dm_stats = {f"dataset_stats/{k}": v for k, v in dm.get_stats().items()}
+        runtime.wandb_run.summary.update(dm_stats)
 
     client: openai.OpenAI = config.openai_client_config.instantiate()
     if not skip_fine_tuning:
@@ -201,9 +202,9 @@ async def main(
         if config.use_wandb_logging:
             pyine.evals.common.define_metrics_for_wandb(
                 wandb_run=runtime.wandb_run,
-                prefix=eval_subset_name,
+                prefix=f"evals/{eval_subset_name}",
             )
-            prefixed_metrics = {f"{eval_subset_name}/{k}": v for k, v in metrics.items()}
+            prefixed_metrics = {f"evals/{eval_subset_name}/{k}": v for k, v in metrics.items()}
             runtime.wandb_run.summary.update(prefixed_metrics)
 
 
