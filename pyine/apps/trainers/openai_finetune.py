@@ -145,6 +145,11 @@ async def main(
         assert runtime is not None and runtime.wandb_run is not None
         dm_stats = {f"dataset_stats/{k}": v for k, v in dm.get_stats().items()}
         runtime.wandb_run.summary.update(dm_stats)
+        for eval_subset_name in config.eval_subset_names:
+            pyine.evals.common.define_metrics_for_wandb(
+                wandb_run=runtime.wandb_run,
+                prefix=f"evals/{eval_subset_name}",
+            )
 
     client: openai.OpenAI = config.openai_client_config.instantiate()
     if not skip_fine_tuning:
@@ -192,6 +197,7 @@ async def main(
         run_is_finished = getattr(runtime.wandb_run, "_is_finished", True)
         if run_is_finished:
             # the openai integration 'finalized' the run, re-open it to log the last few metrics/summaries
+            # (we replace the original run obj with a re-opened one, hopefully just for summary updates)
             wandb_api = wandb.Api()
             runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
         runtime.wandb_run.summary.update({"model_name": model_name})
@@ -205,10 +211,6 @@ async def main(
             llm_grader_provider_config=config.llm_grader_provider_config,
         )
         if config.use_wandb_logging:
-            pyine.evals.common.define_metrics_for_wandb(
-                wandb_run=runtime.wandb_run,
-                prefix=f"evals/{eval_subset_name}",
-            )
             prefixed_metrics = {f"evals/{eval_subset_name}/{k}": v for k, v in metrics.items()}
             runtime.wandb_run.summary.update(prefixed_metrics)
 

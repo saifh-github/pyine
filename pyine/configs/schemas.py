@@ -16,7 +16,6 @@ class RuntimeConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(
         arbitrary_types_allowed=True,  # for e.g. wandb run object; it'll be excluded from dumps
         extra="allow",
-        validate_assignment=True,
     )
     """Pydantic model configuration (allow extra fields and validate assignments)."""
 
