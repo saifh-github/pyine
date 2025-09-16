@@ -4,12 +4,32 @@
 
 Refer to the top-level [README](./README.md) for a high-level description of the project.
 
-## Coding Style
+## Project Structure & Module Organization
 
-Note that this is a strictly Python 3.12+ project.
+Core package code lives under `pyine/`, grouped by domain (`apps`, `organisms`, `prompts`, `utils`).
+Experiment configuration utilities sit in `pyine/configs`, while generated datasets and fixtures
+live in `pyine/data/`. Tests mirror the package layout in `tests/` to keep unit coverage close to
+the implementation. Example notebooks, exploratory scripts, and visualizations reside in
+`notebooks/`. Large artifacts (datasets, checkpoints) should be stored outside the repo and
+referenced via paths or environment variables.
 
-When proposing Python code, always propose PEP-8-compliant code that is type hinted, and that
-respects the following rules:
+## Build, Test, and Development Commands
+
+Use `uv pip install -e ".[dev]"` (or `pip install -e ".[dev]"`) after activating a virtualenv. Run
+`make info` to discover helper tasks. `make check` executes the full pre-commit suite, while
+`make test` runs the default pytest selection (`-k "not slow"`). Use `make test-all` for
+exhaustive runs and `make coverage` when you need HTML and XML coverage artifacts under
+`logs/coverage/`.
+
+## Coding Style & Naming Conventions
+
+Code targets Python 3.12. Format with `black` (120-char lines) and sort imports via `isort`; both
+run automatically through pre-commit. Linting relies on `flake8`, so keep modules idiomatic:
+4-space indentation, descriptive snake_case for functions/modules, PascalCase for classes. Use
+type annotations, and use lightweight dataclasses where practical (or ideally pydantic models when
+validation is useful). Keep secrets out of version control.
+
+When proposing Python code, respects the following rules:
 
 For imports, prefer the shortest, explicit imports (e.g. `import x; x.y()` instead
 of `from x import y; y()`). For example:
@@ -70,13 +90,33 @@ that is really not so obvious to understand.
 
 When writing pydantic-related code, use the pydantic v2 conventions.
 
-## Code linting and testing
+## Code Linting and Testing
 
 To check whether linters find issues in proposed code, run `make check` (the necessary environment
 should have already been setup). This runs precommit hooks and checks for e.g. PEP8 compliance.
 
-To check whether all unit tests pass, run `make test-all` (this will include slow tests that require
-datasets or heavy processing). For a faster assessment that only checks the fast tests, run
-`make test`.
+Tests use `pytest`, organized per feature subpackage. Name test modules `test_<subject>.py` and
+individual tests `test_<expectation>`. Mark long-running or data-heavy scenarios with
+`@pytest.mark.slow`; CI and `make test` exclude them by default, so ensure at least one fast path
+exercises new code. When adding features, extend coverage expectations (branch-aware) and
+inspect reports in `logs/coverage/html/index.html`.
+
+To exhaustively check whether all unit tests pass, run `make test-all` (this will include slow
+tests that require datasets or heavy processing).
 
 See the [Makefile](./Makefile) for more information on these commands.
+
+## Commit & Pull Request Guidelines
+
+Commit messages follow an imperative, present-tense style (e.g., `Add prompt result viewer notebook`).
+Keep related changes together and re-run `make check` before pushing. Pull requests
+should summarize intent, call out datasets or configs touched, and link any tracking issues.
+Include reproduction steps or command logs for behavioral changes, plus screenshots when UI
+notebooks or visual outputs change.
+
+## Environment & Configuration Tips
+
+Populate a local `.env` based on `.env.template` to supply API keys, dataset roots, and experiment
+toggles. Avoid committing real credentials; use descriptive placeholder values instead. Prefer
+referencing paths via environment variables so notebooks, apps, and CLI tools stay portable
+across machines.
