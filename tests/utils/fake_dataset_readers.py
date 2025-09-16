@@ -326,16 +326,16 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
     ) -> None:
         super().__init__(lmdb_path=lmdb_path, config=config, **kwargs)
         # build deltas indices/keys and precompute deltas
-        self.deltas_indices: list[int] = []
+        self._deltas_indices: list[int] = []
         self.deltas_keys: list[str] = []
         self._deltas: list[deltas_utils.TraceDeltaList] = []
         for i, tkey in enumerate(self.trace_keys):
             dkey = f"{tkey}{traces_utils.DELTAS_SUFFIX}"
             self.deltas_keys.append(dkey)
-            self.deltas_indices.append(i)
+            self._deltas_indices.append(i)
             dlist = self._make_deltas(self._traces[i])
             self._deltas.append(dlist)
-        assert len(self.deltas_indices) == len(self._deltas) == len(self)
+        assert len(self._deltas_indices) == len(self._deltas) == len(self)
 
     def __getitem__(self, index_or_key: int | str) -> deltas_utils.TraceDeltaList:
         if isinstance(index_or_key, int):

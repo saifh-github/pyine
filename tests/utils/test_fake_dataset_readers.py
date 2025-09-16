@@ -124,9 +124,9 @@ class TestFakeDeltaDatasetReader:
         self,
         delta_reader: FakeDeltaDatasetReader,
     ) -> None:
-        assert len(delta_reader.deltas_indices) == len(delta_reader)
+        assert len(delta_reader._deltas_indices) == len(delta_reader)
         assert len(delta_reader.deltas_keys) == len(delta_reader)
-        assert len(delta_reader.trace_indices) == len(delta_reader.trace_keys) == len(delta_reader)
+        assert len(delta_reader._trace_indices) == len(delta_reader.trace_keys) == len(delta_reader)
         # deltas keys match the corresponding trace keys + suffix
         for tkey, dkey in zip(delta_reader.trace_keys, delta_reader.deltas_keys):
             assert dkey.startswith(tkey)

@@ -210,8 +210,7 @@ class DatasetReader(torch.utils.data.Dataset):
         raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
 
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
-        """
-        Fetches an individual trace data object from the LMDB database by external index or key.
+        """Fetches an individual trace data object from the LMDB database by external index or key.
 
         Args:
             index_or_key: index or key of the trace to retrieve.
@@ -227,8 +226,7 @@ class DatasetReader(torch.utils.data.Dataset):
 
     @functools.lru_cache(maxsize=512)
     def get_problem_data(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.CodingProblem:
-        """
-        Fetches the problem data associated with a trace by external index or key.
+        """Fetches the problem data associated with a trace by external index or key.
 
         Args:
             index_or_key: Index or key of the trace for which to retrieve parent problem data.
