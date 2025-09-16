@@ -4,6 +4,7 @@ import typing
 import langchain_core.messages
 import langchain_core.runnables
 import tqdm
+import wandb
 
 import pyine.data.datamodule
 import pyine.evals.utils
@@ -11,7 +12,6 @@ import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.reprod
-import wandb
 
 
 async def evaluate_model_on_subset(

@@ -5,10 +5,10 @@ import typing
 
 import pytest
 
-import pyine.evals.utils as eval_utils
+import pyine.evals.utils
 import pyine.prompts
 import pyine.utils.llm_providers
-import tests.data.utils.env_checks as env_checks
+import tests.env_checks
 
 
 class _DummyGraderChain:
@@ -39,7 +39,7 @@ class _DummyGraderChain:
 
 
 def test_add_sample_and_accuracies_no_grader() -> None:
-    evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator.add_sample(identifier="s1", expected="42", predicted="42", tags=["easy"])
     evaluator.add_sample(identifier="s2", expected="abc", predicted="xyz", tags=["hard"])
     evaluator.add_sample(identifier="s3", expected="1.0", predicted="1", tags=["woops"])
@@ -53,7 +53,7 @@ def test_add_sample_and_accuracies_no_grader() -> None:
 
 @pytest.mark.asyncio
 async def test_grader_accuracy_with_mock_chain() -> None:
-    evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator._llm_grader_chain = _DummyGraderChain(  # simple grader = 1.0 on exact, 0.25 otherwise
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.25
     )
@@ -67,7 +67,7 @@ async def test_grader_accuracy_with_mock_chain() -> None:
 
 @pytest.mark.asyncio
 async def test_agreement_table_with_mock_chain() -> None:
-    evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator._llm_grader_chain = _DummyGraderChain(
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.0
     )
@@ -88,7 +88,7 @@ async def test_agreement_table_with_mock_chain() -> None:
 
 
 def test_add_batch_validation_errors() -> None:
-    evaluator = eval_utils.OutcomeEvaluator()
+    evaluator = pyine.evals.utils.OutcomeEvaluator()
     with pytest.raises(ValueError):
         evaluator.add_batch(
             identifiers=["i1", "i2"],
@@ -105,7 +105,7 @@ def test_add_batch_validation_errors() -> None:
 
 
 def test_identifier_selector_filtering() -> None:
-    evaluator = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator.add_sample(identifier="foo/good", expected="1", predicted="1", tags=["x"])
     evaluator.add_sample(identifier="bar/bad", expected="1", predicted="2", tags=["y"])
 
@@ -119,21 +119,21 @@ def test_identifier_selector_filtering() -> None:
 
 
 def test_strip_hard_checks_behavior() -> None:
-    evaluator_no_strip = eval_utils.OutcomeEvaluator(strip_hard_checks=False)
+    evaluator_no_strip = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=False)
     evaluator_no_strip.add_sample(identifier="ns", expected="answer", predicted=" answer ")
     assert evaluator_no_strip.compute_hard_accuracy() == 0.0
-    evaluator_strip = eval_utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator_strip = pyine.evals.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator_strip.add_sample(identifier="s", expected="answer", predicted=" answer ")
     assert evaluator_strip.compute_hard_accuracy() == 1.0
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    env_checks.OPENAI_API_KEY_MISSING,
+    tests.env_checks.OPENAI_API_KEY_MISSING,
     reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
 )
 async def test_real_llm_grade_scoring() -> None:
-    evaluator = eval_utils.OutcomeEvaluator(
+    evaluator = pyine.evals.utils.OutcomeEvaluator(
         llm_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
             provider="openai",
             model_kwargs=dict(
@@ -171,8 +171,8 @@ def test_parse_usage_from_dict_basic() -> None:
             "reasoning_tokens": 30,
         }
     }
-    info = eval_utils.parse_token_usage_from_response(response)
-    assert isinstance(info, eval_utils.TokenUsageInfo)
+    info = pyine.evals.utils.parse_token_usage_from_response(response)
+    assert isinstance(info, pyine.evals.utils.TokenUsageInfo)
     assert info.total_tokens == 100
     assert info.prompt_tokens == "unknown"
     assert info.completion_tokens == 10
@@ -187,7 +187,7 @@ def test_parse_usage_from_attr_object() -> None:
 
     obj = type("ObjWithUsage", (), {})()
     obj.usage = _Usage()
-    info = eval_utils.parse_token_usage_from_response(obj)
+    info = pyine.evals.utils.parse_token_usage_from_response(obj)
     assert info.total_tokens == 12
     assert info.prompt_tokens == 5
     assert info.completion_tokens == 7
@@ -195,7 +195,7 @@ def test_parse_usage_from_attr_object() -> None:
     # thinking_tokens alias should populate reasoning_tokens when present
     obj2 = type("ObjWithUsage2", (), {})()
     obj2.usage = type("U", (), {"thinking_tokens": 3})()
-    info2 = eval_utils.parse_token_usage_from_response(obj2)
+    info2 = pyine.evals.utils.parse_token_usage_from_response(obj2)
     assert info2.reasoning_tokens == 3
 
 
@@ -211,20 +211,20 @@ def test_parse_usage_from_nested_creation_meta_llm_output() -> None:
             }
         }
     }
-    info = eval_utils.parse_token_usage_from_response(wrapper)
+    info = pyine.evals.utils.parse_token_usage_from_response(wrapper)
     assert info.total_tokens == 33
 
 
 def test_parse_usage_raises_when_no_information() -> None:
     with pytest.raises(ValueError, match="could not deduce token usage information"):
-        _ = eval_utils.parse_token_usage_from_response({})
+        _ = pyine.evals.utils.parse_token_usage_from_response({})
 
 
 def test_token_usage_info_add_and_iadd_success() -> None:
     r1 = {"usage": {"total_tokens": 10, "prompt_tokens": 6, "completion_tokens": 4}}
     r2 = {"usage": {"total_tokens": 20, "prompt_tokens": 3, "completion_tokens": 7}}
-    info1 = eval_utils.parse_token_usage_from_response(r1)
-    info2 = eval_utils.parse_token_usage_from_response(r2)
+    info1 = pyine.evals.utils.parse_token_usage_from_response(r1)
+    info2 = pyine.evals.utils.parse_token_usage_from_response(r2)
     summed = info1 + info2
     assert summed.total_tokens == 30
     assert summed.prompt_tokens == 9
@@ -239,8 +239,8 @@ def test_token_usage_info_add_and_iadd_success() -> None:
 
     known_output = {"usage": {"cached_tokens": 5, "total_tokens": 5}}
     unknown_output = {"usage": {"total_tokens": 10}}  # output_tokens omitted -> 'unknown'
-    info_known = eval_utils.parse_token_usage_from_response(known_output)
-    info_unknown = eval_utils.parse_token_usage_from_response(unknown_output)
+    info_known = pyine.evals.utils.parse_token_usage_from_response(known_output)
+    info_unknown = pyine.evals.utils.parse_token_usage_from_response(unknown_output)
     with pytest.raises(ValueError):
         _ = info_known + info_unknown
     with pytest.raises(ValueError):
@@ -248,7 +248,7 @@ def test_token_usage_info_add_and_iadd_success() -> None:
 
 
 @pytest.mark.skipif(
-    env_checks.OPENAI_API_KEY_MISSING,
+    tests.env_checks.OPENAI_API_KEY_MISSING,
     reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
 )
 def test_token_usage_with_real_openai_generation(tmp_path: pathlib.Path):
@@ -281,5 +281,5 @@ def f(x):
         log_new_results=False,
     )
     assert len(records) == 1
-    info = eval_utils.parse_token_usage_from_response(records[0])
+    info = pyine.evals.utils.parse_token_usage_from_response(records[0])
     assert info.total_tokens != "unknown" and info.total_tokens > 0

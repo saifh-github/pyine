@@ -56,10 +56,7 @@ class MainConfig(pydantic.BaseModel):
         """Returns whether the model to be fine-tuned supports the use of system prompts."""
         models_without_system_prompts = ["o1", "o3", "o4"]
         return not any(
-            [
-                self.openai_finetuner_config.params.base_model.startswith(m)
-                for m in models_without_system_prompts
-            ]
+            [self.openai_finetuner_config.params.base_model.startswith(m) for m in models_without_system_prompts]
         )
 
 
@@ -175,12 +172,11 @@ def register_experiment_configs(
             "_self_",
             {"override /config/openai_client_config": "timeout300s"},
         ],
+        bases=(main_config,),
     )
     for config_type_str, dm_config_name in itertools.product(["_eval_only", ""], dm_config_names):
         exp_name = f"{dm_config_name}{config_type_str}"
-        base_config = (
-            base_eval_only_config if config_type_str == "_eval_only" else base_train_config
-        )
+        base_config = base_eval_only_config if config_type_str == "_eval_only" else base_train_config
         logger.debug(f"setting up config for experiment={exp_name}")
         experiment_store(
             hydra_zen.make_config(
@@ -256,9 +252,7 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     # ---------------- store default datamodule configs ----------------
 
     datamodule_config_store = config_store(group="config/datamodule_config")
-    dm_config_names = pyine.organisms.datamodules.shortcuts_configs.store_hydra_configs(
-        datamodule_config_store
-    )
+    dm_config_names = pyine.organisms.datamodules.shortcuts_configs.store_hydra_configs(datamodule_config_store)
 
     # ---------------- store default openai client configs ----------------
 
@@ -279,9 +273,7 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
         name="openai_o4-mini_default_rlft",
     )
 
-    openai_finetuner_method_config_store = openai_finetuner_config_store(
-        group="config/openai_finetuner_config/method"
-    )
+    openai_finetuner_method_config_store = openai_finetuner_config_store(group="config/openai_finetuner_config/method")
     openai_finetuner_method_config_store(
         hydra_zen.builds(
             pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig,
@@ -308,5 +300,5 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
 
     # ---------------- register all configs with hydra ----------------
 
-    store.add_to_hydra_store()
+    store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
     return openai_finetune_main_config  # all done; return this for launch calls, if needed

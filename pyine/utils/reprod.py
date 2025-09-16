@@ -17,7 +17,6 @@ import lightning.fabric.utilities.seed
 import pydantic
 import rich
 import torch
-
 import wandb
 
 if typing.TYPE_CHECKING:

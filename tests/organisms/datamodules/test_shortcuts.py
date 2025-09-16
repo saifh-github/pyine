@@ -8,7 +8,7 @@ import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.utils.reprod
-import tests.data.utils.env_checks
+import tests.env_checks
 
 
 def _assert_non_leaking_assignments(metadata):
@@ -56,15 +56,15 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBiasD
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
+    tests.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
 def test_shortcuts_datamodule_integration(shortcuts_dm_config):
@@ -125,15 +125,15 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.HF_ACCESS_TOKEN_MISSING,
+    tests.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
 def test_shortcuts_datamodule_predefined_split(shortcuts_dm_config):

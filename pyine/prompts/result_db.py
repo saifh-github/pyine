@@ -128,7 +128,7 @@ class PromptResultDB:
         if creation_meta is None:
             creation_meta = CreationMeta()
         # note: internally used created_at field is in UTC time zone, and stored as isoformat string
-        internal_created_at = creation_meta.created_at.astimezone(datetime.timezone.utc).isoformat()
+        internal_created_at = creation_meta.created_at.astimezone(datetime.UTC).isoformat()
         logger.debug(f"storing new entry in database ({identifier=})")
         with self._lock:
 
@@ -206,7 +206,7 @@ class PromptResultDB:
             params.append(prompt_version)
         if max_result_age is not None:
             # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
             sql.append("AND created_at > ?")
             params.append(cutoff.isoformat())
         sql.append("ORDER BY created_at ASC, id ASC")  # ordered by iso utc time
@@ -246,7 +246,7 @@ class PromptResultDB:
             params.append(prompt_version)
         if max_result_age is not None:
             # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
             sql.append("AND created_at > ?")
             params.append(cutoff.isoformat())
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
@@ -281,7 +281,7 @@ class PromptResultDB:
             params.append(prompt_version)
         if max_result_age is not None:
             # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - max_result_age
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
             sql.append("AND created_at > ?")
             params.append(cutoff.isoformat())
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
@@ -380,7 +380,7 @@ class PromptResultDB:
             params.append(prompt_version)
         if older_than is not None:
             # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - older_than
+            cutoff = datetime.datetime.now(datetime.UTC) - older_than
             sql.append("AND created_at < ?")
             params.append(cutoff.isoformat())
 

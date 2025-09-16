@@ -267,7 +267,8 @@ class ClassImportSpec(
         ),
     ]
     params: dict[str, typing.Any] | pydantic.BaseModel = pydantic.Field(
-        default_factory=dict, description="Keyword arguments passed to the target class constructor."
+        default_factory=dict,
+        description="Keyword arguments passed to the target class constructor.",
     )
     params_key: typing.Annotated[
         str | None,

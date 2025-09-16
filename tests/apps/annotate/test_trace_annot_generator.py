@@ -5,16 +5,16 @@ import pytest
 
 import pyine.apps.annotate.trace_annot_generator as app
 import pyine.prompts
-import tests.data.utils.env_checks as env_checks
+import tests.env_checks
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    env_checks.OPENAI_API_KEY_MISSING,
+    tests.env_checks.OPENAI_API_KEY_MISSING,
     reason="OPENAI key missing, cannot check annotator app",
 )
 @pytest.mark.skipif(
-    env_checks.TACO_TRACES_DATASET_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check annotation generation",
 )
 def test_main_trace_annot_generator(

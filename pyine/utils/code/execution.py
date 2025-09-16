@@ -669,7 +669,10 @@ def _unsafe_execute_and_trace_code(
         trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
     try:
         with pyine.utils.timers.TimeLimit(timeout_seconds):
-            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):  # noqa
+            with (
+                contextlib.redirect_stdout(stdout_capture),
+                contextlib.redirect_stderr(stderr_capture),
+            ):  # noqa
                 if entrypoint_name is not None:
                     with trace_context(_trace_callback):
                         exec(compiled_code, exec_namespace)
@@ -891,7 +894,14 @@ print(f"Final values: a={a}, b={b}, c={c}")
     _trace_result = _unsafe_execute_and_trace_code(
         code_string=_sample_code,
         inputs="",
-        blacklisted_modules=["linecache", "traceback", "pydev", "pydevd_tracing", "contextlib", "numpy"],
+        blacklisted_modules=[
+            "linecache",
+            "traceback",
+            "pydev",
+            "pydevd_tracing",
+            "contextlib",
+            "numpy",
+        ],
         # trace_only_inside_code_string=True,
     )
     print(_trace_result.stdout)

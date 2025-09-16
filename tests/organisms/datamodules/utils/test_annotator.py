@@ -12,7 +12,7 @@ import pyine.prompts.result_db as result_db
 import pyine.prompts.types as prompt_types
 import pyine.utils.code.execution as exec_utils
 import pyine.utils.llm_providers as llm_providers
-import tests.data.utils.env_checks
+import tests.env_checks
 
 
 @dataclasses.dataclass
@@ -298,7 +298,10 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
         prompt_config=prompt_types.PromptBuildConfig(prompt_name="code_summary", version=None),
         identifier_resolver=_id_resolver,
         group_resolver=lambda _t, p, _c: str(p.problem_id),
-        input_variables_builder=lambda t, p, c, **__: {"code": t.code_string, "description": p.problem_statement},
+        input_variables_builder=lambda t, p, c, **__: {
+            "code": t.code_string,
+            "description": p.problem_statement,
+        },
         tags_builder=lambda *_, **__: [],  # noqa
         meta_builder=lambda *_, **__: {},  # noqa
         min_results_per_item=1,
@@ -316,11 +319,11 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.slow
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot run annotator integration",
 )
 @pytest.mark.skipif(
-    tests.data.utils.env_checks.OPENAI_API_KEY_MISSING,
+    tests.env_checks.OPENAI_API_KEY_MISSING,
     reason="OPENAI_API_KEY is missing, cannot run annotator integration",
 )
 async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:

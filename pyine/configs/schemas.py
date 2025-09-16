@@ -3,9 +3,9 @@ import pathlib
 
 import hydra.conf
 import pydantic
+import wandb
 
 import pyine.utils.reprod
-import wandb
 
 logger = logging.getLogger(__name__)
 

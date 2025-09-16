@@ -8,7 +8,7 @@ import pyine.data.traces.dataset_utils
 import pyine.organisms.datamodules.utils.samples
 import pyine.prompts
 import pyine.utils.code.execution as exec_utils
-import tests.data.utils.env_checks
+import tests.env_checks
 from pyine.organisms.datamodules.utils.samples import (
     SampleBuilder,
     SampleSelectionConfig,
@@ -172,7 +172,7 @@ class TestSampleBuilderRealData:
 
     @pytest.mark.slow
     @pytest.mark.skipif(
-        tests.data.utils.env_checks.TACO_TRACES_DATASET_MISSING,
+        tests.env_checks.TACO_TRACES_DATASET_MISSING,
         reason="TACO traces dataset is missing, cannot check sample generation",
     )
     def test_sample_generation_on_taco_traces(self):

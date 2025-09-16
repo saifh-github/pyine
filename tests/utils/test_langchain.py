@@ -3,12 +3,12 @@ import langchain_core.outputs
 import langchain_openai
 import pytest
 
-from pyine.utils.langchain import CaptureLLMHandler
-from tests.data.utils.env_checks import OPENAI_API_KEY_MISSING
+import pyine.utils.langchain
+import tests.env_checks
 
 
 def test_capture_llm_handler_manual_event_sequence() -> None:
-    handler = CaptureLLMHandler()
+    handler = pyine.utils.langchain.CaptureLLMHandler()
     assert handler.get_latest_event() is None
     handler.on_llm_start(
         serialized={"name": "gpt"},
@@ -44,10 +44,10 @@ def test_capture_llm_handler_manual_event_sequence() -> None:
     assert handler.get_latest_event("missing") is None  # noqa
 
 
-@pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
 def test_capture_llm_handler_records_events_with_openai_chat():
     model_name = "gpt-4o-mini"
-    handler = CaptureLLMHandler()
+    handler = pyine.utils.langchain.CaptureLLMHandler()
     llm = langchain_openai.ChatOpenAI(model=model_name, temperature=0, max_tokens=16)
     result = llm.with_config(callbacks=[handler]).invoke("Reply with a single word: hello")
     assert result is not None and isinstance(result, langchain_core.messages.AIMessage)

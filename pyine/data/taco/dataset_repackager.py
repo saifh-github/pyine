@@ -120,7 +120,10 @@ async def reprocess_code_samples(
                         try:
                             return await code_analysis_chain.ainvoke(input_data, config={"max_concurrency": 512})
                         except Exception as e:
-                            full_stop_exceptions = ["insufficient balance", "stopping processing at "]
+                            full_stop_exceptions = [
+                                "insufficient balance",
+                                "stopping processing at ",
+                            ]
                             if any([s in str(e).lower() for s in full_stop_exceptions]):
                                 raise e
                             retries += 1

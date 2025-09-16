@@ -326,7 +326,11 @@ class _EventPairIterator:
 
     def get_next_pair(
         self,
-    ) -> tuple[pyine.utils.code.execution.TraceEvent, pyine.utils.code.execution.TraceEvent, EventRelationship]:
+    ) -> tuple[
+        pyine.utils.code.execution.TraceEvent,
+        pyine.utils.code.execution.TraceEvent,
+        EventRelationship,
+    ]:
         """Returns the next event pair and relationship tuple."""
         assert self.iter_idx < len(self.relevant_step_idxs) - 1, "iterator index out of bounds"
         curr_step = self.trace_res.traced_steps[self.relevant_step_idxs[self.iter_idx]]
@@ -486,7 +490,8 @@ def get_deltas_from_trace_steps(
                     event_iterator.increment_iter_idx()  # do that now, we are consuming the event
                     call_stack._push_manually(caller_trace_key, caller_vars)  # put orig caller info back on stack
                     next_call_delta = dict(
-                        __call__=repr(next_next_step.trace_key), __args__=repr(next_next_step.arguments)
+                        __call__=repr(next_next_step.trace_key),
+                        __args__=repr(next_next_step.arguments),
                     )
                     next_call_step = next_next_step.trace_step_idx
                     next_next_step = event_iterator.get_next_event(increment=True)  # fetch next event for its trace key

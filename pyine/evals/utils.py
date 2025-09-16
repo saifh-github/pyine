@@ -572,7 +572,11 @@ def parse_token_usage_from_response(
     prompt_kws = ["prompt_tokens", "input_tokens"]
     if (prompt := _get_first_available(usage, prompt_kws)) is not None:
         result.prompt_tokens = prompt
-    cached_kws = ["prompt_tokens_details.cached_tokens", "input_token_details.cache_read", "cached_tokens"]
+    cached_kws = [
+        "prompt_tokens_details.cached_tokens",
+        "input_token_details.cache_read",
+        "cached_tokens",
+    ]
     if (cached := _get_first_available(usage, cached_kws)) is not None:
         result.cached_tokens = cached
     reasoning_kws = [

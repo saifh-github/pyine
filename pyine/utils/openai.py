@@ -256,7 +256,10 @@ def convert_messages_to_openai(
                             or {}
                         )
                         arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
-                        entry = {"type": "function", "function": {"name": name, "arguments": arguments}}
+                        entry = {
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
                         tc_id = getattr(tc, "id", None)
                         if tc_id:
                             entry["id"] = tc_id

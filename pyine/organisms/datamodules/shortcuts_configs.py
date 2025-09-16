@@ -91,9 +91,7 @@ def get_taco_configs(base_config: hydra_zen.typing.Builds) -> dict[str, hydra_ze
         output_configs["TACO_10s10t_v1_part1"] = (
             taco_10s10t_v1_part1_config := hydra_zen.builds(
                 pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig,
-                lmdb_paths=[
-                    taco_10s10t_v1_paths[0]
-                ],  # smaller overall dataset for quick experiments
+                lmdb_paths=[taco_10s10t_v1_paths[0]],  # smaller overall dataset for quick experiments
                 # -------------
                 builds_bases=(taco_10s10t_v1_config,),
             )

@@ -224,7 +224,11 @@ def main() -> None:
     help="Path to a PromptResultDB file. If omitted, use the framework default.",
 )
 @click.option(
-    "--verbose/--no-verbose", "verbose", default=True, show_default=True, help="Toggles verbose output/logging."
+    "--verbose/--no-verbose",
+    "verbose",
+    default=True,
+    show_default=True,
+    help="Toggles verbose output/logging.",
 )
 @click.option(
     "--dry-run",
@@ -359,7 +363,11 @@ def traces(
     show_default=True,
 )
 @click.option(
-    "--verbose/--no-verbose", "verbose", default=True, show_default=True, help="Toggles verbose output/logging."
+    "--verbose/--no-verbose",
+    "verbose",
+    default=True,
+    show_default=True,
+    help="Toggles verbose output/logging.",
 )
 @click.option(
     "--dry-run",

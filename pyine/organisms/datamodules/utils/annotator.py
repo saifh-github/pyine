@@ -377,7 +377,10 @@ def _default_input_variables_builder(
                 output["description"] = code_summary_records[-1].result
         if config.augment_config.get_buggy_code_before_hinting and is_hint_prompting and not is_already_bugged:
             # try to fetch a buggy version of the code string before applying the hint generation prompt
-            for prompt_info, augment_prob in config.augment_config.get_buggy_code_before_hinting.items():
+            for (
+                prompt_info,
+                augment_prob,
+            ) in config.augment_config.get_buggy_code_before_hinting.items():
                 if np.random.random() > augment_prob:
                     continue  # failed random draw for this augment
                 if isinstance(prompt_info, tuple):

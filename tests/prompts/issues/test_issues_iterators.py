@@ -12,12 +12,14 @@ def test_get_full_output_config_and_template():
         assert isinstance(example, pyine.prompts.utils.PromptExample)
     assert config.examples[0].output is not None
     assert issues_iterators.invalid_code_token not in config.get_examples_as_text(
-        target_examples=[0], extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token)
+        target_examples=[0],
+        extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token),
     )
     assert config.examples[1].output is None  # invalid input code
     assert (
         config.get_examples_as_text(
-            target_examples=[1], extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token)
+            target_examples=[1],
+            extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token),
         )
         .rstrip("\n")
         .endswith(issues_iterators.invalid_code_token)

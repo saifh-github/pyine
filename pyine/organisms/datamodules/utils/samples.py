@@ -769,7 +769,10 @@ class SampleBuilder(SampleDataParserType):
                 )
                 if is_too_long:  # if the trace is too long, always try to generate a partial sample
                     try_partial_sample = True
-            if not try_partial_sample and self.transform_config.transform_strategy in ["hybrid", "random"]:
+            if not try_partial_sample and self.transform_config.transform_strategy in [
+                "hybrid",
+                "random",
+            ]:
                 # if the trace is not too long, we can still generate a partial sample randomly
                 total_partial_mass = sum(
                     [
@@ -951,7 +954,10 @@ class SampleBuilder(SampleDataParserType):
             assert target_step_count <= len(range_steps) - 1
             segment_start_idx = int(rng.integers(0, len(range_steps) - target_step_count))
             segment_end_idx = segment_start_idx + target_step_count  # goes to next event to get outcomes
-            segment_start, segment_end = range_steps[segment_start_idx], range_steps[segment_end_idx]
+            segment_start, segment_end = (
+                range_steps[segment_start_idx],
+                range_steps[segment_end_idx],
+            )
             segment_size = segment_end_idx - segment_start_idx
             assert 0 < segment_size <= max_step_count, "segment size is not valid"
             if self.transform_config.combine_local_and_global_vars_for_partial_samples:

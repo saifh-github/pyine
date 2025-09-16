@@ -4,16 +4,16 @@ import click.testing
 import pytest
 import yaml
 
-import pyine.apps.splits.dataset_splitter as splitter
-import pyine.apps.write.dataset_writer as writer
-import pyine.data.traces.dataset_reader as reader
-import pyine.data.utils.splits as splits_utils
-import tests.data.utils.env_checks as env_checks
+import pyine.apps.splits.dataset_splitter
+import pyine.apps.write.dataset_writer
+import pyine.data.traces.dataset_reader
+import pyine.data.utils.splits
+import tests.env_checks
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    env_checks.TACO_DATASET_MISSING,
+    tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check dataset split",
 )
 def test_main_split_taco_micro_subset(
@@ -26,19 +26,26 @@ def test_main_split_taco_micro_subset(
     """
     split_file_path = pathlib.Path(tmp_path) / "split.bin"
     assert not split_file_path.exists()
-    monkeypatch.setattr(splits_utils, "get_dataset_split_file_path", lambda x, must_exist: split_file_path)
+    monkeypatch.setattr(
+        pyine.data.utils.splits,
+        "get_dataset_split_file_path",
+        lambda x, must_exist: split_file_path,
+    )
     cli_runner = click.testing.CliRunner()
-    res = cli_runner.invoke(splitter.main, ["split", "--dataset-name=TACO", "--max-sample-count=10"])  # noqa
+    res = cli_runner.invoke(
+        pyine.apps.splits.dataset_splitter.main,
+        ["split", "--dataset-name=TACO", "--max-sample-count=10"],
+    )  # noqa
     assert res.exit_code == 0, res
     assert split_file_path.exists()
-    split_result = splits_utils.get_dataset_split_result("TACO")
+    split_result = pyine.data.utils.splits.get_dataset_split_result("TACO")
     assert split_result.source_dataset_name == "TACO"
     assert len(split_result.subset_assignments) == 10
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check problem partitioning",
 )
 def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
@@ -47,7 +54,7 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
     Uses a temporary directory for the output dir.
     """
     cli_runner = click.testing.CliRunner()
-    taco_dataset_split_path = splits_utils.get_dataset_split_file_path("TACO", must_exist=False)
+    taco_dataset_split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO", must_exist=False)
     cli_args = [
         "partition",
         f"--split-file={taco_dataset_split_path}",
@@ -56,11 +63,11 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
         "--no-only-assigned-ids",
         "--format=yaml",
     ]
-    res = cli_runner.invoke(splitter.main, cli_args)  # noqa
+    res = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, cli_args)  # noqa
     assert res.exit_code == 0, res
     part_files = sorted(list(tmp_path.glob("*.yaml")))
     assert len(part_files) > 0
-    expected_ids = splits_utils.SplitResult.from_file(taco_dataset_split_path).identifiers
+    expected_ids = pyine.data.utils.splits.SplitResult.from_file(taco_dataset_split_path).identifiers
     found_ids = []
     for part_file in part_files:
         with part_file.open("r") as fd:
@@ -73,11 +80,11 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    env_checks.TACO_DATASET_MISSING,
+    tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check dataset split",
 )
 @pytest.mark.skipif(
-    env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check problem partitioning",
 )
 def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
@@ -88,7 +95,7 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
     Uses a temporary directory for the output dir.
     """
     cli_runner = click.testing.CliRunner()
-    taco_dataset_split_path = splits_utils.get_dataset_split_file_path("TACO", must_exist=False)
+    taco_dataset_split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO", must_exist=False)
     out_parts_path = tmp_path / "parts"
     cli_args = [
         "partition",
@@ -98,7 +105,7 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
         "--no-only-assigned-ids",
         "--format=yaml",
     ]
-    res = cli_runner.invoke(splitter.main, cli_args)  # noqa
+    res = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, cli_args)  # noqa
     assert res.exit_code == 0, res
     part_files = sorted(list(out_parts_path.glob("*.yaml")))
     assert len(part_files) > 3
@@ -126,10 +133,10 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
             f"--target-problem-ids={part_file}",
             "--generate-obfuscated-solutions",
         ]
-        res = cli_runner.invoke(writer.main, cli_args)  # noqa
+        res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa
         assert res.exit_code == 0, res
         assert out_dataset_path.is_dir()
-    readers = [reader.DatasetReader(path) for path in out_dataset_paths]
+    readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in out_dataset_paths]
     for part_idx, r in enumerate(readers):
         expected_pids = expected_problem_ids[part_idx]
         found_pids = r.problem_keys

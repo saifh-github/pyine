@@ -114,11 +114,11 @@ output = "logs/coverage/coverage.xml"
 [tool.isort]
 profile = "black"
 line_length = 120
-src_paths = ["pyine"]
-known_first_party = ["pyine"]
+src_paths = ["pyine", "tests"]
+known_first_party = ["pyine", "tests"]
 
 [tool.black]
-line-length = 100
+line-length = 120
 target-version = ["py312"]
 
 [tool.nbqa]

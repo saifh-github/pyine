@@ -68,10 +68,22 @@ def test_store_and_fetch_by_identifier(db: PromptResultDB):
 def test_group_queries_and_tag_filter(db: PromptResultDB):
     # id1 two versions under group g1
     db.store(
-        identifier="id1", group="g1", prompt_name="p", prompt_version="1", prompt="p1", result="r1", tags=["a", "b"]
+        identifier="id1",
+        group="g1",
+        prompt_name="p",
+        prompt_version="1",
+        prompt="p1",
+        result="r1",
+        tags=["a", "b"],
     )  # v1
     db.store(
-        identifier="id1", group="g1", prompt_name="p", prompt_version="2", prompt="p2", result="r2", tags=["a"]
+        identifier="id1",
+        group="g1",
+        prompt_name="p",
+        prompt_version="2",
+        prompt="p2",
+        result="r2",
+        tags=["a"],
     )  # v2
     # id2 one version, contains a wip tag
     db.store(
@@ -323,9 +335,30 @@ def test_delete_records_by_identifier(db: PromptResultDB):
 
 def test_delete_records_by_group_and_prompt_version(db: PromptResultDB):
     # two in target group (v1 and v2), one in another group
-    db.store(identifier="x1", group="del-group", prompt_name="pn", prompt_version="v1", prompt="p", result="r1")
-    db.store(identifier="x2", group="del-group", prompt_name="pn", prompt_version="v2", prompt="p", result="r2")
-    db.store(identifier="x3", group="other", prompt_name="pn", prompt_version="v1", prompt="p", result="r3")
+    db.store(
+        identifier="x1",
+        group="del-group",
+        prompt_name="pn",
+        prompt_version="v1",
+        prompt="p",
+        result="r1",
+    )
+    db.store(
+        identifier="x2",
+        group="del-group",
+        prompt_name="pn",
+        prompt_version="v2",
+        prompt="p",
+        result="r2",
+    )
+    db.store(
+        identifier="x3",
+        group="other",
+        prompt_name="pn",
+        prompt_version="v1",
+        prompt="p",
+        result="r3",
+    )
     deleted = db.delete_records(group="del-group", prompt_name="pn", prompt_version="v1")
     assert deleted == 1
     remaining_in_group = db.get_by_group("del-group")

@@ -126,7 +126,8 @@ def run_in_parallel(
         if local_executor is not None:
             # cancel_futures ensures pending tasks are canceled on shutdown if exceptions occur upstream
             if isinstance(
-                local_executor, (concurrent.futures.ThreadPoolExecutor, concurrent.futures.ProcessPoolExecutor)
+                local_executor,
+                (concurrent.futures.ThreadPoolExecutor, concurrent.futures.ProcessPoolExecutor),
             ):
                 local_executor.shutdown(cancel_futures=True)
             else:

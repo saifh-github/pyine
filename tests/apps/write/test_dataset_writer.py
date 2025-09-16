@@ -3,9 +3,9 @@ import pathlib
 import click.testing
 import pytest
 
-import pyine.apps.write.dataset_writer as writer
+import pyine.apps.write.dataset_writer
 import pyine.utils.filesystem
-import tests.data.utils.env_checks as env_checks
+import tests.env_checks
 
 
 def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
@@ -20,13 +20,13 @@ def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
         "--fetch-augmented-solutions=hints/stubs=1",
         "--dry-run",
     ]
-    res = cli_runner.invoke(writer.main, cli_args)  # noqa
+    res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa
     assert res.exit_code == 0, res
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    env_checks.TACO_DATASET_MISSING,
+    tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check trace dataset writer app",
 )
 def test_main_write_taco_traces_micro(
@@ -46,7 +46,7 @@ def test_main_write_taco_traces_micro(
         "--max-solutions-per-problem=1",
         "--max-tests-per-solution=1",
     ]
-    res = cli_runner.invoke(writer.main, cli_args)  # noqa
+    res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa
     assert res.exit_code == 0, res
     assert output_path.is_dir()
 
@@ -60,5 +60,5 @@ def test_main_write_deltas_dry_run() -> None:
         "--output-path=/tmp/potato_out",
         "--dry-run",
     ]
-    res = cli_runner.invoke(writer.main, cli_args)  # noqa
+    res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa
     assert res.exit_code == 0, res

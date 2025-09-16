@@ -182,7 +182,11 @@ def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
     past = {"a": 1, "b": 2}
     cur = {"b": 3, "c": 4}
     d_changes = portability.format_object_changes(past, cur)
-    assert set(d_changes) == {"dict:len=2:removed(a):None", "dict:len=2:added(c):4", "dict:len=2:changed(b):3"}
+    assert set(d_changes) == {
+        "dict:len=2:removed(a):None",
+        "dict:len=2:added(c):4",
+        "dict:len=2:changed(b):3",
+    }
     # too many
     big_past = {i: i for i in range(20)}
     big_cur = {i: i + 1 for i in range(20)}

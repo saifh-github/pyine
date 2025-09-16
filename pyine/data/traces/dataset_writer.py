@@ -582,7 +582,10 @@ def _trace_code_snippet(
             default_test_result = exception_test_result
         else:
             # other kinds of exception are probably unexpected, and did not match the expected output
-            return trace_result, exception_test_result  # return the results immediately, pass or fail
+            return (
+                trace_result,
+                exception_test_result,
+            )  # return the results immediately, pass or fail
     if code_snippet.entrypoint_name is not None or trace_result.return_value is not None:
         # the executed code returned a value that SHOULD be the expected one
         # (if the code had a specific entrypoint, this is the only possible outcome)

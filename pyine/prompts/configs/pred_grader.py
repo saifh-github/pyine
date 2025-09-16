@@ -66,7 +66,7 @@ def get_prompt_template(
         include_examples=include_examples,
         target_examples=target_examples,
         role_variables=None,
-        context_variables=dict(expected_output_format=parser.get_format_instructions()) if parser else None,
+        context_variables=(dict(expected_output_format=parser.get_format_instructions()) if parser else None),
         examples_block_variables=None,
     )
     if partial_vars:

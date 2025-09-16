@@ -224,7 +224,10 @@ class FakeTraceDatasetReader(_FakeBase):
             tests.append((inp, out))
         solutions = [
             traces_utils.SolutionIdentifier(
-                dataset=self._dataset_name, subset=self._subset_name, problem_idx=p_idx, solution_idx=s_idx
+                dataset=self._dataset_name,
+                subset=self._subset_name,
+                problem_idx=p_idx,
+                solution_idx=s_idx,
             )
             for s_idx in range(self._cfg.solutions_per_problem)
         ]

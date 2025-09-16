@@ -10,7 +10,7 @@ import pytest
 
 import pyine.utils.openai as openai_utils
 import pyine.utils.reprod
-from tests.data.utils.env_checks import OPENAI_API_KEY_MISSING
+import tests.env_checks
 
 fine_tune_base_model = "gpt-4.1-nano-2025-04-14"  # might need to be updated at some point...
 test_tag = "pyine-pytest-openai"  # will be useful to ignore if tests fail and start sending emails
@@ -200,7 +200,7 @@ def client() -> openai_sdk.OpenAI:
     return openai_sdk.OpenAI()
 
 
-@pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
 class TestOpenAIIntegration:
 
     @pytest.fixture(scope="class")
@@ -373,7 +373,7 @@ class TestOpenAIIntegration:
         assert len(reply) > 0
 
 
-@pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
 class TestCleanups:
 
     @pytest.mark.slow
