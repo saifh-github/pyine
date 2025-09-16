@@ -189,7 +189,13 @@ async def main(
         logger.info("skipping fine-tuning, evaluating base model directly")
 
     if config.use_wandb_logging:
-        runtime.wandb_run.summary["model_name"] = model_name
+        if runtime.wandb_run.status != "running":
+            if runtime.wandb_run.status != "finished":
+                raise RuntimeError(f"wandb run is not running or finished, status={runtime.wandb_run.status}")
+            # the openai integration 'finalized' the run, re-open it to log the last few metrics/summaries
+            wandb_api = wandb.Api()
+            runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
+        runtime.wandb_run.summary.update({"model_name": model_name})
 
     for eval_subset_name in config.eval_subset_names:
         metrics = await _evaluate(
