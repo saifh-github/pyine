@@ -696,11 +696,9 @@ def fetch_or_generate_prompt_results(
                 else:
                     # not satisfactory: retry if allowed; otherwise raise
                     if retry_count >= max_unsatisfactory_retries:
-                        preview = result_str if len(result_str) <= 200 else result_str[:200] + "..."
                         raise ValidationFailedError(
                             f"LLM output did not pass validation"
                             f" (after {retry_count} retries; max allowed {max_unsatisfactory_retries})."
-                            f" Last output preview: {preview!r}"
                         )
                     retry_count += 1
                     continue

@@ -552,7 +552,10 @@ class AnnotationReport:
     """Total number of tokens exchanged with the LLM (best-effort find, not reliable if not using OpenAI models)."""
     errors: int = 0
     """Total number of errors caught during processing."""
+    error_message_tracebacks: list[str] = dataclasses.field(default_factory=list)
+    """List of tracebacks for each error caught during processing (these are long!)."""
     error_messages: list[str] = dataclasses.field(default_factory=list)
+    """List of error messages for each error caught during processing (useful for printing)."""
 
     def add(self, other: "AnnotationReport") -> "AnnotationReport":
         """Accumulate counts from another report into this one and return self."""
@@ -562,6 +565,7 @@ class AnnotationReport:
         self.new_results_generated += other.new_results_generated
         self.total_tokens_exchanged += other.total_tokens_exchanged
         self.errors += other.errors
+        self.error_message_tracebacks.extend(other.error_message_tracebacks)
         self.error_messages.extend(other.error_messages)
         return self
 
@@ -780,12 +784,14 @@ def _process_one_annotation(
     except pyine.prompts.result_db.ValidationFailedError as e:
         rep.errors += 1
         attempts = config.max_unsatisfactory_retries + 1
-        rep.error_messages.append("".join(traceback.format_exception(e)))
+        rep.error_messages.append(f"sample_idx={sample_idx}, trace_id={trace.identifier}: {e}")
+        rep.error_message_tracebacks.append("".join(traceback.format_exception(e)))
         logger.warning(f"result validation failed after {attempts} attempt(s) for data sample at idx: {sample_idx}")
         logger.debug(f"exception details: {e}")
     except Exception as e:
         rep.errors += 1
-        rep.error_messages.append("".join(traceback.format_exception(e)))
+        rep.error_messages.append(f"sample_idx={sample_idx}, trace_id={trace.identifier}: {e}")
+        rep.error_message_tracebacks.append("".join(traceback.format_exception(e)))
         logger.exception(f"failed to process and annotate data sample at idx: {sample_idx}")
         logger.debug(f"exception details: {e}")
     return rep
