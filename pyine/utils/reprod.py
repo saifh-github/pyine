@@ -17,6 +17,7 @@ import lightning.fabric.utilities.seed
 import pydantic
 import rich
 import torch
+
 import wandb
 
 if typing.TYPE_CHECKING:
@@ -360,7 +361,7 @@ def entrypoint_setup(
                 config_file_prefix = config_file_path.name.split(".")[0]
                 configs_artifact.add_file(
                     local_path=str(config_file_path),
-                    name=config_file_prefix,
+                    name=f"{config_file_prefix}{config_file_path.suffix}",
                     skip_cache=True,
                     policy="immutable",
                 )

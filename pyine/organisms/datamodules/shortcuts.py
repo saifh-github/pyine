@@ -217,6 +217,17 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         return self._metadata is not None
 
     @typing.override
+    def get_stats(self) -> dict[str, int | float | str]:
+        """Returns a dictionary of useful-to-log statistics."""
+        if not self._is_setup_complete():
+            raise RuntimeError("data parsers are not ready yet, call `setup()` first")
+        stats = dict()
+        for subset_type, parser in self._subset_parsers.items():
+            for stat_key, stat_vaL in parser.get_stats().items():
+                stats[f"{subset_type}/{stat_key}"] = stat_vaL
+        return stats
+
+    @typing.override
     def get_parser(
         self,
         subset_type: SubsetNameType,

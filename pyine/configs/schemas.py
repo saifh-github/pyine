@@ -3,9 +3,9 @@ import pathlib
 
 import hydra.conf
 import pydantic
-import wandb
 
 import pyine.utils.reprod
+import wandb
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class RuntimeConfig(pydantic.BaseModel):
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
         default_kwargs = dict(
-            name=f"{self.exp_name}:{self.run_name}",
+            name=f"{self.exp_name}-{self.run_name}",
             notes=self.notes,
             tags=tuple(sorted(set(self.tags))) if self.tags else None,
             group=self.run_group,

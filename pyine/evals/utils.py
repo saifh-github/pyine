@@ -304,6 +304,11 @@ class OutcomeEvaluator:
                 for item_idx, score in zip(future_item_idxs, scores):
                     selected_items[item_idx].llm_score = self._decode_response(score)
 
+    @staticmethod
+    def get_metric_names() -> list[str]:
+        """Returns a list of metric names supported by this evaluator."""
+        return ["accuracy/hard", "accuracy/soft", "accuracy/grader"]
+
     async def compute_metrics(
         self,
         score_threshold: float = 0.5,
@@ -444,6 +449,17 @@ class TokenUsageInfo:
             reasoning_tokens="unknown",
             completion_tokens="unknown",
         )
+
+    @staticmethod
+    def get_metric_names() -> list[str]:
+        """Returns a list of metric names supported by this evaluator."""
+        return [
+            "total_tokens",
+            "prompt_tokens",
+            "cached_tokens",
+            "reasoning_tokens",
+            "completion_tokens",
+        ]
 
     def asdict(self) -> dict[str, TokenCount]:
         """Returns a dictionary representation of the TokenUsageInfo object."""

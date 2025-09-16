@@ -11,6 +11,7 @@ import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.reprod
+import wandb
 
 
 async def evaluate_model_on_subset(
@@ -51,7 +52,7 @@ async def evaluate_model_on_subset(
         output_metrics: dict[str, float | int | str] = await evaluator.compute_metrics()
         if token_usage is None:
             token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-        output_metrics.update(token_usage.asdict())
+        output_metrics.update({f"token_usage/{k}": v for k, v in token_usage.asdict().items()})
         return output_metrics
 
     sample_idxs = list(range(len(parser)))
@@ -122,3 +123,24 @@ async def evaluate_model_on_subset(
         prog_bar.close()
 
     return await _get_metrics()
+
+
+def define_metrics_for_wandb(
+    wandb_run: wandb.Run,
+    prefix: str | None = None,
+) -> None:
+    """Defines the evaluation metrics for the given wandb run."""
+    for metric_name in pyine.evals.utils.OutcomeEvaluator.get_metric_names():
+        metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
+        wandb_run.define_metric(
+            name=metric_name,
+            summary="max",  # outcome eval metrics are always max
+            step_metric="global_step",
+        )  # noqa
+    for metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():
+        metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
+        wandb_run.define_metric(
+            name=metric_name,
+            summary="mean",  # token usage metrics make sense as averaged over full runs
+            step_metric="global_step",
+        )  # noqa

@@ -618,6 +618,16 @@ class SampleBuilder(SampleDataParserType):
         logger.debug(f"found {len(code_summaries_lut)} code summaries in prompt result db")
         return code_summaries_lut
 
+    def get_stats(self) -> dict[str, int | float | str]:
+        """Returns a dictionary of statistics for the prepared samples."""
+        # note: we cannot provide stats on the transformed samples as their types are resolved later
+        return {
+            "sample_count": len(self.traces),
+            **{f"code_type_counts/{k}": c for k, c in collections.Counter(self.input_types).items()},
+            "code_overrides_count": sum([bool(c) for c in self.code_overrides]),
+            "code_summaries_count": len(self.code_summaries),
+        }
+
     def __len__(self) -> int:
         """Returns the number of traces covered by this reader."""
         return len(self.traces)

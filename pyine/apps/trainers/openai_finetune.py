@@ -135,10 +135,16 @@ async def main(
         main_config=config,
         use_wandb_logging=config.use_wandb_logging,
     )
+
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm.prepare_data()
     dm.setup()
+
+    if config.use_wandb_logging:
+        assert runtime is not None and runtime.wandb_run is not None
+        runtime.wandb_run.summary.update(dm.get_stats())
+
     client: openai.OpenAI = config.openai_client_config.instantiate()
     if not skip_fine_tuning:
         approx_tokens = _compute_estimated_train_token_count(config, dm)
@@ -182,7 +188,6 @@ async def main(
         logger.info("skipping fine-tuning, evaluating base model directly")
 
     if config.use_wandb_logging:
-        assert runtime is not None and runtime.wandb_run is not None
         runtime.wandb_run.summary["model_name"] = model_name
 
     for eval_subset_name in config.eval_subset_names:
@@ -194,8 +199,12 @@ async def main(
             llm_grader_provider_config=config.llm_grader_provider_config,
         )
         if config.use_wandb_logging:
-            assert runtime is not None and runtime.wandb_run is not None
-            runtime.wandb_run.summary[eval_subset_name] = metrics
+            pyine.evals.common.define_metrics_for_wandb(
+                wandb_run=runtime.wandb_run,
+                prefix=eval_subset_name,
+            )
+            prefixed_metrics = {f"{eval_subset_name}/{k}": v for k, v in metrics.items()}
+            runtime.wandb_run.summary.update(prefixed_metrics)
 
 
 if __name__ == "__main__":
