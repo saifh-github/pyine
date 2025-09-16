@@ -240,7 +240,7 @@ def get_portable_function_name(callabl: typing.Callable) -> str:
         base = _qual(module, qualname)
     elif (
         # plain functions, including nested and class/staticmethod functions
-        isinstance(callable, (types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType))
+        isinstance(callabl, (types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType))
         or inspect.isbuiltin(callabl)
     ):
         module = getattr(callabl, "__module__", None)
