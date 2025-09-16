@@ -638,7 +638,12 @@ async def annotate_trace_dataset(
     data_indices = list(config.target_indices or range(len(dataset)))
     if shuffle_indices:
         random.shuffle(data_indices)
-    wrapped_data_indices = tqdm.tqdm(data_indices, disable=not show_progress, desc="annotation progress")
+    wrapped_data_indices = tqdm.tqdm(
+        data_indices,
+        disable=not show_progress,
+        desc="annotation progress",
+        smoothing=0.05,  # for a longer-window estimate
+    )
     output = AnnotationReport()
     if not parallel:
         for iter_idx, sample_idx in enumerate(wrapped_data_indices):
