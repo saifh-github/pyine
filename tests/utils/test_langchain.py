@@ -1,9 +1,47 @@
 import langchain_core.messages
+import langchain_core.outputs
 import langchain_openai
 import pytest
 
 from pyine.utils.langchain import CaptureLLMHandler
 from tests.data.utils.env_checks import OPENAI_API_KEY_MISSING
+
+
+def test_capture_llm_handler_manual_event_sequence() -> None:
+    handler = CaptureLLMHandler()
+    assert handler.get_latest_event() is None
+    handler.on_llm_start(
+        serialized={"name": "gpt"},
+        prompts=["hi"],
+        invocation_params={"temperature": 0},
+    )
+    llm_result = langchain_core.outputs.LLMResult(
+        generations=[[langchain_core.outputs.Generation(text="done")]],
+        llm_output={"token_usage": {"total_tokens": 1}},
+    )
+    handler.on_llm_end(llm_result, request_id="req-1")
+    handler.on_llm_error(RuntimeError("boom"), attempt=2)
+
+    assert [event.type for event in handler.events] == [
+        "llm_start",
+        "llm_end",
+        "llm_error",
+    ]
+
+    latest = handler.get_latest_event()
+    assert latest is not None and latest.type == "llm_error"
+    assert latest.error == "boom" and latest.kwargs == {"attempt": 2}
+
+    end_event = handler.get_latest_event("llm_end")
+    assert end_event is not None and end_event.response is llm_result
+    assert end_event.kwargs == {"request_id": "req-1"}
+
+    start_event = handler.get_latest_event("llm_start")
+    assert start_event is not None and start_event.prompts == ["hi"]
+    assert start_event.serialized == {"name": "gpt"}
+    assert start_event.kwargs == {"invocation_params": {"temperature": 0}}
+
+    assert handler.get_latest_event("missing") is None  # noqa
 
 
 @pytest.mark.skipif(OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
