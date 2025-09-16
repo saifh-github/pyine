@@ -2,15 +2,19 @@
 
 import asyncio
 import functools
+import itertools
+import logging
 import typing
 
 import hydra.conf
 import hydra_zen
 import hydra_zen.typing
+import pydantic
 
 import pyine.apps.trainers.openai_finetune
 import pyine.configs.base
 import pyine.configs.schemas
+import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.evals.grader_configs
@@ -20,6 +24,59 @@ import pyine.organisms.models.utils.openai
 import pyine.utils.llm_providers
 import pyine.utils.openai
 import pyine.utils.reprod
+
+logger = logging.getLogger(__name__)
+
+
+class MainConfig(pydantic.BaseModel):
+    """Configuration for the OpenAI fine-tuner app's main function.
+
+    Assembles the components required to fine-tune a model for code execution using a code execution
+    traces datamodule.
+    """
+
+    datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig
+    """Configuration for the datamodule to use."""
+    openai_client_config: pyine.utils.openai.OpenAIClientConfig
+    """Configuration for the OpenAI client to use."""
+    openai_finetuner_config: pyine.utils.openai.OpenAIFineTunerConfig
+    """Configuration for the OpenAI fine-tuner to use."""
+    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
+    """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evaluation."""
+    eval_subset_names: list[str] = ["valid"]
+    """Subset names to evaluate on."""
+    use_wandb_logging: bool = False
+    """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
+
+    def needs_answers_in_train_dataset(self) -> bool:
+        """Returns whether the model needs answers in its training dataset."""
+        return self.openai_finetuner_config.params.method.get("type", "") != "reinforcement"
+
+    def supports_system_prompt(self) -> bool:
+        """Returns whether the model to be fine-tuned supports the use of system prompts."""
+        models_without_system_prompts = ["o1", "o3", "o4"]
+        return not any(
+            [
+                self.openai_finetuner_config.params.base_model.startswith(m)
+                for m in models_without_system_prompts
+            ]
+        )
+
+
+@functools.wraps(pyine.apps.trainers.openai_finetune.main)
+def _async_main_wrapper(*args, **kwargs):
+    """Wrapper for async main function."""
+    return asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
+
+
+def hydra_main() -> None:
+    """Hydra main entrypoint for the OpenAI fine-tuner app."""
+    _ = register_hydra_configs()
+    hydra_zen.zen(_async_main_wrapper).hydra_main(
+        config_path=None,
+        config_name="openai_finetune_main",
+        version_base=pyine.configs.base.target_hydra_version,
+    )
 
 
 def _openai_finetuner_method_config_getter(
@@ -87,27 +144,12 @@ def get_default_rlft_params_config():
     )
 
 
-@functools.wraps(pyine.apps.trainers.openai_finetune.main)
-def _async_main_wrapper(*args, **kwargs):
-    """Wrapper for async main function."""
-    return asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
-
-
-def hydra_main() -> None:
-    """Hydra main entrypoint for the app."""
-    _ = register_hydra_configs()
-    hydra_zen.zen(_async_main_wrapper).hydra_main(
-        config_path=None,
-        config_name="openai_finetune_main",
-        version_base=pyine.configs.base.target_hydra_version,
-    )
-
-
 def register_experiment_configs(
     experiment_store: hydra_zen.ZenStore,
     main_config: hydra_zen.typing.Builds,
+    dm_config_names: list[str],
 ) -> None:
-    """Registers experiment-specific configs in the hydra store.
+    """Registers experiment configs in the hydra store for all datamodule configs.
 
     These are the configs that define full experiments for the associated app; to be used on the
     command line, you should specify the desired experiment name, e.g. for some 'main.py' app:
@@ -117,51 +159,40 @@ def register_experiment_configs(
     For more information on the individual experiments, refer to their docstrings and to any
     potential README.md file in the corresponding experiment directory.
     """
-    # @@@@@@ TODO: update w/ better base (DRY)
-    experiment_store(
-        hydra_zen.make_config(
-            runtime=dict(exp_name="TACO_latest_20s_eval_only"),
-            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
-            skip_fine_tuning=True,
-            hydra_defaults=[
-                "_self_",
-                {"override /config/datamodule_config": "TACO_latest_20s"},
-                {"override /config/openai_client_config": "timeout300s"},
-            ],
-            bases=(main_config,),
-        ),
-        name="TACO_latest_20s_eval_only",
+    base_eval_only_config = hydra_zen.make_config(
+        skip_fine_tuning=True,
+        config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
+        hydra_defaults=[
+            "_self_",
+            {"override /config/openai_client_config": "timeout300s"},
+        ],
+        bases=(main_config,),
     )
-    experiment_store(
-        hydra_zen.make_config(
-            runtime=dict(exp_name="TACO_latest_20s"),
-            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
-            skip_fine_tuning=False,
-            hydra_defaults=[
-                "_self_",
-                {"override /config/datamodule_config": "TACO_latest_20s"},
-                {"override /config/openai_client_config": "timeout300s"},
-            ],
-            bases=(main_config,),
-        ),
-        name="TACO_latest_20s",
+    base_train_config = hydra_zen.make_config(
+        skip_fine_tuning=False,
+        config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
+        hydra_defaults=[
+            "_self_",
+            {"override /config/openai_client_config": "timeout300s"},
+        ],
     )
-    experiment_store(
-        hydra_zen.make_config(
-            runtime=dict(exp_name="TACO_10s10t_v1_part1_20s_eval_only"),
-            config=dict(eval_subset_names=["valid", "valid_obfuscated"]),
-            skip_fine_tuning=True,
-            hydra_defaults=[
-                "_self_",
-                {"override /config/datamodule_config": "TACO_10s10t_v1_part1_20s"},
-                {"override /config/openai_client_config": "timeout300s"},
-            ],
-            bases=(main_config,),
-        ),
-        name="TACO_10s10t_v1_part1_20s_eval_only",
-    )
-
-    # @@@@ TODO: pull in experiment configs from organisms folder, if needed
+    for config_type_str, dm_config_name in itertools.product(["_eval_only", ""], dm_config_names):
+        exp_name = f"{dm_config_name}{config_type_str}"
+        base_config = (
+            base_eval_only_config if config_type_str == "_eval_only" else base_train_config
+        )
+        logger.debug(f"setting up config for experiment={exp_name}")
+        experiment_store(
+            hydra_zen.make_config(
+                runtime=dict(exp_name=exp_name),
+                hydra_defaults=[
+                    "_self_",
+                    {"override /config/datamodule_config": dm_config_name},
+                ],
+                bases=(base_config,),
+            ),
+            name=exp_name,
+        )
 
 
 def register_hydra_configs() -> hydra_zen.typing.Builds:
@@ -207,7 +238,7 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     config_store = store(group="config")
     config_store(
         hydra_zen.builds(
-            pyine.apps.trainers.openai_finetune.MainConfig,
+            MainConfig,
             # -------------
             populate_full_signature=True,
             hydra_convert="object",
@@ -225,7 +256,9 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     # ---------------- store default datamodule configs ----------------
 
     datamodule_config_store = config_store(group="config/datamodule_config")
-    pyine.organisms.datamodules.shortcuts_configs.store_hydra_configs(datamodule_config_store)
+    dm_config_names = pyine.organisms.datamodules.shortcuts_configs.store_hydra_configs(
+        datamodule_config_store
+    )
 
     # ---------------- store default openai client configs ----------------
 
@@ -246,7 +279,9 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
         name="openai_o4-mini_default_rlft",
     )
 
-    openai_finetuner_method_config_store = openai_finetuner_config_store(group="config/openai_finetuner_config/method")
+    openai_finetuner_method_config_store = openai_finetuner_config_store(
+        group="config/openai_finetuner_config/method"
+    )
     openai_finetuner_method_config_store(
         hydra_zen.builds(
             pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig,
@@ -262,10 +297,14 @@ def register_hydra_configs() -> hydra_zen.typing.Builds:
     llm_grader_provider_config_store = config_store(group="config/llm_grader_provider_config")
     pyine.evals.grader_configs.store_hydra_configs(llm_grader_provider_config_store)
 
-    # ---------------- store full demo/experiment configs ----------------
+    # ---------------- store experiment configs ----------------
 
     experiment_store = store(group="experiment", package="_global_")
-    register_experiment_configs(experiment_store, openai_finetune_main_config)
+    register_experiment_configs(
+        experiment_store=experiment_store,
+        main_config=openai_finetune_main_config,
+        dm_config_names=dm_config_names,
+    )
 
     # ---------------- register all configs with hydra ----------------
 

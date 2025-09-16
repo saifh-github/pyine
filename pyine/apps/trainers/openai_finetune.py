@@ -11,16 +11,12 @@ import sys
 import typing
 
 import openai
-import pydantic
 import wandb.integration.openai.fine_tuning
 
 import pyine.configs.schemas
 import pyine.data.datamodule
-import pyine.data.traces.dataset_utils
-import pyine.data.utils.splits
 import pyine.evals.common
 import pyine.evals.utils
-import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
 import pyine.utils.code.output_compare
 import pyine.utils.concurrency
@@ -31,45 +27,12 @@ import pyine.utils.tokenizers
 
 logger = logging.getLogger(__name__)
 
-
-class MainConfig(pydantic.BaseModel):
-    """Configuration for the script's main function.
-
-    Assembles the components required to fine-tune a model for code execution using a code execution
-    traces datamodule.
-
-    NOTE: this config is intended to be used with the `main` function defined below, and is provided
-    here as a demonstration of how to use this app (will be refactored/cleaned when we have a config
-    manager).
-    """
-
-    datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig
-    """Configuration for the datamodule to use."""
-    openai_client_config: pyine.utils.openai.OpenAIClientConfig
-    """Configuration for the OpenAI client to use."""
-    openai_finetuner_config: pyine.utils.openai.OpenAIFineTunerConfig
-    """Configuration for the OpenAI fine-tuner to use."""
-    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
-    """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evaluation."""
-    eval_subset_names: list[str] = ["valid"]
-    """Subset names to evaluate on."""
-    use_wandb_logging: bool = False
-    """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
-
-    def needs_answers_in_train_dataset(self) -> bool:
-        """Returns whether the model needs answers in its training dataset."""
-        return self.openai_finetuner_config.params.method.get("type", "") != "reinforcement"
-
-    def supports_system_prompt(self) -> bool:
-        """Returns whether the model to be fine-tuned supports the use of system prompts."""
-        models_without_system_prompts = ["o1", "o3", "o4"]
-        return not any(
-            [self.openai_finetuner_config.params.base_model.startswith(m) for m in models_without_system_prompts]
-        )
+if typing.TYPE_CHECKING:
+    import pyine.apps.trainers.openai_finetune_configs
 
 
 def _compute_estimated_train_token_count(
-    config: MainConfig,
+    config: "pyine.apps.trainers.openai_finetune_configs.MainConfig",
     dm: pyine.data.datamodule.ConversationDataModule,
 ) -> int:
     """Approximate the number of tokens used to train a model on the given dataset."""
@@ -118,7 +81,7 @@ async def _evaluate(
 
 
 async def main(
-    config: MainConfig,
+    config: "pyine.apps.trainers.openai_finetune_configs.MainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
     skip_fine_tuning: bool = False,  # used to evaluate the base model directly
 ) -> None:
