@@ -71,7 +71,9 @@ def get_model_from_provider(
     if provider == "deepseek":
         if not got_client_obj:
             if "api_key" not in model_kwargs:
-                model_kwargs.update({"api_key": os.environ.get("DEEPSEEK_API_KEY")})
+                env_api_key = os.environ.get("DEEPSEEK_API_KEY")
+                if env_api_key:
+                    model_kwargs["api_key"] = env_api_key
             if "base_url" not in model_kwargs:
                 model_kwargs.update(
                     {"base_url": os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1")}
@@ -80,7 +82,9 @@ def get_model_from_provider(
     elif provider == "openai":
         if not got_client_obj:
             if "api_key" not in model_kwargs:
-                model_kwargs.update({"api_key": os.environ.get("OPENAI_API_KEY")})
+                env_api_key = os.environ.get("OPENAI_API_KEY")
+                if env_api_key:
+                    model_kwargs["api_key"] = env_api_key
             if "base_url" not in model_kwargs:
                 model_kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
         llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
