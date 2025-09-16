@@ -92,3 +92,30 @@ def test_deepseek_explicit_keys_override_env(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(llm, ChatDeepSeek)
     assert llm.init_kwargs["api_key"] == "EXPL-KEY"
     assert llm.init_kwargs["base_url"] == "https://explicit.example"
+
+
+def test_llm_provider_config_from_dict_requires_provider() -> None:
+    with pytest.raises(ValueError):
+        lp.LLMProviderConfig.from_dict({"model": "gpt"})
+
+
+def test_llm_provider_config_instantiates_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lp.langchain_core.rate_limiters, "InMemoryRateLimiter", InMemoryRateLimiter, raising=True)
+    monkeypatch.setattr(lp.langchain_openai, "ChatOpenAI", ChatOpenAI, raising=True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    cfg_dict = {
+        "provider": "openai",
+        "rate_limiter_config": {"max_calls": 2, "period": 1},
+        "with_retry_config": {"max_retries": 5},
+        "model": "gpt-test",
+        "temperature": 0.1,
+    }
+    cfg = lp.LLMProviderConfig.from_dict(cfg_dict)
+    assert cfg.model_kwargs == {"model": "gpt-test", "temperature": 0.1}
+    model = cfg.get_model()
+    assert isinstance(model, ChatOpenAI)
+    assert isinstance(model.rate_limiter, InMemoryRateLimiter)
+    assert model.init_kwargs["model"] == "gpt-test"
+    assert model.init_kwargs["temperature"] == 0.1
+    assert model.retry_config == {"max_retries": 5}
