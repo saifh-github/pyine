@@ -1,6 +1,5 @@
 import asyncio
 import atexit
-import collections.abc
 import concurrent.futures
 import dataclasses
 import inspect
@@ -297,4 +296,6 @@ async def run_with_sliding_window(
             future = submit_one(item, executor)
             assert future not in in_flight
             in_flight[future] = item
-            progress_callback(list(in_flight.values()), completed)
+            out = progress_callback(list(in_flight.values()), completed)
+            if inspect.isawaitable(out):
+                await out
