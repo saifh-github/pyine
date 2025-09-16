@@ -329,7 +329,7 @@ def _async_main_wrapper(fn):
 @click.option(
     "--max-in-flight-jobs",
     type=int,
-    default=5_000,
+    default=32,
     show_default=True,
     help="Maximum number of in-flight jobs when --parallel is enabled.",
 )

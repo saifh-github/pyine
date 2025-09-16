@@ -579,10 +579,7 @@ class AnnotationReport:
             f"new results: {self.new_results_generated:_}, "
             f"tokens exchanged: {self.total_tokens_exchanged:_}, "
             f"errors: {self.errors}"
-            f", error messages: {self.error_messages}"
-            if self.error_messages
-            else ""
-        )
+        ) + (f", error messages: {self.error_messages}" if self.error_messages else "")
 
 
 async def annotate_trace_dataset(
@@ -593,7 +590,7 @@ async def annotate_trace_dataset(
     shuffle_indices: bool = False,
     parallel: bool = True,
     max_workers: int | None = None,
-    max_in_flight_jobs: int | None = 5_000,
+    max_in_flight_jobs: int | None = 32,
     verbose: bool = False,
 ) -> AnnotationReport:
     """Annotates a trace dataset by invoking LLM prompts per element and logging results.
@@ -691,7 +688,7 @@ async def annotate_trace_dataset(
 
     def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
         if verbose and completed and len(completed) % 50 == 0:  # print progress report every 50 completions
-            wrapped_data_indices.write(f"progress report: {output.summary()}")
+            wrapped_data_indices.write(f"progress report (completed {len(completed)}): {output.summary()}")
 
     await pyine.utils.concurrency.run_with_sliding_window(
         input_items=wrapped_data_indices,

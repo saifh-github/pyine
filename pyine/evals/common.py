@@ -110,7 +110,7 @@ async def evaluate_model_on_subset(
 
         async def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
             if verbose and completed and len(completed) % async_metrics_compute_rate == 0:
-                prog_bar.write(f"progress report: {await _get_metrics()}")
+                prog_bar.write(f"progress report (completed {len(completed)}): {await _get_metrics()}")
 
         await pyine.utils.concurrency.run_with_sliding_window(
             input_items=sample_idxs,
