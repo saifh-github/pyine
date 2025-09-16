@@ -251,3 +251,39 @@ async def test_run_with_sliding_window_respects_cap_and_processes_all_results():
     assert peak_inflight <= cap
     assert peak_inflight >= min(n_items, cap)
     assert callback_calls == 2 * n_items
+
+
+@pytest.mark.asyncio
+async def test_run_with_sliding_window_collects_failures_without_aborting():
+    items = [1, 2, 3]
+
+    def worker(x: int) -> int:
+        if x == 2:
+            raise ValueError("boom")
+        time.sleep(0.01)
+        return x * 10
+
+    def submit_one(item, executor):
+        return executor.submit(worker, item)
+
+    results: dict[int, int] = {}
+
+    def process_result(item, result):
+        results[item] = result
+
+    with pytest.raises(pyine.utils.concurrency.SlidingWindowExecutionError) as exc_info:
+        await pyine.utils.concurrency.run_with_sliding_window(
+            input_items=items,
+            submit_one=submit_one,
+            process_result=process_result,
+            progress_callback=None,
+            max_workers=2,
+            max_in_flight_jobs=2,
+        )
+
+    assert results == {1: 10, 3: 30}
+    failures = exc_info.value.failures
+    assert len(failures) == 1
+    failed_item, error = failures[0]
+    assert failed_item == 2
+    assert isinstance(error, ValueError)

@@ -13,6 +13,7 @@ __all__ = [
     "get_shared_executor",
     "run_in_parallel",
     "run_independent",
+    "SlidingWindowExecutionError",
 ]
 
 T = typing.TypeVar("T")
@@ -241,6 +242,15 @@ This is called after any job is submitted or completed.
 """
 
 
+class SlidingWindowExecutionError(RuntimeError):
+    """Aggregate failure raised when one or more jobs crash during execution."""
+
+    def __init__(self, failures: list[tuple[InputItemType, BaseException]]) -> None:
+        self.failures = failures
+        msg = ", ".join(f"item={item!r} error={exc!r}" for item, exc in failures) or "unknown failure"
+        super().__init__(msg)
+
+
 async def run_with_sliding_window(
     input_items: typing.Iterable[InputItemType],
     submit_one: SubmissionFuncType,
@@ -263,6 +273,7 @@ async def run_with_sliding_window(
     completed: list[InputItemType] = []
     iter_items = iter(input_items)
     progress_callback = progress_callback or (lambda x, y: None)
+    failures: list[tuple[InputItemType, BaseException]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # initially fill the window to its max size
         while len(in_flight) < max_in_flight_jobs:
@@ -281,9 +292,14 @@ async def run_with_sliding_window(
             done = next(concurrent.futures.as_completed(in_flight))
             assert done in in_flight
             item = in_flight.pop(done)
-            out = process_result(item, done.result())
-            if inspect.isawaitable(out):
-                await out
+            try:
+                result_value = done.result()
+            except BaseException as exc:  # capture failures and keep draining the queue
+                failures.append((item, exc))
+            else:
+                out = process_result(item, result_value)
+                if inspect.isawaitable(out):
+                    await out
             completed.append(item)
             out = progress_callback(list(in_flight.values()), completed)
             if inspect.isawaitable(out):
@@ -299,3 +315,6 @@ async def run_with_sliding_window(
             out = progress_callback(list(in_flight.values()), completed)
             if inspect.isawaitable(out):
                 await out
+    if failures:
+        # surface the first error while preserving the full list for callers that inspect the exception
+        raise SlidingWindowExecutionError(failures) from failures[0][1]
