@@ -12,6 +12,19 @@ def test_get_project_root_path_env_override(monkeypatch: pytest.MonkeyPatch, tmp
     assert fs.get_project_root_path() == tmp_path.resolve()
 
 
+def test_get_project_root_path_defaults_to_package_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    fake_pkg = tmp_path / "pyine_pkg" / "__init__.py"
+    fake_pkg.parent.mkdir(parents=True)
+    fake_pkg.write_text("", encoding="utf-8")
+    monkeypatch.delenv("PROJECT_ROOT_PATH", raising=False)
+    monkeypatch.setattr(fs.pyine, "__file__", str(fake_pkg), raising=True)
+    expected_root = fake_pkg.parents[1].resolve()
+    assert fs.get_project_root_path() == expected_root
+
+
 def test_get_data_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
     # env override
     custom = tmp_path / "data_root"
@@ -61,6 +74,22 @@ def test_get_tmp_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
     probe.unlink(missing_ok=True)  # in case it already exists
     probe.write_text("ok", encoding="utf-8")
     assert probe.exists()
+
+
+def test_get_logs_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    custom = tmp_path / "logs_root"
+    monkeypatch.setenv("LOGS_ROOT_PATH", str(custom))
+    assert fs.get_logs_root_path() == custom.resolve()
+    monkeypatch.delenv("LOGS_ROOT_PATH", raising=False)
+    monkeypatch.setattr(fs, "get_project_root_path", lambda: tmp_path)
+    assert fs.get_logs_root_path() == tmp_path / "logs"
+
+
+def test_get_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fs.getpass, "getuser", lambda: "tester", raising=True)
+    assert fs.get_username() == "tester"
+    monkeypatch.setattr(fs.getpass, "getuser", lambda: "", raising=True)
+    assert fs.get_username() == "unknown"
 
 
 def test_find_dotenv_file(tmp_path, monkeypatch):
