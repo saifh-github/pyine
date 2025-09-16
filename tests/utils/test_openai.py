@@ -4,6 +4,7 @@ import pathlib
 import time
 import typing
 
+import langchain_core.messages
 import openai as openai_sdk
 import pytest
 
@@ -54,6 +55,25 @@ class TestLocalDatasetIO:
         assert messages_dataset[0][2]["role"] == "assistant"
         assert messages_dataset[1][0]["role"] == "user"
         assert messages_dataset[1][1]["role"] == "assistant"
+
+    def test_write_dataset_enforces_minimum_size(
+        self,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        out_path = tmp_path / "too_small.jsonl"
+        with pytest.raises(ValueError):
+            openai_utils.write_dataset_to_jsonl(
+                dataset=[
+                    {
+                        "messages": [
+                            {"role": "user", "content": "Hi"},
+                            {"role": "assistant", "content": "Hello"},
+                        ]
+                    }
+                ],
+                path=out_path,
+            )
+        assert not out_path.exists()
 
     def test_write_and_read_objects_jsonl(
         self,
@@ -134,6 +154,45 @@ class TestMessageConversion:
         out2 = openai_utils.convert_messages_to_openai([DummyMsg("assistant", "ok")])
         assert out2[0]["role"] == "assistant"
         assert out2[0]["content"] == "ok"
+
+    def test_convert_langchain_message_types(self) -> None:
+        system_msg = langchain_core.messages.SystemMessage(content="sys")
+        human_msg = langchain_core.messages.HumanMessage(content="hi")
+        tool_call = langchain_core.messages.tool.ToolCall(
+            id="call-1",
+            name="fn",
+            args={"x": 1},
+        )
+        ai_msg = langchain_core.messages.AIMessage(
+            content="ok",
+            tool_calls=[tool_call],
+        )
+        tool_msg = langchain_core.messages.ToolMessage(
+            content="result",
+            tool_call_id="call-1",
+            name="tool",
+        )
+        func_msg = langchain_core.messages.FunctionMessage(
+            name="legacy",
+            content="payload",
+        )
+        chat_msg = langchain_core.messages.ChatMessage(role="user", content="again")
+
+        out = openai_utils.convert_messages_to_openai([system_msg, human_msg, ai_msg, tool_msg, func_msg, chat_msg])
+        assert [entry["role"] for entry in out] == [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "function",
+            "user",
+        ]
+        tool_calls = out[2]["tool_calls"]
+        assert isinstance(tool_calls, list) and tool_calls[0]["function"]["name"] == "fn"
+        assert tool_calls[0]["function"]["arguments"] == '{"x":1}'
+        assert out[3]["tool_call_id"] == "call-1"
+        assert out[4]["name"] == "legacy"
+        assert out[5]["content"] == "again"
 
 
 @pytest.fixture(scope="class")
