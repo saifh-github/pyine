@@ -404,16 +404,20 @@ class SampleBuilder(SampleDataParserType):
         self,
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
         traces: list[TraceMetadata] | None = None,  # if `None`, will target all available traces
-        transform_config: SampleTransformConfig | None = None,
-        selection_config: SampleSelectionConfig | None = None,
+        transform_config: SampleTransformConfig | dict | None = None,
+        selection_config: SampleSelectionConfig | dict | None = None,
         prompt_result_db_path: str | None = None,  # if `None`, will use framework default
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces."""
         if transform_config is None:
             transform_config = SampleTransformConfig()
+        elif isinstance(transform_config, dict):
+            transform_config = SampleTransformConfig(**transform_config)
         self.transform_config = transform_config
         if selection_config is None:
             selection_config = SampleSelectionConfig()
+        elif isinstance(selection_config, dict):
+            selection_config = SampleSelectionConfig(**selection_config)
         self.selection_config = selection_config
         if prompt_result_db_path is None:
             self.prompt_result_db = pyine.prompts.get_framework_db()
