@@ -28,7 +28,7 @@ class CapturedEvent(pydantic.BaseModel):
         default_factory=lambda: datetime.datetime.now(),
     )
     """Timestamp of event creation (in local time)."""
-    kwargs: dict[str, typing.Any] = dict()
+    kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Keyword arguments passed to the LLM call; may include e.g. invocation_params."""
 
 
@@ -73,6 +73,6 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
     def get_latest_event(self, event_type: CapturedEventType | None = None) -> CapturedEvent | None:
         """Get the latest captured event with an optional target type."""
         if event_type is None:
-            return self.events[-1] if self.events else []
+            return self.events[-1] if self.events else None
         target_events = [e for e in self.events if e.type == event_type] if self.events else []
         return target_events[-1] if target_events else None
