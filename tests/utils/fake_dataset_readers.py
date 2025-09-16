@@ -121,14 +121,15 @@ class FakeTraceDatasetReader(_FakeBase):
         self._subset_name = self._cfg.subset_name
         self._rng = random.Random(self._cfg.seed)
         # public attributes mirroring real reader
-        self.problem_indices: list[int] = []
         self.problem_keys: list[str] = []
-        self.trace_indices: list[int] = []
         self.trace_keys: list[str] = []
-        self.trace_idx_to_problem_idx: dict[int, int] = {}
         self.trace_key_to_problem_key: dict[str, str] = {}
-        self.augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        # private attributes with INTERNAL indices
+        self._problem_indices: list[int] = []
+        self._trace_indices: list[int] = []
+        self._trace_idx_to_problem_idx: dict[int, int] = {}
+        self._augment_idx_to_parent_trace_idx: dict[int, int] = {}
         # internal storages
         self._problems: list[traces_utils.CodingProblem] = []
         self._traces: list[exec_utils.TraceResult] = []
@@ -137,7 +138,7 @@ class FakeTraceDatasetReader(_FakeBase):
 
     # ---------------------------- public API ----------------------------
     def __len__(self) -> int:
-        return len(self.trace_indices)
+        return len(self.trace_keys)
 
     def __getitem__(self, index_or_key: int | str) -> exec_utils.TraceResult:
         idx = self._resolve_index(index_or_key)
@@ -146,13 +147,13 @@ class FakeTraceDatasetReader(_FakeBase):
     @functools.lru_cache(maxsize=512)
     def get_problem_data(self, index_or_key: int | str) -> traces_utils.CodingProblem:
         idx = self._resolve_index(index_or_key)
-        problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[idx]]
+        problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
         # internal problem_idx is already an integer index into self._problems
         return self._problems[problem_idx]
 
     def get_tags(self, index_or_key: int | str) -> list[str]:
         idx = self._resolve_index(index_or_key)
-        problem_idx = self.trace_idx_to_problem_idx[self.trace_indices[idx]]
+        problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
         return self._problems[problem_idx].problem_tags
 
     # ---------------------------- internals ----------------------------
@@ -173,7 +174,7 @@ class FakeTraceDatasetReader(_FakeBase):
         for p_idx in range(self._cfg.num_problems):
             cp = self._make_problem(p_idx)
             self._problems.append(cp)
-            self.problem_indices.append(p_idx)
+            self._problem_indices.append(p_idx)
             pkey = f"{cp.problem_id}{traces_utils.PROBLEM_DATA_SUFFIX}"
             self.problem_keys.append(pkey)
         # generate traces per problem/solution/test (+augmentations)
@@ -189,7 +190,7 @@ class FakeTraceDatasetReader(_FakeBase):
                         aug_trace, aug_key = self._make_trace(problem, s_idx, t_idx, augment=augm_tag)
                         self._append_trace(aug_trace, aug_key, p_idx, parent_key=base_key)
 
-        assert len(self.trace_indices) == len(self.trace_keys) == len(self._traces)
+        assert len(self._trace_indices) == len(self.trace_keys) == len(self._traces)
 
     def _append_trace(
         self,
@@ -200,13 +201,13 @@ class FakeTraceDatasetReader(_FakeBase):
     ) -> None:
         internal_idx = len(self._traces)
         self._traces.append(trace)
-        self.trace_indices.append(internal_idx)
+        self._trace_indices.append(internal_idx)
         self.trace_keys.append(tkey)
-        self.trace_idx_to_problem_idx[internal_idx] = problem_idx
+        self._trace_idx_to_problem_idx[internal_idx] = problem_idx
         pkey = self.problem_keys[problem_idx]
         self.trace_key_to_problem_key[tkey] = pkey
         if parent_key is not None:
-            self.augment_idx_to_parent_trace_idx[internal_idx] = self.trace_indices[self.trace_keys.index(parent_key)]
+            self._augment_idx_to_parent_trace_idx[internal_idx] = self._trace_indices[self.trace_keys.index(parent_key)]
             self.augment_key_to_parent_trace_key[tkey] = parent_key
 
     def _make_problem(self, p_idx: int) -> traces_utils.CodingProblem:

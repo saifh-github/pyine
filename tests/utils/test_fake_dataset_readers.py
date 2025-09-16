@@ -54,9 +54,9 @@ class TestFakeTraceDatasetReader:
             * (1 + small_config.augmented_per_solution)
         )
         assert len(trace_reader) == expected_traces
-        assert len(trace_reader.trace_indices) == expected_traces
+        assert len(trace_reader._trace_indices) == expected_traces
         assert len(trace_reader.trace_keys) == expected_traces
-        assert len(trace_reader.problem_indices) == small_config.num_problems
+        assert len(trace_reader._problem_indices) == small_config.num_problems
         assert len(trace_reader.problem_keys) == small_config.num_problems
 
         metadata = trace_reader.get_metadata()

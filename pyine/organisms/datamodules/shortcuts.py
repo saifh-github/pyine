@@ -317,8 +317,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         """Close readers when the datamodule is torn down, and unassigns all parser attributes."""
         self._metadata: TraceDatasetMetadata | None = None
         self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
-        for r in self._readers:
-            r.close()
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
 
 

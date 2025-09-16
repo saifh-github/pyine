@@ -58,7 +58,6 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     sb = SampleBuilder(source_data=[small_fake_reader], traces=targets)
     assert len(sb) == len(targets)
     for t in sb.traces:
-        assert t.index in small_fake_reader.trace_indices
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
         assert t.parent_dataset_hash == small_fake_reader.get_hash()
@@ -73,7 +72,6 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     sb2 = SampleBuilder(source_data=small_fake_reader)
     assert len(sb2) == len(expected_traces)
     for t in sb2.traces:
-        assert t.index in small_fake_reader.trace_indices
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
         assert t.parent_dataset_hash == small_fake_reader.get_hash()
