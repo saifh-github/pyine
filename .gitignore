@@ -4,6 +4,7 @@
 /results/
 /output/
 /logs/
+/wandb/
 
 # Byte-compiled / optimized / temp files
 __pycache__/
