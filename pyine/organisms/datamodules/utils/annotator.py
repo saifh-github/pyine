@@ -365,7 +365,7 @@ def _default_input_variables_builder(
     is_already_bugged = prior_augment.startswith("bugg") or prior_augment.startswith("issue")
     if (is_hint_prompting and not is_already_hinted) or (is_issue_prompting and not is_already_bugged):
         if is_hint_prompting:
-            output["expected_output"] = trace.expected_output
+            output["expected_output"] = str(trace.expected_output)
         if config.augment_config.fetch_code_descriptions:
             # try to go and fetch the description for the parent solution (code summary) from db
             code_summary_records = config._prompt_result_db.get_by_identifier(

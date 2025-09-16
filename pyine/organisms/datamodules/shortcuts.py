@@ -1,3 +1,4 @@
+import itertools
 import logging
 import pathlib
 import typing
@@ -19,9 +20,9 @@ import pyine.utils.pydantic
 import pyine.utils.reprod
 from pyine.data.datamodule import SubsetNameType
 from pyine.organisms.datamodules.utils.samples import (
+    SampleBuilder,
     SampleBuilderConfig,
     SampleDataLoaderType,
-    SampleDataParserType,
     SampleInputType,
     TraceDatasetMetadata,
     TraceMetadata,
@@ -63,7 +64,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         # attributes below are initialized in setup()
         self._metadata: TraceDatasetMetadata | None = None
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
-        self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
+        self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
 
     @typing.override
     def prepare_data(self) -> None:
@@ -185,15 +186,16 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers here since they should be read-only and never pickled
         readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
-        self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
+        self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
         for subset_type in self.config.subset_types:
             logger.debug(f"setting up shortcuts datamodule {subset_type} parser...")
             subset_traces = self._get_traces_meta_for_subset(subset_type)
-            self._subset_parsers[subset_type] = self.config.instantiate_parser(
+            parser = self.config.instantiate_parser(
                 subset_type=subset_type,
                 source_data=readers,
                 traces=subset_traces,
             )
+            self._subset_parsers[subset_type] = typing.cast(SampleBuilder, parser)
 
     def _get_traces_meta_for_subset(self, subset_type: SubsetNameType | None) -> list[TraceMetadata]:
         """Returns the list of trace metadata objects for a given subset type."""
@@ -201,11 +203,12 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             raise RuntimeError("metadata not ready yet, call `setup()` first")
         if subset_type is None:
             return self._metadata.base_traces
-        if subset_type not in self._metadata.subset_traces:
-            if not any([subset_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
-                raise ValueError(f"subset {subset_type} is not defined in the metadata's split table")
-            parent_subset_type = subset_type.rsplit("_", maxsplit=1)[0]
-            return self._metadata.subset_traces[parent_subset_type]
+        known_subsets = list(self._metadata.subset_traces.keys())
+        if subset_type not in known_subsets:
+            for prefix, suffix in itertools.product(known_subsets, typing.get_args(SampleInputType)):
+                if f"{prefix}_{suffix}" == subset_type:
+                    return self._metadata.subset_traces[prefix]
+            raise ValueError(f"subset {subset_type} is not defined in the metadata's split table")
         else:
             return self._metadata.subset_traces[subset_type]
 
@@ -217,7 +220,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     def get_parser(
         self,
         subset_type: SubsetNameType,
-    ) -> SampleDataParserType:
+    ) -> SampleBuilder:
         """Returns a data parser object for a given subset type, or for the full dataset (if None).
 
         This function exists for users that might not want to use dataloaders directly, and would prefer
@@ -302,7 +305,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     def teardown(self, stage: str | None = None) -> None:
         """Close readers when the datamodule is torn down, and unassigns all parser attributes."""
         self._metadata: TraceDatasetMetadata | None = None
-        self._subset_parsers: dict[SubsetNameType, SampleDataParserType] = dict()
+        self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
         for r in self._readers:
             r.close()
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
@@ -462,12 +465,14 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         if loader_type not in self.loader_types:
             raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
         loader_config: pyine.data.datamodule.BaseDataLoaderConfig = self.default_dataloader_config
-        assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
-        if any([loader_type.endswith(f"_{suffix}") for suffix in typing.get_args(SampleInputType)]):
-            loader_type = loader_type.rsplit("_", maxsplit=1)[0]
-        if loader_type in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_type]:
-            loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_type])  # noqa
-        return loader_config
+        known_loaders = list(self.dataloader_config_overrides.keys())
+        if loader_type in known_loaders:  # specific (perfect) match
+            return loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_type])
+        for prefix, suffix in itertools.product(known_loaders, typing.get_args(SampleInputType)):
+            # check for potential parent matches
+            if f"{prefix}_{suffix}" == loader_type and prefix in self.dataloader_config_overrides:
+                return loader_config.get_updated_spec(**self.dataloader_config_overrides[prefix])
+        return loader_config  # fallback to default config
 
     @pydantic.model_validator(mode="after")
     @typing.override

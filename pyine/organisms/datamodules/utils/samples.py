@@ -147,13 +147,15 @@ SampleInputType = typing.Literal[  # note: literal makes this type compatible wi
     "stubbed",  # note: this type CANNOT have a real execution outcome tied to it (it can't be executed)
     "hinted",
     "bugged",  # note: this type should lead to different execution outcomes than the expected ones
+    "bugged_hinted",  # same as the above
 ]
 """Possible input types for trace execution samples:
 - 'original': the original code snippet taken from the source dataset;
 - 'obfuscated': the obfuscated version of the code snippet taken from the source dataset;
 - 'stubbed': a modified version of the code snippet where part of the implementation is stubbed/hidden;
 - 'hinted': a modified version of the code snippet with one or more execution output hints;
-- 'bugged': a modified version of the code snippet with one or more bugs that should affect execution outcomes.
+- 'bugged': a modified version of the code snippet with one or more bugs that should affect execution outcomes;
+- 'bugged_hinted': a modified version of the code snippet with both execution output hints and bugs.
 """
 
 
@@ -172,7 +174,17 @@ class SampleData(typing.NamedTuple):
     identifier: str
     """Unique identifier for the trace. Used for debugging/logging/ref only."""
     code: str
-    """Code string that has been executed and for which results must be predicted."""
+    """Code string that should be interpreted and for which results must be predicted.
+
+    Note: this is the full code snippet, not just the part that is relevant to the target execution
+    outcome type (specified via `output_type`).
+
+    This code snippet may have been replaced by a prompt result database lookup; you can check if
+    `has_code_override = True` to see if this is the case. If so, the only valid `output_type`
+    becomes 'program output' (which is the full program output), and the `expected_output` field
+    might correspond to a different execution outcome than the "correct" one, depending on whether
+    the code snippet contains an issue or not. You can tell this by checking the `code_type` field.
+    """
     description: str
     """High-level description of the implemented code/algorithm (may be empty)."""
     entrypoint: str
@@ -184,17 +196,30 @@ class SampleData(typing.NamedTuple):
     inputs: str
     """Provided input args (for full execution or function calls), or intermediary state (for partial execs)."""
     expected_output: str
-    """Expected output that was previously verified/found, and that should be predicted by models."""
+    """Expected output that was previously verified/found, and that should be predicted by models.
+
+    Note: this expected output is only "correct" when the code does NOT contain issues/bugs! Refer
+    to the `code_type` field to determine this; in such cases, the expected output is actually not
+    the "correct" output, but the "intended" output.
+    """
     output_type: SampleOutputType
     """Type of the expected output (for specific descriptions in prompts)."""
     code_type: SampleInputType
     """Type of the provided code snippet (identifies whether it contains hints, stubs, bugs, ...)."""
     trace_step_count: int
-    """Number of steps that are expected to be executed to predict the outputs (can be used as a hint)."""
+    """Number of steps that are expected to be executed to predict the outputs.
+
+    Unreliable if `has_code_override = True`.
+    """
     comma_separated_tags: str
     """Comma-separated tags (e.g. 'augment:type,subset:train') that can be used to filter samples."""
     has_code_override: bool
-    """Whether the code snippet has been overridden by a prompt result database lookup."""
+    """Whether the code snippet has been overridden by a prompt result database lookup.
+
+    Note: if this is True, then the only possible value for `output_type` should be 'program output',
+    and the `expected_output` field might correspond to a different execution outcome than the
+    "correct" one.
+    """
 
     def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""
@@ -355,16 +380,24 @@ LMDBDatasetReadersOrPathsType = (
 class SampleBuilder(SampleDataParserType):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
-    This wrapper will optionally transform raw traces into partial execution samples to make the
-    prediction task easier in cases where e.g. traces are very long. How/when to do this must be
-    specified via the transform config.
+    The role of this class is to provide sample selection and preparation (transformation)
+    strategies to build training/evaluation code execution samples from raw traces. By 'selection',
+    we mean the strategy used to select which version of a traced code problem solution to use
+    (augmented with hints/issues or not). By 'transformation', we mean the strategy used to
+    transform a raw trace result into a set of input + expected output variables for prompts/models.
 
-    Regarding trace selection (for code that is hinted/bugged/stubbed/...), we will try to use
-    traces based on already-augmented code that would be present in the provided dataset if
-    possible; if these are not present, we will query the prompt result database for augmented
-    code snippets. If using code snippets from the prompt database, these will be considered as
-    OVERRIDES to code snippets that were actually traced, and we will not be able to generate
-    any 'partial' execution samples from them (we will default to using full program outputs).
+    The transformation strategy (specified via `SampleTransformConfig`) determines when to ask
+    models to predict the execution of full code snippets ('program output'), and when to predict
+    a portion of them (related to a function, a segment, etc.). 'Partial samples' can be used to
+    diversify training data and make the prediction task easier in cases where e.g. traces are
+    very long.
+
+    The selection strategy (specified via `SampleSelectionConfig`) determines which augmented
+    code snippets to use (if any), and if augmentations are not present in the trace dataset
+    itself, whether to go fetch them from the prompt result database (if available). If the prompt
+    result database is used to retrieve augmented code snippets, then the only sample type that
+    can be generated for that sample is the 'program output' (i.e. full code snippet). This is
+    because we are lacking trace data required to prepare other output types here.
     """
 
     def __init__(
@@ -453,12 +486,16 @@ class SampleBuilder(SampleDataParserType):
                 cousin_traces[augmentless_id]["obfuscated"].append(trace_id)
             elif trace_id.augment_category in ["hints/stubs", "hints_stubs"]:
                 raise NotImplementedError("how are we getting these here? isn't it impossible to trace stubbed code?")
-            elif trace_id.augment_category.startswith("hints"):
+            elif trace_id.augment_category == "bugged_hinted":
+                cousin_traces[augmentless_id]["bugged_hinted"].append(trace_id)
+            elif trace_id.augment_category.startswith("hint"):
                 cousin_traces[augmentless_id]["hinted"].append(trace_id)
-            elif trace_id.augment_category.startswith("issues"):
+            elif trace_id.augment_category.startswith("issue") or trace_id.augment_category.startswith("bug"):
                 cousin_traces[augmentless_id]["bugged"].append(trace_id)
             else:
                 raise ValueError(f"Unexpected category: {trace_id.augment_category}")
+        assert len(cousin_traces) <= len(traces)
+        assert sum([len(c) for t, dicts in cousin_traces.items() for c in dicts.values()]) == len(traces)
         # all 'cousin clusters' will be used to produce ONE trace sample each; pick which one according to strategy
         rng = np.random.default_rng(selection_config.seed)
         output_traces_meta: list[TraceMetadata] = []
@@ -471,6 +508,7 @@ class SampleBuilder(SampleDataParserType):
             target_type = typing.cast(SampleInputType, target_type)
             if target_type == "original":
                 assert target_type in trace_map, "missing orig trace in source data?"
+                assert len(trace_map[target_type]) == 1 and trace_map[target_type][0] == orig_trace_id
                 # keep the original trace as-is, with no code snippet override
                 output_traces_meta.append(trace_lut[orig_trace_id])
                 output_code_types.append(target_type)
@@ -491,7 +529,7 @@ class SampleBuilder(SampleDataParserType):
                     picked_idx = int(rng.integers(0, len(trace_map[target_type])))
                     picked_trace_id = trace_map[target_type][picked_idx]
                 elif selection_config.choice_strategy == "latest":
-                    picked_trace_id = trace_map[target_type][-1]
+                    picked_trace_id = list(sorted(trace_map[target_type], key=lambda tid: str(tid)))[-1]
                 else:
                     raise NotImplementedError
                 # keep that trace as-is with no override under the assumption that the traced code is already augmented
@@ -517,7 +555,7 @@ class SampleBuilder(SampleDataParserType):
                             for rec in records
                             if rec.prompt_name is not None and rec.prompt_name.startswith("issues")
                         ]
-                elif target_type == "hinted":
+                elif target_type == "hinted" or target_type == "bugged_hinted":
                     # hinted code snippet are test-specific, i.e. they refer to particular inputs/outputs
                     # (therefore, logically, they should be attached to a trace id directly)
                     records = prompt_result_db.get_by_identifier(identifier=str(orig_trace_id))
@@ -528,6 +566,9 @@ class SampleBuilder(SampleDataParserType):
                             rec.prompt_name is not None
                             and rec.prompt_name.startswith("hints")
                             and not rec.prompt_name.endswith("stubs")
+                            and (  # if we are looking for bugged+hinted snippets, check tags
+                                target_type != "bugged_hinted" or "augment:bugged_hinted" in rec.tags
+                            )
                         )
                     ]
                 else:
@@ -542,6 +583,8 @@ class SampleBuilder(SampleDataParserType):
                 else:
                     raise NotImplementedError
                 # append the original trace metadata, but with the code snippet override from the database
+                # (note: in these cases, the only valid sample output type will be 'program output',
+                #  as we cannot correctly deduce anything trace-related without re-tracing entirely)
                 output_traces_meta.append(trace_lut[orig_trace_id])
                 output_code_types.append(target_type)
                 output_code_overrides.append(potential_code_snippet_overrides[picked_code_override_idx])
@@ -551,7 +594,8 @@ class SampleBuilder(SampleDataParserType):
         if output_traces_meta:
             type_counts = collections.Counter(output_code_types)
             output_types_str = "\n\t".join([f"{k}: {c}" for k, c in type_counts.items()])
-            logger.debug(f"produced output types:\n\t{output_types_str}")
+            logger.debug(f"prepared sample code types:\n\t{output_types_str}")
+            logger.debug(f"prepared samples with code override: {sum([bool(c) for c in output_code_overrides])}")
         return output_traces_meta, output_code_types, output_code_overrides
 
     @staticmethod
@@ -641,7 +685,7 @@ class SampleBuilder(SampleDataParserType):
         # ultimate fallback: return a sample for the full program output
         return SampleData(
             identifier=trace_data.identifier,
-            code=trace_data.code_string,
+            code=trace_code_override if trace_code_override else trace_data.code_string,
             description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
             entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
