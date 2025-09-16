@@ -402,7 +402,6 @@ async def main(
     # resolve target dataset indices: --target-indices and/or --target-split-file/--target-split-subset
     indices_list: list[int] | None = None
     if target_split_file or target_split_subset:
-        # @@@@ never tested???
         if not target_split_file or not target_split_subset:
             raise click.BadParameter("--target-split-file and --target-split-subset must be provided together")
         split_data = pyine.data.utils.splits.get_dataset_split_result(target_split_file)
@@ -412,15 +411,15 @@ async def main(
                 f"invalid target split subset ({target_split_subset}), "
                 f"available ones are: {list(subsets_to_problem_ids.keys())}"
             )
-        problem_ids = subsets_to_problem_ids[target_split_subset]
+        subset_problem_ids = subsets_to_problem_ids[target_split_subset]
         if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
             raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
-        indices_list = [  # @@@@@@@ ???
-            sample_idx for sample_idx in range(len(dataset)) if dataset.problem_keys[sample_idx] in problem_ids
-        ]
+        target_problem_ids = list(set(subset_problem_ids) & set(dataset.problem_keys))
+        indices_list = [dataset.problem_keys.index(target_pid) for target_pid in target_problem_ids]
+        indices_list.sort()
         if not indices_list:
             raise click.BadParameter(
-                f"no traces found in target split subset '{target_split_subset}' " f"for problem ids: {problem_ids}"
+                f"no traces found in subset '{target_split_subset}' for dataset at: {effective_dataset_path}"
             )
         logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
     if target_indices:

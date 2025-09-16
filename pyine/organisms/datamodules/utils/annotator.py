@@ -690,7 +690,7 @@ async def annotate_trace_dataset(
         output += result
 
     def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
-        if verbose and len(completed) % 50 == 0:  # print progress report every 50 completions
+        if verbose and completed and len(completed) % 50 == 0:  # print progress report every 50 completions
             wrapped_data_indices.write(f"progress report: {output.summary()}")
 
     await pyine.utils.concurrency.run_with_sliding_window(
