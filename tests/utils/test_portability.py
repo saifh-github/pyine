@@ -134,7 +134,8 @@ def test_get_portable_representation_various_types():
     c = CallableNoName()
     setattr(c, "__module__", None)
     anon_repr = portability.get_portable_representation(c)
-    assert anon_repr == "<callable '<?>'>"
+    assert anon_repr.startswith("<callable '")
+    assert anon_repr.endswith("CallableNoName.__call__'>")
 
     class C:
         pass

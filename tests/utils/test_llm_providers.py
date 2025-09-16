@@ -4,8 +4,6 @@ import pytest
 
 import pyine.utils.llm_providers as lp
 
-# use local stubs to inject into the imported module attributes
-
 
 class InMemoryRateLimiter:
     def __init__(self, **cfg):
