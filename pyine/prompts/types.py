@@ -34,6 +34,12 @@ class PromptBuildConfig(pydantic.BaseModel):
     """Number or list of examples to include in the template; if `None`, all examples are included."""
     partial_vars: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Optional partial variables to use for prompt template substitution."""
+    role_variables: dict[str, typing.Any] | None = None
+    """Optional variables to substitute in the role block."""
+    context_variables: dict[str, typing.Any] | None = None
+    """Optional variables to substitute in the context block."""
+    examples_block_variables: dict[str, typing.Any] | None = None
+    """Optional variables to substitute in the examples block."""
 
     def get_template(self) -> langchain_core.prompts.BasePromptTemplate:
         """Returns a LangChain prompt template for this prompt."""
@@ -46,6 +52,9 @@ class PromptBuildConfig(pydantic.BaseModel):
             include_examples=self.include_examples,
             target_examples=self.target_examples,
             partial_vars=self.partial_vars,
+            role_variables=self.role_variables,
+            context_variables=self.context_variables,
+            examples_block_variables=self.examples_block_variables,
         )
 
     def get_chain(
@@ -65,4 +74,7 @@ class PromptBuildConfig(pydantic.BaseModel):
             include_examples=self.include_examples,
             target_examples=self.target_examples,
             partial_vars=self.partial_vars,
+            role_variables=self.role_variables,
+            context_variables=self.context_variables,
+            examples_block_variables=self.examples_block_variables,
         )

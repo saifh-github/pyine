@@ -77,7 +77,7 @@ class PromptManager:
         logger.debug(f"loading prompt config from: {prompt_path}")
         try:
             package_files = importlib.resources.files(self.package_name)
-            prompt_file = package_files / str(prompt_path)
+            prompt_file = package_files.joinpath(*prompt_path.parts)
             if not prompt_file.is_file():
                 raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
             versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
@@ -118,19 +118,24 @@ class PromptManager:
     def list_prompts(self) -> list[PromptNameType]:
         """Returns a list of all available prompts in the package (as names without extension)."""
         package_files = importlib.resources.files(self.package_name)
-        prompts_dir = pathlib.Path(package_files) / self.prompts_subdir  # noqa
+        prompts_dir = package_files.joinpath(self.prompts_subdir)
         if not prompts_dir.is_dir():
             return []
         prompt_names = []
-        for root, _, files in prompts_dir.walk():
-            rel_path = root.relative_to(prompts_dir)
-            for file in files:
-                if not file.lower().endswith(".yaml"):
+        stack: list[tuple[typing.Any, pathlib.PurePosixPath]] = [(prompts_dir, pathlib.PurePosixPath())]
+        while stack:
+            current_dir, rel_root = stack.pop()
+            for entry in current_dir.iterdir():
+                if entry.is_dir():
+                    stack.append((entry, rel_root / entry.name))
                     continue
-                if rel_path == pathlib.Path("."):
-                    prompt_names.append(file[:-5])  # remove .yaml extension
+                if not entry.name.lower().endswith(".yaml"):
+                    continue
+                prompt_name = entry.name[:-5]
+                if rel_root == pathlib.PurePosixPath():
+                    prompt_names.append(prompt_name)
                 else:
-                    prompt_names.append(f"{rel_path}/{file[:-5]}")
+                    prompt_names.append(f"{rel_root.as_posix()}/{prompt_name}")
         return sorted(prompt_names)
 
     def list_prompt_versions(self, prompt_name: PromptNameType) -> list[PromptVersionType]:
@@ -139,7 +144,7 @@ class PromptManager:
 
         prompt_path = self._get_prompt_file_path(prompt_name)
         package_files = importlib.resources.files(self.package_name)
-        prompt_file = package_files / str(prompt_path)
+        prompt_file = package_files.joinpath(*prompt_path.parts)
         if not prompt_file.is_file():
             raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
         versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
@@ -151,7 +156,7 @@ class PromptManager:
 
         prompt_path = self._get_prompt_file_path(prompt_name)
         package_files = importlib.resources.files(self.package_name)
-        prompt_file = package_files / str(prompt_path)
+        prompt_file = package_files.joinpath(*prompt_path.parts)
         if not prompt_file.is_file():
             raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
         versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
@@ -215,6 +220,9 @@ def get_prompt_template(
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
     partial_vars: dict[str, typing.Any] | None = None,
+    role_variables: dict[str, typing.Any] | None = None,
+    context_variables: dict[str, typing.Any] | None = None,
+    examples_block_variables: dict[str, typing.Any] | None = None,
 ) -> langchain_core.prompts.BasePromptTemplate:
     """Convenience function to get a prompt template using the default manager.
 
@@ -231,6 +239,9 @@ def get_prompt_template(
             a list of example indices, or an integer that specifies the number of samples to
             pick randomly. If `None` is provided instead, all examples are included.
         partial_vars: Optional partial variables to use for prompt template substitution.
+        role_variables: Optional variables for rendering the role block.
+        context_variables: Optional variables for rendering the context block.
+        examples_block_variables: Optional variables for rendering the examples block template.
     """
     manager = get_framework_prompt_manager()
     prompt_module = None
@@ -246,15 +257,18 @@ def get_prompt_template(
             include_examples=include_examples,
             target_examples=target_examples,
             partial_vars=partial_vars,
+            role_variables=role_variables,
+            context_variables=context_variables,
+            examples_block_variables=examples_block_variables,
         )
     prompt_config = manager.get_prompt_config(prompt_name=prompt_name, version=version)
     template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
-        role_variables=None,  # the module override should provide this
-        context_variables=None,  # the module override should provide this
-        examples_block_variables=None,  # the module override should provide this
+        role_variables=role_variables,
+        context_variables=context_variables,
+        examples_block_variables=examples_block_variables,
     )
     if partial_vars:
         template = template.partial(**partial_vars)
@@ -270,6 +284,9 @@ def get_prompt_chain(
     target_examples: int | list[int] | None = None,
     partial_vars: dict[str, typing.Any] | None = None,
     runnable_name: str | None = None,
+    role_variables: dict[str, typing.Any] | None = None,
+    context_variables: dict[str, typing.Any] | None = None,
+    examples_block_variables: dict[str, typing.Any] | None = None,
 ) -> langchain_core.runnables.Runnable:
     """Convenience function to get a runnable prompt chain using the default manager.
 
@@ -288,6 +305,9 @@ def get_prompt_chain(
             pick randomly. If `None` is provided instead, all examples are included.
         partial_vars: Optional partial variables to use for prompt template substitution.
         runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
+        role_variables: Optional variables for rendering the role block.
+        context_variables: Optional variables for rendering the context block.
+        examples_block_variables: Optional variables for rendering the examples block template.
     """
     manager = get_framework_prompt_manager()
     prompt_module = None
@@ -305,6 +325,9 @@ def get_prompt_chain(
             target_examples=target_examples,
             partial_vars=partial_vars,
             runnable_name=runnable_name,
+            role_variables=role_variables,
+            context_variables=context_variables,
+            examples_block_variables=examples_block_variables,
         )
     prompt_template = get_prompt_template(
         prompt_name=prompt_name,
@@ -313,6 +336,9 @@ def get_prompt_chain(
         include_examples=include_examples,
         target_examples=target_examples,
         partial_vars=partial_vars,
+        role_variables=role_variables,
+        context_variables=context_variables,
+        examples_block_variables=examples_block_variables,
     )
     if prompt_module is not None and hasattr(prompt_module, "get_output_parser"):
         output_parser = prompt_module.get_output_parser(version=version)

@@ -1,6 +1,7 @@
 import pathlib
 
 import pyine.prompts.manager as prompt_manager
+import pyine.prompts.types as prompt_types
 import pyine.prompts.utils as prompt_utils
 
 
@@ -18,7 +19,7 @@ class TestPromptManager:
         mock_files.return_value = mock_package_files
         mock_prompt_file = mocker.MagicMock()
         mock_prompt_file.is_file.return_value = True
-        mock_package_files.__truediv__.return_value = mock_prompt_file
+        mock_package_files.joinpath.return_value = mock_prompt_file
         mock_versioned_config = mocker.MagicMock()
         mock_versioned_config.versions = {"v1.0.0": "config1", "v2.0.0": "config2"}
         mocker.patch.object(prompt_utils.VersionedPromptConfig, "from_yaml", return_value=mock_versioned_config)
@@ -39,3 +40,43 @@ class TestPromptManager:
             assert not result.endswith(".yaml")
             prompt_config = manager.get_prompt_config(result)
             assert prompt_config.metadata.name == result
+
+    def test_prompt_build_config_forwards_block_variables_to_template(self, monkeypatch):
+        captured_kwargs: dict[str, dict[str, str] | None] = {}
+
+        def fake_get_prompt_template(**kwargs):
+            captured_kwargs.update(kwargs)
+            return "template"
+
+        monkeypatch.setattr(prompt_manager, "get_prompt_template", fake_get_prompt_template)
+        build_config = prompt_types.PromptBuildConfig(
+            prompt_name="dummy",
+            role_variables={"role": "value"},
+            context_variables={"context": "value"},
+            examples_block_variables={"examples": "value"},
+        )
+        result = build_config.get_template()
+        assert result == "template"
+        assert captured_kwargs["role_variables"] == {"role": "value"}
+        assert captured_kwargs["context_variables"] == {"context": "value"}
+        assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
+
+    def test_prompt_build_config_forwards_block_variables_to_chain(self, monkeypatch):
+        captured_kwargs: dict[str, dict[str, str] | None] = {}
+
+        def fake_get_prompt_chain(**kwargs):
+            captured_kwargs.update(kwargs)
+            return "chain"
+
+        monkeypatch.setattr(prompt_manager, "get_prompt_chain", fake_get_prompt_chain)
+        build_config = prompt_types.PromptBuildConfig(
+            prompt_name="dummy",
+            role_variables={"role": "value"},
+            context_variables={"context": "value"},
+            examples_block_variables={"examples": "value"},
+        )
+        result = build_config.get_chain(model="model", runnable_name="run")
+        assert result == "chain"
+        assert captured_kwargs["role_variables"] == {"role": "value"}
+        assert captured_kwargs["context_variables"] == {"context": "value"}
+        assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
