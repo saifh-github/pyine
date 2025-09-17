@@ -150,6 +150,26 @@ Note: The Faithfulness Secret Sauce"""
         assert context_template.template in rendered
         assert examples_block in rendered
 
+    def test_examples_block_variables_not_mutated(
+        self,
+        sample_metadata: prompt_utils.PromptMetadata,
+        sample_examples: list[prompt_utils.PromptExample],
+        question_template: prompt_utils.PromptTemplate,
+        example_template_fstring: prompt_utils.PromptTemplate,
+    ):
+        config = prompt_utils.PromptConfig(
+            metadata=sample_metadata,
+            question=question_template,
+            example_template=example_template_fstring,
+            examples=sample_examples,
+        )
+        block_variables = {"custom": "value"}
+        _ = config.get_system_message(
+            include_examples=True,
+            examples_block_variables=block_variables,
+        )
+        assert block_variables == {"custom": "value"}
+
 
 class TestVersionedPromptConfig:
 

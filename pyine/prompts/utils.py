@@ -127,7 +127,7 @@ class PromptConfig(pydantic.BaseModel):
     """The template used when rendering a set of in-context examples inside the prompt template itself."""
     question: PromptTemplate  # mandatory; otherwise, why are we prompting a model without a question?
     """The question template with placeholder variables."""
-    examples: list[PromptExample] | None = []
+    examples: list[PromptExample] | None = pydantic.Field(default_factory=list)
     """Examples tied to this prompt that can be used for few-shot/in-context learning."""
     template_block_separator: str = "\n\n"
     """Separator to use between prompt template blocks."""
@@ -236,14 +236,14 @@ class PromptConfig(pydantic.BaseModel):
             assert (
                 "examples_str" in examples_block_template.input_variables
             ), "examples block template must include 'examples_str' variable"
-            examples_block_variables = examples_block_variables or {}
-            assert "examples_str" not in examples_block_variables, "overlap between input/output variable names"
+            block_variables = dict(examples_block_variables) if examples_block_variables else {}
+            assert "examples_str" not in block_variables, "overlap between input/output variable names"
             examples_str = self.get_examples_as_text(
                 target_examples=target_examples,
-                extra_variables=examples_block_variables,
+                extra_variables=block_variables,
             )
-            examples_block_variables["examples_str"] = examples_str
-            examples_block_prompt = examples_block_template.format(**examples_block_variables)
+            block_variables["examples_str"] = examples_str
+            examples_block_prompt = examples_block_template.format(**block_variables)
             rendered_template_parts.append(examples_block_prompt)
         if return_as_blocks:
             return rendered_template_parts
@@ -317,8 +317,13 @@ class PromptConfig(pydantic.BaseModel):
                 optional_variables=self.question.optional_variables or [],
             )
         if self.question.optional_variables:
-            # set all optional variables with a default to avoid/bypass issues w/ optionals not being honored
-            output_template = output_template.partial(**{opt_var: "" for opt_var in self.question.optional_variables})
+            # set defaults only for optional variables that do not already have partial values
+            existing_partial = getattr(output_template, "partial_variables", {}) or {}
+            optional_defaults = {
+                opt_var: "" for opt_var in self.question.optional_variables if opt_var not in existing_partial
+            }
+            if optional_defaults:
+                output_template = output_template.partial(**optional_defaults)
         return output_template
 
     def render_prompt(
@@ -401,12 +406,14 @@ class VersionedPromptConfig(pydantic.BaseModel):
                 continue  # we'll take care of this one below
             if version == INTERNAL_DEFINES_KEY:
                 continue  # this block contains variable definitions (aliases), skip it
-            assert isinstance(config_data, dict), "each prompt version must be mapped to a config a dictionary"
+            if not isinstance(config_data, dict):
+                raise ValueError("each prompt version must be mapped to a config dictionary")
             # if the version information is not already in the config data, add it here before validation
             if "metadata" not in config_data:
                 config_data["metadata"] = {"version": version}
             else:
-                assert "version" not in config_data["metadata"], "version cannot be specified in metadata directly"
+                if "version" in config_data["metadata"]:
+                    raise ValueError("version cannot be specified in metadata directly")
                 config_data["metadata"]["version"] = version
             versions[version] = PromptConfig.model_validate(config_data)
         if not versions:
