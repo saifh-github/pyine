@@ -510,9 +510,7 @@ class PromptResultDB:
         if isinstance(cmeta_dict.get("created_at"), datetime.datetime):
             maybe_naive = cmeta_dict["created_at"]
             if maybe_naive.tzinfo is None or maybe_naive.tzinfo.utcoffset(maybe_naive) is None:
-                logger.warning(
-                    "creation_meta.created_at without timezone detected; falling back to row created_at",
-                )
+                # backward compat: created_at without timezone detected; falling back to row created_at
                 cmeta_dict.pop("created_at", None)
         if "created_at" not in cmeta_dict or not isinstance(cmeta_dict["created_at"], datetime.datetime):
             fallback_created_at = datetime.datetime.fromisoformat(row["created_at"])
