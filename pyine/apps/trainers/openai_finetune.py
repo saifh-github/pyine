@@ -1,9 +1,4 @@
-"""
-OpenAI API model fine-tuning CLI.
-
-This is a work-in-progress / demo / reference script for fine-tuning an OpenAI model using a code
-execution traces dataset.
-"""
+"""OpenAI API model fine-tuning CLI app."""
 
 import concurrent.futures
 import logging

@@ -586,7 +586,7 @@ class AnnotationReport:
             f"new results: {self.new_results_generated:_}, "
             f"tokens exchanged: {self.total_tokens_exchanged:_}, "
             f"errors: {self.errors}"
-        ) + (f", error messages: {self.error_messages}" if self.error_messages else "")
+        ) + (f", error messages: {self.error_messages[:5]}" if self.error_messages else "")
 
 
 async def annotate_trace_dataset(
@@ -789,17 +789,15 @@ def _process_one_annotation(
             rep.total_tokens_exchanged += token_usage_dict.get("total_tokens", 0)
     except (KeyboardInterrupt, GeneratorExit, MemoryError, asyncio.CancelledError):
         raise  # we should not be trying to catch/silence there here
-    except pyine.prompts.result_db.ValidationFailedError as e:
+    except (pyine.prompts.result_db.ValidationFailedError, Exception) as e:
         rep.errors += 1
-        attempts = config.max_unsatisfactory_retries + 1
-        rep.error_messages.append(f"sample_idx={sample_idx}, trace_id={trace.identifier}: {e}")
+        id_str = f"sample_idx={sample_idx}, trace_id={trace.identifier}"
+        rep.error_messages.append(f"{id_str}: {e}")
         rep.error_message_tracebacks.append("".join(traceback.format_exception(e)))
-        logger.warning(f"result validation failed after {attempts} attempt(s) for data sample at idx: {sample_idx}")
-        logger.debug(f"exception details: {e}")
-    except Exception as e:
-        rep.errors += 1
-        rep.error_messages.append(f"sample_idx={sample_idx}, trace_id={trace.identifier}: {e}")
-        rep.error_message_tracebacks.append("".join(traceback.format_exception(e)))
-        logger.exception(f"failed to process and annotate data sample at idx: {sample_idx}")
-        logger.debug(f"exception details: {e}")
+        if isinstance(e, pyine.prompts.result_db.ValidationFailedError):
+            logger.warning(
+                f"result validation failed for {id_str} " f"(attempts: {config.max_unsatisfactory_retries}) "
+            )
+        else:
+            logger.exception(f"failed to process and annotate data for {id_str};\n{e}")
     return rep

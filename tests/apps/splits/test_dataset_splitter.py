@@ -129,7 +129,7 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
             "--dataset-name=TACO",
             f"--output-path={out_dataset_path}",
             "--max-solutions-per-problem=2",
-            "--max-tests-per-solution=1",
+            "--max-tests-per-solution=2",
             f"--target-problem-ids={part_file}",
             "--generate-obfuscated-solutions",
         ]
