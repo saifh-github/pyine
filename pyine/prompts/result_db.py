@@ -30,9 +30,9 @@ class CreationMeta(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="allow")
     """Allows extra fields to be defined in subclasses."""
     created_at: datetime.datetime = pydantic.Field(
-        default_factory=lambda: datetime.datetime.now(),
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
-    """Timestamp of record creation (in local time)."""
+    """Timestamp of record creation (UTC)."""
     created_by: str = pydantic.Field(
         default_factory=lambda: pyine.utils.filesystem.get_username(),
     )
@@ -47,6 +47,17 @@ class CreationMeta(pydantic.BaseModel):
     """Hyperparameters or other provider-specific parameters used."""
     llm_output: dict[str, pydantic.JsonValue] | None = None
     """Arbitrary LLM provider specific output data obtained after generation."""
+
+    @pydantic.field_validator("created_at", mode="after")
+    @classmethod
+    def _ensure_timezone(
+        cls,
+        value: datetime.datetime,
+    ) -> datetime.datetime:
+        """Ensure created_at carries timezone information."""
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            raise ValueError("created_at must be timezone-aware; pass a datetime with tzinfo set (UTC recommended).")
+        return value.astimezone(datetime.UTC)
 
 
 class PromptResultRecord(pydantic.BaseModel):
@@ -486,8 +497,28 @@ class PromptResultDB:
         tags_raw = row["tags"]
         cmeta_raw = row["creation_meta"]
         cmeta_dict = orjson.loads(cmeta_raw) if cmeta_raw else {}
-        if isinstance(cmeta_dict.get("created_at", None), str):
-            cmeta_dict["created_at"] = datetime.datetime.fromisoformat(cmeta_dict["created_at"])  # noqa
+        created_at_raw = cmeta_dict.get("created_at", None)
+        if isinstance(created_at_raw, str):
+            try:
+                cmeta_dict["created_at"] = datetime.datetime.fromisoformat(created_at_raw)
+            except ValueError:
+                logger.warning(
+                    "could not parse creation_meta.created_at=%r; falling back to row created_at",
+                    created_at_raw,
+                )
+                cmeta_dict.pop("created_at", None)
+        if isinstance(cmeta_dict.get("created_at"), datetime.datetime):
+            maybe_naive = cmeta_dict["created_at"]
+            if maybe_naive.tzinfo is None or maybe_naive.tzinfo.utcoffset(maybe_naive) is None:
+                logger.warning(
+                    "creation_meta.created_at without timezone detected; falling back to row created_at",
+                )
+                cmeta_dict.pop("created_at", None)
+        if "created_at" not in cmeta_dict or not isinstance(cmeta_dict["created_at"], datetime.datetime):
+            fallback_created_at = datetime.datetime.fromisoformat(row["created_at"])
+            if fallback_created_at.tzinfo is None or fallback_created_at.tzinfo.utcoffset(fallback_created_at) is None:
+                fallback_created_at = fallback_created_at.replace(tzinfo=datetime.UTC)
+            cmeta_dict["created_at"] = fallback_created_at.astimezone(datetime.UTC)
         return PromptResultRecord(
             identifier=row["identifier"],
             prompt_name=row["prompt_name"],

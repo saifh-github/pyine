@@ -5,6 +5,7 @@ import pathlib
 import threading
 import types
 
+import orjson
 import pydantic
 import pytest
 
@@ -63,6 +64,12 @@ def test_store_and_fetch_by_identifier(db: PromptResultDB):
     assert only_v1[0].prompt_version == "v1"
     assert only_v1[0].meta == {"model": "dummy", "temperature": 0.1}
     assert only_v1[0].tags == ["a", "b"]
+
+
+def test_creation_meta_requires_timezone() -> None:
+    naive_now = datetime.datetime.now()
+    with pytest.raises(ValueError):
+        CreationMeta(created_at=naive_now)
 
 
 def test_group_queries_and_tag_filter(db: PromptResultDB):
@@ -151,13 +158,39 @@ def test_list_identifiers(db: PromptResultDB):
 def test_get_by_identifier_max_age_and_tag_filter(db: PromptResultDB):
     import datetime as _dt
 
-    old_cm = CreationMeta(created_at=_dt.datetime.now() - _dt.timedelta(minutes=30))
+    old_cm = CreationMeta(created_at=_dt.datetime.now(datetime.UTC) - _dt.timedelta(minutes=30))
     db.store(identifier="age_tag", prompt="p", result="old", tags=["wip:yes"], creation_meta=old_cm)
     db.store(identifier="age_tag", prompt="p", result="new", tags=["ok"])
     recent_only = db.get_by_identifier("age_tag", max_result_age=_dt.timedelta(minutes=10))
     assert [r.result for r in recent_only] == ["new"]
     tag_filtered = db.get_by_identifier("age_tag", tag_filter_rule="-wip:*")
     assert [r.result for r in tag_filtered] == ["new", "new"] or [r.result for r in tag_filtered] == ["new"]
+
+
+def test_row_to_record_falls_back_to_created_at_column(db: PromptResultDB):
+    row_id = db.store(identifier="fallback", prompt="prompt", result="result")
+    conn = db._connect()
+    try:
+        created_at_iso = conn.execute("SELECT created_at FROM items WHERE id = ?", (row_id,)).fetchone()[0]
+        conn.execute(
+            "UPDATE items SET creation_meta = ? WHERE id = ?",
+            (
+                orjson.dumps(
+                    {
+                        "created_by": "unit-test",
+                        "platform": "test",
+                    }
+                ),
+                row_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    fetched = db.get_by_identifier("fallback")
+    assert len(fetched) == 1
+    expected_created_at = datetime.datetime.fromisoformat(created_at_iso)
+    assert fetched[0].creation_meta.created_at == expected_created_at
 
 
 def test_fetch_or_generate_deduplicates_existing(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
@@ -368,8 +401,8 @@ def test_delete_records_by_group_and_prompt_version(db: PromptResultDB):
 
 
 def test_delete_records_older_than(db: PromptResultDB):
-    old_cm = CreationMeta(created_at=datetime.datetime.now() - datetime.timedelta(days=2))
-    new_cm = CreationMeta(created_at=datetime.datetime.now())
+    old_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=2))
+    new_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC))
     db.store(identifier="age-del", prompt="p", result="old", creation_meta=old_cm)
     db.store(identifier="age-del", prompt="p", result="new", creation_meta=new_cm)
     deleted = db.delete_records(older_than=datetime.timedelta(days=1))
