@@ -52,6 +52,9 @@ def get_prompt_template(
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
     partial_vars: dict[str, typing.Any] | None = None,
+    role_variables: dict[str, typing.Any] | None = None,
+    context_variables: dict[str, typing.Any] | None = None,
+    examples_block_variables: dict[str, typing.Any] | None = None,
 ) -> "langchain_core.prompts.BasePromptTemplate":
     """Returns the prompt template for the prediction grader prompt (manager module override).
 
@@ -61,13 +64,16 @@ def get_prompt_template(
 
     prompt_config = pyine.prompts.manager.get_prompt_config("pred_grader", version=version)
     parser = get_output_parser(version=version)
+    merged_context = dict(context_variables) if context_variables else {}
+    if parser is not None:
+        merged_context.setdefault("expected_output_format", parser.get_format_instructions())
     template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
-        role_variables=None,
-        context_variables=(dict(expected_output_format=parser.get_format_instructions()) if parser else None),
-        examples_block_variables=None,
+        role_variables=role_variables,
+        context_variables=merged_context or None,
+        examples_block_variables=examples_block_variables,
     )
     if partial_vars:
         template = template.partial(**partial_vars)
