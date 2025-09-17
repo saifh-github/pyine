@@ -528,7 +528,7 @@ class CodingProblemIterator:
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
             # with TACO we're loading JSONs: the 'problem metadata' are JSONs paths to parse later
-            json_file_paths = list(self.root_data_path.glob("*.json"))
+            json_file_paths = list(sorted(self.root_data_path.glob("*.json")))
             if not json_file_paths:
                 raise FileNotFoundError(f"no JSON files found in the dataset root directory: {self.root_data_path}")
             output_paths = []
