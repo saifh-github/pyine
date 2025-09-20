@@ -10,8 +10,8 @@ import tests.env_checks
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    tests.env_checks.OPENAI_API_KEY_MISSING,
-    reason="OPENAI key missing, cannot check annotator app",
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available; cannot check annotator app",
 )
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,

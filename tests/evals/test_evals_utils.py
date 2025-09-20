@@ -129,8 +129,8 @@ def test_strip_hard_checks_behavior() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    tests.env_checks.OPENAI_API_KEY_MISSING,
-    reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
 )
 async def test_real_llm_grade_scoring() -> None:
     evaluator = pyine.evals.utils.OutcomeEvaluator(
@@ -248,8 +248,8 @@ def test_token_usage_info_add_and_iadd_success() -> None:
 
 
 @pytest.mark.skipif(
-    tests.env_checks.OPENAI_API_KEY_MISSING,
-    reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
 )
 def test_token_usage_with_real_openai_generation(tmp_path: pathlib.Path):
     model = pyine.utils.llm_providers.LLMProviderConfig(

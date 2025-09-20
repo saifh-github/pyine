@@ -200,7 +200,10 @@ def client() -> openai_sdk.OpenAI:
     return openai_sdk.OpenAI()
 
 
-@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
 class TestOpenAIIntegration:
 
     @pytest.fixture(scope="class")
@@ -373,7 +376,10 @@ class TestOpenAIIntegration:
         assert len(reply) > 0
 
 
-@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
 class TestCleanups:
 
     @pytest.mark.slow

@@ -84,7 +84,10 @@ def test_get_chain_attaches_parser(mocker):
     assert not isinstance(openai_chain.last, langchain_core.output_parsers.PydanticOutputParser)
 
 
-@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
 def test_pred_grader_infer_score_only():
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
@@ -102,7 +105,10 @@ def test_pred_grader_infer_score_only():
     assert 0.0 <= result.score <= 1.0
 
 
-@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
 def test_pred_grader_infer_with_reasoning():
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",

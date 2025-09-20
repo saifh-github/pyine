@@ -323,8 +323,8 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
     reason="TACO traces dataset is missing, cannot run annotator integration",
 )
 @pytest.mark.skipif(
-    tests.env_checks.OPENAI_API_KEY_MISSING,
-    reason="OPENAI_API_KEY is missing, cannot run annotator integration",
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available; cannot run annotator integration",
 )
 async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> None:
     dataset_path = du.get_latest_dataset_path("TACO")

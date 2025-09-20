@@ -44,7 +44,10 @@ def test_capture_llm_handler_manual_event_sequence() -> None:
     assert handler.get_latest_event("missing") is None  # noqa
 
 
-@pytest.mark.skipif(tests.env_checks.OPENAI_API_KEY_MISSING, reason="OpenAI API key not available")
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
 def test_capture_llm_handler_records_events_with_openai_chat():
     model_name = "gpt-4o-mini"
     handler = pyine.utils.langchain.CaptureLLMHandler()

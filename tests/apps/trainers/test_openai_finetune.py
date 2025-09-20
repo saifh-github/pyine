@@ -22,8 +22,8 @@ import tests.env_checks
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
 @pytest.mark.skipif(
-    tests.env_checks.OPENAI_API_KEY_MISSING,
-    reason="OpenAI API key missing, cannot run OpenAI-backed evaluation.",
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available, cannot run OpenAI-backed evaluation.",
 )
 async def test_main_evaluates_base_model_with_skip_fine_tuning(
     tmp_path: pathlib.Path,
