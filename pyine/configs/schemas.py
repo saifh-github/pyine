@@ -1,7 +1,9 @@
 import logging
 import pathlib
+import typing
 
 import hydra.conf
+import hydra_zen.typing
 import pydantic
 import wandb
 
@@ -110,3 +112,77 @@ class RuntimeConfig(pydantic.BaseModel):
         tags_list.append(tag)
         self.wandb_run.tags = tuple(sorted(set(tags_list)))
         logger.info(f"added tag '{tag}' to wandb run id: {self.wandb_run_id}")
+
+
+class ConfigDescription(pydantic.BaseModel):
+    """Provides a description of a hydra-zen configuration object."""
+
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    """Pydantic model configuration (frozen, allow arbitrary types)."""
+
+    name: str | None
+    """Name of the configuration; used for registration in the hydra store.
+
+    Note: although this field defaults to `None`, it is required for validation; when it is `None`,
+    we will look for a "__cfg_name__" field in the config to use as the config name.
+    """
+    group: str | None
+    """Optional group name for grouping similar configurations together.
+
+    Note: if None, we will look for a "__cfg_group__" field in the config to use as the group.
+    """
+    package: str | None = None
+    """Optional package name used when storing this config in the hydra store."""
+    config: hydra_zen.typing.Builds | type[typing.Protocol]
+    """Hydra-zen config object (can be used for instantiations and as a base in new definitions)."""
+    description: str | None = None
+    """Description of the config; should be informative to potential users.
+
+    Note: although this field defaults to `None`, it is required for validation; when it is `None`,
+    we will look for a "__description__" or "__doc__" field in the config to use as the description.
+    """
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _fill_attribs(cls, data: typing.Any) -> typing.Any:
+        """Fills the attributes that may be missing."""
+        if not isinstance(data, dict):
+            return data
+        cfg = data.get("config")
+
+        name = data.get("name")
+        if name in (None, "") and cfg is not None:
+            name = getattr(cfg, "__cfg_name__", None)
+        if not name:
+            raise ValueError("name must be provided or found in the config")
+        if not isinstance(name, str):
+            raise TypeError(f"name must be a string, got {type(name)}")
+        data["name"] = name
+
+        group = data.get("group")
+        if group in (None, "") and cfg is not None:
+            group = getattr(cfg, "__cfg_group__", None)
+        if group is not None:
+            if not isinstance(group, str):
+                raise TypeError(f"group must be a string, got {type(group)}")
+            data["group"] = group
+
+        desc = data.get("description")
+        if desc in (None, "") and cfg is not None:
+            desc = getattr(cfg, "__description__", "") or getattr(cfg, "__doc__", "")
+        if not desc:
+            raise ValueError("description must be provided or found in the config")
+        if not isinstance(desc, str):
+            raise TypeError(f"description must be a string, got {type(desc)}")
+        data["description"] = desc
+
+        return data
+
+    @pydantic.model_validator(mode="after")
+    def _attach_config_attributes(self) -> "ConfigDescription":
+        """Attaches description/name/group to the config."""
+        # @@@@ might need to update zen exclude?
+        setattr(self.config, "__description__", self.description)
+        setattr(self.config, "__cfg_name__", self.name)
+        setattr(self.config, "__cfg_group__", self.group)
+        return self

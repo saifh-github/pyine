@@ -1,13 +1,15 @@
 """OpenAI API model fine-tuning CLI app."""
 
-import concurrent.futures
+import functools
 import logging
 import sys
 import typing
 
 import openai
+import wandb
 import wandb.integration.openai.fine_tuning
 
+import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
@@ -50,29 +52,27 @@ def _compute_estimated_train_token_count(
 
 async def _evaluate(
     model_name: str,
-    subset_name: str,
+    eval_subset_name: str,
     client: openai.OpenAI,
-    dm: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule,
     llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None,
-) -> dict[str, float | int | str]:
-    """Evaluates the given model on the specified subset."""
-    logger.info(f"running evaluation for {model_name} on the {subset_name} subset...")
+) -> pyine.evals.common.EvaluationResult:
+    """Evaluates the given OpenAI model on the specified subset."""
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model=model_name,
         client=client.chat.completions,
     )
-    eval_parser = dm.get_parser(subset_name)
+    eval_parser = datamodule.get_parser(eval_subset_name)
     assert isinstance(eval_parser, pyine.organisms.datamodules.utils.samples.SampleBuilder)
     eval_parser = typing.cast(pyine.organisms.datamodules.utils.samples.SampleBuilder, eval_parser)
-    metrics = await pyine.evals.common.evaluate_model_on_subset(
-        chain=dm.config.get_prompt_chain(model),
+    evaluation_result = await pyine.evals.common.evaluate_langchain_runnable_on_subset(
+        chain=datamodule.config.get_prompt_chain(model),
         parser=eval_parser,
         llm_grader_provider_config=llm_grader_provider_config,
         verbose=True,
     )
-    pyine.evals.utils.print_metrics(metrics, subset_name, logger.info)
-    return metrics
+    return evaluation_result
 
 
 async def main(
@@ -94,20 +94,7 @@ async def main(
         use_wandb_logging=config.use_wandb_logging,
     )
 
-    dm = config.datamodule_config.instantiate_datamodule(verbose=True)
-    logger.info("preparing datamodule and setting up parsers/loaders...")
-    dm.prepare_data()
-    dm.setup()
-
-    if config.use_wandb_logging:
-        assert runtime is not None and runtime.wandb_run is not None
-        dm_stats = {f"dataset_stats/{k}": v for k, v in dm.get_stats().items()}
-        runtime.wandb_run.summary.update(dm_stats)
-        for eval_subset_name in config.eval_subset_names:
-            pyine.evals.common.define_metrics_for_wandb(
-                wandb_run=runtime.wandb_run,
-                prefix=f"evals/{eval_subset_name}",
-            )
+    dm = pyine.apps.trainers.common.prepare_code_exec_datamodule(config, runtime)
 
     client: openai.OpenAI = config.openai_client_config.instantiate()
     if not skip_fine_tuning:
@@ -145,7 +132,7 @@ async def main(
         model_name = finetuner.wait_for_job(job_id)
         if not model_name:
             logger.error("fine-tune failed or no model name returned")
-            sys.exit(-1)
+            sys.exit(1)
     else:
         # use the base model directly as the target to evaluate
         model_name = config.openai_finetuner_config.params.base_model
@@ -160,17 +147,8 @@ async def main(
             runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
         runtime.wandb_run.summary.update({"model_name": model_name})
 
-    for eval_subset_name in config.eval_subset_names:
-        metrics = await _evaluate(
-            model_name=model_name,
-            subset_name=eval_subset_name,
-            client=client,
-            dm=dm,
-            llm_grader_provider_config=config.llm_grader_provider_config,
-        )
-        if config.use_wandb_logging:
-            prefixed_metrics = {f"evals/{eval_subset_name}/{k}": v for k, v in metrics.items()}
-            runtime.wandb_run.summary.update(prefixed_metrics)
+    eval_callback = functools.partial(_evaluate, model_name=model_name, client=client)
+    await pyine.apps.trainers.common.evaluate_code_execution_model(eval_callback, dm, config, runtime)
 
 
 if __name__ == "__main__":

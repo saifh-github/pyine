@@ -3,11 +3,12 @@
 import hydra_zen
 import hydra_zen.typing
 
+import pyine.configs.schemas
 import pyine.utils.llm_providers
 
 
-def store_hydra_configs(store: hydra_zen.ZenStore) -> None:
-    """Stores grader-specific configs in the provided hydra zen store."""
+def get_configs(group: str) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Generates and returns LLM-based-grader-specific configs for hydra zen storage."""
     openai_llm_provider_config = hydra_zen.builds(
         pyine.utils.llm_providers.LLMProviderConfig,
         provider="openai",
@@ -15,17 +16,28 @@ def store_hydra_configs(store: hydra_zen.ZenStore) -> None:
         populate_full_signature=True,
         hydra_convert="object",
     )
-    store(
-        hydra_zen.make_config(
-            model_kwargs=dict(model="gpt-5-mini"),
-            bases=(openai_llm_provider_config,),
-        ),
+    gpt5_mini_config = pyine.configs.schemas.ConfigDescription(
         name="openai_gpt-5-mini",
-    )
-    store(
-        hydra_zen.make_config(
-            model_kwargs=dict(model="gpt-5-nano"),
+        group=group,
+        config=hydra_zen.make_config(
+            model_kwargs=dict(model="gpt-5-mini"),
+            # -------------
             bases=(openai_llm_provider_config,),
+            zen_meta={
+                "__description__": "LLM provider settings for grading using OpenAI's gpt-5-mini.",
+            },
         ),
-        name="openai_gpt-5-nano",
     )
+    gpt5_nano_config = pyine.configs.schemas.ConfigDescription(
+        name="openai_gpt-5-nano",
+        group=group,
+        config=hydra_zen.make_config(
+            model_kwargs=dict(model="gpt-5-nano"),
+            # -------------
+            bases=(openai_llm_provider_config,),
+            zen_meta={
+                "__description__": "LLM provider settings for grading using OpenAI's gpt-5-nano (cheaper!).",
+            },
+        ),
+    )
+    return [gpt5_mini_config, gpt5_nano_config]
