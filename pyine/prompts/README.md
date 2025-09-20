@@ -1,15 +1,19 @@
-# `pyine.prompts` — Prompting tools
+# `pyine.prompts`
 
-This package provides a small, test-backed toolkit to author, version, load, render, and run LLM prompts.
-It is centered around simple YAML templates and a few helper functions. Keep reading for the fastest way to use it.
+This package provides a small, test-backed toolkit to author, version, load, render, and run LLM
+prompts. It is centered around YAML templates that specify the contents of the prompts in a
+structured and reference-friendly (DRY) fashion.
 
 Focus: only prompting. Everything below relates to prompt templates, their Python helpers, and an optional results log.
 
-## What you get
+**What you get:**
 
-- Versioned YAML prompts under `pyine/prompts/templates`;
+- Versioned YAML prompts under `pyine/prompts/templates` and their associated dataclasses and
+  structured output parsers under `pyine/prompts/configs`;
 - Simple helpers to list prompts, load a prompt config, render a prompt, or build a Runnable chain;
 - Optional SQLite-backed prompt results database for caching/analysis of generations.
+
+______________________________________________________________________
 
 ## Quick start
 
@@ -59,7 +63,7 @@ print(cfg.metadata.name, cfg.metadata.version)
 print(list_prompt_versions("code_analysis"))  # ["v1.0", ...]
 ```
 
-## YAML template anatomy (per version)
+### Anatomy of a YAML prompt template (per version)
 
 ```yaml
 v1.0-universal:  # arbitrary name that identifies the VERSION of the prompt
@@ -247,4 +251,4 @@ will instantiate them and enforce schema validity.
 that assert expected outputs for clarity and robustness. When adding Pydantic models, ensure their
 fully qualified names are stable; tests should cover validation and prompt rendering. Run the
 existing tests under tests/prompts and add new ones for your prompt and models. Refer to the
-top-level README for more details on how to contribute.
+[top-level README](../../README.md) for more details on how to contribute.

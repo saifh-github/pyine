@@ -99,7 +99,9 @@ Tests use `pytest`, organized per feature subpackage. Name test modules `test_<s
 individual tests `test_<expectation>`. Mark long-running or data-heavy scenarios with
 `@pytest.mark.slow`; CI and `make test` exclude them by default, so ensure at least one fast path
 exercises new code. When adding features, extend coverage expectations (branch-aware) and
-inspect reports in `logs/coverage/html/index.html`.
+inspect reports in `logs/coverage/html/index.html`. When creating new tests, make sure that all
+newly logged files and results are sent to an appropriate temp dir to avoid polluting real
+directories.
 
 To exhaustively check whether all unit tests pass, run `make test-all` (this will include slow
 tests that require datasets or heavy processing).
