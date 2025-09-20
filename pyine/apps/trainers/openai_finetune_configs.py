@@ -32,7 +32,7 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
-class MainConfig(pyine.apps.trainers.common.AppMainConfig):
+class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     """Configuration for the OpenAI fine-tuner app's main function.
 
     Assembles the components required to fine-tune a model for code execution using a code execution
@@ -175,7 +175,7 @@ def _get_app_main_configs(
         name="base",
         group=group,
         config=hydra_zen.builds(
-            MainConfig,
+            OpenAIFineTuneAppMainConfig,
             # -------------
             populate_full_signature=True,
             hydra_convert="object",

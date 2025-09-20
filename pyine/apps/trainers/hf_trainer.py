@@ -283,7 +283,7 @@ def train(
     tokenizer: transformers.PreTrainedTokenizerBase,
     model: transformers.PreTrainedModel,
     datamodule: pyine.data.datamodule.ConversationDataModule,
-    config: "pyine.apps.trainers.hf_trainer_configs.MainConfig",
+    config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> transformers.Trainer:
     """Run fine-tuning with HuggingFace Trainer.
@@ -364,13 +364,13 @@ async def _evaluate(
 
 
 async def main(
-    config: "pyine.apps.trainers.hf_trainer_configs.MainConfig",
+    config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
 ) -> None:
     """Main function for the script; performs fine-tuning and evaluation for huggingface model.
 
     Args:
-        config: Configuration for the application; see `MainConfig` for details.
+        config: Configuration for the application; see `HFTrainerAppMainConfig` for details.
         runtime: Configuration for the runtime; available when launched via hydra.
     """
     pyine.utils.reprod.entrypoint_setup(

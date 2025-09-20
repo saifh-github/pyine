@@ -48,7 +48,7 @@ TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
 """Configuration parameters for the OpenAI client."""
 
 
-class MainConfig(pyine.apps.trainers.common.AppMainConfig):
+class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     """Configuration for HuggingFace LoRA fine-tuning."""
 
     base_model: str = pydantic.Field(
@@ -250,7 +250,7 @@ def _get_app_main_configs(
         name="base",
         group=group,
         config=hydra_zen.builds(
-            MainConfig,
+            HFTrainerAppMainConfig,
             base_model="Qwen/Qwen2.5-Coder-7B-Instruct",  # we propose this default for base experiments
             # -------------
             populate_full_signature=True,

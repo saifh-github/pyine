@@ -45,7 +45,7 @@ async def test_main_evaluates_base_model_with_skip_fine_tuning(
         suffix="pyine-pytest-openai-ft",
     )
     finetuner_cfg = pyine.utils.openai.OpenAIFineTunerConfig(params=finetuner_params_config)
-    cfg = pyine.apps.trainers.openai_finetune_configs.MainConfig(
+    cfg = pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig(
         datamodule_config=real_dm_config,
         openai_client_config=openai_client_config,
         openai_finetuner_config=finetuner_cfg,

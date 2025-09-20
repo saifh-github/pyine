@@ -15,6 +15,6 @@ runtime:  # builds the app's `pyine.configs.schemas.RuntimeConfig` object
   exp_name: example  # this is a required setting to define for all experiments
   seed: 123  # override the default app seed
 
-config:  # builds the app's `pyine.apps.trainers.openai_finetune_configs.MainConfig` object
+config:  # builds the app's `pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig` object
   openai_finetuner_config:  # builds an expected attribute inside the above (which is another config)
     base_model: gpt-4.1-nano-2025-04-14  # override the default gpt-4.1-mini to an ever smaller model
