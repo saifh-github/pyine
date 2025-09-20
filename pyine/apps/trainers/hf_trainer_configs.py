@@ -20,6 +20,7 @@ import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_trainer
 import pyine.configs.base
 import pyine.configs.schemas
+import pyine.configs.searchpath
 import pyine.data.datamodule
 import pyine.evals.grader_configs
 import pyine.organisms.datamodules.shortcuts_configs
@@ -250,6 +251,7 @@ def _get_app_main_configs(
         group=group,
         config=hydra_zen.builds(
             MainConfig,
+            base_model="Qwen/Qwen2.5-Coder-7B-Instruct",  # we propose this default for base experiments
             # -------------
             populate_full_signature=True,
             hydra_convert="object",
@@ -261,7 +263,7 @@ def _get_app_main_configs(
                 {"llm_grader_provider_config": "openai_gpt-5-nano"},
             ],
             zen_meta={
-                "__description__": ("Default settings for the HF trainer app."),
+                "__description__": "Default settings for the HF trainer app.",
             },
         ),
     )
@@ -269,34 +271,6 @@ def _get_app_main_configs(
     trainer_args_configs = _get_trainer_args_configs(f"{group}/training_args_config")
     lora_configs = _get_lora_configs(f"{group}/lora_config")
     llm_grader_provider_configs = pyine.evals.grader_configs.get_configs(f"{group}/llm_grader_provider_config")
-
-    qwen25c05B_m3pro_config = pyine.configs.schemas.ConfigDescription(
-        name="qwen25c05B_m3pro",
-        group=group,
-        config=hydra_zen.builds(
-            MainConfig,
-            base_model="Qwen/Qwen2.5-Coder-0.5B-Instruct",  # super-tiny model for MPS-based runs
-            quantization_mode="none",  # mps does not support quantization? (to be confirmed)
-            training_args_config=dict(
-                # gradient_checkpointing=True,  # maybe needed
-                # gradient_checkpointing_kwargs=dict(...),  # for the above, if needed
-                # gradient_accumulation_steps=5,  # maybe needed
-            ),
-            # -------------
-            hydra_defaults=[
-                {"training_args_config": "base"},
-                {"lora_config": "default"},  # update to more aggressive LoRA config if needed
-                "_self_",
-            ],
-            builds_bases=(app_main_config.config,),
-            zen_meta={
-                "__description__": (
-                    "Override of the main settings for the HF trainer app which specifies "
-                    "the Qwen/Qwen2.5-Coder-0.5B-Instruct model for MPS-based runs on M3 Pro chips."
-                ),
-            },
-        ),
-    )
 
     # ... add more trainer configs here if needed
 
@@ -306,7 +280,6 @@ def _get_app_main_configs(
         *trainer_args_configs,
         *lora_configs,
         *llm_grader_provider_configs,
-        qwen25c05B_m3pro_config,
     ]
 
 
@@ -378,7 +351,7 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer_main")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")
     main_app_configs = _get_app_main_configs(group="config")
     entrypoint_config = pyine.configs.schemas.ConfigDescription(
         name="entrypoint",
@@ -404,11 +377,18 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
         group="experiment",
         package="_global_",
     )
-    for config in [entrypoint_config, *main_app_configs, *experiment_configs]:
+    external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
+        "hf_trainer",
+        entrypoint_config,
+        main_app_configs,
+    )
+    configs_to_register = [entrypoint_config, *main_app_configs, *experiment_configs, *external_configs]
+    for config in configs_to_register:
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
-    return [*base_configs, entrypoint_config, *main_app_configs, *experiment_configs]
+    return [*base_configs, *configs_to_register]
 
 
 if __name__ == "__main__":
+    pyine.configs.base.register_searchpath_plugin()
     pyine.configs.base.print_experiment_configs(register_hydra_configs(), "hf_trainer")

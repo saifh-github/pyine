@@ -146,7 +146,10 @@ def print_experiment_configs(
     app_name: str,
 ) -> None:
     """Prints the available experiment configs for the app."""
-    print(f"AVAILABLE EXPERIMENT CONFIGURATIONS FOR THE '{app_name}' APPLICATION:")
+    splash_msg = f"AVAILABLE EXPERIMENT CONFIGURATIONS FOR THE '{app_name}' APPLICATION:"
+    bar_str = "=" * len(splash_msg)
+    print(f"\n\n{splash_msg}\n{bar_str}\n\n")
+    exp_config_names = []
     for config_desc in config_descriptions:
         if config_desc.group != "experiment":
             continue
@@ -154,3 +157,11 @@ def print_experiment_configs(
         with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
             config_dict = hydra.compose(config_name="entrypoint", overrides=[f"+experiment={config_desc.name}"])
         pyine.utils.portability.render_config(config_desc.config, config_dict)
+        exp_config_names.append(config_desc.name)
+    if not exp_config_names:
+        print(">>> No experiment configs found.")
+    else:
+        print("\n>>> Summary of available experiment overrides:")
+        for exp_config_name in exp_config_names:
+            print(f"\t+experiment={exp_config_name}")
+    print("\nAll done.")

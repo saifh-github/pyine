@@ -16,6 +16,7 @@ import pyine.apps.trainers.common
 import pyine.apps.trainers.openai_finetune
 import pyine.configs.base
 import pyine.configs.schemas
+import pyine.configs.searchpath
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
@@ -186,7 +187,7 @@ def _get_app_main_configs(
                 {"llm_grader_provider_config": "openai_gpt-5-nano"},
             ],
             zen_meta={
-                "__description__": ("Default settings for the OpenAI fine-tuner app."),
+                "__description__": "Default settings for the OpenAI fine-tuner app.",
             },
         ),
     )
@@ -271,7 +272,7 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("openai_finetune_main")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("openai_finetune")
     main_app_configs = _get_app_main_configs(group="config")
     entrypoint_config = pyine.configs.schemas.ConfigDescription(
         name="entrypoint",
@@ -298,11 +299,18 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
         group="experiment",
         package="_global_",
     )
-    for config in [entrypoint_config, *main_app_configs, *experiment_configs]:
+    external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
+        "openai_finetune",
+        entrypoint_config,
+        main_app_configs,
+    )
+    configs_to_register = [entrypoint_config, *main_app_configs, *experiment_configs, *external_configs]
+    for config in configs_to_register:
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
-    return [*base_configs, entrypoint_config, *main_app_configs, *experiment_configs]
+    return [*base_configs, *configs_to_register]
 
 
 if __name__ == "__main__":
+    pyine.configs.base.register_searchpath_plugin()
     pyine.configs.base.print_experiment_configs(register_hydra_configs(), "openai_finetune")

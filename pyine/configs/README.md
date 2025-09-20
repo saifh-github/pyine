@@ -126,13 +126,41 @@ python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp
 
 This is handy if you keep your overlays outside the repo while developing.
 
+## Using Structured Configs (Advanced)
+
+If you would like to also use structured configurations based on
+[Hydra-Zen](https://mit-ll-responsible-ai.github.io/hydra-zen/) to build your experiments,
+you can create do so by defining a config registration function in any appropriately-named file
+located in the same config search tree. Specifically, for any file whose name ends with
+`..._configs.py` in the `<repo_root>/pyine/configs/` or in the custom-defined `PYINE_CONFIGS_ROOT`
+folder (or subfolder), the framework will automatically look for a `register_hydra_configs`
+function with the following signature:
+
+```python
+import pyine.configs.schemas
+
+def register_hydra_configs(
+    app_name: str,  # should be e.g. 'openai_finetune' or 'hf_trainer'
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # entrypoint config for the above app
+    app_configs: list[pyine.configs.schemas.ConfigDescription],  # other registered configs for the app
+) -> list[pyine.configs.schemas.ConfigDescription]:  # returns NEW configs to register for the app
+    ...
+```
+
+The new config description objects you generate and return will be added to the Hydra-Zen store
+during the setup of all apps in the framework.
+
 ______________________________________________________________________
 
 ## Troubleshooting / FAQ
 
-**ERROR: "Could not override 'experiment'. No match in the defaults list".**
+**ERROR: "Could not override `experiment`. No match in the defaults list".**
 
 You forgot to put `+` before `experiment=...` on the command line argument.
+
+**ERROR: "Could not override `config@experiment.config`'\`"**
+
+Make sure that your experiment configuration file starts with `# @package _global_`
 
 **ERROR: "Could not load config `experiment=...`" OR "Could not find `experiment/...`"**
 
@@ -144,7 +172,7 @@ You forgot to put `+` before `experiment=...` on the command line argument.
 **ISSUE: Overrides do not seem to apply**
 
 - Use `--cfg job` to confirm the final values;
-- Remember that later defaults/overrides win, and that `_self_` should usually be last;
+- Remember that later defaults/overrides win, and that `_self_` should usually be last in YAMLs;
 - Remember that CLI overrides take precedence over the YAML ones.
 
 **Q: How can I base my experiment on an existing experiment?**

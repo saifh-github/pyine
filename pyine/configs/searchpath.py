@@ -1,3 +1,5 @@
+import importlib.util
+import logging
 import os
 import pathlib
 import typing
@@ -5,7 +7,10 @@ import typing
 import hydra.core.config_search_path
 import hydra.plugins.search_path_plugin
 
+import pyine.configs.schemas
 import pyine.utils.filesystem
+
+logger = logging.getLogger(__name__)
 
 CONFIGS_ROOT_ENV_VAR = "PYINE_CONFIGS_ROOT"
 """Name of the environment variable used to override the default configs search path."""
@@ -67,3 +72,86 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
         yield "pyine_cwd", pathlib.Path.cwd() / "pyine" / "configs"
         # check using repo-root tree (installed in editable/dev, or running from a subdir)
         yield "pyine_repo", pyine.utils.filesystem.get_project_root_path() / "pyine" / "configs"
+
+    @classmethod
+    def get_external_configs(
+        cls,
+        app_name: str,
+        entrypoint_config: pyine.configs.schemas.ConfigDescription,
+        app_configs: list[pyine.configs.schemas.ConfigDescription],
+    ) -> list[pyine.configs.schemas.ConfigDescription]:
+        """Generates and returns external configs for hydra zen storage (for all search paths).
+
+        This function will look for python config files with a `_configs.py` suffix in each of
+        the search paths, check if they possess a `register_hydra_configs` with the expected
+        function signature, and use them to generate external configs for hydra zen storage.
+
+        Args:
+            app_name: The name of the app for which to generate external configs.
+            entrypoint_config: The entrypoint config for the app.
+            app_configs: The list of all configs that have already been registered for the app.
+
+        Returns:
+            The list of newly generated app configs from external modules.
+        """
+        processed_files: set[pathlib.Path] = set()
+        module_counter = 0
+        output_configs: list[pyine.configs.schemas.ConfigDescription] = []
+        # iterate all candidate roots (env -> cwd -> repo)
+        for label, root in cls._paths_to_try():
+            if not (root.exists() and root.is_dir()):
+                continue
+            # recursively find Python files named "*_configs.py"
+            for py_file in root.rglob("*_configs.py"):
+                py_path = py_file.resolve()
+                if py_path in processed_files:
+                    continue  # already seen (skip)
+                processed_files.add(py_path)
+                try:
+                    module_counter += 1
+                    mod_name = f"_pyine_ext_cfg_{label}_{module_counter}_{py_path.stem}"
+                    spec = importlib.util.spec_from_file_location(mod_name, py_path)
+                    if spec is None or spec.loader is None:
+                        logger.warning(f"could not create import spec for external config file: {py_path}")
+                        continue
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                except Exception as e:
+                    logger.warning(f"failed to import external configs from '{py_path}': {e}")
+                    continue
+                # fetch the expected registration function
+                register_fn = getattr(module, "register_hydra_configs", None)
+                if register_fn is None:
+                    continue  # silently skip files without the expected callable
+                if not isinstance(register_fn, RegisterHydraConfigsFuncType):
+                    raise TypeError(f"'register_hydra_configs' function in '{py_path}' is not callable")
+                new_configs = register_fn(app_name, entrypoint_config, app_configs)
+                if not isinstance(new_configs, list):
+                    logger.warning(
+                        f"unexpected return from 'register_hydra_configs' function in '{py_path}': {type(new_configs)}"
+                    )
+                    continue
+                valid_configs: list[pyine.configs.schemas.ConfigDescription] = []
+                for cfg in new_configs:
+                    if isinstance(cfg, pyine.configs.schemas.ConfigDescription):
+                        valid_configs.append(cfg)
+                    else:
+                        logger.warning(
+                            f"ignoring invalid config from '{py_path}': expected ConfigDescription, got {type(cfg)}"
+                        )
+                if valid_configs:
+                    output_configs.extend(valid_configs)
+        return output_configs
+
+
+@typing.runtime_checkable
+class RegisterHydraConfigsFuncType(typing.Protocol):
+    """Protocol used to represent a callback used to register external configs for hydra."""
+
+    def __call__(
+        self,
+        app_name: str,  # name of the app that we are looking to register configs for
+        entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
+        app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
+    ) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
+        ...
