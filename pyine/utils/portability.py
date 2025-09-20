@@ -1,15 +1,29 @@
+import dataclasses
 import datetime
 import functools
 import importlib
 import inspect
 import os
+import pathlib
 import re
 import site
 import types
 import typing
 
 import numpy as np
+import omegaconf
 import pandas as pd
+import pydantic
+import rich
+import rich.box
+import rich.console
+import rich.panel
+import rich.rule
+import rich.segment
+import rich.style
+import rich.table
+import rich.text
+import yaml
 
 
 def get_portable_representation(
@@ -488,3 +502,227 @@ def parse_indices_spec(
         else:
             indices.add(int(part))
     return sorted(indices)
+
+
+def _path_representer(dumper, data: pathlib.Path):
+    """Helper function for yaml.SafeDumper and yaml.Dumper to represent pathlib.Path objects."""
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data.as_posix())  # keeps OS-agnostic output
+
+
+yaml.SafeDumper.add_multi_representer(pathlib.Path, _path_representer)
+yaml.Dumper.add_multi_representer(pathlib.Path, _path_representer)
+
+
+def render_config(
+    cfg_type: type[typing.Any],
+    cfg_values: typing.Any | None = None,
+    *,
+    show_field_descriptions: bool = False,
+    console: rich.console.Console | None = None,
+    title: str | None = None,
+) -> None:
+    """Pretty-prints a config for a dataclass or Pydantic model using rich.
+
+    Args:
+        cfg_type: The config class (dataclass or Pydantic model class).
+        cfg_values: (Optional) An instance/dict/DictConfig with assigned values to show. If None,
+            the "Value" column falls back to the default.
+        show_field_descriptions: (Optional) Whether to show field descriptions. Defaults to False.
+        console: (Optional) Rich Console. A new one is created if omitted.
+        title: (Optional) Override panel title (defaults to class name).
+    """
+    cns = console or rich.console.Console(width=200)  # expect this to output in a big terminal window
+    # extract basic stuff from the provided config object
+    doc = (
+        getattr(cfg_values, "zen_meta", {}).get("__description__", "")
+        or getattr(cfg_values, "zen_meta", {}).get("__doc__", "")
+        or getattr(cfg_type, "__description__", "")
+        or getattr(cfg_type, "__doc__", "")
+        or "<no config documentation available>"
+    ).strip()
+    default_title = getattr(cfg_type, "__name__", "Config")
+    if hasattr(cfg_type, "__cfg_name__") and hasattr(cfg_type, "__cfg_group__"):
+        default_title += f" => '+{cfg_type.__cfg_group__}={cfg_type.__cfg_name__}'"
+    # start building the table that will contain config fields/types/values/(descriptions)
+    table = rich.table.Table(expand=True)
+    table.box = rich.box.SIMPLE_HEAD
+    table.pad_edge = False
+    table.padding = (0, 1)
+    wrap_opts = dict(no_wrap=True)  # we handle wrapping w/ a custom class when creating rows
+    if show_field_descriptions:
+        table.add_column("FIELD", style="bold", ratio=10, min_width=10, **wrap_opts)
+        table.add_column("TYPE", ratio=20, min_width=10, **wrap_opts)
+        table.add_column("VALUE", ratio=35, min_width=40, **wrap_opts)
+        table.add_column("DESCRIPTION", ratio=35, min_width=40, **wrap_opts)
+    else:
+        table.add_column("FIELD", style="bold", ratio=10, min_width=10, **wrap_opts)
+        table.add_column("TYPE", ratio=20, min_width=10, **wrap_opts)
+        table.add_column("VALUE", ratio=70, min_width=40, **wrap_opts)
+
+    # --------------- helper functions ---------------
+
+    def _table_add_row(*args) -> None:
+        args = [_RichFoldIndicator(arg) for arg in args]
+        table.add_row(*args)
+
+    def _format_type_and_val(
+        tp: typing.Any,
+        cfg_vals: typing.Any | None = None,
+        cfg_name: str | None = None,
+        default: typing.Any = "<MISSING>",
+    ) -> tuple[str, str]:  # type name, value
+        # first, get the value itself
+        if cfg_vals is None:
+            val = default
+            target = None
+        else:
+            assert cfg_name is not None, "cfg_name must be provided if cfg_vals is not None"
+            if isinstance(cfg_vals, (omegaconf.DictConfig, typing.Mapping)):
+                val = cfg_vals.get(cfg_name, default)
+                target = cfg_vals.get("_zen_target", None) or cfg_vals.get("_target_", None)
+            else:
+                val = getattr(cfg_vals, cfg_name, default)
+                target = cfg_vals.get("_zen_target", None) or getattr(cfg_vals, "_target_", None)
+        # for the type, try to be more specific than 'any' (if e.g. _target_ is specified)
+        if tp is typing.Any:
+            if target is not None:
+                return target, val
+            if val is not ... and val != "<MISSING>":
+                return type(val).__name__, val
+        origin = typing.get_origin(tp)
+        if origin is None:
+            return getattr(tp, "__name__", str(tp)), val
+        args = ", ".join(_format_type_and_val(a)[0] for a in typing.get_args(tp))
+        return f"{getattr(origin, '__name__', str(origin))}[{args}]", val
+
+    def _format_val(val: typing.Any) -> str:
+        if isinstance(val, omegaconf.DictConfig):
+            try:
+                return omegaconf.OmegaConf.to_yaml(val, resolve=True).strip()
+            except omegaconf.errors.InterpolationResolutionError:
+                return omegaconf.OmegaConf.to_yaml(val, resolve=False).strip()
+        if isinstance(val, (dict, list, tuple, set)):
+            return yaml.safe_dump(val).strip()
+        return str(val)
+
+    skipped_field_names = ["_zen_exclude", "__description__", "zen_meta"]
+
+    # if the provided config is a dataclass...
+    if dataclasses.is_dataclass(cfg_type):
+        for f in dataclasses.fields(cfg_type):  # noqa
+            if f.name in skipped_field_names:
+                continue
+            has_factory = getattr(f, "default_factory", dataclasses.MISSING) is not dataclasses.MISSING
+            if has_factory:
+                default = f.default_factory()
+            else:
+                default = f.default if f.default is not dataclasses.MISSING else "<MISSING>"
+            ftype, val = _format_type_and_val(f.type, cfg_values, f.name, default)
+            if show_field_descriptions:
+                desc = ""
+                if f.metadata:
+                    desc = f.metadata.get("help", "") or f.metadata.get("description", "")
+                _table_add_row(f.name, ftype, _format_val(val), desc)
+            else:
+                _table_add_row(f.name, ftype, _format_val(val))
+    # else, if the provided config is a pydantic model...
+    elif isinstance(cfg_type, type) and issubclass(cfg_type, pydantic.BaseModel):
+        model_fields = getattr(cfg_type, "model_fields", None) or {}
+        for name, field in model_fields.items():
+            if name in skipped_field_names:
+                continue
+            ann = getattr(field, "annotation", None)
+            default = getattr(field, "default", ...)
+            ftype, val = _format_type_and_val(ann, cfg_values, name, default if default is not ... else "<MISSING>")
+            if show_field_descriptions:
+                desc = getattr(field, "description", None)
+                _table_add_row(name, ftype, _format_val(val), desc or "")
+            else:
+                _table_add_row(name, ftype, _format_val(val))
+    # else, fallback for unknown config types
+    else:
+        if show_field_descriptions:
+            _table_add_row("<unknown>", "—", "—", "Unsupported config type")
+        else:
+            _table_add_row("<unknown>", "—", "—")
+    # print the panel that groups the config description and table
+    body_parts = [
+        rich.text.Text(f"\n{doc}\n\nConfig contents listed below:\n"),
+        table,
+    ]
+    cns.print(
+        rich.panel.Panel(
+            rich.console.Group(*body_parts), title=title or default_title, expand=True, box=rich.box.ROUNDED
+        )
+    )
+    return
+
+
+class _RichFoldIndicator:
+    """Wraps a renderable to show markers on folded lines inside a rich.table.Table cell.
+
+    The `prefix` string will be shown at the start of continuation lines (line > 0). The `suffix`
+    string will be shown at the end of all but the last line.
+    """
+
+    def __init__(
+        self,
+        renderable: typing.Any,
+        *,
+        prefix: str = " ↳ ",
+        suffix: str = "",
+        prefix_style: str | rich.style.Style = "dim",
+        suffix_style: str | rich.style.Style = "dim",
+        reserve_suffix: bool = True,  # reserve width for suffix to avoid re-wrapping
+    ) -> None:
+        """Initializes the internal attributes."""
+        self.renderable = renderable
+        self.prefix = prefix
+        self.suffix = suffix
+        self.prefix_style = rich.style.Style.parse(prefix_style) if isinstance(prefix_style, str) else prefix_style
+        self.suffix_style = rich.style.Style.parse(suffix_style) if isinstance(suffix_style, str) else suffix_style
+        self.reserve_suffix = reserve_suffix
+
+    def __rich_console__(
+        self,
+        console: rich.console.Console,
+        options: rich.console.ConsoleOptions,
+    ) -> rich.console.RenderResult:
+        """Renders the rich.table.Table cell with proper folding markers."""
+        # reserve space so markers don't force rewrap
+        suffix_w = len(self.suffix) if (self.suffix and self.reserve_suffix) else 0
+        prefix_w = len(self.prefix) if self.prefix else 0
+        wrap_width = max(1, options.max_width - suffix_w - prefix_w)
+        # try to split on hard newlines to distinguish from soft wraps
+        hard_chunks: list[typing.Any]
+        if isinstance(self.renderable, str):
+            hard_chunks = self.renderable.split("\n")
+        elif isinstance(self.renderable, rich.text.Text):
+            # rich's Text split preserves styling per chunk
+            try:
+                hard_chunks = self.renderable.split("\n")  # type: ignore[arg-type]
+            except AttributeError:
+                # fallback: split via str() then rebuild Text chunks (styling lost across hard breaks)
+                hard_chunks = [rich.text.Text(part) for part in str(self.renderable).split("\n")]
+        else:
+            # unknown renderable: we can't reliably find hard breaks; fallback to old behavior
+            hard_chunks = [self.renderable]
+        last_chunk_idx = len(hard_chunks) - 1
+        for ci, chunk in enumerate(hard_chunks):
+            lines = console.render_lines(
+                chunk,
+                options=console.options.update_width(wrap_width),
+                new_lines=False,
+                pad=False,
+            )
+            last_line_idx = len(lines) - 1
+            for li, segs in enumerate(lines):
+                # only add prefix for soft wraps (continuations within same hard line)
+                if li > 0 and self.prefix:
+                    yield rich.segment.Segment(self.prefix, self.prefix_style)
+                yield from segs
+                # add suffix on all but the last overall visual line
+                is_last_overall = (ci == last_chunk_idx) and (li == last_line_idx)
+                if (not is_last_overall) and self.suffix:
+                    yield rich.segment.Segment(self.suffix, self.suffix_style)
+                yield rich.segment.Segment.line()
