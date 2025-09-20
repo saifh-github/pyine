@@ -90,6 +90,10 @@ that is really not so obvious to understand.
 
 When writing pydantic-related code, use the pydantic v2 conventions.
 
+Avoid writing overly-defensive code; prefer that if something is missing or breaks, an exception
+is raised, rather than trying to bypass or silence that problem. Avoid using try-except blocks that
+only serve to silence or avoid issues, especially those that catch `Exception`.
+
 ## Code Linting and Testing
 
 To check whether linters find issues in proposed code, run `make check` (the necessary environment
