@@ -9,7 +9,7 @@ Examples:
 
     Write a traces dataset from the latest repackaged TACO dataset with caps and verbose logging:
     ```bash
-        python pyine/apps/write/dataset_writer.py traces \
+        python -m pyine.apps.write.dataset_writer traces \
             --dataset-name TACO
             --output-dataset-path /tmp/traces.lmdb \
             --max-output-traces 1000 \
@@ -22,7 +22,7 @@ Examples:
 
     Write a deltas dataset from an existing traces dataset:
     ```bash
-        python pyine/apps/write/dataset_writer.py deltas \
+        python -m pyine.apps.write.dataset_writer deltas \
             --traces-dataset /data/my_traces.lmdb \
             --output-dataset-path /data/my_deltas.lmdb \
             --verbose

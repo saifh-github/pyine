@@ -17,7 +17,10 @@ import lightning.fabric.utilities.seed
 import pydantic
 import rich
 import torch
+import transformers
 import wandb
+
+import pyine.utils.portability  # for yaml path dump fixer
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas
@@ -223,6 +226,7 @@ def set_seed(
         workers=workers,
         verbose=verbose,
     )
+    transformers.set_seed(seed)
 
 
 def get_reprod_metadata(

@@ -9,7 +9,7 @@ Examples:
 
     Splitting the TACO dataset 80-10-10 with difficulty and solution counts groups:
     ```bash
-        python pyine/apps/splits/dataset_splitter.py split \
+        python -m pyine.apps.splits.dataset_splitter split \
             --dataset-name TACO \
             --train-fraction=0.8 \
             --valid-fraction=0.1 \
@@ -21,7 +21,7 @@ Examples:
 
     Partition problem identifiers from a split file into 100-sample-chunks (YAML by default):
     ```bash
-        python pyine/apps/splits/dataset_splitter.py partition \
+        python -m pyine.apps.splits.dataset_splitter partition \
             --split-file data/splits/TACO-split.bin \
             --output-dir data/splits \
             --ids-per-chunk 100 \

@@ -8,7 +8,7 @@ Examples:
 
     Minimal example: run prompt "code_summary" with target word count "50" over all dataset traces:
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset /path/to/traces/dataset \
             --prompt-name code_summary \
             --prompt-vars '{"target_word_count": "50"}' \
@@ -18,7 +18,7 @@ Examples:
 
     Use the latest trace dataset available for a source dataset (e.g., "TACO"):
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset-latest-from TACO \
             --prompt-name hints/docs \
             --llm-option provider=openai \
@@ -27,7 +27,7 @@ Examples:
 
     Use a YAML file for a static/shared LLM config and specify prompt variables directly inline:
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset /path/to/traces/dataset \
             --prompt-name code_summary \
             --prompt-vars '{"target_word_count": "100"}' \
@@ -37,7 +37,7 @@ Examples:
     Dry run (no logging to the DB), sequential processing, and no progress bar:
 
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset /path/to/traces/dataset \
             --prompt-name issues/iterators \
             --dry-run \
@@ -48,7 +48,7 @@ Examples:
     Custom result DB path and specific worker count for prompt chain invocation concurrency:
 
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset /path/to/traces/dataset \
             --prompt-name issues/todos \
             --db-path ./outputs/prompt_results.sqlite \
@@ -58,7 +58,7 @@ Examples:
     Limit to a subset of indices, add shared tags and meta, and force generation:
 
     ```bash
-        python pyine/apps/annotate/trace_annot_generator.py \
+        python -m pyine.apps.annotate.trace_annot_generator \
             --dataset /path/to/traces/dataset \
             --prompt-name hints/docs \
             --target-indices 0-99,150,200-205 \
