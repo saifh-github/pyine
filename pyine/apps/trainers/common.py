@@ -5,7 +5,6 @@ import typing
 import pydantic
 import wandb
 
-import pyine.apps.trainers.wandb_tables
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
@@ -87,7 +86,7 @@ async def evaluate_code_execution_model(
             llm_grader_provider_config=config.llm_grader_provider_config,
         )
         if inspect.isawaitable(evaluation_result):
-            await evaluation_result
+            evaluation_result = await evaluation_result
         pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
         evaluation_results[eval_subset_name] = evaluation_result
     if config.use_wandb_logging and evaluation_results:
@@ -97,15 +96,16 @@ async def evaluate_code_execution_model(
         if not hasattr(runtime.wandb_run, "log"):
             # reopen the run in case it was closed (e.g. like the openai integration always does)
             runtime.wandb_run = wandb.init(id=runtime.wandb_run_id, resume="must")
-        pyine.apps.trainers.wandb_tables.log_eval_metrics_table(
+        logger.info(f"logging evaluation results to wandb run id: {wandb_run_id}...")
+        pyine.evals.common.log_eval_metrics_table(
             wandb_run=runtime.wandb_run,
             results_by_subset=evaluation_results,
         )
         for subset_name, subset_result in evaluation_results.items():
-            pyine.apps.trainers.wandb_tables.log_sample_predictions_table(
+            pyine.evals.common.log_sample_predictions_table(
                 wandb_run=runtime.wandb_run,
                 subset_name=subset_name,
-                predictions=subset_result.predictions,
+                artifacts=subset_result.artifacts,
             )
             prefixed_metrics = {f"evals/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
             runtime.wandb_run.summary.update(prefixed_metrics)
