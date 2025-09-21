@@ -10,17 +10,24 @@ import pyine
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT_ENV_VAR = "PYINE_PROJECT_ROOT"
+"""Name of the environment variable used to override the default project root path."""
+DATA_ROOT_ENV_VAR = "PYINE_DATA_ROOT"
+"""Name of the environment variable used to override the default data root path."""
+LOGS_ROOT_ENV_VAR = "PYINE_LOGS_ROOT"
+"""Name of the environment variable used to override the default logs root path."""
+
 
 def get_project_root_path() -> pathlib.Path:
     """Returns the default path to the project root directory.
 
-    The path can be overridden by setting the 'PROJECT_ROOT_PATH' environment variable.
+    The path can be overridden by setting the 'PROJECT_ROOT_ENV_VAR' environment variable.
     If the variable is not set, it defaults to the parent directory of the `pyine` package.
 
     Returns:
         pathlib.Path: The absolute, resolved path to the project root directory.
     """
-    env_path = os.environ.get("PROJECT_ROOT_PATH", None)
+    env_path = os.environ.get(PROJECT_ROOT_ENV_VAR, None)
     if env_path:
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'pyine' root directory
@@ -30,13 +37,13 @@ def get_project_root_path() -> pathlib.Path:
 def get_data_root_path() -> pathlib.Path:
     """Returns the root path for storing and loading datasets.
 
-    The path can be overridden by setting the 'DATA_ROOT_PATH' environment variable.
+    The path can be overridden by setting the 'DATA_ROOT_ENV_VAR' environment variable.
     If the variable is not set, it defaults to a 'data' directory in the project root.
 
     Returns:
         pathlib.Path: The absolute, resolved path to the data root directory.
     """
-    env_path = os.environ.get("DATA_ROOT_PATH", None)
+    env_path = os.environ.get(DATA_ROOT_ENV_VAR, None)
     if env_path:
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'data' directory
@@ -46,13 +53,13 @@ def get_data_root_path() -> pathlib.Path:
 def get_logs_root_path() -> pathlib.Path:
     """Returns the root path for storing logs.
 
-    The path can be overridden by setting the 'LOGS_ROOT_PATH' environment variable.
+    The path can be overridden by setting the 'LOGS_ROOT_ENV_VAR' environment variable.
     If the variable is not set, it defaults to a 'logs' directory in the project root.
 
     Returns:
         pathlib.Path: The absolute, resolved path to the logs root directory.
     """
-    env_path = os.environ.get("LOGS_ROOT_PATH", None)
+    env_path = os.environ.get(LOGS_ROOT_ENV_VAR, None)
     if env_path:
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'logs' directory

@@ -8,7 +8,7 @@ import pyine.utils.filesystem as fs
 
 
 def test_get_project_root_path_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
-    monkeypatch.setenv("PROJECT_ROOT_PATH", str(tmp_path))
+    monkeypatch.setenv(fs.PROJECT_ROOT_ENV_VAR, str(tmp_path))
     assert fs.get_project_root_path() == tmp_path.resolve()
 
 
@@ -19,7 +19,7 @@ def test_get_project_root_path_defaults_to_package_parent(
     fake_pkg = tmp_path / "pyine_pkg" / "__init__.py"
     fake_pkg.parent.mkdir(parents=True)
     fake_pkg.write_text("", encoding="utf-8")
-    monkeypatch.delenv("PROJECT_ROOT_PATH", raising=False)
+    monkeypatch.delenv(fs.PROJECT_ROOT_ENV_VAR, raising=False)
     monkeypatch.setattr(fs.pyine, "__file__", str(fake_pkg), raising=True)
     expected_root = fake_pkg.parents[1].resolve()
     assert fs.get_project_root_path() == expected_root
@@ -28,11 +28,11 @@ def test_get_project_root_path_defaults_to_package_parent(
 def test_get_data_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
     # env override
     custom = tmp_path / "data_root"
-    monkeypatch.setenv("DATA_ROOT_PATH", str(custom))
+    monkeypatch.setenv(fs.DATA_ROOT_ENV_VAR, str(custom))
     assert fs.get_data_root_path() == custom.resolve()
 
     # default branch uses project_root/data
-    monkeypatch.delenv("DATA_ROOT_PATH", raising=False)
+    monkeypatch.delenv(fs.DATA_ROOT_ENV_VAR, raising=False)
     monkeypatch.setattr(fs, "get_project_root_path", lambda: tmp_path)
     assert fs.get_data_root_path() == tmp_path / "data"
 
@@ -78,9 +78,9 @@ def test_get_tmp_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
 
 def test_get_logs_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     custom = tmp_path / "logs_root"
-    monkeypatch.setenv("LOGS_ROOT_PATH", str(custom))
+    monkeypatch.setenv(fs.LOGS_ROOT_ENV_VAR, str(custom))
     assert fs.get_logs_root_path() == custom.resolve()
-    monkeypatch.delenv("LOGS_ROOT_PATH", raising=False)
+    monkeypatch.delenv(fs.LOGS_ROOT_ENV_VAR, raising=False)
     monkeypatch.setattr(fs, "get_project_root_path", lambda: tmp_path)
     assert fs.get_logs_root_path() == tmp_path / "logs"
 
