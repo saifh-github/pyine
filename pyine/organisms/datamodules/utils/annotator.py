@@ -442,9 +442,6 @@ def _default_input_variables_builder(
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     if not is_hint_prompting and not is_issue_prompting:
         raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
-    if is_mislead_prompting and config.augment_config.misleading_augment_prob != 1.0:
-        raise ValueError("misleading prob not 1 but using misleading prompt?")
-
     # -------- prepare meta flags/variables for the generation of code hints and issues --------
 
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -484,27 +481,30 @@ def _default_input_variables_builder(
 
     # -------- special case: generate misleading hint by picking an alternative test case --------
 
-    if is_mislead_prompting or (
-        is_hint_prompting and not is_stub_prompting and config.augment_config.is_misleading_enabled
-    ):
-        if is_mislead_prompting or np.random.random() > config.augment_config.misleading_augment_prob:
-            # if we are prompting for misleading hints specific, or if random draw succeeds, do augment
-            assert config._test_data_cache is not None, "missing test data cache for misleading generation"
-            test_case = config._test_data_cache.sample_alternative_test_case(
-                trace_id=trace_id,
-                max_inputs_length_delta=config.augment_config.max_misleading_test_length_delta,
-                max_outputs_length_delta=config.augment_config.max_misleading_test_length_delta,
-                match_inputs_signature=config.augment_config.misleading_test_match_signatures,
-                match_outputs_signature=config.augment_config.misleading_test_match_signatures,
-                sample_from_top_k=config.augment_config.misleading_test_top_k_candidates,
-            )
-            if test_case is not None:
-                assert test_case.test_idx != trace_id.test_idx
-                output["expected_output"] = str(test_case.expected_output)  # new misleading output
-                output[_INTERNAL_MISLEADING_TOKEN] = str(trace.expected_output)  # orig expected output
-            elif is_mislead_prompting:
-                # if we did not manage to find an alternative test case for this prompt, skip the instance
-                return None
+    should_apply_misleading = False
+    if is_mislead_prompting:
+        should_apply_misleading = True
+    elif is_hint_prompting and not is_stub_prompting and config.augment_config.is_misleading_enabled:
+        if np.random.random() < config.augment_config.misleading_augment_prob:
+            should_apply_misleading = True
+
+    if should_apply_misleading:
+        assert config._test_data_cache is not None, "missing test data cache for misleading generation"
+        test_case = config._test_data_cache.sample_alternative_test_case(
+            trace_id=trace_id,
+            max_inputs_length_delta=config.augment_config.max_misleading_test_length_delta,
+            max_outputs_length_delta=config.augment_config.max_misleading_test_length_delta,
+            match_inputs_signature=config.augment_config.misleading_test_match_signatures,
+            match_outputs_signature=config.augment_config.misleading_test_match_signatures,
+            sample_from_top_k=config.augment_config.misleading_test_top_k_candidates,
+        )
+        if test_case is not None:
+            assert test_case.test_idx != trace_id.test_idx
+            output["expected_output"] = str(test_case.expected_output)  # new misleading output
+            output[_INTERNAL_MISLEADING_TOKEN] = str(trace.expected_output)  # orig expected output
+        elif is_mislead_prompting:
+            # if we did not manage to find an alternative test case for this prompt, skip the instance
+            return None
 
     # -------- special case: generating hints on buggy code, where code is not already buggy --------
 
@@ -590,7 +590,7 @@ def _default_tags_builder(
             else:
                 output_tags.append("augment:bugged_hinted")
         elif _INTERNAL_MISLEADING_TOKEN in input_vars:
-            assert config.augment_config.is_misleading_enabled
+            assert config.augment_config.is_misleading_enabled or is_mislead_prompting
             output_tags.append("augment:misleading")
         elif is_hint_prompting:
             output_tags.append("augment:hinted")
@@ -673,6 +673,7 @@ def _default_output_validator(
         return True
     is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
+    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     if is_hint_prompting or is_issue_prompting:
         # for both issues and hints, we will be tracing the newly generated code to see the results:
         # => for all issue types, we expect the execution output to NOT be the expected one;
@@ -703,16 +704,18 @@ def _default_output_validator(
             or (new_trace_result.exception != trace.exception)
             or (trace.return_value is None and new_trace_result.stdout != trace.stdout)
         )
-        if is_issue_prompting:
+        if is_issue_prompting and not is_mislead_prompting:
             assert "augment:bugged" in tags, "missing augment tag for bugged code"
             return output_is_different  # we want a different output for bugged code
-        else:  # is_hint_prompting
+        else:
+            assert is_hint_prompting or is_mislead_prompting, "branching logic mistake somewhere"
             if any([bug_tag in tags for bug_tag in ["augment:bugged_hinted", "augment:bugged_misleading"]]):
                 assert _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
                 # we are actually hinting a BUGGED code snippet, so expect a different output
                 return output_is_different
             else:
-                return not output_is_different  # we want the same output for hinted code
+                assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
+                return not output_is_different  # we want the original output for hinted code
     # ultimate fallback: accept everything (we don't know how to validate it)
     return True
 
@@ -802,11 +805,12 @@ async def annotate_trace_dataset(
     """
     model = pyine.utils.llm_providers.get_model_from_provider_config(config.llm_provider_config)
     prompt_name, prompt_version = config.prompt_config.prompt_name, config.prompt_config.version
+    is_mislead_prompt = prompt_name == "issues/docs"
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
-    if config.augment_config.is_misleading_enabled and config._test_data_cache is None:
+    if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and config._test_data_cache is None:
         assert isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader)
         logger.info("preparing or reloading coding problem test data cache for target dataset")
         config._test_data_cache = (
