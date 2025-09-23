@@ -59,6 +59,15 @@ class CreationMeta(pydantic.BaseModel):
             raise ValueError("created_at must be timezone-aware; pass a datetime with tzinfo set (UTC recommended).")
         return value.astimezone(datetime.UTC)
 
+    @property
+    def created_at_localtz(self) -> datetime.datetime:
+        """Return the created_at datetime in the local timezone."""
+        return self.created_at.astimezone()
+
+    def __str__(self):
+        """Returns a string representation of the creation metadata (for debugging purposes)."""
+        return f"Created at {self.created_at_localtz.isoformat()} by {self.created_by}"
+
 
 class PromptResultRecord(pydantic.BaseModel):
     """Pydantic model for a stored prompt/result entry."""

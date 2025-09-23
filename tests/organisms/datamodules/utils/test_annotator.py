@@ -249,7 +249,7 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bad_id_handling_increments_skips(monkeypatch: pytest.MonkeyPatch) -> None:
     pid, sid, tid = _make_ids()
     problem = _make_problem(pid)
     # first ok, second broken (invalid identifier that cannot resolve)
@@ -287,9 +287,13 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
             )
         ]
 
-    def _id_resolver(trace: exec_utils.TraceResult, _: du.CodingProblem, __: annotator.AnnotationOptions) -> str:
+    def _id_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str | None:
         if trace.identifier is None:
-            raise ValueError("cannot derive identifier without a trace id")
+            return None  # cannot derive identifier without a trace id
         return str(du.TraceIdentifier.from_string(str(trace.identifier)).get_parent_identifier())
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
@@ -312,8 +316,8 @@ async def test_error_handling_increments_errors(monkeypatch: pytest.MonkeyPatch)
         show_progress=False,
     )
     assert report.total_samples == 2
-    assert report.errors == 1
-    assert report.new_results_generated + report.skipped_samples == 1
+    assert report.errors == 0
+    assert report.new_results_generated + report.skipped_samples == 2
 
 
 @pytest.mark.slow

@@ -38,7 +38,8 @@ class IdentifierResolverType(typing.Protocol):
 
     The purpose of this callable is to compute the record identifier to use when creating/fetching
     a result record. This identifier should be a string, and it will likely correspond to a trace id,
-    a solution id, or a problem id.
+    a solution id, or a problem id. If the callable determines that the provided trace/problem
+    combination should NOT be annotated (for any reason), it should return None.
     """
 
     def __call__(
@@ -46,7 +47,7 @@ class IdentifierResolverType(typing.Protocol):
         trace: pyine.utils.code.execution.TraceResult,
         problem: pyine.data.traces.dataset_utils.CodingProblem,
         config: "AnnotationOptions",
-    ) -> str: ...
+    ) -> str | None: ...
 
 
 class GroupResolverType(typing.Protocol):
@@ -332,6 +333,7 @@ class AnnotationOptions(pydantic.BaseModel):
     _test_data_cache: pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache | None = (
         pydantic.PrivateAttr(default=None)
     )
+    _already_seen_ids: set[str] = pydantic.PrivateAttr(default_factory=set)
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "AnnotationOptions":
@@ -348,11 +350,12 @@ def _default_identifier_resolver(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
-) -> str:
-    """Returns the identifier to use when creating/fetching a result record.
+) -> str | None:
+    """Returns the identifier to use when creating/fetching a result record (or None when skipping).
 
     Implements known rules for some prompts, but if an unsupported prompt is used, will raise
-    an exception.
+    an exception. Will rely on the identifier cache inside the config object to determine what
+    samples have already been annotated (or will be, in some in-flight job) and should be skipped.
     """
     prompts_where_solution_gives_identifier = [
         "callable_analysis",
@@ -365,14 +368,21 @@ def _default_identifier_resolver(
     if config.prompt_config.prompt_name in prompts_where_solution_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-        solution_id = trace_id.get_parent_identifier()
-        return str(solution_id)
+        solution_id_str = str(trace_id.get_parent_identifier())
+        if solution_id_str not in config._already_seen_ids:
+            config._already_seen_ids.add(solution_id_str)
+            return solution_id_str
+        return None
     prompts_where_trace_gives_identifier = [
         "hints/docs",
         "hints/tests",
     ]
     if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
-        return str(trace.identifier)
+        trace_id_str = str(trace.identifier)
+        if trace_id_str not in config._already_seen_ids:
+            config._already_seen_ids.add(trace_id_str)
+            return trace_id_str
+        return None
     # elif config.prompt_config.prompt_name in ...
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default resolver")
 
@@ -420,19 +430,16 @@ def _default_input_variables_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
-    **kwargs,
+    **base_kwargs,
 ) -> dict[str, typing.Any] | None:
     """Builds input variables for the target prompt.
 
     Implements known rules for some prompts, but if an unsupported prompt is used, will raise
     an exception.
     """
-    output = {
-        # initialize the vars dict with stuff that is generic/useful for all prompts
-        "code": trace.code_string,
-        "inputs": str(trace.inputs),
-    }
-    output.update(kwargs)  # update w/ whatever the caller may have provided
+    # initialize the vars dict with stuff that is generic/useful for all prompts
+    output = dict(code=trace.code_string)
+    output.update(base_kwargs)  # update w/ whatever the caller may have provided
     if config.prompt_config.prompt_name == "code_summary":
         # this is the simplest case: nothing more to do here
         return output
@@ -466,9 +473,9 @@ def _default_input_variables_builder(
     if is_obfuscated and ((is_issue_prompting and not is_mislead_prompting) or is_stub_prompting):
         raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
 
-    # -------- generic prompt data preparation: output + code description --------
+    # -------- generic prompt data preparation: inputs/outputs/description --------
 
-    output["expected_output"] = str(trace.expected_output)  # default expected output (prior to potential modifs)
+    # assume all prompts can benefit from code descriptions
     if config.augment_config.fetch_code_descriptions:
         # try to go and fetch the description for the parent solution (code summary) from db
         code_summary_records = config._prompt_result_db.get_by_identifier(
@@ -478,6 +485,11 @@ def _default_input_variables_builder(
         if code_summary_records:
             # always keep the latest description (this should not matter too much)
             output["description"] = code_summary_records[-1].result
+
+    # only provide inputs/outputs for prompts that are test-specific
+    if (is_hint_prompting and not is_stub_prompting) or is_mislead_prompting:
+        output["inputs"] = str(trace.inputs)
+        output["expected_output"] = str(trace.expected_output)  # default expected output (prior to potential modifs)
 
     # -------- special case: generate misleading hint by picking an alternative test case --------
 
@@ -770,6 +782,26 @@ class AnnotationReport:
         ) + (f", error messages: {self.error_messages[:5]}" if self.error_messages else "")
 
 
+supported_prompts_for_trace_dataset_annotation = [
+    "code_summary",
+    "hints/docs",
+    "hints/stubs",
+    "hints/tests",
+    # ... add more hints prompt names here if we build new ones
+    "issues/docs",
+    "issues/iterators",
+    "issues/todos",
+    # ... add more issues prompt names here if we build new ones
+]
+"""List of supported prompts for trace dataset annotation.
+
+Prompts not in this list are likely not handled at all in the various builder/getter functions
+defined in this module. New types of hints or issues that are similar to existing types may be
+supported in the future with minimal changes, but totally new types of prompts will likely not
+be, as that would require a ton more refactoring and special case handling.
+"""
+
+
 async def annotate_trace_dataset(
     dataset: pyine.data.traces.dataset_reader.DatasetReader,
     config: AnnotationOptions,
@@ -808,6 +840,8 @@ async def annotate_trace_dataset(
     is_mislead_prompt = prompt_name == "issues/docs"
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
+    if prompt_name not in supported_prompts_for_trace_dataset_annotation:
+        raise ValueError(f"prompt '{prompt_name}' is not supported for trace dataset annotation")
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
     if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and config._test_data_cache is None:
@@ -838,22 +872,27 @@ async def annotate_trace_dataset(
     output = AnnotationReport()
     if not parallel:
         for iter_idx, sample_idx in enumerate(wrapped_data_indices):
-            output += _process_one_annotation(
-                trace=dataset[sample_idx],
-                problem=dataset.get_problem_data(sample_idx),
-                sample_idx=sample_idx,
-                model=model,
-                config=config,
-                dry_run=dry_run,
-                base_filter_fn=base_filter_fn,
-                db=config._prompt_result_db,
-                identifier_getter=identifier_getter,
-                group_getter=group_getter,
-                prompt_input_vars_getter=prompt_input_vars_getter,
-                tags_getter=tags_getter,
-                meta_getter=meta_getter,
-                creation_meta_getter=creation_meta_getter,
-            )
+            trace, problem = dataset[sample_idx], dataset.get_problem_data(sample_idx)
+            sample_id = identifier_getter(trace, problem, config)
+            if sample_id is not None:
+                output += _process_one_annotation(
+                    trace=trace,
+                    problem=problem,
+                    sample_idx=sample_idx,
+                    sample_id=sample_id,
+                    model=model,
+                    config=config,
+                    dry_run=dry_run,
+                    base_filter_fn=base_filter_fn,
+                    db=config._prompt_result_db,
+                    group_getter=group_getter,
+                    prompt_input_vars_getter=prompt_input_vars_getter,
+                    tags_getter=tags_getter,
+                    meta_getter=meta_getter,
+                    creation_meta_getter=creation_meta_getter,
+                )
+            else:
+                output += AnnotationReport(total_samples=1, skipped_samples=1)
             if verbose and iter_idx % 50 == 0:  # print progress report every 50 iterations
                 wrapped_data_indices.write(f"progress report: {output.summary()}")
         return output
@@ -862,19 +901,23 @@ async def annotate_trace_dataset(
     def _submit_one(
         sample_idx: typing.Hashable,
         executor: concurrent.futures.Executor,
-    ) -> concurrent.futures.Future:
+    ) -> concurrent.futures.Future | None:
         sample_idx = typing.cast(int, sample_idx)
+        trace, problem = dataset[sample_idx], dataset.get_problem_data(sample_idx)
+        sample_id = identifier_getter(trace, problem, config)
+        if sample_id is None:
+            return None  # skip job
         return executor.submit(
             _process_one_annotation,
-            trace=dataset[sample_idx],
-            problem=dataset.get_problem_data(sample_idx),
+            trace=trace,
+            problem=problem,
             sample_idx=sample_idx,
+            sample_id=sample_id,
             model=model,
             config=config,
             dry_run=dry_run,
             base_filter_fn=base_filter_fn,
             db=config._prompt_result_db,  # noqa
-            identifier_getter=identifier_getter,
             group_getter=group_getter,
             prompt_input_vars_getter=prompt_input_vars_getter,
             tags_getter=tags_getter,
@@ -882,8 +925,11 @@ async def annotate_trace_dataset(
             creation_meta_getter=creation_meta_getter,
         )
 
-    def _process_result(_: typing.Hashable, result: AnnotationReport) -> None:
+    def _process_result(_: typing.Hashable, result: AnnotationReport | None) -> None:
         nonlocal output
+        if result is None:
+            # job was skipped by the _submit_one identifier check
+            result = AnnotationReport(total_samples=1, skipped_samples=1)
         output += result
 
     def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
@@ -898,6 +944,7 @@ async def annotate_trace_dataset(
         max_workers=max_workers,
         max_in_flight_jobs=max_in_flight_jobs,
     )
+    assert output.total_samples == len(data_indices)
     logger.info(f"final report: {output.summary()}")
     return output
 
@@ -906,12 +953,12 @@ def _process_one_annotation(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     sample_idx: int,
+    sample_id: str,
     model: langchain_core.language_models.BaseLanguageModel,
     config: AnnotationOptions,
     dry_run: bool,
     base_filter_fn: typing.Callable[[list[str]], bool],
     db: pyine.prompts.result_db.PromptResultDB,
-    identifier_getter: IdentifierResolverType,
     group_getter: GroupResolverType,
     prompt_input_vars_getter: InputVariablesBuilderType,
     tags_getter: TagsBuilderType,
@@ -919,9 +966,9 @@ def _process_one_annotation(
     creation_meta_getter: CreationMetaBuilderType,
 ) -> AnnotationReport:
     """Helper function to process one annotation."""
+    assert sample_id is not None
     rep = AnnotationReport(total_samples=1)
     try:
-        identifier = identifier_getter(trace, problem, config)
         input_vars = prompt_input_vars_getter(trace, problem, config)
         if input_vars is None:
             rep.skipped_samples += 1
@@ -945,7 +992,7 @@ def _process_one_annotation(
             )
         records = pyine.prompts.result_db.fetch_or_generate_prompt_results(
             model=model,
-            identifier=identifier,
+            identifier=sample_id,
             input_variables=input_vars,
             prompt_config=config.prompt_config,
             db=db,
