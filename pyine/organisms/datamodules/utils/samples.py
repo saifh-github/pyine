@@ -196,11 +196,11 @@ class TraceDatasetMetadata(pydantic.BaseModel):
         """Confirms that all dataset traces contain reasonable types and the subsets do not overlap."""
         if not self.base_traces:
             raise ValueError("base traces must not be empty")
-        seen_trace_ids: list[pyine.data.traces.dataset_utils.TraceIdentifier] = []
+        seen_trace_ids: set[pyine.data.traces.dataset_utils.TraceIdentifier] = set()
         expected_augment_types = _get_expected_augment_types()
         for trace_meta in self.base_traces:
             assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
-            seen_trace_ids.append(trace_meta.trace_id)
+            seen_trace_ids.add(trace_meta.trace_id)
             augm_type = trace_meta.trace_id.augment_category
             if augm_type is not None:
                 if augm_type not in expected_augment_types:
@@ -211,7 +211,7 @@ class TraceDatasetMetadata(pydantic.BaseModel):
                 ), "augment type is not in the trace tags; this should not happen?"
             else:
                 assert not trace_meta.is_augmented and not trace_meta.is_multi_augmented
-        leftover_trace_ids = [trace_meta.trace_id for trace_meta in self.leftover_traces]
+        leftover_trace_ids = {trace_meta.trace_id for trace_meta in self.leftover_traces}
         for trace_meta in self.leftover_traces:
             if trace_meta.trace_id not in seen_trace_ids:
                 raise ValueError(f"trace id {trace_meta.trace_id} is not in the base traces")

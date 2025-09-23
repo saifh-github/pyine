@@ -61,10 +61,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         super().__init__(config)
         self.verbose = verbose
         self.config: "ShortcutBiasDataModuleConfig" = config
-        # attributes below are initialized in setup()
         self._metadata: TraceDatasetMetadata | None = None
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
-        self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
+        self._subset_parsers: dict[SubsetNameType, SampleBuilder | None] = dict()
 
     @typing.override
     def prepare_data(self) -> None:
@@ -183,18 +182,27 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         parser_types_str = "\n\t".join([str(s) for s in self.config.subset_types])
         logger.info(f"setting up shortcuts datamodule parsers:\n\t{parser_types_str}")
         self._metadata = self._load_prepared_metadata()
-        # note: we share lmdb readers across all parsers here since they should be read-only and never pickled
-        readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
-        self._subset_parsers: dict[SubsetNameType, SampleBuilder] = dict()
+        # note: we share lmdb readers across all parsers since they should be read-only and never pickled
+        self._readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
+        self._subset_parsers: dict[SubsetNameType, SampleBuilder | None] = dict()
         for subset_type in self.config.subset_types:
-            logger.debug(f"setting up shortcuts datamodule {subset_type} parser...")
+            if self.config.instantiate_parsers_at_setup:
+                self._subset_parsers[subset_type] = self._instantiate_parser_if_needed(subset_type)
+            else:
+                self._subset_parsers[subset_type] = None  # instantiation deferred to first use
+
+    def _instantiate_parser_if_needed(self, subset_type: SubsetNameType) -> SampleBuilder:
+        """Instantiates a parser for a given subset type if it has not been instantiated yet."""
+        if self._subset_parsers[subset_type] is None:
+            logger.debug(f"instantiating shortcuts datamodule {subset_type} parser...")
             subset_traces = self._get_traces_meta_for_subset(subset_type)
             parser = self.config.instantiate_parser(
                 subset_type=subset_type,
-                source_data=readers,
+                source_data=self._readers,
                 traces=subset_traces,
             )
             self._subset_parsers[subset_type] = typing.cast(SampleBuilder, parser)
+        return self._subset_parsers[subset_type]
 
     def _get_traces_meta_for_subset(self, subset_type: SubsetNameType | None) -> list[TraceMetadata]:
         """Returns the list of trace metadata objects for a given subset type."""
@@ -221,7 +229,8 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
         stats = dict()
-        for subset_type, parser in self._subset_parsers.items():
+        for subset_type in self._subset_parsers.keys():
+            parser = self._instantiate_parser_if_needed(subset_type)
             for stat_key, stat_vaL in parser.get_stats().items():
                 stats[f"{subset_type}/{stat_key}"] = stat_vaL
         return stats
@@ -242,7 +251,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         assert subset_type is not None, "subset type must be specified"
         if subset_type not in self._subset_parsers:
             raise ValueError(f"parser for subset {subset_type} is not defined")
-        return self._subset_parsers[subset_type]
+        return self._instantiate_parser_if_needed(subset_type)
 
     @typing.override
     def get_hf_messages_dataset(
@@ -359,6 +368,8 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
     dataloader_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = pydantic.Field(default_factory=dict)
     """Overrides for the default DataLoader configuration; will shuffle training data."""
+    instantiate_parsers_at_setup: bool = False
+    """Specified whether to instantiate data parsers at setup time (default: False)."""
 
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 

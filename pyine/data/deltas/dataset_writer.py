@@ -73,12 +73,12 @@ def write_dataset(
         )
     )
     delta_counts = []
-    seen_problem_ids, seen_trace_ids = [], []
+    seen_problem_ids, seen_trace_ids = set(), set()
     for trace_idx in tqdm.tqdm(range(len(trace_reader)), desc="parsing traces from raw dataset"):
         trace = trace_reader[trace_idx]
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace.identifier)
         assert trace_id not in seen_trace_ids
-        seen_trace_ids.append(trace_id)
+        seen_trace_ids.add(trace_id)
         problem_data = trace_reader.get_problem_data(trace_idx)
         deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
             trace_res=trace,
@@ -89,7 +89,7 @@ def write_dataset(
             # we will store the problem data, trace, and the new deltas in the output dataset
             if problem_data.problem_id not in seen_problem_ids:
                 # store problem data first, but only if this is a problem we have never seen yet
-                seen_problem_ids.append(problem_data.problem_id)
+                seen_problem_ids.add(problem_data.problem_id)
                 problem_metadata_key = (
                     str(problem_data.problem_id) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
                 )
