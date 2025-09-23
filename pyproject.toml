@@ -104,6 +104,7 @@ exclude_lines = [
   "pragma: no cover",
   'if __name__ == "__main__":',
   "raise NotImplementedError",
+  "if typing.TYPE_CHECKING:",
 ]
 
 [tool.coverage.html]
