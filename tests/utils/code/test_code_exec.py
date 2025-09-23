@@ -13,6 +13,7 @@ from pyine.utils.code.execution import (
     TraceResult,
     TraceTagType,
     TracingCapException,
+    _safe_execute_and_trace_code,
     _unsafe_execute_and_trace_code,
     execute_and_trace_code,
     format_traced_code_execution,
@@ -384,6 +385,52 @@ def func(b: str) -> int:
         assert safe_step.local_variables == unsafe_step.local_variables
 
 
+def _build_dummy_trace_result() -> tuple[TraceResult, TraceEvent, TraceKey]:
+    trace_key = TraceKey(file="snippet.py", object="fn", line=1)
+    event = TraceEvent(
+        event_type=TraceEventType.CALL,
+        stack_trace=[trace_key],
+        global_variables={"g": "1"},
+        local_variables={"l": "2"},
+        arguments={"l": "2"},
+        return_value=None,
+        stdout=None,
+        stderr=None,
+        exception=None,
+        trace_step_idx=0,
+        trace_key=trace_key,
+    )
+    dummy_block = code_blocks.CodeBlock(
+        type=code_blocks.BlockType.FUNCTION,
+        name="fn",
+        depth=0,
+        parent_line=None,
+        start_line=1,
+        end_line=2,
+    )
+    trace_result = TraceResult(
+        identifier="identifier",
+        code_string="print('hi')\n",
+        code_blocks={repr(trace_key): dummy_block},
+        inputs="inp",
+        expected_output="out",
+        max_valid_events=None,
+        max_events_per_line=None,
+        max_var_repr_length=None,
+        traced_steps=[event, None],
+        traced_steps_map={repr(trace_key): [0]},
+        entrypoint_name=None,
+        entrypoint_step_idx=None,
+        return_value=123,
+        exception=None,
+        stdout="ok",
+        stderr="",
+        metadata={"seed": "42"},
+        tags=["tag"],
+    )
+    return trace_result, event, trace_key
+
+
 def test_tracekey_roundtrip_and_tags_buckets():
     key = TraceKey(file="foo.py", object="fn", line=12)
     repr_value = repr(key)
@@ -417,50 +464,9 @@ def test_trace_exception_from_exception_captures_origin():
 
 
 def test_trace_event_and_result_helpers():
-    trace_key = TraceKey(file="snippet.py", object="fn", line=1)
-    event = TraceEvent(
-        event_type=TraceEventType.CALL,
-        stack_trace=[trace_key],
-        global_variables={"g": "1"},
-        local_variables={"l": "2"},
-        arguments={"l": "2"},
-        return_value=None,
-        stdout=None,
-        stderr=None,
-        exception=None,
-        trace_step_idx=0,
-        trace_key=trace_key,
-    )
+    trace_result, event, trace_key = _build_dummy_trace_result()
     assert hash(event) == hash((0, trace_key))
     assert repr(event) == "step#000000:call@snippet.py:fn:L0001"
-    dummy_block = code_blocks.CodeBlock(
-        type=code_blocks.BlockType.FUNCTION,
-        name="fn",
-        depth=0,
-        parent_line=None,
-        start_line=1,
-        end_line=2,
-    )
-    trace_result = TraceResult(
-        identifier="identifier",
-        code_string="print('hi')\n",
-        code_blocks={repr(trace_key): dummy_block},
-        inputs="inp",
-        expected_output="out",
-        max_valid_events=None,
-        max_events_per_line=None,
-        max_var_repr_length=None,
-        traced_steps=[event, None],
-        traced_steps_map={repr(trace_key): [0]},
-        entrypoint_name=None,
-        entrypoint_step_idx=None,
-        return_value=123,
-        exception=None,
-        stdout="ok",
-        stderr="",
-        metadata={"seed": "42"},
-        tags=["tag"],
-    )
     assert str(trace_result) == "identifier"
     numbered = trace_result.code_string_with_line_numbers
     assert numbered.startswith("L0001:")
@@ -469,3 +475,153 @@ def test_trace_event_and_result_helpers():
     formatted = format_traced_code_execution(trace_result)
     assert "Code Execution Trace" in formatted
     assert "Line 1" in formatted
+
+
+def test_safe_execute_returns_result(monkeypatch: pytest.MonkeyPatch):
+    trace_result, _, _ = _build_dummy_trace_result()
+
+    class DummyQueue:
+        def __init__(self):
+            self._items: list[tuple[str, object]] = []
+
+        def empty(self) -> bool:
+            return not self._items
+
+        def get_nowait(self):
+            return self._items.pop(0)
+
+        def put(self, value):
+            self._items.append(value)
+
+    events = [("started", 42), ("returned", trace_result)]
+
+    class DummyProcess:
+        def __init__(self, target=None, args=(), kwargs=None, name=None):
+            self._kwargs = kwargs or {}
+            self.queue = self._kwargs["result_queue"]
+            self.exitcode = 0
+            self._alive = False
+
+        def start(self):
+            for event in events:
+                self.queue.put(event)
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def kill(self):
+            self._alive = False
+
+        def join(self, timeout):
+            return None
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
+
+    result = _safe_execute_and_trace_code(identifier="dummy", timeout_seconds=1, code_string="", inputs=None)
+    assert result == trace_result
+
+
+def test_safe_execute_raises_original_exception(monkeypatch: pytest.MonkeyPatch):
+    class DummyQueue:
+        def __init__(self):
+            self._items: list[tuple[str, object]] = []
+
+        def empty(self) -> bool:
+            return not self._items
+
+        def get_nowait(self):
+            return self._items.pop(0)
+
+        def put(self, value):
+            self._items.append(value)
+
+    boom = RuntimeError("boom")
+    events = [("started", 84), ("raised", boom)]
+
+    class DummyProcess:
+        def __init__(self, target=None, args=(), kwargs=None, name=None):
+            self._kwargs = kwargs or {}
+            self.queue = self._kwargs["result_queue"]
+            self.exitcode = 1
+            self._alive = False
+
+        def start(self):
+            for event in events:
+                self.queue.put(event)
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def kill(self):
+            self._alive = False
+
+        def join(self, timeout):
+            return None
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _safe_execute_and_trace_code(identifier="dummy", timeout_seconds=1, code_string="", inputs=None)
+    assert exc_info.value is boom
+
+
+def test_safe_execute_times_out_and_kills_process(monkeypatch: pytest.MonkeyPatch):
+    class DummyQueue:
+        def __init__(self):
+            self._items: list[tuple[str, object]] = []
+
+        def empty(self) -> bool:
+            return not self._items
+
+        def get_nowait(self):
+            return self._items.pop(0)
+
+        def put(self, value):
+            self._items.append(value)
+
+    events = [("started", 21)]
+
+    class DummyProcess:
+        def __init__(self, target=None, args=(), kwargs=None, name=None):
+            self._kwargs = kwargs or {}
+            self.queue = self._kwargs["result_queue"]
+            self.exitcode = -9
+            self._alive = True
+
+        def start(self):
+            for event in events:
+                self.queue.put(event)
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def kill(self):
+            self._alive = False
+
+        def join(self, timeout):
+            return None
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
+
+    time_counter = {"value": 0.0}
+
+    def fake_time():
+        value = time_counter["value"]
+        time_counter["value"] += 0.6
+        return value
+
+    monkeypatch.setattr("pyine.utils.code.execution.time.time", fake_time)
+    monkeypatch.setattr("pyine.utils.code.execution.time.sleep", lambda _: None)
+
+    with pytest.raises(TimeoutError):
+        _safe_execute_and_trace_code(
+            identifier="dummy",
+            timeout_seconds=1,
+            timeout_external_buffer_seconds=0,
+            sleep_duration_seconds=0,
+            code_string="",
+            inputs=None,
+        )

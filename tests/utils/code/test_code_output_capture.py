@@ -142,3 +142,29 @@ class TestStdStreamCapture:
             assert cap.getvalue() == "test3\n"
             cap.seek(0)
             cap.truncate(0)
+
+    def test_buffer_write_requires_bytes(self) -> None:
+        cap = StdStreamCapture(stream_name="stdout")
+        with pytest.raises(TypeError):
+            cap.buffer.write("not-bytes")
+
+    def test_buffer_writelines(self) -> None:
+        cap = StdStreamCapture(stream_name="stdout")
+        written = cap.buffer.writelines([b"a", b"b"])
+        assert written == 2
+        assert cap.buffer.getvalue() == b"ab"
+
+    def test_buffer_close_and_parent_close(self) -> None:
+        cap = StdStreamCapture(stream_name="stderr")
+        assert not cap.buffer.closed
+        cap.buffer.close()
+        assert cap.buffer.closed
+        assert not cap.closed
+        cap.close()
+        assert cap.closed
+
+    def test_truncate_partial_returns_length(self) -> None:
+        cap = StdStreamCapture(stream_name="stdout")
+        cap.write("alpha")
+        remaining = cap.truncate(2)
+        assert remaining == len("alpha")

@@ -1,6 +1,8 @@
 import builtins
 import dataclasses
 import datetime
+import types
+import typing
 
 import numpy as np
 import omegaconf
@@ -401,3 +403,47 @@ def test_rich_fold_indicator_wraps_lines():
     rendered = console.export_text()
     assert "> " in rendered
     assert " <" in rendered
+
+
+def test_render_config_unknown_type_and_doc_selection():
+    class UnknownConfig:
+        __cfg_name__ = "name"
+        __cfg_group__ = "group"
+        __doc__ = "Default doc"
+
+    cfg_values = types.SimpleNamespace(zen_meta={"__description__": " Custom desc "})
+    console = rich.console.Console(record=True, width=80)
+    portability.render_config(
+        UnknownConfig,
+        cfg_values,
+        console=console,
+        show_field_descriptions=True,
+    )
+    output = console.export_text()
+    normalized = output.lower().replace("\n", " ")
+    assert "custom desc" in normalized
+    assert "unsupported config" in normalized
+    assert "+group=name" in normalized
+
+
+def test_render_config_handles_unresolved_omegaconf(monkeypatch: pytest.MonkeyPatch):
+    @dataclasses.dataclass
+    class Config:
+        foo: typing.Any = "default"
+
+    cfg = {
+        "foo": omegaconf.OmegaConf.create({"inner": "${missing}"}),
+        "_target_": "custom.Target",
+    }
+    console = rich.console.Console(record=True, width=60)
+    portability.render_config(
+        Config,
+        cfg,
+        console=console,
+        show_field_descriptions=False,
+    )
+    output = console.export_text()
+    flattened = output.replace("\n", " ")
+    assert "custom" in flattened.lower()
+    assert ".targe" in flattened.lower()
+    assert "${missing}" in flattened
