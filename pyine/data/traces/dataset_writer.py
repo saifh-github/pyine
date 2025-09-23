@@ -664,7 +664,7 @@ def _fetch_augmented_code_to_trace(
                                 trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                                     **vars(solution.solution_id),
                                     test_idx=test_tuple.test_idx,
-                                    augment_category=prompt_name.replace("/", "_"),
+                                    augment_category=prompt_name,
                                     augment_idx=record_idx,
                                 ),
                                 entrypoint_name=problem.entrypoint_name,

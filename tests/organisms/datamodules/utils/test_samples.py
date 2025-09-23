@@ -495,9 +495,9 @@ class TestSelectTraces:
         )
         # figure how many tests exist for that solution in the fake reader (two by fixture config)
         # i.e., number of clusters that share the same parent solution id
-        expected_bugged_clusters = sum(1 for t in sb_bugged.traces if t.get_parent_solution_id() == sol_id_str)
+        expected_bugged_clusters = sum(1 for t in sb_bugged.traces if str(t.solution_id) == sol_id_str)
         # no other solution has DB bug records, so the builder should contain only those clusters
         assert len(sb_bugged) == expected_bugged_clusters
-        assert all(t.get_parent_solution_id() == sol_id_str for t in sb_bugged.traces)
+        assert all(str(t.solution_id) == sol_id_str for t in sb_bugged.traces)
         assert set(sb_bugged.input_types) == {"bugged"}
         assert all(ovr in {"bug_A", "bug_B"} for ovr in sb_bugged.code_overrides)

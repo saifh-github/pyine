@@ -80,3 +80,14 @@ class TestPromptManager:
         assert captured_kwargs["role_variables"] == {"role": "value"}
         assert captured_kwargs["context_variables"] == {"context": "value"}
         assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
+
+    def test_prompt_aliases_reuse_hints_docs(self):
+        manager = prompt_manager.get_framework_prompt_manager()
+        prompts = manager.list_prompts()
+        assert "issues/docs" in prompts
+        hints_config = manager.get_prompt_config("hints/docs")
+        issues_config = manager.get_prompt_config("issues/docs")
+        assert issues_config.metadata.name == "issues/docs"
+        assert hints_config.metadata.name == "hints/docs"
+        assert issues_config.question.template == hints_config.question.template
+        assert issues_config is not hints_config

@@ -97,9 +97,8 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         }
         unassigned_traces_meta: list[TraceMetadata] = []
         for trace_meta in base_traces_meta:
-            problem_id = trace_meta.get_parent_problem_id()
-            if problem_id in split_data.subset_assignments:
-                subset_traces_meta[split_data.subset_assignments[problem_id]].append(trace_meta)
+            if str(trace_meta.problem_id) in split_data.subset_assignments:
+                subset_traces_meta[split_data.subset_assignments[str(trace_meta.problem_id)]].append(trace_meta)
             else:
                 unassigned_traces_meta.append(trace_meta)
         self._apply_max_solution_count_cap(subset_traces_meta, unassigned_traces_meta)
@@ -121,7 +120,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         if self.config.max_solution_count is not None:
             rng = np.random.default_rng(self.config.split_seed)
             for subset_name, traces_meta in subset_traces_meta.items():
-                tidxs_to_sids = {tidx: tm.get_parent_solution_id() for tidx, tm in enumerate(traces_meta)}
+                tidxs_to_sids = {tidx: str(tm.solution_id) for tidx, tm in enumerate(traces_meta)}
                 solution_ids = list(set(tidxs_to_sids.values()))
                 if len(solution_ids) > self.config.max_solution_count:
                     # if we have more solutions than requested, pick a random subset of the available ones

@@ -10,12 +10,17 @@ import pydantic
 import yaml
 
 from pyine.prompts.types import PromptNameType, PromptVersionType
-from pyine.prompts.utils import PromptConfig
+from pyine.prompts.utils import PromptConfig, VersionedPromptConfig
 
 logger = logging.getLogger(__name__)
 
 _PromptCacheKeyType = str
 """Type used to represent a prompt cache key (e.g. 'code_summary:v1.0')."""
+
+PROMPT_NAME_ALIASES: dict[PromptNameType, PromptNameType] = {
+    "issues/docs": "hints/docs",
+}
+"""Alias map used to resolve prompt names to their canonical definitions."""
 
 
 class PromptManager:
@@ -41,6 +46,23 @@ class PromptManager:
         self.package_name = package_name
         self.prompts_subdir = prompts_subdir
         self._cache: dict[_PromptCacheKeyType, PromptConfig] = {}
+
+    @staticmethod
+    def _make_cache_key(
+        prompt_name: PromptNameType,
+        version: PromptVersionType | None,
+    ) -> _PromptCacheKeyType:
+        """Generate a cache key for the given prompt name/version pair."""
+        return f"{prompt_name}:{version}" if version else prompt_name
+
+    def _resolve_prompt_alias(
+        self,
+        prompt_name: PromptNameType,
+    ) -> tuple[PromptNameType, bool]:
+        """Resolve a prompt alias to its canonical name (if any)."""
+        if prompt_name in PROMPT_NAME_ALIASES:
+            return PROMPT_NAME_ALIASES[prompt_name], True
+        return prompt_name, False
 
     def _get_prompt_file_path(
         self,
@@ -110,10 +132,35 @@ class PromptManager:
         Returns:
             The prompt configuration for the requested version.
         """
-        cache_key = f"{prompt_name}:{version}" if version else prompt_name
-        if cache_key not in self._cache:
-            self._cache[cache_key] = self._load_prompt_config(prompt_name, version)
-        return self._cache[cache_key]
+        resolved_name, is_alias = self._resolve_prompt_alias(prompt_name)
+        cache_key = self._make_cache_key(prompt_name, version)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        canonical_cache_key = self._make_cache_key(resolved_name, version)
+        canonical_config = self._cache.get(canonical_cache_key)
+        if canonical_config is None:
+            canonical_config = self._load_prompt_config(resolved_name, version)
+            self._cache[canonical_cache_key] = canonical_config
+        if not is_alias:
+            self._cache[cache_key] = canonical_config
+            return canonical_config
+        alias_metadata = canonical_config.metadata.model_copy(update={"name": prompt_name})
+        alias_config = canonical_config.model_copy(update={"metadata": alias_metadata})
+        self._cache[cache_key] = alias_config
+        return alias_config
+
+    def _get_versioned_config(self, prompt_name: PromptNameType) -> VersionedPromptConfig:
+        """Get the versioned configuration for a specific prompt."""
+        import pyine.prompts.utils as prompt_utils
+
+        resolved_name, _ = self._resolve_prompt_alias(prompt_name)
+        prompt_path = self._get_prompt_file_path(resolved_name)
+        package_files = importlib.resources.files(self.package_name)
+        prompt_file = package_files.joinpath(*prompt_path.parts)
+        if not prompt_file.is_file():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+        versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
+        return versioned_config
 
     def list_prompts(self) -> list[PromptNameType]:
         """Returns a list of all available prompts in the package (as names without extension)."""
@@ -136,31 +183,18 @@ class PromptManager:
                     prompt_names.append(prompt_name)
                 else:
                     prompt_names.append(f"{rel_root.as_posix()}/{prompt_name}")
+        for alias_name in PROMPT_NAME_ALIASES:
+            if alias_name not in prompt_names:
+                prompt_names.append(alias_name)
         return sorted(prompt_names)
 
     def list_prompt_versions(self, prompt_name: PromptNameType) -> list[PromptVersionType]:
         """List all available versions for a specific prompt."""
-        import pyine.prompts.utils as prompt_utils
-
-        prompt_path = self._get_prompt_file_path(prompt_name)
-        package_files = importlib.resources.files(self.package_name)
-        prompt_file = package_files.joinpath(*prompt_path.parts)
-        if not prompt_file.is_file():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-        versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
-        return list(versioned_config.versions.keys())
+        return list(self._get_versioned_config(prompt_name).versions.keys())
 
     def get_default_prompt_version(self, prompt_name: PromptNameType) -> PromptVersionType:
         """Returns the default version used for a specific prompt."""
-        import pyine.prompts.utils as prompt_utils
-
-        prompt_path = self._get_prompt_file_path(prompt_name)
-        package_files = importlib.resources.files(self.package_name)
-        prompt_file = package_files.joinpath(*prompt_path.parts)
-        if not prompt_file.is_file():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-        versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
-        return versioned_config.default_version
+        return self._get_versioned_config(prompt_name).default_version
 
     def clear_cache(self) -> None:
         """Clear the internal prompt cache."""

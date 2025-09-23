@@ -1,4 +1,6 @@
 import collections
+import dataclasses
+import functools
 import logging
 import pathlib
 import typing
@@ -25,28 +27,54 @@ from pyine.utils.code.execution import (
 logger = logging.getLogger(__name__)
 
 
-class TraceMetadata(typing.NamedTuple):
+def _get_expected_augment_types() -> list[str]:
+    """Returns the list of expected augmentation types for trace datasets.
+
+    Combines the augmentation types from the `SampleInputType` define with all prompt names
+    that are known to the prompt manager.
+    """
+    import pyine.prompts
+
+    pregenerated_augment_types = [
+        prompt_name
+        for prompt_name in pyine.prompts.get_framework_prompt_manager().list_prompts()
+        if prompt_name.startswith("issues/") or prompt_name.startswith("hints/")
+    ]
+    irrelevant_augment_types = ["original", "stubbed"]  # stubbed code cannot be executed/traced
+    dynamic_augment_types = [t for t in typing.get_args(SampleInputType) if t not in irrelevant_augment_types]
+    return [*dynamic_augment_types, *pregenerated_augment_types]
+
+
+@dataclasses.dataclass(frozen=True)
+class TraceMetadata:
     """Metadata structure for a single trace, to be used for lookups and to cache as prepared data."""
 
     identifier: str
-    """Unique identifier for the trace."""
+    """Unique identifier (str) for the trace."""
     index: int
-    """Index of the trace in its original dataset."""
+    """Index of this sample in its original dataset."""
     parent_dataset_hash: str
     """Hash of the dataset that contains the trace."""
     tags: list[str]
     """List of tags associated with the trace (problem+exec+augments)."""
 
-    def get_parent_solution_id(self) -> str:
+    @functools.cached_property
+    def trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+        """Returns the trace identifier object for this trace."""
+        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
+
+    @functools.cached_property
+    def solution_id(self) -> pyine.data.traces.dataset_utils.SolutionIdentifier:
         """Returns the unique identifier for the parent solution to this trace.
 
         Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
         can be used to get multiple traces, depending on the input arguments used when executing
         the code snippet, and depending on applied code augmentations.
         """
-        return str(self.get_trace_id_obj().get_parent_identifier())
+        return self.trace_id.get_parent_identifier()
 
-    def get_parent_problem_id(self) -> str:
+    @functools.cached_property
+    def problem_id(self) -> pyine.data.traces.dataset_utils.CodingProblemIdentifier:
         """Returns the unique identifier for the parent problem to this trace.
 
         Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
@@ -57,15 +85,39 @@ class TraceMetadata(typing.NamedTuple):
         a trace is assigned to a specific split subset based e.g. on a rule, all traces that belong
         to the same parent problem will be assigned to the same subset.
         """
-        return str(self.get_trace_id_obj().get_parent_identifier().get_parent_identifier())
+        return self.solution_id.get_parent_identifier()
 
-    def get_augment_type(self) -> str | None:
-        """Returns the augmentation type for this trace (if any)."""
-        return self.get_trace_id_obj().augment_category
+    @functools.cached_property
+    def augment_tags(self) -> list[str]:
+        """Returns all tags associated with this trace's augmentation(s)."""
+        out_tags = [t for t in self.tags if t.startswith("augment:")]
+        if out_tags:
+            augm_category = self.trace_id.augment_category
+            assert (
+                augm_category is not None and f"augment:{augm_category}" in out_tags
+            ), "found inconsistent augmentation category tags; dataset creation issue?"
+        return out_tags
 
-    def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
-        """Returns the trace identifier object for this trace."""
-        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
+    @functools.cached_property
+    def is_augmented(self) -> bool:
+        """Returns whether this trace is augmented."""
+        return self.trace_id.augment_category is None and not self.augment_tags
+
+    @functools.cached_property
+    def is_multi_augmented(self) -> bool:
+        """Returns whether this trace is multi-augmented (e.g. bugged-hinted, bugged-misleading, etc.)."""
+        multi_augm_categories: list[SampleInputType] = ["bugged_hinted", "bugged_misleading"]
+        return any([t in self.augment_tags for t in multi_augm_categories])
+
+    @functools.cached_property
+    def comma_separated_tags(self) -> str:
+        """Returns a comma-separated string of all tags associated with this trace."""
+        if not self.tags:
+            return ""
+        for tag in self.tags:
+            if "," in tag:
+                raise ValueError(f"trace tags cannot contain commas: {tag}")
+        return ",".join(self.tags)
 
 
 def get_traces_metadata(
@@ -73,7 +125,17 @@ def get_traces_metadata(
     base_filter: pyine.data.utils.filter_rules.FilterType | None = None,
     verbose: bool = False,
 ) -> list[TraceMetadata]:
-    """Returns a list of TraceMetadata objects for all traces in the provided dataset reader(s)."""
+    """Returns a list of TraceMetadata objects for all traces in the provided dataset reader(s).
+
+    Args:
+        readers: list of DatasetReader instances to get all traces from.
+        base_filter: filter to apply to the dataset reader(s) to get target traces. If None, then
+            no filter will be applied, and all available traces will be returned.
+        verbose: whether to display a progress bar during parsing or not.
+
+    Returns:
+        A list of TraceMetadata objects for all targeted traces in the provided dataset.
+    """
     if not isinstance(readers, list):
         readers = [readers]
     logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
@@ -83,12 +145,9 @@ def get_traces_metadata(
     all_trace_keys = []
     for reader in readers_map.values():
         all_trace_keys.extend(reader.trace_keys)
-    # sanity check: there should not be any duplicates
-    assert len(set(all_trace_keys)) == len(all_trace_keys)
-    if verbose:
-        prog_bar = tqdm.tqdm(total=len(all_trace_keys), desc="Parsing traces metadata")
-    else:
-        prog_bar = None
+    if len(set(all_trace_keys)) != len(all_trace_keys):
+        raise ValueError("there should be no duplicates in the list of trace keys across all datasets")
+    prog_bar = tqdm.tqdm(total=len(all_trace_keys), desc="Parsing traces metadata", disable=not verbose)
     base_traces_meta: list[TraceMetadata] = []
     for reader_hash, reader in readers_map.items():
         for trace_idx in range(len(reader)):
@@ -103,10 +162,8 @@ def get_traces_metadata(
                         tags=tags,
                     ),
                 )
-            if prog_bar is not None:
-                prog_bar.update(1)
-    if prog_bar is not None:
-        prog_bar.close()
+            prog_bar.update(1)
+    prog_bar.close()
     return base_traces_meta
 
 
@@ -123,9 +180,46 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     leftover_traces: list[TraceMetadata]
     """List of leftover traces still unassigned after subset filtering and leftover split."""
     problem_assignments: dict[str, pyine.data.datamodule.SubsetNameType]
-    """Assignments of coding problems to data subsets."""
+    """Assignments of coding problems identifiers (str) to data subsets."""
     split_hash: str
     """Hash of the split file where the assignments were parsed from."""
+
+    @pydantic.model_validator(mode="after")
+    def _post_validator(self) -> "TraceDatasetMetadata":
+        """Confirms that all dataset traces contain reasonable types and the subsets do not overlap."""
+        if not self.base_traces:
+            raise ValueError("base traces must not be empty")
+        seen_trace_ids: list[pyine.data.traces.dataset_utils.TraceIdentifier] = []
+        expected_augment_types = self._get_expected_augment_types()
+        for trace_meta in self.base_traces:
+            assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
+            seen_trace_ids.append(trace_meta.trace_id)
+            augm_type = trace_meta.trace_id.augment_category
+            if augm_type is not None:
+                if augm_type not in expected_augment_types:
+                    raise ValueError(f"unexpected augment type: {augm_type}")
+                assert trace_meta.is_augmented and trace_meta.augment_tags
+                assert any(
+                    [t == f"augment:{augm_type}" for t in trace_meta.augment_tags]
+                ), "augment type is not in the trace tags; this should not happen?"
+            else:
+                assert not trace_meta.is_augmented and not trace_meta.is_multi_augmented
+        leftover_trace_ids = [trace_meta.trace_id for trace_meta in self.leftover_traces]
+        for trace_meta in self.leftover_traces:
+            if trace_meta.trace_id not in seen_trace_ids:
+                raise ValueError(f"trace id {trace_meta.trace_id} is not in the base traces")
+        for subset_name, subset_traces in self.subset_traces.items():
+            for trace_meta in subset_traces:
+                if trace_meta.trace_id not in seen_trace_ids:
+                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is not in the base traces")
+                if trace_meta.trace_id in leftover_trace_ids:
+                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is in leftover traces")
+                problem_id_str = str(trace_meta.problem_id)
+                if problem_id_str not in self.problem_assignments:
+                    raise ValueError(f"problem id {problem_id_str} has no corresponding problem assignment")
+                if self.problem_assignments[problem_id_str] != subset_name:
+                    raise ValueError(f"problem id {problem_id_str} has incorrect assignment")
+        return self
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate
@@ -142,21 +236,47 @@ SampleOutputType = typing.Literal[  # note: literal makes this type compatible w
 """
 
 SampleInputType = typing.Literal[  # note: literal makes this type compatible with default collate
-    "original",
+    "original",  # corresponds to using code and test case inputs/outputs from the source dataset as-is
+    # all types below refer to augmented versions where we modify code and/or test case inputs/outputs
     "obfuscated",
-    "stubbed",  # note: this type CANNOT have a real execution outcome tied to it (it can't be executed)
+    "obfuscated_hinted",
+    "obfuscated_misleading",
+    "stubbed",  # note: this type CANNOT have a real execution outcome tied to it (it cannot be executed)
     "hinted",
+    "misleading",
     "bugged",  # note: this type should lead to different execution outcomes than the expected ones
-    "bugged_hinted",  # same as the above
+    "bugged_hinted",  # same as the above (built as a buggy augmentation of a hinted trace)
+    "bugged_misleading",  # same as the above (built as an misleading augmentation of a buggy trace)
 ]
 """Possible input types for trace execution samples:
-- 'original': the original code snippet taken from the source dataset;
-- 'obfuscated': the obfuscated version of the code snippet taken from the source dataset;
-- 'stubbed': a modified version of the code snippet where part of the implementation is stubbed/hidden;
-- 'hinted': a modified version of the code snippet with one or more execution output hints;
-- 'bugged': a modified version of the code snippet with one or more bugs that should affect execution outcomes;
-- 'bugged_hinted': a modified version of the code snippet with both execution output hints and bugs.
+- 'original': default sample type with the original code from the source dataset and no augmentations;
+- 'obfuscated': augmented sample with obfuscated code (taken from the source dataset) but otherwise normal behavior;
+- 'obfuscated_hinted': augmented sample with obfuscated code (taken from the source dataset) and execution output hints;
+- 'obfuscated_misleading': augmented sample with obfuscated code (taken from the source dataset) and MISLEADING execution output hints;
+- 'stubbed': augmented sample where part of the code is stubbed/hidden by an LLM to force models to infer execution steps;
+- 'hinted': augmented sample where code contains one or more execution output hints produced by an LLM;
+- 'misleading': augmented sample where code contains one or more MISLEADING execution output hints produced by an LLM;
+- 'bugged': augmented sample where code contains one or more bugs that should affect execution outcomes;
+- 'bugged_hinted': augmented sample where code contains both execution output hints and bugs;
+- 'bugged_misleading': augmented sample where code contains both MISLEADING hints and bugs.
 """
+
+_solution_specific_augment_types: list[SampleInputType] = [
+    "obfuscated",
+    "stubbed",
+    "bugged",
+]
+"""List of augment types that are specific to a particular coding problem solution."""
+
+_trace_specific_augment_types: list[SampleInputType] = [
+    "obfuscated_hinted",
+    "obfuscated_misleading",
+    "hinted",
+    "misleading",
+    "bugged_hinted",
+    "bugged_misleading",
+]
+"""List of augment types that are specific to a particular trace (i.e. to specific test case inputs/outputs)."""
 
 
 class SampleData(typing.NamedTuple):
@@ -221,7 +341,7 @@ class SampleData(typing.NamedTuple):
     "correct" one.
     """
 
-    def get_trace_id_obj(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+    def get_trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""
         return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
 
@@ -377,6 +497,18 @@ LMDBDatasetReadersOrPathsType = (
 """Type used to specify source dataset args in the sample builder."""
 
 
+@dataclasses.dataclass(frozen=True)
+class _TraceSampleSelectionResult:
+    """Result of the sample selection process for a single trace."""
+
+    trace_meta: TraceMetadata
+    """The metadata associated with the trace from which to generate a sample."""
+    code_type: SampleInputType
+    """The type of the code snippet that will be used in the generated sample."""
+    code_override: str | None = None  # if None, use the original code snippet
+    """The code snippet override that will be used in the generated sample (instead of the original)."""
+
+
 class SampleBuilder(SampleDataParserType):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
@@ -390,14 +522,15 @@ class SampleBuilder(SampleDataParserType):
     models to predict the execution of full code snippets ('program output'), and when to predict
     a portion of them (related to a function, a segment, etc.). 'Partial samples' can be used to
     diversify training data and make the prediction task easier in cases where e.g. traces are
-    very long.
+    very long. See the docstring of `SampleOutputType` for more information on supported types.
 
     The selection strategy (specified via `SampleSelectionConfig`) determines which augmented
     code snippets to use (if any), and if augmentations are not present in the trace dataset
     itself, whether to go fetch them from the prompt result database (if available). If the prompt
     result database is used to retrieve augmented code snippets, then the only sample type that
     can be generated for that sample is the 'program output' (i.e. full code snippet). This is
-    because we are lacking trace data required to prepare other output types here.
+    because we are lacking trace data required to prepare other output types here. See the
+    docstring of `SampleInputType` for more information on supported types.
     """
 
     def __init__(
@@ -424,15 +557,13 @@ class SampleBuilder(SampleDataParserType):
         else:
             self.prompt_result_db = pyine.prompts.PromptResultDB(prompt_result_db_path)
         self.readers_map, traces = self._init_readers_and_trace_metadata(source_data=source_data, traces=traces)
-        self.traces, self.input_types, self.code_overrides = self._select_traces(
-            source_data=source_data,
+        self.selected_traces = self._select_samples_from_traces(
             traces=traces,
             selection_config=selection_config,
             prompt_result_db=self.prompt_result_db,
         )
-        assert len(self.traces) == len(self.code_overrides) and len(self.traces) == len(self.input_types)
         self.code_summaries = self._build_code_summaries_lut(
-            traces=self.traces,
+            traces=[t.trace_meta for t in self.selected_traces],
             prompt_result_db=self.prompt_result_db,
         )
 
@@ -466,117 +597,150 @@ class SampleBuilder(SampleDataParserType):
         return readers_map, traces
 
     @staticmethod
-    def _select_traces(
-        source_data: LMDBDatasetReadersOrPathsType,  # noqa
+    def _select_samples_from_traces(
         traces: list[TraceMetadata],
         selection_config: SampleSelectionConfig,
         prompt_result_db: pyine.prompts.PromptResultDB,
-    ) -> tuple[list[TraceMetadata], list[SampleInputType], list[str | None]]:
-        """Selects traces to keep according to the selected strategy."""
+    ) -> list[_TraceSampleSelectionResult]:
+        """Selects samples to generate from traces according to the specified strategy/options."""
         # first, scan all available traces and identify which augment group they belong to
         TraceIdType = pyine.data.traces.dataset_utils.TraceIdentifier  # noqa
         trace_lut: dict[TraceIdType, TraceMetadata] = dict()
         cousin_traces: dict[TraceIdType, dict[SampleInputType, list[TraceIdType]]] = {}
         for trace in traces:
-            trace_id = trace.get_trace_id_obj()
-            assert trace_id not in trace_lut, "trace id already exists in trace lut?"
-            trace_lut[trace_id] = trace
-            augmentless_id = trace_id.get_augmentless_identifier()
+            assert trace.trace_id not in trace_lut, "trace id already exists in trace lut?"
+            trace_lut[trace.trace_id] = trace
+            augmentless_id = trace.trace_id.get_augmentless_identifier()
             if augmentless_id not in cousin_traces:
                 cousin_traces[augmentless_id] = collections.defaultdict(list)
-            if trace_id.augment_category is None:
-                cousin_traces[augmentless_id]["original"].append(trace_id)
-            elif trace_id.augment_category == "obfuscated":
-                cousin_traces[augmentless_id]["obfuscated"].append(trace_id)
-            elif trace_id.augment_category in ["hints/stubs", "hints_stubs"]:
-                raise NotImplementedError("how are we getting these here? isn't it impossible to trace stubbed code?")
-            elif trace_id.augment_category == "bugged_hinted":
-                cousin_traces[augmentless_id]["bugged_hinted"].append(trace_id)
-            elif trace_id.augment_category.startswith("hint"):
-                cousin_traces[augmentless_id]["hinted"].append(trace_id)
-            elif trace_id.augment_category.startswith("issue") or trace_id.augment_category.startswith("bug"):
-                cousin_traces[augmentless_id]["bugged"].append(trace_id)
-            else:
-                raise ValueError(f"Unexpected category: {trace_id.augment_category}")
+            if not trace.is_augmented:
+                # unaugmented (i.e. original code + test inputs/outputs from source dataset)
+                assert len(cousin_traces[augmentless_id]["original"]) == 0, (
+                    "why do we have more than one trace for a given augmentless code snippet?"
+                    # TODO: may become useful later when we start tracing nondeterministic code
+                )
+                cousin_traces[augmentless_id]["original"].append(trace.trace_id)
+                continue
+            # the only types of augmented traces that we expect from a trace dataset are:
+            #   - traces with code hints or issues (exception 'hints/stubs': those CANNOT ever be traced)
+            #   - obfuscated code traces (the only time we ever obfuscate code is in the dataset writer)
+            assert not trace.is_multi_augmented, (
+                "current implementation does not support multi-augmented traces; "
+                "update the sample builder's trace selection code if dataset writer gets updated for augments"
+            )
+            augm_category = trace.trace_id.augment_category or ""
+            assert augm_category != "hints/stubs", "how can these have been traced?"
+            is_obfuscated = augm_category == "obfuscated"
+            is_hinted = augm_category.startswith("hints/")
+            is_buggy = augm_category.startswith("issues/")
+            assert (
+                is_obfuscated or is_hinted or is_buggy
+            ), f"trace id {trace.trace_id} has unexpected augment category: {augm_category}"
+            if is_obfuscated:
+                cousin_traces[augmentless_id]["obfuscated"].append(trace.trace_id)
+            elif is_buggy:
+                if augm_category == "issues/docs":
+                    cousin_traces[augmentless_id]["misleading"].append(trace.trace_id)
+                else:
+                    cousin_traces[augmentless_id]["bugged"].append(trace.trace_id)
+            elif is_hinted:
+                cousin_traces[augmentless_id]["hinted"].append(trace.trace_id)
         assert len(cousin_traces) <= len(traces)
         assert sum([len(c) for t, dicts in cousin_traces.items() for c in dicts.values()]) == len(traces)
         # all 'cousin clusters' will be used to produce ONE trace sample each; pick which one according to strategy
         rng = np.random.default_rng(selection_config.seed)
-        output_traces_meta: list[TraceMetadata] = []
-        output_code_types: list[SampleInputType] = []
-        output_code_overrides: list[str | None] = []
-        for orig_trace_id, trace_map in cousin_traces.items():
+        output_selections: list[_TraceSampleSelectionResult] = []
+        for orig_trace_id, trace_map in cousin_traces.items():  # for each cousin trace cluster...
             assert orig_trace_id in trace_lut, "augmentless id not found in trace lut?"
-            target_type = _draw_type(selection_config.input_type_prob_map, rng)
+            target_type = _draw_type(selection_config.input_type_prob_map, rng)  # draw the sample type...
             assert target_type is not None, "unexpected default fallback for input type draw"
             target_type = typing.cast(SampleInputType, target_type)
             if target_type == "original":
+                # keep the original trace as-is, with no code snippet override
                 assert target_type in trace_map, "missing orig trace in source data?"
                 assert len(trace_map[target_type]) == 1 and trace_map[target_type][0] == orig_trace_id
-                # keep the original trace as-is, with no code snippet override
-                output_traces_meta.append(trace_lut[orig_trace_id])
-                output_code_types.append(target_type)
-                output_code_overrides.append(None)
+                output_selections.append(
+                    _TraceSampleSelectionResult(
+                        trace_meta=trace_lut[orig_trace_id],
+                        code_type=target_type,
+                    )
+                )
             elif target_type == "obfuscated":
                 if target_type in trace_map:
                     # keep that trace as-is with no override under the assumption that obfuscation was done previously
-                    assert len(trace_map[target_type]) == 1
-                    obfuscated_trace_id = trace_map[target_type][0]
-                    output_traces_meta.append(trace_lut[obfuscated_trace_id])
-                    output_code_types.append(target_type)
-                    output_code_overrides.append(None)
+                    assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
+                    output_selections.append(
+                        _TraceSampleSelectionResult(
+                            trace_meta=trace_lut[trace_map["obfuscated"][0]],
+                            code_type=target_type,
+                        )
+                    )
                 else:
-                    # cannot obfuscate code here, skip the trace (we'd need to load more problem data to do it)
-                    continue
+                    # cannot obfuscate code here, skip the trace (we'd need to load more problem data to obfuscate)
+                    pass
             elif target_type in trace_map and trace_map[target_type]:
+                # if the augmentation we are looking for already exists, just pick a corresponding trace and use it
                 if selection_config.choice_strategy == "random":
                     picked_idx = int(rng.integers(0, len(trace_map[target_type])))
                     picked_trace_id = trace_map[target_type][picked_idx]
                 elif selection_config.choice_strategy == "latest":
                     picked_trace_id = list(sorted(trace_map[target_type], key=lambda tid: str(tid)))[-1]
                 else:
-                    raise NotImplementedError
+                    raise NotImplementedError("unsupported random selection strategy")
                 # keep that trace as-is with no override under the assumption that the traced code is already augmented
-                output_traces_meta.append(trace_lut[picked_trace_id])
-                output_code_types.append(target_type)
-                output_code_overrides.append(None)
+                output_selections.append(
+                    _TraceSampleSelectionResult(
+                        trace_meta=trace_lut[picked_trace_id],
+                        code_type=target_type,
+                    )
+                )
             elif target_type not in trace_map or not trace_map[target_type]:
+                # if the augmentation we are looking for does not exist, generate it using prompt result db lookups
                 if not selection_config.allow_db_lookups:
-                    continue  # could not locate the required target code snippet type, skip this instance
-                if target_type == "stubbed" or target_type == "bugged":
-                    # stubbed and bugged code snippets are not trace/test-specific
-                    # (therefore, logically, they should be attached to a solution id instead of a trace id)
-                    solution_id = orig_trace_id.get_parent_identifier()
+                    continue  # lookups disabled, skip this instance
+                # first, determine the strategy to look up previously generated prompt results for the target type
+                augment_is_soluton_specific = target_type in _solution_specific_augment_types
+                augment_is_trace_specific = target_type in _trace_specific_augment_types
+                # next, determine what parent trace to use for lookups (orig or obfuscated)
+                if target_type.startswith("obfuscated_"):
+                    assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
+                    target_trace_meta = trace_map["obfuscated"][0]
+                else:
+                    target_trace_meta = trace_lut[orig_trace_id]
+                # now, go and fetch the required records to assemble the selected sample result
+                if augment_is_soluton_specific:
+                    # relevant prompt result db entries should be attached to the parent solution id
                     if target_type == "stubbed":
                         records = prompt_result_db.get_by_identifier(
-                            identifier=str(solution_id),
+                            identifier=str(target_trace_meta.solution_id),
                             prompt_name="hints/stubs",
                         )
-                    else:  # target_type == "bugged"
-                        records = prompt_result_db.get_by_identifier(identifier=str(solution_id))
+                    else:
+                        assert target_type == "bugged", "branching logic error"
+                        records = prompt_result_db.get_by_identifier(identifier=str(target_trace_meta.solution_id))
                         records = [
-                            rec  # keep records that match any kind of issue/bug
+                            rec  # keep records that match any kind of issue/bug except 'issues/docs'
                             for rec in records
-                            if rec.prompt_name is not None and rec.prompt_name.startswith("issues")
-                        ]
-                elif target_type == "hinted" or target_type == "bugged_hinted":
-                    # hinted code snippet are test-specific, i.e. they refer to particular inputs/outputs
-                    # (therefore, logically, they should be attached to a trace id directly)
-                    records = prompt_result_db.get_by_identifier(identifier=str(orig_trace_id))
-                    records = [
-                        rec  # keep records that match any kind of hint (except stubs, handled above)
-                        for rec in records
-                        if (
-                            rec.prompt_name is not None
-                            and rec.prompt_name.startswith("hints")
-                            and not rec.prompt_name.endswith("stubs")
-                            and (  # if we are looking for bugged+hinted snippets, check tags
-                                target_type != "bugged_hinted" or "augment:bugged_hinted" in rec.tags
+                            if (
+                                rec.prompt_name is not None
+                                and rec.prompt_name.startswith("issues/")
+                                and rec.prompt_name != "issues/docs"  # reserved for 'misleading' augm types
                             )
-                        )
-                    ]
+                        ]
+                elif augment_is_trace_specific:
+                    # relevant prompt result db entries should be attached to the trace id itself
+                    records = prompt_result_db.get_by_identifier(identifier=str(target_trace_meta.trace_id))
+                    if target_type == "hinted":
+                        records = [
+                            r for r in records if r.prompt_name.startswith("hints/") and r.prompt_name != "hints/stubs"
+                        ]
+                    elif target_type == "misleading":
+                        records = [r for r in records if r.prompt_name == "issues/docs"]
+                    else:
+                        records = [r for r in records if f"augment:{target_type}" in r.tags]
                 else:
-                    raise NotImplementedError
+                    raise NotImplementedError(f"missing augment handling for: {target_type}")
+                # given the records we have found...
                 if not records:
                     continue  # no database match found, skip this trace
                 potential_code_snippet_overrides = [r.result for r in records]  # kept in order, last = most recent
@@ -586,86 +750,93 @@ class SampleBuilder(SampleDataParserType):
                     picked_code_override_idx = -1
                 else:
                     raise NotImplementedError
-                # append the original trace metadata, but with the code snippet override from the database
+                # append the resulting sample, but with the code snippet override from the database
                 # (note: in these cases, the only valid sample output type will be 'program output',
                 #  as we cannot correctly deduce anything trace-related without re-tracing entirely)
-                output_traces_meta.append(trace_lut[orig_trace_id])
-                output_code_types.append(target_type)
-                output_code_overrides.append(potential_code_snippet_overrides[picked_code_override_idx])
+                output_selections.append(
+                    _TraceSampleSelectionResult(
+                        trace_meta=target_trace_meta,
+                        code_type=target_type,
+                        code_override=potential_code_snippet_overrides[picked_code_override_idx],
+                    )
+                )
             else:
                 raise NotImplementedError
-        logger.debug(f"trace selection strategy kept {len(output_traces_meta)} of {len(traces)} traces")
-        if output_traces_meta:
-            type_counts = collections.Counter(output_code_types)
-            output_types_str = "\n\t".join([f"{k}: {c}" for k, c in type_counts.items()])
-            logger.debug(f"prepared sample code types:\n\t{output_types_str}")
-            logger.debug(f"prepared samples with code override: {sum([bool(c) for c in output_code_overrides])}")
-        return output_traces_meta, output_code_types, output_code_overrides
+        logger.debug(f"trace selection strategy kept {len(output_selections)} samples for {len(traces)} traces")
+        if output_selections:
+            code_type_counts = collections.Counter([s.code_type for s in output_selections])
+            output_types_str = "\n\t".join([f"{k}: {c}" for k, c in code_type_counts.items()])
+            logger.debug(f"selected sample code types:\n\t{output_types_str}")
+            code_override_flags = [bool(c.code_override) for c in output_selections]
+            logger.debug(f"selected samples with code override: {sum(code_override_flags)}")
+        return output_selections
 
     @staticmethod
     def _build_code_summaries_lut(
         traces: list[TraceMetadata],
         prompt_result_db: pyine.prompts.PromptResultDB,
-    ) -> dict[str, str]:  # solution id to code description string
+    ) -> dict[pyine.data.traces.dataset_utils.SolutionIdentifier, str]:  # sid to code description map
         """Builds a lookup table of code summaries for each trace."""
-        code_summaries_lut: dict[str, str] = dict()
+        code_summaries_lut: dict[pyine.data.traces.dataset_utils.SolutionIdentifier, str] = dict()
         for trace_meta in traces:
-            solution_id = trace_meta.get_parent_solution_id()
-            if solution_id not in code_summaries_lut:
+            if trace_meta.solution_id not in code_summaries_lut:
                 records = prompt_result_db.get_by_identifier(
-                    identifier=trace_meta.get_parent_solution_id(),
+                    identifier=str(trace_meta.solution_id),
                     prompt_name="code_summary",
                 )
                 if records:
                     # always take the latest summary that's available in the database
-                    code_summaries_lut[solution_id] = records[-1].result
+                    code_summaries_lut[trace_meta.solution_id] = records[-1].result
         logger.debug(f"found {len(code_summaries_lut)} code summaries in prompt result db")
         return code_summaries_lut
 
     def get_stats(self) -> dict[str, int | float | str]:
         """Returns a dictionary of statistics for the prepared samples."""
         # note: we cannot provide stats on the transformed samples as their types are resolved later
+        code_type_counts = collections.Counter([s.code_type for s in self.selected_traces])
+        code_override_flags = [bool(c.code_override) for c in self.selected_traces]
         return {
-            "sample_count": len(self.traces),
-            **{f"code_type_counts/{k}": c for k, c in collections.Counter(self.input_types).items()},
-            "code_overrides_count": sum([bool(c) for c in self.code_overrides]),
+            "sample_count": len(self.selected_traces),
+            **{f"code_type_counts/{k}": c for k, c in code_type_counts.items()},
+            "code_overrides_count": sum(code_override_flags),
             "code_summaries_count": len(self.code_summaries),
         }
 
     def __len__(self) -> int:
-        """Returns the number of traces covered by this reader."""
-        return len(self.traces)
+        """Returns the number of traces that will be converted into samples."""
+        return len(self.selected_traces)
 
     def __getitem__(self, idx: int) -> SampleData:
-        """Returns a data sample for the trace at the specified index.
+        """Returns the data sample associated with a specified index (where `0 <= idx < len(self)`).
 
         Notes:
           - We perform a random draw across all potential output types (with the full program output
-            as a fallback option) to decide which sample type to generate.
-          - If a function is targeted: inputs are the call arguments, the expected output is the
-            function's returned value(s), and the description contains the called function's name.
-          - If an arbitrary code segment is targeted: inputs are the frame variables at the start of
-            the segment, the output is the full description of the frame variables at the end of the
-            segment (at a specific line, or after a given number of steps).
-          - If max_partial_trace_steps is set, functions exceeding this cap are ignored and segments
+            as a fallback option) to decide which sample type to generate. If a sample code (input)
+            type is not available in the trace dataset, the sample output type will be forced to
+            the fallback full program output type.
+          - If a function is targeted as the sample output type: the input arguments will be call
+            arguments, and the expected output is the function's returned value(s).
+          - If an arbitrary code segment is targeted as the sample output type: input args are the
+            frame variables at the start of the segment, and outputs are the frame variables at
+            the end of the segment (at a specific line, or after a given number of steps).
+          - If `max_partial_trace_steps` is set, when generating a sample that targets a function
+            or a segment as its output type, functions exceeding this cap are ignored and segments
             are truncated to respect the cap.
-          - If for a generated candidate, max_inputs_str_length or max_output_str_length caps are
-            set and exceeded, returns None, i.e. drops that candidate entirely.
+          - If for a generated candidate, `max_inputs_str_length` or `max_output_str_length` caps
+            are set and exceeded, returns the 'fallback option' again (the full program output).
         """
         if not (0 <= idx < len(self)):
             raise IndexError(f"index {idx} out of range")
-        trace_meta = self.traces[idx]
-        trace_code_type = self.input_types[idx]
-        trace_code_override = self.code_overrides[idx]
-        reader = self.readers_map[trace_meta.parent_dataset_hash]
-        trace_data = reader[trace_meta.index]
+        selected_trace = self.selected_traces[idx]
+        reader = self.readers_map[selected_trace.trace_meta.parent_dataset_hash]
+        trace_data = reader[selected_trace.trace_meta.index]
         assert trace_data.identifier is not None, "trace identifier is required"
-        assert trace_data.identifier == trace_meta.identifier, "trace identifier mismatch"
+        assert trace_data.identifier == selected_trace.trace_meta.identifier, "trace identifier mismatch"
         if self.transform_config.seed is not None:
             t_rng = np.random.default_rng(self.transform_config.seed + idx)  # reproducible trace-specific rng
         else:
             t_rng = np.random.default_rng()
-        if trace_code_override is not None:
+        if selected_trace.code_override is not None:
             # if we have a code snippet override, we do NOT have trace events associated with it
             # (therefore, the only possible output type is the full program output)
             picked_output_type: SampleOutputType = "program output"
@@ -675,8 +846,8 @@ class SampleBuilder(SampleDataParserType):
             # first, if requested, try to generate a sample for a function call
             sample = self._get_function_call_sample(
                 trace_data=trace_data,
-                trace_meta=trace_meta,
-                trace_code_type=trace_code_type,
+                trace_meta=selected_trace.trace_meta,
+                trace_code_type=selected_trace.code_type,
                 rng=t_rng,
             )
             if sample is not None:
@@ -688,8 +859,8 @@ class SampleBuilder(SampleDataParserType):
             # if requested (or as a fallback from the function call sample), try to generate a segment sample
             sample = self._get_code_segment_sample(
                 trace_data=trace_data,
-                trace_meta=trace_meta,
-                trace_code_type=trace_code_type,
+                trace_meta=selected_trace.trace_meta,
+                trace_code_type=selected_trace.code_type,
                 target_output_type=picked_output_type,
                 rng=t_rng,
             )
@@ -699,18 +870,18 @@ class SampleBuilder(SampleDataParserType):
         # ultimate fallback: return a sample for the full program output
         return SampleData(
             identifier=trace_data.identifier,
-            code=trace_code_override if trace_code_override else trace_data.code_string,
-            description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
+            code=selected_trace.code_override if selected_trace.code_override else trace_data.code_string,
+            description=self.code_summaries.get(selected_trace.trace_meta.solution_id, ""),
             entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
             last_line=len(trace_data.code_string.splitlines()),
             inputs=str(trace_data.inputs),
             expected_output=str(trace_data.expected_output),
             output_type="program output",
-            code_type=trace_code_type,
+            code_type=selected_trace.code_type,
             trace_step_count=trace_data.valid_step_count,  # count valid steps only
-            comma_separated_tags=self._get_comma_sep_tags(trace_meta),
-            has_code_override=trace_code_override is not None,
+            comma_separated_tags=selected_trace.trace_meta.comma_separated_tags,
+            has_code_override=selected_trace.code_override is not None,
         )
 
     def _satisfies_str_caps(self, inp: str, out: str) -> bool:
@@ -726,16 +897,6 @@ class SampleBuilder(SampleDataParserType):
         ):
             return False
         return True
-
-    @staticmethod
-    def _get_comma_sep_tags(trace_meta: TraceMetadata) -> str:
-        """Returns a comma-separated string of tags for the given trace."""
-        if not trace_meta.tags:
-            return ""
-        for tag in trace_meta.tags:
-            if "," in tag:
-                raise ValueError(f"trace tags cannot contain commas: {tag}")
-        return ",".join(trace_meta.tags)
 
     def _pick_output_type(
         self,
@@ -873,7 +1034,7 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
+                description=self.code_summaries.get(trace_meta.solution_id, ""),
                 entrypoint=target_func_name,
                 first_line=first_line,
                 last_line=last_line,
@@ -882,7 +1043,7 @@ class SampleBuilder(SampleDataParserType):
                 output_type="function return",
                 code_type=trace_code_type,
                 trace_step_count=call_step_count,
-                comma_separated_tags=self._get_comma_sep_tags(trace_meta),
+                comma_separated_tags=trace_meta.comma_separated_tags,
                 has_code_override=False,
             )
         return None  # no more candidates to consider, failed to get a function call
@@ -973,7 +1134,7 @@ class SampleBuilder(SampleDataParserType):
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description=self.code_summaries.get(trace_meta.get_parent_solution_id(), ""),
+                description=self.code_summaries.get(trace_meta.solution_id, ""),
                 entrypoint="",
                 first_line=first_line,
                 last_line=last_line,
@@ -982,7 +1143,7 @@ class SampleBuilder(SampleDataParserType):
                 output_type="frame variables",
                 code_type=trace_code_type,
                 trace_step_count=segment_size,
-                comma_separated_tags=self._get_comma_sep_tags(trace_meta),
+                comma_separated_tags=trace_meta.comma_separated_tags,
                 has_code_override=False,
             )
         return None  # no more candidate lists to consider, failed to get a segment sample

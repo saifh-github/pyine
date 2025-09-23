@@ -17,11 +17,10 @@ def _assert_non_leaking_assignments(metadata):
     for subset_type, subset_traces in metadata.subset_traces.items():
         for trace in subset_traces:
             assert trace.identifier not in traces_to_subsets
-            parent = trace.get_parent_problem_id()
-            if parent in problems_to_subsets:
-                assert problems_to_subsets[parent] == subset_type
+            if trace.problem_id in problems_to_subsets:
+                assert problems_to_subsets[trace.problem_id] == subset_type
             else:
-                problems_to_subsets[parent] = subset_type
+                problems_to_subsets[trace.problem_id] = subset_type
             traces_to_subsets[trace.identifier] = subset_type
 
 
