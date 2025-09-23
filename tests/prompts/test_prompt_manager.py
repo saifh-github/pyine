@@ -1,5 +1,9 @@
 import pathlib
 
+import pytest
+
+import pyine.prompts.configs.hints.docs as hints_docs
+import pyine.prompts.configs.issues.docs as issues_docs
 import pyine.prompts.manager as prompt_manager
 import pyine.prompts.types as prompt_types
 import pyine.prompts.utils as prompt_utils
@@ -91,3 +95,35 @@ class TestPromptManager:
         assert hints_config.metadata.name == "hints/docs"
         assert issues_config.question.template == hints_config.question.template
         assert issues_config is not hints_config
+
+
+def test_issues_docs_delegates_to_hints(monkeypatch: pytest.MonkeyPatch):
+    captured_kwargs: dict[str, object] = {}
+    marker = object()
+
+    def fake_get_prompt_template(**kwargs):
+        captured_kwargs.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(hints_docs, "get_prompt_template", fake_get_prompt_template)
+    result = issues_docs.get_prompt_template(
+        version="v1",
+        use_chat_template=True,
+        include_examples=False,
+        target_examples=[1, 2],
+        partial_vars={"pv": 1},
+        role_variables={"role": "analyst"},
+        context_variables={"ctx": "value"},
+        examples_block_variables={"examples": "value"},
+    )
+    assert result is marker
+    assert captured_kwargs == {
+        "version": "v1",
+        "use_chat_template": True,
+        "include_examples": False,
+        "target_examples": [1, 2],
+        "partial_vars": {"pv": 1},
+        "role_variables": {"role": "analyst"},
+        "context_variables": {"ctx": "value"},
+        "examples_block_variables": {"examples": "value"},
+    }

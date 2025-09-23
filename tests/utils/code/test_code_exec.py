@@ -1,11 +1,21 @@
+import sys
+
 import pytest
 
+import pyine.utils.code.blocks as code_blocks
 from pyine.utils.code.execution import (
     EXEC_MODULE_OBJ_NAME,
     EXEC_TRACE_FILE_NAME,
+    TraceEvent,
+    TraceEventType,
+    TraceException,
+    TraceKey,
+    TraceResult,
+    TraceTagType,
     TracingCapException,
     _unsafe_execute_and_trace_code,
     execute_and_trace_code,
+    format_traced_code_execution,
 )
 
 
@@ -372,3 +382,90 @@ def func(b: str) -> int:
         assert safe_step.event_type == unsafe_step.event_type
         assert safe_step.global_variables == unsafe_step.global_variables
         assert safe_step.local_variables == unsafe_step.local_variables
+
+
+def test_tracekey_roundtrip_and_tags_buckets():
+    key = TraceKey(file="foo.py", object="fn", line=12)
+    repr_value = repr(key)
+    assert repr_value == "foo.py:fn:L0012"
+    rebuilt = TraceKey.from_string(repr_value)
+    assert rebuilt == key
+    tags_zero = TraceTagType.get_step_count_tags([])
+    assert tags_zero == ["total_steps:0", "valid_steps:0"]
+    tags_small = TraceTagType.get_step_count_tags([None, object(), object()])
+    assert tags_small == ["total_steps:1_10", "valid_steps:1_10"]
+    tags_large = TraceTagType.get_step_count_tags([object()] * 15)
+    assert tags_large[0] == "total_steps:10_100"
+    assert tags_large[1] == "valid_steps:10_100"
+
+
+def test_trace_exception_from_exception_captures_origin():
+    def boom():
+        raise ValueError("kaboom")
+
+    try:
+        boom()
+    except ValueError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+    assert exc_type is not None and exc_tb is not None and exc_value is not None
+    trace_exc = TraceException.from_exception(exc_type, exc_value, exc_tb)
+    assert trace_exc.type == "ValueError"
+    assert "kaboom" in trace_exc.message
+    assert trace_exc.origin is not None
+    assert trace_exc.origin.object == "boom"
+    assert trace_exc.traceback is not None
+
+
+def test_trace_event_and_result_helpers():
+    trace_key = TraceKey(file="snippet.py", object="fn", line=1)
+    event = TraceEvent(
+        event_type=TraceEventType.CALL,
+        stack_trace=[trace_key],
+        global_variables={"g": "1"},
+        local_variables={"l": "2"},
+        arguments={"l": "2"},
+        return_value=None,
+        stdout=None,
+        stderr=None,
+        exception=None,
+        trace_step_idx=0,
+        trace_key=trace_key,
+    )
+    assert hash(event) == hash((0, trace_key))
+    assert repr(event) == "step#000000:call@snippet.py:fn:L0001"
+    dummy_block = code_blocks.CodeBlock(
+        type=code_blocks.BlockType.FUNCTION,
+        name="fn",
+        depth=0,
+        parent_line=None,
+        start_line=1,
+        end_line=2,
+    )
+    trace_result = TraceResult(
+        identifier="identifier",
+        code_string="print('hi')\n",
+        code_blocks={repr(trace_key): dummy_block},
+        inputs="inp",
+        expected_output="out",
+        max_valid_events=None,
+        max_events_per_line=None,
+        max_var_repr_length=None,
+        traced_steps=[event, None],
+        traced_steps_map={repr(trace_key): [0]},
+        entrypoint_name=None,
+        entrypoint_step_idx=None,
+        return_value=123,
+        exception=None,
+        stdout="ok",
+        stderr="",
+        metadata={"seed": "42"},
+        tags=["tag"],
+    )
+    assert str(trace_result) == "identifier"
+    numbered = trace_result.code_string_with_line_numbers
+    assert numbered.startswith("L0001:")
+    assert trace_result.total_step_count == 2
+    assert trace_result.valid_step_count == 1
+    formatted = format_traced_code_execution(trace_result)
+    assert "Code Execution Trace" in formatted
+    assert "Line 1" in formatted

@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-from pyine.utils.code.execution import (  # noqa; OK to use here directly w/ hardcoded code strings (will be faster)
-    _unsafe_execute_and_trace_code,
-)
+from pyine.utils.code.execution import _unsafe_execute_and_trace_code
 from pyine.utils.code.input_mock import MockInput, MockInputContext
 
 
@@ -41,6 +39,47 @@ class TestMockInput:
         mock = MockInput("test input")
         result = mock.mock_input()
         assert result == "test input"
+
+    def test_buffer_operations(self):
+        mock = MockInput(["alpha", "beta"], encoding="utf-16")
+        first_line = mock.buffer.readline()
+        assert first_line == "alpha\n".encode("utf-16")
+        remaining = mock.buffer.read()
+        assert remaining == "beta\n".encode("utf-16")
+        mock = MockInput("gamma\ndelta")
+        lines = mock.buffer.readlines()
+        assert lines == [b"gamma\n", b"delta\n"]
+        mock = MockInput("eps\nzet")
+        iterated = list(mock.buffer)
+        assert iterated == [b"eps\n", b"zet\n"]
+
+    def test_mock_input_raises_eof_when_exhausted(self):
+        mock = MockInput("only one")
+        assert mock.mock_input() == "only one"
+        with pytest.raises(EOFError):
+            mock.mock_input()
+
+    def test_attribute_passthrough_missing_attribute(self, monkeypatch):
+        mock = MockInput("data")
+        fake_stdin = io.StringIO()
+        monkeypatch.setattr(sys, "stdin", fake_stdin)
+        with pytest.raises(AttributeError):
+            _ = mock.nonexistent_attribute
+
+    def test_attribute_passthrough_calls_original(self, monkeypatch):
+        class DummyStdIn:
+            def __init__(self):
+                self.called = False
+
+            def fileno(self):
+                self.called = True
+                return 7
+
+        dummy = DummyStdIn()
+        monkeypatch.setattr(sys, "stdin", dummy)
+        mock = MockInput("foo")
+        assert mock.fileno() == 7
+        assert dummy.called
 
 
 class TestMockInputContext:

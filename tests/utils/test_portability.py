@@ -1,9 +1,13 @@
 import builtins
+import dataclasses
 import datetime
 
 import numpy as np
+import omegaconf
 import pandas as pd
+import pydantic
 import pytest
+import rich.console
 
 import pyine.utils.portability as portability
 
@@ -351,3 +355,49 @@ def test_parse_indices_spec():
     assert portability.parse_indices_spec("0-1,2") == [0, 1, 2]
     assert portability.parse_indices_spec("0,1-2,3") == [0, 1, 2, 3]
     assert portability.parse_indices_spec("4-10,1-3") == [1, 2, 3, *range(4, 11)]
+
+
+def test_render_config_for_dataclass_and_pydantic():
+    @dataclasses.dataclass
+    class DemoDataclass:
+        foo: int = 1
+        bar: str = "baz"
+
+    class DemoModel(pydantic.BaseModel):
+        foo: int = pydantic.Field(1, description="foo field")
+        bar: str = pydantic.Field("baz", description="bar field")
+
+    dataclass_cfg = omegaconf.OmegaConf.create({"foo": 10, "bar": "zzz"})
+    dataclass_console = rich.console.Console(record=True, width=60)
+    portability.render_config(
+        DemoDataclass,
+        dataclass_cfg,
+        console=dataclass_console,
+        title="DemoDataclass",
+        show_field_descriptions=False,
+    )
+    dataclass_output = dataclass_console.export_text()
+    assert "DemoDataclass" in dataclass_output
+    assert "10" in dataclass_output
+
+    model_console = rich.console.Console(record=True, width=60)
+    portability.render_config(
+        DemoModel,
+        DemoModel(foo=7, bar="qux").model_dump(),
+        console=model_console,
+        title="DemoModel",
+        show_field_descriptions=True,
+    )
+    model_output = model_console.export_text()
+    assert "DemoModel" in model_output
+    assert "foo field" in model_output
+    assert "qux" in model_output
+
+
+def test_rich_fold_indicator_wraps_lines():
+    indicator = portability._RichFoldIndicator("line one\nline two that wraps", prefix="> ", suffix=" <")
+    console = rich.console.Console(record=True, width=15)
+    console.print(indicator)
+    rendered = console.export_text()
+    assert "> " in rendered
+    assert " <" in rendered
