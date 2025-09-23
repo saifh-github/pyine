@@ -1,5 +1,6 @@
 import dataclasses
 import pathlib
+import types
 import typing
 
 import pytest
@@ -19,6 +20,9 @@ import tests.env_checks
 class _FakeTrace:
     identifier: str | None
     code_string: str
+    inputs: typing.Any = dataclasses.field(default_factory=lambda: ["alpha", "beta"])
+    expected_output: typing.Any = "omega"
+    tags: list[str] = dataclasses.field(default_factory=list)
 
 
 class _FakeDatasetReader:
@@ -31,12 +35,13 @@ class _FakeDatasetReader:
         return len(self._traces)
 
     def __getitem__(self, idx: int) -> typing.Any:
+        trace_data = self._traces[idx]
         return exec_utils.TraceResult(
-            identifier=self._traces[idx].identifier,
-            code_string=self._traces[idx].code_string,
+            identifier=trace_data.identifier,
+            code_string=trace_data.code_string,
             code_blocks={},
-            inputs="",
-            expected_output="",
+            inputs=trace_data.inputs,
+            expected_output=trace_data.expected_output,
             max_valid_events=None,
             max_events_per_line=None,
             max_var_repr_length=None,
@@ -49,7 +54,7 @@ class _FakeDatasetReader:
             stdout="",
             stderr="",
             metadata={},
-            tags=[],
+            tags=list(trace_data.tags),
         )
 
     def get_problem_data(self, idx: int) -> du.CodingProblem:
@@ -86,10 +91,123 @@ def _make_problem(pid: str) -> du.CodingProblem:
 
 def _make_dataset() -> tuple[_FakeDatasetReader, str, str]:
     pid, sid, tid = _make_ids()
-    trace = _FakeTrace(identifier=tid, code_string="def add(a,b): return a+b")
+    trace = _FakeTrace(
+        identifier=tid,
+        code_string="def add(a, b): return a + b",
+        inputs=[1, 2],
+        expected_output="3",
+        tags=["synthetic"],
+    )
     problem = _make_problem(pid)
     dataset = _FakeDatasetReader([trace], [problem])
     return dataset, sid, pid
+
+
+async def _run_prompt_case(
+    prompt_name: str,
+    *,
+    dataset: _FakeDatasetReader,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    partial_vars: dict[str, typing.Any] | None = None,
+    prepopulate_summary: bool = True,
+    identifier_resolver: annotator.IdentifierResolverType | None = None,
+    group_resolver: annotator.GroupResolverType | None = None,
+    augment_config: annotator.AugmentedAnnotationOptions | None = None,
+    test_cache: typing.Any = None,
+) -> dict[str, typing.Any]:
+    """Run annotation for a specific prompt and capture builder inputs."""
+
+    captured: dict[str, typing.Any] = {}
+
+    def _fake_fetch(
+        model: typing.Any,
+        identifier: str,
+        input_variables: dict[str, typing.Any],
+        prompt_config: typing.Any,
+        *,
+        creation_meta: result_db.CreationMeta,
+        group: str | None,
+        tags: list[str],
+        meta: dict[str, typing.Any],
+        **kwargs,
+    ) -> list[result_db.PromptResultRecord]:
+        captured.update(
+            {
+                "identifier": identifier,
+                "group": group,
+                "prompt_name": prompt_config.prompt_name,
+                "input_variables": dict(input_variables),
+                "tags": list(tags),
+                "meta": dict(meta),
+            }
+        )
+        return [
+            result_db.PromptResultRecord(
+                identifier=identifier,
+                prompt_name=prompt_config.prompt_name,
+                prompt_version=getattr(prompt_config, "version", None),
+                group=group,
+                creation_meta=creation_meta,
+                prompt="prompt",
+                result="modified-code",
+                meta=meta,
+                tags=tags,
+            )
+        ]
+
+    monkeypatch.setattr(
+        prompt_manager,
+        "list_prompts",
+        lambda: annotator.supported_prompts_for_trace_dataset_annotation,
+    )
+    monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
+    monkeypatch.setattr(llm_providers, "get_model_from_provider_config", lambda *_: _DummyModel())
+
+    db_path = tmp_path / f"{prompt_name.replace('/', '_')}_test.db"
+    options = annotator.AnnotationOptions(
+        llm_provider_config={"provider": "openai"},
+        prompt_config=prompt_types.PromptBuildConfig(
+            prompt_name=prompt_name,
+            partial_vars=partial_vars or {},
+        ),
+        min_results_per_item=1,
+        force_generation=True,
+        db_path=db_path,
+        identifier_resolver=identifier_resolver,
+        group_resolver=group_resolver,
+        augment_config=augment_config or annotator.AugmentedAnnotationOptions(),
+    )
+
+    trace = dataset[0]
+    problem = dataset.get_problem_data(0)
+    if prepopulate_summary:
+        assert trace.identifier is not None
+        trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+        solution_id = trace_id.get_parent_identifier()
+        options._prompt_result_db.store(
+            identifier=str(solution_id),
+            prompt="summary",
+            result="Existing summary",
+            meta={},
+            tags=[],
+            group=str(problem.problem_id),
+            prompt_name="code_summary",
+            prompt_version=None,
+        )
+
+    if test_cache is not None:
+        object.__setattr__(options, "_test_data_cache", test_cache)
+
+    report = await annotator.annotate_trace_dataset(
+        dataset,  # type: ignore[arg-type]
+        config=options,
+        show_progress=False,
+        dry_run=False,
+        parallel=False,
+    )
+    captured["report"] = report
+    return captured
 
 
 @pytest.mark.asyncio
@@ -318,6 +436,188 @@ async def test_bad_id_handling_increments_skips(monkeypatch: pytest.MonkeyPatch)
     assert report.total_samples == 2
     assert report.errors == 0
     assert report.new_results_generated + report.skipped_samples == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "prompt_name",
+        "identifier_kind",
+        "group_kind",
+        "expect_description",
+        "expect_inputs",
+        "expect_expected_output",
+        "expected_augment_tag",
+    ),
+    [
+        ("code_summary", "solution", "problem", False, False, False, None),
+        ("hints/docs", "trace", "solution", True, True, True, "augment:hinted"),
+        ("hints/tests", "trace", "solution", True, True, True, "augment:hinted"),
+        ("hints/stubs", "solution", "problem", True, False, False, "augment:stubbed"),
+        ("issues/iterators", "solution", "problem", True, False, False, "augment:bugged"),
+        ("issues/todos", "solution", "problem", True, False, False, "augment:bugged"),
+    ],
+)
+async def test_supported_prompts_prepare_input_variables(
+    prompt_name: str,
+    identifier_kind: str,
+    group_kind: str,
+    expect_description: bool,
+    expect_inputs: bool,
+    expect_expected_output: bool,
+    expected_augment_tag: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    dataset, sid, pid = _make_dataset()
+    partial_vars = {"target_word_count": 20} if prompt_name == "code_summary" else None
+    captured = await _run_prompt_case(
+        prompt_name,
+        dataset=dataset,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        partial_vars=partial_vars,
+        prepopulate_summary=prompt_name != "code_summary",
+    )
+
+    report = typing.cast(annotator.AnnotationReport, captured.pop("report"))
+    assert report.total_samples == 1
+    assert report.skipped_samples == 0
+    assert report.errors == 0
+    assert report.new_results_generated == 1
+
+    trace = dataset[0]
+    assert trace.identifier is not None
+    trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+    expected_solution_id = str(trace_id.get_parent_identifier())
+    expected_problem_id = str(dataset.get_problem_data(0).problem_id)
+
+    if identifier_kind == "solution":
+        assert captured["identifier"] == expected_solution_id
+    elif identifier_kind == "trace":
+        assert captured["identifier"] == str(trace.identifier)
+    else:
+        raise AssertionError(f"unsupported identifier kind '{identifier_kind}' in test setup")
+
+    if group_kind == "problem":
+        assert captured["group"] == expected_problem_id
+    elif group_kind == "solution":
+        assert captured["group"] == expected_solution_id
+    else:
+        raise AssertionError(f"unsupported group kind '{group_kind}' in test setup")
+
+    input_vars = captured["input_variables"]
+    assert input_vars["code"] == trace.code_string
+    if expect_description:
+        assert input_vars["description"] == "Existing summary"
+    else:
+        assert "description" not in input_vars
+    if expect_inputs:
+        assert input_vars["inputs"] == str(trace.inputs)
+    else:
+        assert "inputs" not in input_vars
+    if expect_expected_output:
+        assert input_vars["expected_output"] == str(trace.expected_output)
+    else:
+        assert "expected_output" not in input_vars
+    # we don't expect the bugged hinted token to be here for any of the covered cases
+    # (it would show up only when prompting for hints, and if the db+options are set)
+    assert annotator._INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
+
+    tags = captured["tags"]
+    assert "llm_provider:openai" in tags
+    if prompt_name == "code_summary":
+        assert "target_summary_word_count:20" in tags
+    else:
+        assert "augment:has_code_description" in tags
+    if expected_augment_tag is None:
+        assert not any(tag.startswith("augment:") for tag in tags if tag != "augment:has_code_description")
+    else:
+        assert expected_augment_tag in tags
+
+    assert captured["prompt_name"] == prompt_name
+    meta = captured["meta"]
+    assert meta["prompt_config"]["prompt_name"] == prompt_name
+    assert meta["llm_provider_config"]["provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_misleading_issue_prompt_rewrites_expected_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    dataset, _, _ = _make_dataset()
+
+    def _identifier_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
+        assert trace.identifier is not None
+        return str(trace.identifier)
+
+    def _group_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
+        assert trace.identifier is not None
+        trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+        return str(trace_id.get_parent_identifier())
+
+    class _StubTestCache:
+        def sample_alternative_test_case(
+            self,
+            *,
+            trace_id: du.TraceIdentifier,
+            **_: typing.Any,
+        ) -> types.SimpleNamespace:
+            return types.SimpleNamespace(
+                expected_output={"alt": "value"},
+                test_idx=trace_id.test_idx + 1,
+            )
+
+    captured = await _run_prompt_case(
+        "issues/docs",
+        dataset=dataset,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        identifier_resolver=_identifier_resolver,
+        group_resolver=_group_resolver,
+        test_cache=_StubTestCache(),
+    )
+
+    report = typing.cast(annotator.AnnotationReport, captured.pop("report"))
+    assert report.total_samples == 1
+    assert report.skipped_samples == 0
+    assert report.errors == 0
+    assert report.new_results_generated == 1
+
+    trace = dataset[0]
+    assert trace.identifier is not None
+    trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+    expected_solution_id = str(trace_id.get_parent_identifier())
+
+    assert captured["identifier"] == str(trace.identifier)
+    assert captured["group"] == expected_solution_id
+    assert captured["prompt_name"] == "issues/docs"
+
+    input_vars = captured["input_variables"]
+    assert input_vars["description"] == "Existing summary"
+    assert input_vars["inputs"] == str(trace.inputs)
+    assert input_vars["expected_output"] == str({"alt": "value"})
+    assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
+    assert input_vars["code"] == trace.code_string
+
+    tags = captured["tags"]
+    assert "augment:has_code_description" in tags
+    assert "augment:misleading" in tags
+    assert "augment:bugged" not in tags
+    assert "llm_provider:openai" in tags
+
+    meta = captured["meta"]
+    assert meta["prompt_config"]["prompt_name"] == "issues/docs"
+    assert meta["llm_provider_config"]["provider"] == "openai"
 
 
 @pytest.mark.slow
