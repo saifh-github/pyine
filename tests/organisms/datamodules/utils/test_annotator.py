@@ -3,6 +3,7 @@ import pathlib
 import types
 import typing
 
+import numpy as np
 import pytest
 
 import pyine.data.traces.dataset_reader
@@ -115,6 +116,7 @@ async def _run_prompt_case(
     group_resolver: annotator.GroupResolverType | None = None,
     augment_config: annotator.AugmentedAnnotationOptions | None = None,
     test_cache: typing.Any = None,
+    prepopulate_db_records: list[dict[str, typing.Any]] | None = None,
 ) -> dict[str, typing.Any]:
     """Run annotation for a specific prompt and capture builder inputs."""
 
@@ -195,6 +197,10 @@ async def _run_prompt_case(
             prompt_name="code_summary",
             prompt_version=None,
         )
+
+    if prepopulate_db_records:
+        for record in prepopulate_db_records:
+            options._prompt_result_db.store(**record)
 
     if test_cache is not None:
         object.__setattr__(options, "_test_data_cache", test_cache)
@@ -539,6 +545,143 @@ async def test_supported_prompts_prepare_input_variables(
     meta = captured["meta"]
     assert meta["prompt_config"]["prompt_name"] == prompt_name
     assert meta["llm_provider_config"]["provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_bugged_hint_prompt_uses_buggy_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    dataset, _, _ = _make_dataset()
+    trace = dataset[0]
+    assert trace.identifier is not None
+    trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+    solution_id = trace_id.get_parent_identifier()
+    problem = dataset.get_problem_data(0)
+
+    monkeypatch.setattr(np.random, "random", lambda: 0.0)
+    monkeypatch.setattr(annotator.random, "choice", lambda seq: seq[0])
+
+    augment_cfg = annotator.AugmentedAnnotationOptions(
+        buggy_code_before_hinting_prob_map={"issues/iterators": 1.0},
+    )
+    buggy_code = "def buggy_add(a, b): return a - b"
+
+    captured = await _run_prompt_case(
+        "hints/docs",
+        dataset=dataset,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        augment_config=augment_cfg,
+        prepopulate_db_records=[
+            dict(
+                identifier=str(solution_id),
+                prompt="buggy",
+                result=buggy_code,
+                meta={},
+                tags=[],
+                group=str(problem.problem_id),
+                prompt_name="issues/iterators",
+                prompt_version=None,
+            )
+        ],
+    )
+
+    input_vars = captured["input_variables"]
+    assert input_vars["code"] == buggy_code
+    assert input_vars[annotator._INTERNAL_BUGGED_HINTED_TOKEN] == trace.code_string
+    assert input_vars["inputs"] == str(trace.inputs)
+    assert input_vars["expected_output"] == str(trace.expected_output)
+    tags = captured["tags"]
+    assert "augment:has_code_description" in tags
+    assert "augment:bugged_hinted" in tags
+    assert captured["prompt_name"] == "hints/docs"
+
+
+@pytest.mark.asyncio
+async def test_bugged_misleading_prompt_uses_buggy_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    dataset, _, _ = _make_dataset()
+    trace = dataset[0]
+    assert trace.identifier is not None
+    trace_id = du.TraceIdentifier.from_string(str(trace.identifier))
+    solution_id = trace_id.get_parent_identifier()
+    problem = dataset.get_problem_data(0)
+
+    monkeypatch.setattr(np.random, "random", lambda: 0.0)
+    monkeypatch.setattr(annotator.random, "choice", lambda seq: seq[0])
+
+    augment_cfg = annotator.AugmentedAnnotationOptions(
+        buggy_code_before_hinting_prob_map={"issues/iterators": 1.0},
+        misleading_augment_prob=1.0,
+    )
+
+    class _StubTestCache:
+        def sample_alternative_test_case(
+            self,
+            *,
+            trace_id: du.TraceIdentifier,
+            **_: typing.Any,
+        ) -> types.SimpleNamespace:
+            return types.SimpleNamespace(
+                expected_output={"alt": "value"},
+                test_idx=trace_id.test_idx + 1,
+            )
+
+    buggy_code = "def buggy_add(a, b): return a - b"
+
+    def _identifier_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
+        assert trace.identifier is not None
+        return str(trace.identifier)
+
+    def _group_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
+        assert trace.identifier is not None
+        parent_id = du.TraceIdentifier.from_string(str(trace.identifier)).get_parent_identifier()
+        return str(parent_id)
+
+    captured = await _run_prompt_case(
+        "issues/docs",
+        dataset=dataset,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        augment_config=augment_cfg,
+        test_cache=_StubTestCache(),
+        identifier_resolver=_identifier_resolver,
+        group_resolver=_group_resolver,
+        prepopulate_db_records=[
+            dict(
+                identifier=str(solution_id),
+                prompt="buggy",
+                result=buggy_code,
+                meta={},
+                tags=[],
+                group=str(problem.problem_id),
+                prompt_name="issues/iterators",
+                prompt_version=None,
+            )
+        ],
+    )
+
+    input_vars = captured["input_variables"]
+    assert input_vars["code"] == buggy_code
+    assert input_vars[annotator._INTERNAL_BUGGED_HINTED_TOKEN] == trace.code_string
+    assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
+    assert input_vars["expected_output"] == str({"alt": "value"})
+    tags = captured["tags"]
+    assert "augment:has_code_description" in tags
+    assert "augment:misleading" not in tags
+    assert "augment:bugged_misleading" in tags
+    assert captured["prompt_name"] == "issues/docs"
 
 
 @pytest.mark.asyncio
