@@ -57,7 +57,8 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     targets = make_targets(small_fake_reader, [0, 1, 2])
     sb = SampleBuilder(source_data=[small_fake_reader], traces=targets)
     assert len(sb) == len(targets)
-    for t in sb.traces:
+    for st in sb.selected_traces:
+        t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
         assert t.parent_dataset_hash == small_fake_reader.get_hash()
@@ -71,7 +72,8 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     assert len(expected_traces) == len(small_fake_reader)
     sb2 = SampleBuilder(source_data=small_fake_reader)
     assert len(sb2) == len(expected_traces)
-    for t in sb2.traces:
+    for st in sb2.selected_traces:
+        t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
         assert t.parent_dataset_hash == small_fake_reader.get_hash()
@@ -421,9 +423,12 @@ class TestSelectTraces:
                 input_type_prob_map={"original": 1.0},
             ),
         )
-        assert len(sb_original.traces) == len(small_fake_reader)
-        assert set(sb_original.input_types) == {"original"}
-        assert all(ovr is None for ovr in sb_original.code_overrides)
+        selected_traces_meta = [s.trace_meta for s in sb_original.selected_traces]
+        code_input_types = [s.code_type for s in sb_original.selected_traces]
+        assert len(selected_traces_meta) == len(small_fake_reader)
+        assert set(code_input_types) == {"original"}
+        code_overrides = [s.code_override for s in sb_original.selected_traces]
+        assert all(ovr is None for ovr in code_overrides)
         # obfuscated: none present and no DB fallback for obfuscation => skip everything
         sb_obf = SampleBuilder(
             source_data=[small_fake_reader],
@@ -478,9 +483,11 @@ class TestSelectTraces:
         )
         # only one cluster should have hints in DB => length 1
         assert len(sb_hinted) == 1
-        assert sb_hinted.input_types == ["hinted"]
-        assert sb_hinted.code_overrides == ["hint_v2"]  # latest
-        assert sb_hinted.traces[0].identifier == trace_id_str  # same original trace (override applies at use time)
+        assert sb_hinted.selected_traces[0].code_type == "hinted"
+        assert sb_hinted.selected_traces[0].code_override == "hint_v2"  # latest
+        assert (
+            sb_hinted.selected_traces[0].trace_meta.identifier == trace_id_str
+        )  # same original trace (override applies at use time)
         # bugged + random => for the selected solution, there are as many clusters as test cases
         # only clusters matching the solution id should be selected; others skipped
         sb_bugged = SampleBuilder(
@@ -495,9 +502,13 @@ class TestSelectTraces:
         )
         # figure how many tests exist for that solution in the fake reader (two by fixture config)
         # i.e., number of clusters that share the same parent solution id
-        expected_bugged_clusters = sum(1 for t in sb_bugged.traces if str(t.solution_id) == sol_id_str)
+        expected_bugged_clusters = sum(
+            1 for t in sb_bugged.selected_traces if str(t.trace_meta.solution_id) == sol_id_str
+        )
         # no other solution has DB bug records, so the builder should contain only those clusters
         assert len(sb_bugged) == expected_bugged_clusters
-        assert all(str(t.solution_id) == sol_id_str for t in sb_bugged.traces)
-        assert set(sb_bugged.input_types) == {"bugged"}
-        assert all(ovr in {"bug_A", "bug_B"} for ovr in sb_bugged.code_overrides)
+        assert all(str(t.trace_meta.solution_id) == sol_id_str for t in sb_bugged.selected_traces)
+        code_input_types = [s.code_type for s in sb_bugged.selected_traces]
+        assert set(code_input_types) == {"bugged"}
+        code_overrides = [s.code_override for s in sb_bugged.selected_traces]
+        assert all(ovr in {"bug_A", "bug_B"} for ovr in code_overrides)

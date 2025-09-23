@@ -563,38 +563,39 @@ def _default_tags_builder(
     # add augment-related tags below
     is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
-    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    assert trace.identifier is not None, "cannot derive identifier without a trace id"
-    trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-    if "description" in input_vars:
-        assert config.augment_config.fetch_code_descriptions
-        output_tags.append("augment:has_code_description")
-    if trace_id.augment_category == "obfuscated":
-        if is_hint_prompting and not is_stub_prompting:
-            output_tags.append("augment:obfuscated_hinted")
-        elif is_mislead_prompting:
-            output_tags.append("augment:obfuscated_misleading")
+    if is_hint_prompting or is_issue_prompting:
+        is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
+        is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
+        assert trace.identifier is not None, "cannot derive identifier without a trace id"
+        trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
+        if "description" in input_vars:
+            assert config.augment_config.fetch_code_descriptions
+            output_tags.append("augment:has_code_description")
+        if trace_id.augment_category == "obfuscated":
+            if is_hint_prompting and not is_stub_prompting:
+                output_tags.append("augment:obfuscated_hinted")
+            elif is_mislead_prompting:
+                output_tags.append("augment:obfuscated_misleading")
+            else:
+                raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
+        elif is_stub_prompting:
+            output_tags.append("augment:stubbed")
+        elif is_issue_prompting and not is_mislead_prompting:
+            output_tags.append("augment:bugged")
+        elif _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
+            assert config.augment_config.is_bugged_hinting_enabled
+            if _INTERNAL_MISLEADING_TOKEN in input_vars:
+                assert config.augment_config.is_bugged_misleading_enabled
+                output_tags.append("augment:bugged_misleading")
+            else:
+                output_tags.append("augment:bugged_hinted")
+        elif _INTERNAL_MISLEADING_TOKEN in input_vars:
+            assert config.augment_config.is_misleading_enabled
+            output_tags.append("augment:misleading")
+        elif is_hint_prompting:
+            output_tags.append("augment:hinted")
         else:
-            raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
-    elif is_stub_prompting:
-        output_tags.append("augment:stubbed")
-    elif is_issue_prompting and not is_mislead_prompting:
-        output_tags.append("augment:bugged")
-    elif _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-        assert config.augment_config.is_bugged_hinting_enabled
-        if _INTERNAL_MISLEADING_TOKEN in input_vars:
-            assert config.augment_config.is_bugged_misleading_enabled
-            output_tags.append("augment:bugged_misleading")
-        else:
-            output_tags.append("augment:bugged_hinted")
-    elif _INTERNAL_MISLEADING_TOKEN in input_vars:
-        assert config.augment_config.is_misleading_enabled
-        output_tags.append("augment:misleading")
-    elif is_hint_prompting:
-        output_tags.append("augment:hinted")
-    else:
-        raise NotImplementedError(f"missing tag handling case for prompt '{config.prompt_config.prompt_name}'")
+            raise NotImplementedError(f"missing tag handling case for prompt '{config.prompt_config.prompt_name}'")
 
     # add prompt-specific tags below
     if config.prompt_config.prompt_name == "code_summary":

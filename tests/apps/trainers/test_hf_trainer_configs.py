@@ -25,15 +25,20 @@ def test_experiment_config_TACO_latest_20s_eval_only(
 ) -> None:
     """Dry-run launch of the HuggingFace trainer using the TACO_latest_20s_eval_only preset."""
     monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
-    main_config = pyine.apps.trainers.hf_trainer_configs.register_hydra_configs()
+    app_configs = pyine.apps.trainers.hf_trainer_configs.register_hydra_configs()
+    assert len(app_configs) > 1
+    entrypoint_config = next((cfg for cfg in app_configs if cfg.name == "entrypoint" and cfg.group is None), None)
+    assert entrypoint_config is not None
     with pytest.raises(pyine.utils.reprod.DryRunExit):
         _ = hydra_zen.launch(
-            main_config,
-            hydra_zen.zen(pyine.apps.trainers.hf_trainer.main),
+            entrypoint_config.config,
+            hydra_zen.zen(pyine.apps.trainers.hf_trainer_configs._async_main_wrapper),
             overrides={
-                "+experiment": "TACO_latest_20s_eval_only",
+                "+experiment": "TACO_latest_20s_base",
                 "runtime": "dry_run",
                 "runtime.seed": 123,
+                "config.training_args_config.do_train": False,
+                "config.training_args_config.do_predict": True,
             },
             config_name="hf_trainer",
             version_base=pyine.configs.base.target_hydra_version,

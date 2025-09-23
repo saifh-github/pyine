@@ -96,17 +96,24 @@ class TraceMetadata:
             assert (
                 augm_category is not None and f"augment:{augm_category}" in out_tags
             ), "found inconsistent augmentation category tags; dataset creation issue?"
+        else:
+            assert self.trace_id.augment_category is None
         return out_tags
 
     @functools.cached_property
     def is_augmented(self) -> bool:
         """Returns whether this trace is augmented."""
-        return self.trace_id.augment_category is None and not self.augment_tags
+        return len(self.augment_tags) > 0
 
     @functools.cached_property
     def is_multi_augmented(self) -> bool:
         """Returns whether this trace is multi-augmented (e.g. bugged-hinted, bugged-misleading, etc.)."""
-        multi_augm_categories: list[SampleInputType] = ["bugged_hinted", "bugged_misleading"]
+        multi_augm_categories: list[SampleInputType] = [
+            "obfuscated_hinted",
+            "obfuscated_misleading",
+            "bugged_hinted",
+            "bugged_misleading",
+        ]
         return any([t in self.augment_tags for t in multi_augm_categories])
 
     @functools.cached_property
@@ -190,7 +197,7 @@ class TraceDatasetMetadata(pydantic.BaseModel):
         if not self.base_traces:
             raise ValueError("base traces must not be empty")
         seen_trace_ids: list[pyine.data.traces.dataset_utils.TraceIdentifier] = []
-        expected_augment_types = self._get_expected_augment_types()
+        expected_augment_types = _get_expected_augment_types()
         for trace_meta in self.base_traces:
             assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
             seen_trace_ids.append(trace_meta.trace_id)
@@ -628,7 +635,7 @@ class SampleBuilder(SampleDataParserType):
                 "current implementation does not support multi-augmented traces; "
                 "update the sample builder's trace selection code if dataset writer gets updated for augments"
             )
-            augm_category = trace.trace_id.augment_category or ""
+            augm_category = trace.trace_id.augment_category
             assert augm_category != "hints/stubs", "how can these have been traced?"
             is_obfuscated = augm_category == "obfuscated"
             is_hinted = augm_category.startswith("hints/")
@@ -704,7 +711,7 @@ class SampleBuilder(SampleDataParserType):
                 # next, determine what parent trace to use for lookups (orig or obfuscated)
                 if target_type.startswith("obfuscated_"):
                     assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
-                    target_trace_meta = trace_map["obfuscated"][0]
+                    target_trace_meta = trace_lut[trace_map["obfuscated"][0]]
                 else:
                     target_trace_meta = trace_lut[orig_trace_id]
                 # now, go and fetch the required records to assemble the selected sample result
