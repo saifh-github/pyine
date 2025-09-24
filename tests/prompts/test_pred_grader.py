@@ -21,9 +21,9 @@ def test_get_score_only_config_and_template():
     assert isinstance(ex, pyine.prompts.utils.PromptExample)
     assert ex.input_variables["execution_type"] in {
         "",
-        "program output",
-        "frame variables",
-        "function return",
+        "program_output",
+        "frame_variables",
+        "function_return",
     }
     assert isinstance(ex.output, pred_grader.GradingResult)
     assert 0.0 <= ex.output.score <= 1.0
@@ -35,11 +35,11 @@ def test_get_score_only_config_and_template():
     for var in ["expected_output", "predicted_output"]:
         assert var in template.input_variables
     rendered = template.format(
-        execution_type="program output",
+        execution_type="program_output",
         expected_output="Hello, Bob",
         predicted_output="Hello Bob",
     )
-    assert "Execution type: program output" in rendered
+    assert "Execution type: program_output" in rendered
     assert "EXPECTED OUTPUT" in rendered and "PREDICTED OUTPUT" in rendered
 
 
@@ -60,7 +60,7 @@ def test_get_with_reasoning_config_and_template():
         "as per the required format above:\n"
     )
     rendered = template.format(
-        execution_type="function return",
+        execution_type="function_return",
         expected_output="{'a': 1, 'b': 2}",
         predicted_output="{'b': 2, 'a': 1}",
     )
@@ -96,7 +96,7 @@ def test_pred_grader_infer_score_only():
     result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
         predicted="Hello Bob",
         expected="Hello, Bob",
-        execution_type="program output",
+        execution_type="program_output",
         llm=model,
         options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=False),
     )
@@ -117,7 +117,7 @@ def test_pred_grader_infer_with_reasoning():
     result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
         predicted="Hello Bob",
         expected="Hello, Bob",
-        execution_type="program output",
+        execution_type="program_output",
         llm=model,
         options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=True),
     )

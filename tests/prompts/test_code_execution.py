@@ -45,10 +45,10 @@ def test_get_unstructured_with_3_output_types_config_and_template():
     rendered_prog = template.format(
         code='print("Hello, " + input("Enter name: "))',
         description="Greets a user by name.",
-        output_type="program output",
+        output_type="program_output",
         inputs="Bobby",
     )
-    assert "Execution output type: program output" in rendered_prog
+    assert "Execution output type: program_output" in rendered_prog
     assert "Greets a user by name" in rendered_prog
     assert "Enter name: " in rendered_prog and "Bobby" in rendered_prog
     assert rendered_prog.endswith("Now, provide ONLY the execution output:")
@@ -56,13 +56,13 @@ def test_get_unstructured_with_3_output_types_config_and_template():
     rendered_vars = template.format(
         code="x=2\ny=3\nz=x+y",
         description="Adds two numbers.",
-        output_type="frame variables",
+        output_type="frame_variables",
         inputs="",
         first_line=1,
         last_line=3,
         trace_step_count=3,
     )
-    assert "Execution output type: frame variables" in rendered_vars
+    assert "Execution output type: frame_variables" in rendered_vars
     assert "First line" in rendered_vars and "Last line" in rendered_vars
     assert "Expected execution step count" in rendered_vars
     assert rendered_vars.endswith("Now, provide ONLY the variables dump:")
@@ -71,12 +71,12 @@ def test_get_unstructured_with_3_output_types_config_and_template():
         code="def add(a,b): return a+b\nresult = add(1,2)",
         description="Simple add function.",
         entrypoint="add",
-        output_type="function return",
+        output_type="function_return",
         inputs="a=1, b=2",
         first_line=1,
         last_line=1,
     )
-    assert "Execution output type: function return" in rendered_ret
+    assert "Execution output type: function_return" in rendered_ret
     assert "Consider only a call of the following function:" in rendered_ret
     assert "Use the following call input arguments:" in rendered_ret
     assert "a=1, b=2" in rendered_ret

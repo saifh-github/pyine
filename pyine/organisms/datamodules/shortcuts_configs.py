@@ -52,9 +52,10 @@ def get_default_sample_builder_overrides_for_subset(
                 choice_strategy="random",
                 input_type_prob_map=dict(
                     original=0.5,
-                    hinted=0.3,
-                    obfuscated_hinted=0.1,
+                    hinted=0.25,
                     stubbed=0.1,
+                    obfuscated_hinted=0.1,
+                    obfuscated=0.05,
                 ),
                 fallback_to_orig=True,
             ),

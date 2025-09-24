@@ -96,7 +96,7 @@ class TestSampleBuilderFullSamples:
         assert sample.identifier == tr.identifier
         assert sample.code == tr.code_string
         assert isinstance(sample.description, str)
-        assert sample.output_type == "program output"
+        assert sample.output_type == "program_output"
         assert sample.inputs == str(tr.inputs)
         assert sample.expected_output == str(tr.expected_output)
         # boundaries
@@ -115,7 +115,7 @@ class TestSampleBuilderPartialSamples:
             transform_strategy="always",
             max_partial_trace_steps=3,
             output_type_prob_map={
-                "frame variables": 1.0,
+                "frame_variables": 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
@@ -129,7 +129,7 @@ class TestSampleBuilderPartialSamples:
         # sample has content and steps
         assert isinstance(sample.inputs, str)
         assert isinstance(sample.expected_output, str)
-        assert isinstance(sample.output_type, str) and sample.output_type == "frame variables"
+        assert isinstance(sample.output_type, str) and sample.output_type == "frame_variables"
         assert sample.trace_step_count > 0
 
     def test_partial_sample_function_call(self, small_fake_reader: FakeTraceDatasetReader) -> None:
@@ -137,7 +137,7 @@ class TestSampleBuilderPartialSamples:
         cfg = SampleTransformConfig(
             transform_strategy="always",
             output_type_prob_map={
-                "function return": 1.0,
+                "function_return": 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
@@ -150,7 +150,7 @@ class TestSampleBuilderPartialSamples:
         # sample has content and steps
         assert isinstance(sample.inputs, str)
         assert isinstance(sample.expected_output, str)
-        assert isinstance(sample.output_type, str) and sample.output_type == "function return"
+        assert isinstance(sample.output_type, str) and sample.output_type == "function_return"
         assert sample.trace_step_count > 0
 
     def test_caps_enforced_and_fallback(self, small_fake_reader: FakeTraceDatasetReader) -> None:
@@ -159,13 +159,13 @@ class TestSampleBuilderPartialSamples:
             transform_strategy="always",
             max_inputs_str_length=0,  # any non-empty inputs will exceed -> partial skipped
             output_type_prob_map={
-                "frame variables": 1.0,
+                "frame_variables": 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         sample = sb[0]
         # since caps reject partial sample, we should have fallen back to full program output
-        assert sample.output_type == "program output"
+        assert sample.output_type == "program_output"
         tr = small_fake_reader[0]
         assert sample.expected_output == str(tr.expected_output)
 
@@ -190,9 +190,9 @@ class TestSampleBuilderRealData:
             max_inputs_str_length=1000,
             max_output_str_length=1000,
             output_type_prob_map={
-                "program output": 0.5,
-                "frame variables": 0.1,
-                "function return": 0.4,
+                "program_output": 0.5,
+                "frame_variables": 0.1,
+                "function_return": 0.4,
             },
         )
         sb = SampleBuilder(
@@ -214,7 +214,7 @@ class TestSampleBuilderRealData:
                 assert sample.code == trace_data.code_string
             assert isinstance(sample.description, str)
             code_lines = sample.code.splitlines()
-            if sample.output_type == "program output":
+            if sample.output_type == "program_output":
                 assert sample.first_line == 0
                 assert sample.last_line == len(code_lines)
                 assert sample.inputs == str(trace_data.inputs)
@@ -227,10 +227,10 @@ class TestSampleBuilderRealData:
                 assert len(sample.expected_output) <= cfg.max_output_str_length
                 assert 0 < sample.trace_step_count < trace_data.valid_step_count
                 assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
-                if sample.output_type == "frame variables":
+                if sample.output_type == "frame_variables":
                     assert 0 < sample.first_line < len(code_lines)
                     assert 0 < sample.last_line < len(code_lines)
-                else:  # function return
+                else:  # function_return
                     assert 0 < sample.first_line <= sample.last_line < len(code_lines)
 
 
@@ -329,13 +329,13 @@ print(x)
             trace_data=nested_call_trace,
             trace_meta=mocker.MagicMock(),
             trace_code_type="original",
-            target_output_type="frame variables",
+            target_output_type="frame_variables",
             rng=np.random.default_rng(seed=0),
         )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
-        assert sample.output_type == "frame variables"
+        assert sample.output_type == "frame_variables"
         assert 2 <= sample.first_line <= 5
         assert 3 <= sample.last_line <= 6
         assert 1 <= sample.trace_step_count <= 3
@@ -361,7 +361,7 @@ print(x)
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
-        assert sample.output_type == "function return"
+        assert sample.output_type == "function_return"
         assert sample.entrypoint == "foo"
         # since we didn't provide code_blocks mapping, first/last line should equal the call site line
         assert sample.first_line == sample.last_line == 3

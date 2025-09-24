@@ -46,6 +46,16 @@ def _get_expected_augment_types() -> list[str]:
     return [*dynamic_augment_types, *pregenerated_augment_types]
 
 
+def _convert_to_comma_separated_tags(tags: list[str]) -> str:
+    """Converts a list of tags to a comma-separated string."""
+    if not tags:
+        return ""
+    for tag in tags:
+        if "," in tag:
+            raise ValueError(f"trace tags cannot contain commas: {tag}")
+    return ",".join(tags)
+
+
 @dataclasses.dataclass(frozen=True)
 class TraceMetadata:
     """Metadata structure for a single trace, to be used for lookups and to cache as prepared data."""
@@ -121,12 +131,7 @@ class TraceMetadata:
     @functools.cached_property
     def comma_separated_tags(self) -> str:
         """Returns a comma-separated string of all tags associated with this trace."""
-        if not self.tags:
-            return ""
-        for tag in self.tags:
-            if "," in tag:
-                raise ValueError(f"trace tags cannot contain commas: {tag}")
-        return ",".join(self.tags)
+        return _convert_to_comma_separated_tags(self.tags)
 
 
 def get_traces_metadata(
@@ -232,16 +237,16 @@ class TraceDatasetMetadata(pydantic.BaseModel):
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate
-    "program output",  # only available for full executions
-    "frame variables",  # only available for partial executions
-    "next step key",  # only available for partial executions  # @@@@ TODO: not implemented yet!
-    "function return",  # only available for specific function calls
+    "program_output",  # only available for full executions
+    "frame_variables",  # only available for partial executions
+    "next_step_key",  # only available for partial executions  # @@@@ TODO: not implemented yet!
+    "function_return",  # only available for specific function calls
 ]
 """Possible output types for trace execution samples:
-- 'program output': the final output of the program after executing the entire code;
-- 'frame variables': the full description of all frame variables at the target line/step;
-- 'next step key': the trace key of the next event after executing the code up to a target line/step;
-- 'function return': the return value of a specific function called at a specific line with specific arguments.
+- 'program_output': the final output of the program after executing the entire code;
+- 'frame_variables': the full description of all frame_variables at the target line/step;
+- 'next_step_key': the trace key of the next event after executing the code up to a target line/step;
+- 'function_return': the return value of a specific function called at a specific line with specific arguments.
 """
 
 SampleInputType = typing.Literal[  # note: literal makes this type compatible with default collate
@@ -310,7 +315,7 @@ class SampleData(typing.NamedTuple):
 
     This code snippet may have been replaced by a prompt result database lookup; you can check if
     `has_code_override = True` to see if this is the case. If so, the only valid `output_type`
-    becomes 'program output' (which is the full program output), and the `expected_output` field
+    becomes 'program_output' (which is the full program output), and the `expected_output` field
     might correspond to a different execution outcome than the "correct" one, depending on whether
     the code snippet contains an issue or not. You can tell this by checking the `code_type` field.
     """
@@ -345,7 +350,7 @@ class SampleData(typing.NamedTuple):
     has_code_override: bool
     """Whether the code snippet has been overridden by a prompt result database lookup.
 
-    Note: if this is True, then the only possible value for `output_type` should be 'program output',
+    Note: if this is True, then the only possible value for `output_type` should be 'program_output',
     and the `expected_output` field might correspond to a different execution outcome than the
     "correct" one.
     """
@@ -431,7 +436,7 @@ class SampleTransformConfig(pydantic.BaseModel):
         if self.transform_strategy != "never" and not self.output_type_prob_map:
             raise ValueError("output type prob map must be provided when using partial samples generation")
         prob_map_total = sum([v for v in self.output_type_prob_map.values()])
-        if prob_map_total < 0 or prob_map_total > 1:  # doesn't have to be 1, as fallback = program output
+        if prob_map_total < 0 or prob_map_total > 1:  # doesn't have to be 1, as fallback = program_output
             raise ValueError(f"total probability map values must be in the range [0, 1]; got {prob_map_total}")
         return self
 
@@ -534,7 +539,7 @@ class SampleBuilder(SampleDataParserType):
     transform a raw trace result into a set of input + expected output variables for prompts/models.
 
     The transformation strategy (specified via `SampleTransformConfig`) determines when to ask
-    models to predict the execution of full code snippets ('program output'), and when to predict
+    models to predict the execution of full code snippets ('program_output'), and when to predict
     a portion of them (related to a function, a segment, etc.). 'Partial samples' can be used to
     diversify training data and make the prediction task easier in cases where e.g. traces are
     very long. See the docstring of `SampleOutputType` for more information on supported types.
@@ -543,9 +548,14 @@ class SampleBuilder(SampleDataParserType):
     code snippets to use (if any), and if augmentations are not present in the trace dataset
     itself, whether to go fetch them from the prompt result database (if available). If the prompt
     result database is used to retrieve augmented code snippets, then the only sample type that
-    can be generated for that sample is the 'program output' (i.e. full code snippet). This is
+    can be generated for that sample is the 'program_output' (i.e. full code snippet). This is
     because we are lacking trace data required to prepare other output types here. See the
     docstring of `SampleInputType` for more information on supported types.
+
+    # @@@@@@ TODO: we could update this class so that a single trace can be used to build MULTIPLE
+                   samples; to do so, we just need to update the `_select_samples_from_traces`
+                   function to return multiple samples per trace (one for each cousin cluster);
+                   this would be useful for training especially...
     """
 
     def __init__(
@@ -689,37 +699,27 @@ class SampleBuilder(SampleDataParserType):
             target_type = _draw_type(selection_config.input_type_prob_map, rng)  # draw the sample type...
             assert target_type is not None, "unexpected default fallback for input type draw"
             target_type = typing.cast(SampleInputType, target_type)
+            target_trace_meta = trace_lut[orig_trace_id]  # might override this below if targeted obfs code
             if target_type == "original":
                 # keep the original trace as-is, with no code snippet override
                 assert target_type in trace_map, "missing orig trace in source data?"
                 assert len(trace_map[target_type]) == 1 and trace_map[target_type][0] == orig_trace_id
-                output_selections.append(
-                    _TraceSampleSelectionResult(
-                        trace_meta=trace_lut[orig_trace_id],
-                        code_type="original",
-                    )
-                )
+                output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
                 continue
-            if target_type == "obfuscated":
-                if target_type in trace_map:
-                    # keep that trace as-is with no override under the assumption that obfuscation was done previously
-                    assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
-                    output_selections.append(
-                        _TraceSampleSelectionResult(
-                            trace_meta=trace_lut[trace_map["obfuscated"][0]],
-                            code_type=target_type,
-                        )
-                    )
+            if target_type.startswith("obfuscated"):
+                if "obfuscated" in trace_map:  # if we already possess the required obfuscated code
+                    assert len(trace_map["obfuscated"]) == 1, "unexpected obfuscated trace count?"
+                    target_trace_meta = trace_lut[trace_map["obfuscated"][0]]
+                    if target_type == "obfuscated":
+                        # keep that trace as-is with no override
+                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "obfuscated"))
+                        continue
                 else:
-                    # cannot obfuscate code here (we'd need to load more problem data to obfuscate)
+                    # we are missing obfuscated code and we cannot generate it here
+                    # (we would need to load more problem data to do it properly)
                     if selection_config.fallback_to_orig:
-                        output_selections.append(
-                            _TraceSampleSelectionResult(
-                                trace_meta=trace_lut[orig_trace_id],
-                                code_type="original",
-                            )
-                        )
-                continue
+                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
+                    continue
             if target_type in trace_map and trace_map[target_type]:
                 # if the augmentation we are looking for already exists, just pick a corresponding trace and use it
                 if selection_config.choice_strategy == "random":
@@ -730,34 +730,18 @@ class SampleBuilder(SampleDataParserType):
                 else:
                     raise NotImplementedError("unsupported random selection strategy")
                 # keep that trace as-is with no override under the assumption that the traced code is already augmented
-                output_selections.append(
-                    _TraceSampleSelectionResult(
-                        trace_meta=trace_lut[picked_trace_id],
-                        code_type=target_type,
-                    )
-                )
+                output_selections.append(_TraceSampleSelectionResult(trace_lut[picked_trace_id], target_type))
                 continue
             if target_type not in trace_map or not trace_map[target_type]:
                 # if the augmentation we are looking for does not exist, generate it using prompt result db lookups
                 if not selection_config.allow_db_lookups:
                     # if db lookups are disabled, go no further
                     if selection_config.fallback_to_orig:
-                        output_selections.append(
-                            _TraceSampleSelectionResult(
-                                trace_meta=trace_lut[orig_trace_id],
-                                code_type="original",
-                            )
-                        )
+                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
                     continue
                 # first, determine the strategy to look up previously generated prompt results for the target type
                 augment_is_soluton_specific = target_type in _solution_specific_augment_types
                 augment_is_trace_specific = target_type in _trace_specific_augment_types
-                # next, determine what parent trace to use for lookups (orig or obfuscated)
-                if target_type.startswith("obfuscated_"):
-                    assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
-                    target_trace_meta = trace_lut[trace_map["obfuscated"][0]]
-                else:
-                    target_trace_meta = trace_lut[orig_trace_id]
                 # now, go and fetch the required records to assemble the selected sample result
                 if augment_is_soluton_specific:
                     # relevant prompt result db entries should be attached to the parent solution id
@@ -781,26 +765,21 @@ class SampleBuilder(SampleDataParserType):
                 elif augment_is_trace_specific:
                     # relevant prompt result db entries should be attached to the trace id itself
                     records = prompt_result_db.get_by_identifier(identifier=str(target_trace_meta.trace_id))
-                    if target_type == "hinted":
+                    if "hinted" in target_type:
                         records = [
                             r for r in records if r.prompt_name.startswith("hints/") and r.prompt_name != "hints/stubs"
                         ]
-                    elif target_type == "misleading":
+                    elif "misleading" in target_type:
                         records = [r for r in records if r.prompt_name == "issues/docs"]
                     else:
-                        records = [r for r in records if f"augment:{target_type}" in r.tags]
+                        raise NotImplementedError(f"missing trace-specific branching logic for: {target_type}")
                 else:
                     raise NotImplementedError(f"missing augment handling for: {target_type}")
                 # given the records we have found...
                 if not records:
                     # no database match found
                     if selection_config.fallback_to_orig:
-                        output_selections.append(
-                            _TraceSampleSelectionResult(
-                                trace_meta=trace_lut[orig_trace_id],
-                                code_type="original",
-                            )
-                        )
+                        output_selections.append(_TraceSampleSelectionResult(trace_lut[orig_trace_id], "original"))
                     continue
                 potential_code_snippet_overrides = [r.result for r in records]  # kept in order, last = most recent
                 if selection_config.choice_strategy == "random":
@@ -810,7 +789,7 @@ class SampleBuilder(SampleDataParserType):
                 else:
                     raise NotImplementedError
                 # append the resulting sample, but with the code snippet override from the database
-                # (note: in these cases, the only valid sample output type will be 'program output',
+                # (note: in these cases, the only valid sample output type will be 'program_output',
                 #  as we cannot correctly deduce anything trace-related without re-tracing entirely)
                 output_selections.append(
                     _TraceSampleSelectionResult(
@@ -898,10 +877,10 @@ class SampleBuilder(SampleDataParserType):
         if selected_trace.code_override is not None:
             # if we have a code snippet override, we do NOT have trace events associated with it
             # (therefore, the only possible output type is the full program output)
-            picked_output_type: SampleOutputType = "program output"
+            picked_output_type: SampleOutputType = "program_output"
         else:
             picked_output_type = self._pick_output_type(trace_data=trace_data, rng=t_rng)
-        if picked_output_type == "function return":
+        if picked_output_type == "function_return":
             # first, if requested, try to generate a sample for a function call
             sample = self._get_function_call_sample(
                 trace_data=trace_data,
@@ -912,8 +891,8 @@ class SampleBuilder(SampleDataParserType):
             if sample is not None:
                 # if we did successfully build a partial sample, return it now
                 return sample
-        if picked_output_type != "program output" and (
-            picked_output_type != "function return" or self.transform_config.functions_fallback_to_segments
+        if picked_output_type != "program_output" and (
+            picked_output_type != "function_return" or self.transform_config.functions_fallback_to_segments
         ):
             # if requested (or as a fallback from the function call sample), try to generate a segment sample
             sample = self._get_code_segment_sample(
@@ -927,6 +906,12 @@ class SampleBuilder(SampleDataParserType):
                 # if we did successfully build a partial sample, return it now
                 return sample
         # ultimate fallback: return a sample for the full program output
+        sample_tags = selected_trace.trace_meta.tags.copy()
+        description = self.code_summaries.get(selected_trace.trace_meta.solution_id, "")
+        if description:
+            sample_tags.append("augment:has_code_description")
+        sample_tags.append(f"sample_code_type:{selected_trace.code_type}")
+        sample_tags.append("sample_output_type:program_output")
         return SampleData(
             identifier=trace_data.identifier,
             code=selected_trace.code_override if selected_trace.code_override else trace_data.code_string,
@@ -936,10 +921,10 @@ class SampleBuilder(SampleDataParserType):
             last_line=len(trace_data.code_string.splitlines()),
             inputs=str(trace_data.inputs),
             expected_output=str(trace_data.expected_output),
-            output_type="program output",
+            output_type="program_output",
             code_type=selected_trace.code_type,
             trace_step_count=trace_data.valid_step_count,  # count valid steps only
-            comma_separated_tags=selected_trace.trace_meta.comma_separated_tags,
+            comma_separated_tags=_convert_to_comma_separated_tags(sample_tags),
             has_code_override=selected_trace.code_override is not None,
         )
 
@@ -966,7 +951,7 @@ class SampleBuilder(SampleDataParserType):
 
         If we do decide to create a 'partial' trace sample, this function will determine which type
         to generate. If we do not decide to create a partial sample, this function will return
-        'program output', i.e. that we should create a full program trace sample.
+        'program_output', i.e. that we should create a full program trace sample.
 
         Assumptions:
           - Partial samples will never be created if the decision strategy is 'never'.
@@ -976,7 +961,7 @@ class SampleBuilder(SampleDataParserType):
           - Sum of all output type probabilities is <= 1.0.
           - If the random draw falls in the leftover mass (1.0 - sum), we fall back to a full trace sample.
         """
-        default_fallback: SampleOutputType = "program output"
+        default_fallback: SampleOutputType = "program_output"
         try_partial_sample = False
         if self.transform_config.transform_strategy == "always":
             try_partial_sample = True
@@ -1090,19 +1075,25 @@ class SampleBuilder(SampleDataParserType):
                 # corresponds to an external call; we'll assign first line == last line
                 # @@@@ TODO: if there are a lot of external calls, might want to hint/doc them specifically
                 first_line, last_line = call_event.trace_key.line, call_event.trace_key.line
+            sample_tags = trace_meta.tags.copy()
+            description = self.code_summaries.get(trace_meta.solution_id, "")
+            if description:
+                sample_tags.append("augment:has_code_description")
+            sample_tags.append(f"sample_code_type:{trace_code_type}")
+            sample_tags.append("sample_output_type:function_return")
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description=self.code_summaries.get(trace_meta.solution_id, ""),
+                description=description,
                 entrypoint=target_func_name,
                 first_line=first_line,
                 last_line=last_line,
                 inputs=call_args_str,
                 expected_output=function_output_str,
-                output_type="function return",
+                output_type="function_return",
                 code_type=trace_code_type,
                 trace_step_count=call_step_count,
-                comma_separated_tags=trace_meta.comma_separated_tags,
+                comma_separated_tags=_convert_to_comma_separated_tags(sample_tags),
                 has_code_override=False,
             )
         return None  # no more candidates to consider, failed to get a function call
@@ -1116,11 +1107,11 @@ class SampleBuilder(SampleDataParserType):
         rng: np.random.Generator,
     ) -> SampleData | None:
         """Returns a sample for a segment of the given trace."""
-        # note: we can get here with a 'function return' target output if this was a fallback call
-        assert target_output_type in ["function return", "frame variables", "next step key"]
-        if target_output_type == "function return":
-            target_output_type = "frame variables"  # override this now with something we can handle below
-        if target_output_type == "next step key":
+        # note: we can get here with a 'function_return' target output if this was a fallback call
+        assert target_output_type in ["function_return", "frame_variables", "next_step_key"]
+        if target_output_type == "function_return":
+            target_output_type = "frame_variables"  # override this now with something we can handle below
+        if target_output_type == "next_step_key":
             raise NotImplementedError  # @@@@ TODO
         # TODO @@@@@: try to target specific blocks? (if/else blocks? loops?)
         # build candidate event lists contiguous within a single frame at any depth; on CALL, skip callee contents
@@ -1190,19 +1181,25 @@ class SampleBuilder(SampleDataParserType):
             if not self._satisfies_str_caps(input_vars_str, output_vars_str):
                 continue  # enforce inputs/output str length cap
             first_line, last_line = segment_start.trace_key.line, segment_end.trace_key.line
+            sample_tags = trace_meta.tags.copy()
+            description = self.code_summaries.get(trace_meta.solution_id, "")
+            if description:
+                sample_tags.append("augment:has_code_description")
+            sample_tags.append(f"sample_code_type:{trace_code_type}")
+            sample_tags.append("sample_output_type:frame_variables")
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
-                description=self.code_summaries.get(trace_meta.solution_id, ""),
+                description=description,
                 entrypoint="",
                 first_line=first_line,
                 last_line=last_line,
                 inputs=input_vars_str,
                 expected_output=output_vars_str,
-                output_type="frame variables",
+                output_type="frame_variables",
                 code_type=trace_code_type,
                 trace_step_count=segment_size,
-                comma_separated_tags=trace_meta.comma_separated_tags,
+                comma_separated_tags=_convert_to_comma_separated_tags(sample_tags),
                 has_code_override=False,
             )
         return None  # no more candidate lists to consider, failed to get a segment sample

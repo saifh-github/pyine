@@ -35,9 +35,9 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBiasD
                 transform_config=pyine.organisms.datamodules.utils.samples.SampleTransformConfig(
                     transform_strategy="hybrid",
                     output_type_prob_map={
-                        "program output": 0.5,
-                        "frame variables": 0.1,
-                        "function return": 0.4,
+                        "program_output": 0.5,
+                        "frame_variables": 0.1,
+                        "function_return": 0.4,
                     },
                 ),
             ),  # other subsets will default to never producing partial samples
