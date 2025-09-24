@@ -1,5 +1,6 @@
 """Hydra-zen config builder for shortcuts data modules."""
 
+import typing
 import warnings
 
 import hydra.conf
@@ -11,6 +12,55 @@ import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.datamodules.utils.samples
+
+
+def get_default_sampler_builder_config(seed: typing.Any) -> dict[str, typing.Any]:
+    """Returns the default configuration dictionary used to instantiate sampler builders.
+
+    This configuration will be hierarchically overridden by subset-specific settings (see below).
+    """
+    return dict(
+        transform_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleTransformConfig
+            seed=seed,
+            transform_strategy="never",
+        ),
+        selection_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleSelectionConfig
+            seed=seed,
+            allow_db_lookups=True,
+            choice_strategy="latest",
+            input_type_prob_map=pyine.organisms.datamodules.utils.samples.get_default_code_input_type_prob_map(),
+            fallback_to_orig=False,
+        ),
+    )
+
+
+def get_default_sample_builder_overrides_for_subset(
+    subset_name: str,
+) -> dict[str, typing.Any]:
+    """Returns default overrides for the sample builder config to be used for a given subset.
+
+    The overrides should apply on top of the base (shared) sampler builder config, and make the
+    resulting config suitable for the given subset. If no overrides are defined, an empty dict
+    will be returned.
+    """
+    if subset_name == "train":
+        return dict(
+            transform_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleTransformConfig
+                transform_strategy="never",  # @@@@@@ TODO consider switching to 'if_too_long'?
+            ),
+            selection_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleSelectionConfig
+                choice_strategy="random",
+                input_type_prob_map=dict(
+                    original=0.5,
+                    hinted=0.3,
+                    obfuscated_hinted=0.1,
+                    stubbed=0.1,
+                ),
+                fallback_to_orig=True,
+            ),
+        )
+    # no specific overrides for this subset
+    return dict()
 
 
 def _get_taco_configs(
@@ -187,20 +237,11 @@ def get_configs(
             split_seed="${runtime.seed}",
             # @@@@@@ TODO: put the configs below in their own store w/ named defaults/overrides?
             default_dataparser_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
-                params=dict(
-                    transform_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleTransformConfig
-                        seed="${runtime.seed}",
-                        transform_strategy="never",
-                    ),
-                    selection_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleSelectionConfig
-                        seed="${runtime.seed}",
-                        input_type_prob_map=dict(
-                            original=1.0,
-                        ),
-                    ),
-                ),
+                params=get_default_sampler_builder_config(seed="${runtime.seed}"),
             ),
-            dataparser_config_overrides=dict(),
+            dataparser_config_overrides={
+                subset: get_default_sample_builder_overrides_for_subset(subset) for subset in ["train", "valid", "test"]
+            },
             dataloader_config_overrides=dict(
                 train=dict(
                     shuffle=True,

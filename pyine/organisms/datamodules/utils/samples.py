@@ -450,7 +450,7 @@ SampleSelectionChoiceStrategyType = typing.Literal["latest", "random"]
 """
 
 
-def _get_default_code_input_type_prob_map() -> dict[SampleInputType, float]:
+def get_default_code_input_type_prob_map() -> dict[SampleInputType, float]:
     """Returns the default probability map used to decide which sample type to select for each trace."""
     return {"original": 1.0}
 
@@ -467,8 +467,14 @@ class SampleSelectionConfig(pydantic.BaseModel):
     """Whether to allow prompt result database lookups for code snippets (if missing)."""
     choice_strategy: SampleSelectionChoiceStrategyType = "latest"
     """Strategy deciding how to select code snippets when multiple choices exist (see type docstring for more info)."""
-    input_type_prob_map: SampleSelectionInputProbMapType = _get_default_code_input_type_prob_map()
+    input_type_prob_map: SampleSelectionInputProbMapType = get_default_code_input_type_prob_map()
     """Probability map used to determine potential input sample types for random selection strategy."""
+    fallback_to_orig: bool = False
+    """Specifies whether to fallback to the original code snippet if no augmentation can be used.
+
+    If False and no augmentation can be used, the trace will be skipped and no sample will be
+    generated using it.
+    """
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "SampleSelectionConfig":
@@ -669,10 +675,11 @@ class SampleBuilder(SampleDataParserType):
                 output_selections.append(
                     _TraceSampleSelectionResult(
                         trace_meta=trace_lut[orig_trace_id],
-                        code_type=target_type,
+                        code_type="original",
                     )
                 )
-            elif target_type == "obfuscated":
+                continue
+            if target_type == "obfuscated":
                 if target_type in trace_map:
                     # keep that trace as-is with no override under the assumption that obfuscation was done previously
                     assert len(trace_map["obfuscated"]) == 1, "missing obfuscated trace in dataset?"
@@ -683,9 +690,16 @@ class SampleBuilder(SampleDataParserType):
                         )
                     )
                 else:
-                    # cannot obfuscate code here, skip the trace (we'd need to load more problem data to obfuscate)
-                    pass
-            elif target_type in trace_map and trace_map[target_type]:
+                    # cannot obfuscate code here (we'd need to load more problem data to obfuscate)
+                    if selection_config.fallback_to_orig:
+                        output_selections.append(
+                            _TraceSampleSelectionResult(
+                                trace_meta=trace_lut[orig_trace_id],
+                                code_type="original",
+                            )
+                        )
+                continue
+            if target_type in trace_map and trace_map[target_type]:
                 # if the augmentation we are looking for already exists, just pick a corresponding trace and use it
                 if selection_config.choice_strategy == "random":
                     picked_idx = int(rng.integers(0, len(trace_map[target_type])))
@@ -701,10 +715,19 @@ class SampleBuilder(SampleDataParserType):
                         code_type=target_type,
                     )
                 )
-            elif target_type not in trace_map or not trace_map[target_type]:
+                continue
+            if target_type not in trace_map or not trace_map[target_type]:
                 # if the augmentation we are looking for does not exist, generate it using prompt result db lookups
                 if not selection_config.allow_db_lookups:
-                    continue  # lookups disabled, skip this instance
+                    # if db lookups are disabled, go no further
+                    if selection_config.fallback_to_orig:
+                        output_selections.append(
+                            _TraceSampleSelectionResult(
+                                trace_meta=trace_lut[orig_trace_id],
+                                code_type="original",
+                            )
+                        )
+                    continue
                 # first, determine the strategy to look up previously generated prompt results for the target type
                 augment_is_soluton_specific = target_type in _solution_specific_augment_types
                 augment_is_trace_specific = target_type in _trace_specific_augment_types
@@ -749,7 +772,15 @@ class SampleBuilder(SampleDataParserType):
                     raise NotImplementedError(f"missing augment handling for: {target_type}")
                 # given the records we have found...
                 if not records:
-                    continue  # no database match found, skip this trace
+                    # no database match found
+                    if selection_config.fallback_to_orig:
+                        output_selections.append(
+                            _TraceSampleSelectionResult(
+                                trace_meta=trace_lut[orig_trace_id],
+                                code_type="original",
+                            )
+                        )
+                    continue
                 potential_code_snippet_overrides = [r.result for r in records]  # kept in order, last = most recent
                 if selection_config.choice_strategy == "random":
                     picked_code_override_idx = int(rng.integers(0, len(potential_code_snippet_overrides)))
@@ -767,8 +798,8 @@ class SampleBuilder(SampleDataParserType):
                         code_override=potential_code_snippet_overrides[picked_code_override_idx],
                     )
                 )
-            else:
-                raise NotImplementedError
+                continue
+            raise NotImplementedError(f"missing augment handling for: {target_type}")
         logger.debug(f"trace selection strategy kept {len(output_selections)} samples for {len(traces)} traces")
         if output_selections:
             code_type_counts = collections.Counter([s.code_type for s in output_selections])
@@ -1200,8 +1231,11 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             if suffix != "original" and subset_type.endswith(f"_{suffix}"):
                 special_subset_overrides = dict(
                     selection_config=SampleSelectionConfig(
+                        seed=0,
+                        allow_db_lookups=True,
                         choice_strategy="latest",
-                        input_type_prob_map={suffix: 1.0},
+                        input_type_prob_map={t: 1.0 if t == suffix else 0.0 for t in typing.get_args(SampleInputType)},
+                        fallback_to_orig=False,
                     )
                 )
                 break
