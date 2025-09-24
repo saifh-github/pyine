@@ -19,7 +19,7 @@ class DummyDatamodule:
     def setup(self) -> None:
         self.setup_called += 1
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self, target_subsets=None) -> dict[str, int | float | str]:
         return self._stats
 
 
@@ -46,11 +46,15 @@ def _build_app_config(
     datamodule_config: DummyDatamoduleConfig,
     *,
     use_wandb_logging: bool = False,
+    train_subset_names: list[str] | None = None,
+    valid_subset_names: list[str] | None = None,
     eval_subset_names: list[str] | None = None,
 ) -> trainer_common.AppMainConfig:
     return trainer_common.AppMainConfig.model_construct(
         datamodule_config=datamodule_config,
         llm_grader_provider_config=None,
+        train_subset_names=train_subset_names or ["train"],
+        valid_subset_names=valid_subset_names or ["valid"],
         eval_subset_names=eval_subset_names or ["valid"],
         use_wandb_logging=use_wandb_logging,
     )

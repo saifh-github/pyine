@@ -37,8 +37,14 @@ def _compute_estimated_train_token_count(
         model_id=config.openai_finetuner_config.params.base_model,
         raise_if_not_found=False,
     )
-    tr_file_path = dm.get_openai_messages_dataset("train")
-    messages = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
+    if len(config.train_subset_names) == 1:
+        tr_file_path = dm.get_openai_messages_dataset(config.train_subset_names[0])
+        messages = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
+    else:
+        messages: list[list[dict[str, str]]] = []
+        for subset_name in config.train_subset_names:
+            tr_file_path = dm.get_openai_messages_dataset(subset_name)
+            messages += pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
     token_count = 0
     for msg in messages:
         if isinstance(msg, dict):
@@ -101,14 +107,16 @@ async def main(
         approx_tokens = _compute_estimated_train_token_count(config, dm)
         logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
         finetuner = config.openai_finetuner_config.instantiate(client)
+        assert len(config.train_subset_names) == 1, "openai trainer only supports one train dataset"
         tr_file_path = dm.get_openai_messages_dataset(
-            subset_type="train",
+            subset_type=config.train_subset_names[0],
             append_answer=config.needs_answers_in_train_dataset(),
             merge_system_with_user=not config.supports_system_prompt(),
         )
         tr_file_id = finetuner.ensure_uploaded(tr_file_path)
+        assert len(config.valid_subset_names) == 1, "openai trainer only supports one valid dataset"
         va_file_path = dm.get_openai_messages_dataset(
-            subset_type="valid",
+            subset_type=config.valid_subset_names[0],
             append_answer=config.needs_answers_in_train_dataset(),
             merge_system_with_user=not config.supports_system_prompt(),
         )

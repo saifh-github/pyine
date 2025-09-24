@@ -376,7 +376,7 @@ class BaseDataModule(pl.LightningDataModule):
         """Types of dataloaders that this particular implementation supports."""
         return self.config.loader_types
 
-    def get_stats(self) -> dict[str, int | float | str]:
+    def get_stats(self, target_subsets: list[SubsetNameType] | None = None) -> dict[str, int | float | str]:
         """Returns a dictionary of useful-to-log statistics."""
         return dict()  # nothing to log here by default
 

@@ -24,8 +24,17 @@ class AppMainConfig(pydantic.BaseModel):
     """Configuration for the datamodule to use."""
     llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
     """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evals."""
+    train_subset_names: list[str] = pydantic.Field(default=["train"], min_length=1)
+    """Subset names to train on."""
+    valid_subset_names: list[str] = pydantic.Field(default=["valid"], min_length=1)
+    """Subset names to validate on."""
     eval_subset_names: list[str] = ["valid", "valid_obfuscated"]
-    """Subset names to evaluate on."""
+    """Subset names to use for final evaluations.
+
+    Note: should be kept to 'validation' instead of 'testing' subsets until experiments are done,
+    and all hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
+        https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
+    """
     use_wandb_logging: bool = False
     """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
 
@@ -49,7 +58,9 @@ def prepare_code_exec_datamodule(
     dm.setup()
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None
-        dm_stats = {f"dataset_stats/{k}": v for k, v in dm.get_stats().items()}
+        target_subsets = config.train_subset_names + config.valid_subset_names + config.eval_subset_names
+        dm_stats = dm.get_stats(target_subsets)
+        dm_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(dm_stats)
         for eval_subset_name in config.eval_subset_names:
             pyine.evals.common.define_metrics_for_wandb(

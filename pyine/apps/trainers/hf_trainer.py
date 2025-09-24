@@ -300,8 +300,18 @@ def train(
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
     # the datamodule supplies conversations as HF datasets with a "messages" column
-    train_raw = datamodule.get_hf_messages_dataset("train")
-    valid_raw = datamodule.get_hf_messages_dataset("valid")
+    if len(config.train_subset_names) == 1:
+        train_raw = datamodule.get_hf_messages_dataset(config.train_subset_names[0])
+    else:
+        train_raw = datasets.concatenate_datasets(
+            [datamodule.get_hf_messages_dataset(sn) for sn in config.train_subset_names]
+        )
+    if len(config.valid_subset_names) == 1:
+        valid_raw = datamodule.get_hf_messages_dataset(config.valid_subset_names[0])
+    else:
+        valid_raw = datasets.concatenate_datasets(
+            [datamodule.get_hf_messages_dataset(sn) for sn in config.valid_subset_names]
+        )
     # use some of the dataloader workers for dataset.map to parallelize tokenization
     num_proc = max(1, config.dataloader_num_workers // 2)
     # convert conversation-style rows into flat, tokenized examples for training/valid
