@@ -16,8 +16,8 @@ def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
         "--dataset-name=potato",
         f"--dataset-path={tmp_path}",
         "--output-path=/tmp/potato_out",
-        "--fetch-augmented-solutions=hints/docs=2",
-        "--fetch-augmented-solutions=hints/stubs=1",
+        "--fetch-augmented-solutions=issues/todos=2",
+        "--fetch-augmented-solutions=issues/iterators=1",
         "--dry-run",
     ]
     res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa

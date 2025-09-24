@@ -358,8 +358,6 @@ def _default_identifier_resolver(
     samples have already been annotated (or will be, in some in-flight job) and should be skipped.
     """
     prompts_where_solution_gives_identifier = [
-        "callable_analysis",
-        "code_analysis",
         "code_summary",
         "hints/stubs",
         "issues/iterators",
@@ -398,8 +396,6 @@ def _default_group_resolver(
     an exception.
     """
     prompts_where_problem_gives_group = [
-        "callable_analysis",
-        "code_analysis",
         "code_summary",
         "hints/stubs",
         "issues/iterators",
@@ -424,6 +420,8 @@ _INTERNAL_BUGGED_HINTED_TOKEN = "__orig_bugless_code__"
 """Token used in prompt variable dicts when prompting on of buggy code (specified the orig code)."""
 _INTERNAL_MISLEADING_TOKEN = "__orig_expected_output__"
 """Token used in prompt variable dicts when using misleading hints (specifies the orig output)."""
+CODE_SUMMARY_TOKEN = "description"
+"""Token used in prompt variable dicts when using code summaries (shared definition across many prompt templates)."""
 
 
 def _default_input_variables_builder(
@@ -477,7 +475,7 @@ def _default_input_variables_builder(
         )
         if code_summary_records:
             # always keep the latest description (this should not matter too much)
-            output["description"] = code_summary_records[-1].result
+            output[CODE_SUMMARY_TOKEN] = code_summary_records[-1].result
 
     # only provide inputs/outputs for prompts that are test-specific
     if (is_hint_prompting and not is_stub_prompting) or is_mislead_prompting:
@@ -564,43 +562,66 @@ def _default_tags_builder(
     if config.llm_provider_config.model_kwargs.get("model", None) is not None:
         output_tags.append(f"llm_provider_model:{config.llm_provider_config.model_kwargs['model']}")
     assert not any([t.startswith("augment:") for t in output_tags]), "should not be any of these yet"
+    assert trace.identifier is not None, "cannot derive identifier without a trace id"
+    trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
+    if trace_id.is_augmented:
+        assert trace_id.augment_category is not None, "missing augment category"
+        output_tags.append(f"augment:{trace_id.augment_category}")  # prior trace augment tag
 
-    # add augment-related tags below
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
-    if is_hint_prompting or is_issue_prompting:
-        is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
-        is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-        assert trace.identifier is not None, "cannot derive identifier without a trace id"
-        trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-        if "description" in input_vars:
-            assert config.augment_config.fetch_code_descriptions
-            output_tags.append("augment:has_code_description")
-        if "obfuscated" in trace_id.augment_category:
+    # add new augment-related tags below
+    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
+    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/") and not is_stub_prompting
+    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
+    is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
+    if is_stub_prompting or is_hint_prompting or is_mislead_prompting or is_bug_prompting:
+        if trace_id.is_obfuscated:
             if trace_id.augment_category != "obfuscated":
-                raise NotImplementedError("missing handling for pre-augmented obfuscated base tags")
-            if is_hint_prompting and not is_stub_prompting:
-                output_tags.append("augment:obfuscated_hinted")
-            elif is_mislead_prompting:
+                raise NotImplementedError("missing handling for pre-obfuscated mixed tagging")
+            if is_stub_prompting or is_bug_prompting:
+                raise NotImplementedError("missing handling for pre-obfuscated stubs/bugs tagging")
+            if _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
+                raise NotImplementedError("missing handling for pre-obfuscated bugged+hinted tagging")
+            if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
                 output_tags.append("augment:obfuscated_misleading")
-            else:
-                raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
-        elif is_stub_prompting:
-            output_tags.append("augment:stubbed")
-        elif is_issue_prompting and not is_mislead_prompting:
-            output_tags.append("augment:bugged")
-        elif _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-            assert config.augment_config.is_bugged_hinting_enabled
-            if _INTERNAL_MISLEADING_TOKEN in input_vars:
-                assert config.augment_config.is_bugged_misleading_enabled
+            elif is_hint_prompting:
+                output_tags.append("augment:obfuscated_hinted")
+        elif trace_id.is_bugged:
+            if is_stub_prompting or is_bug_prompting:
+                raise NotImplementedError("missing handling for pre-bugged stubs/bugs tagging")
+            assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
+            if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
+                output_tags.append("augment:bugged_misleading")
+            elif is_hint_prompting:
+                output_tags.append("augment:bugged_hinted")
+        elif trace_id.is_hinted or trace_id.is_misleading:
+            raise NotImplementedError("missing handling for pre-hinted mixed tagging")
+        elif is_mislead_prompting:
+            assert not trace_id.is_augmented, "this case should have been handled above"
+            assert _INTERNAL_MISLEADING_TOKEN in input_vars
+            if _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
                 output_tags.append("augment:bugged_misleading")
             else:
-                output_tags.append("augment:bugged_hinted")
-        elif _INTERNAL_MISLEADING_TOKEN in input_vars:
-            assert config.augment_config.is_misleading_enabled or is_mislead_prompting
-            output_tags.append("augment:misleading")
+                output_tags.append("augment:misleading")
         elif is_hint_prompting:
-            output_tags.append("augment:hinted")
+            assert not trace_id.is_augmented, "this case should have been handled above"
+            is_misleading = _INTERNAL_MISLEADING_TOKEN in input_vars
+            is_bugged = _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
+            if is_misleading and is_bugged:
+                output_tags.append("augment:bugged_misleading")
+            elif is_misleading:
+                output_tags.append("augment:misleading")
+            elif is_bugged:
+                output_tags.append("augment:bugged_hinted")
+            else:
+                output_tags.append("augment:hinted")
+        elif is_bug_prompting:
+            assert not trace_id.is_augmented, "this case should have been handled above"
+            assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
+            assert _INTERNAL_MISLEADING_TOKEN not in input_vars
+            output_tags.append("augment:bugged")
+        elif is_stub_prompting:
+            assert not trace_id.is_augmented, "this case should have been handled above"
+            output_tags.append("augment:stubbed")
         else:
             raise NotImplementedError(f"missing tag handling case for prompt '{config.prompt_config.prompt_name}'")
 
@@ -611,9 +632,11 @@ def _default_tags_builder(
             raise ValueError("missing 'target_word_count' in prompt template partial variables")
         target_word_count = template_partial_vars["target_word_count"]
         output_tags.append(f"target_summary_word_count:{target_word_count}")
-    # elif prompt_name == ...
+    elif CODE_SUMMARY_TOKEN in input_vars:
+        assert config.augment_config.fetch_code_descriptions
+        output_tags.append("augment:has_code_description")
 
-    return output_tags
+    return list(set(output_tags))
 
 
 def _default_meta_builder(

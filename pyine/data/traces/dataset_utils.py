@@ -121,8 +121,7 @@ class SolutionIdentifier(CodingProblemIdentifier):
 
     def get_parent_identifier(self) -> CodingProblemIdentifier:
         """Returns the parent identifier of this object (i.e., a coding problem identifier)."""
-        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name != "solution_idx"}
-        return CodingProblemIdentifier(**parent_vars)
+        return CodingProblemIdentifier(dataset=self.dataset, subset=self.subset, problem_idx=self.problem_idx)
 
     @staticmethod
     def from_string(identifier_str: str) -> "SolutionIdentifier":
@@ -162,9 +161,12 @@ class TraceIdentifier(SolutionIdentifier):
 
     def get_parent_identifier(self) -> SolutionIdentifier:
         """Returns the parent identifier of this object (i.e., a solution identifier)."""
-        local_vars = ["test_idx", "augment_category", "augment_idx"]
-        parent_vars = {var_name: var_val for var_name, var_val in vars(self).items() if var_name not in local_vars}
-        return SolutionIdentifier(**parent_vars)
+        return SolutionIdentifier(
+            dataset=self.dataset,
+            subset=self.subset,
+            problem_idx=self.problem_idx,
+            solution_idx=self.solution_idx,
+        )
 
     def get_augmentless_identifier(self) -> "TraceIdentifier":
         """Returns a copy of this object without the augmentation information."""

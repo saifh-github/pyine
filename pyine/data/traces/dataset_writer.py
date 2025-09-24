@@ -653,6 +653,8 @@ def _fetch_augmented_code_to_trace(
         assert config._prompt_result_db is not None and config._rng is not None
         for prompt_name, fetch_count in config.fetch_augmented_solutions.items():
             prompt_records = config._prompt_result_db.get_by_identifier(
+                # if we ever want to support hinted-code-tracing, we'll need to modify this logic
+                # (using the solution id for db lookups only works for buggy code that is not test-specific)
                 identifier=str(solution.solution_id),
                 prompt_name=prompt_name,
             )
