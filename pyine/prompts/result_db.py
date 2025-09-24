@@ -307,6 +307,31 @@ class PromptResultDB:
         sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
         return self._get_records(sql, params, tag_filter_rule)
 
+    def get_all_results(
+        self,
+        tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
+    ) -> list[PromptResultRecord]:
+        """Fetch all results from the database.
+
+        Args:
+            tag_filter_rule: Optional rule string for filtering by tags. See the
+                `pyine.data.utils.filter_rules` module for more details.
+            max_result_age: Optional maximum age of results to return.
+
+        Returns:
+            List of matching PromptResultRecord objects, ordered by identifier and creation time.
+        """
+        sql = ["SELECT * FROM items WHERE 1=1"]
+        params: list[typing.Any] = []
+        if max_result_age is not None:
+            # use utc isoformatted time for comparison w/ internal-use-only created_at timestamp
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
+            sql.append("AND created_at > ?")
+            params.append(cutoff.isoformat())
+        sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
+        return self._get_records(sql, params, tag_filter_rule)
+
     def list_identifiers(self) -> list[str]:
         """List all unique identifiers present in the database.
 

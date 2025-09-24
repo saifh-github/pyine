@@ -409,3 +409,29 @@ def test_delete_records_older_than(db: PromptResultDB):
     assert deleted == 1
     remaining = db.get_by_identifier("age-del")
     assert [r.result for r in remaining] == ["new"]
+
+
+def test_get_all_results_ordering_and_filters(db: PromptResultDB):
+    now = datetime.datetime.now(datetime.UTC)
+    cm_old = CreationMeta(created_at=now - datetime.timedelta(minutes=30))
+    cm_mid = CreationMeta(created_at=now - datetime.timedelta(minutes=10))
+    cm_new = CreationMeta(created_at=now - datetime.timedelta(minutes=5))
+    db.store(identifier="id_b", prompt="pb", result="rb", creation_meta=cm_mid, tags=["ok"])
+    db.store(identifier="id_a", prompt="pa_old", result="ra_old", creation_meta=cm_old, tags=["wip:yes"])
+    db.store(identifier="id_a", prompt="pa_new", result="ra_new", creation_meta=cm_new, tags=["ok"])
+    all_recs = db.get_all_results()
+    assert [(r.identifier, r.prompt) for r in all_recs] == [
+        ("id_a", "pa_old"),
+        ("id_a", "pa_new"),
+        ("id_b", "pb"),
+    ]
+    recent_only = db.get_all_results(max_result_age=datetime.timedelta(minutes=15))
+    assert [(r.identifier, r.prompt) for r in recent_only] == [
+        ("id_a", "pa_new"),
+        ("id_b", "pb"),
+    ]
+    no_wip = db.get_all_results(tag_filter_rule="-wip:*")
+    assert [(r.identifier, r.prompt) for r in no_wip] == [
+        ("id_a", "pa_new"),
+        ("id_b", "pb"),
+    ]
