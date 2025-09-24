@@ -45,3 +45,37 @@ clean-coverage: ## Removes only coverage artifacts (keeps other logs)
 	rm -rf logs/coverage
 	rm -f .coverage
 	rm -rf htmlcov
+
+stats: ## Shows a quick snapshot of git activity and tracked files
+	@git rev-parse --abbrev-ref HEAD | awk '{print "Active branch: " $$1}'
+	@git log -1 --pretty="Last commit: %h %cr %an - %s"
+	@git rev-list --count HEAD | awk '{print "Total commits: " $$1}'
+	@git ls-files | wc -l | awk '{print "Tracked files: " $$1}'
+	@printf '%s\n' \
+		"import collections" \
+		"import pathlib" \
+		"import subprocess" \
+		"" \
+		"repo_root = pathlib.Path().resolve()" \
+		"result = subprocess.run(['git', 'ls-files'], check=True, text=True, capture_output=True)" \
+		"counts = collections.Counter()" \
+		"total = 0" \
+		"for relative_path in result.stdout.splitlines():" \
+		"    path = repo_root / relative_path" \
+		"    if not path.exists() or path.is_dir():" \
+		"        continue" \
+		"    try:" \
+		"        with path.open('r', encoding='utf-8', errors='ignore') as handle:" \
+		"            file_loc = sum(1 for _ in handle)" \
+		"    except OSError:" \
+		"        continue" \
+		"    suffix = path.suffix.lower()" \
+		"    if not suffix:" \
+		"        suffix = '<no-ext>'" \
+		"    counts[suffix] += file_loc" \
+		"    total += file_loc" \
+		"" \
+		"print(f'Total tracked lines: {total}')" \
+		"for suffix, value in counts.most_common():" \
+		"    print(f'{suffix:>10}: {value}')" \
+	| python -
