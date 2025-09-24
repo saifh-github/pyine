@@ -335,6 +335,49 @@ class TestClassImportSpec:
         assert instance.a == 7
         assert instance.b == 12
 
+    def test_get_updated_spec_merges_nested_params(
+        self,
+        install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
+    ) -> None:
+        install_fake_import(
+            {
+                "pkg.module.DummySub": DummySub,
+                "pkg.module.DummyBase": DummyBase,
+            },
+        )
+        spec = pyd.ClassImportSpec(
+            class_path="pkg.module.DummySub",
+            base_class_path="pkg.module.DummyBase",
+            params={
+                "a": 5,
+                "b": {
+                    "inner": {
+                        "original": True,
+                        "kept": "value",
+                    },
+                    "top_level": "preserve",
+                },
+            },
+        )
+        updated_spec = spec.get_updated_spec(
+            b={
+                "inner": {
+                    "original": False,
+                    "override": "new",
+                },
+                "additional": 42,
+            },
+        )
+        assert spec.params["b"]["inner"] == {"original": True, "kept": "value"}
+        assert updated_spec.params["b"]["inner"] == {
+            "original": False,
+            "kept": "value",
+            "override": "new",
+        }
+        assert updated_spec.params["b"]["top_level"] == "preserve"
+        assert updated_spec.params["b"]["additional"] == 42
+        assert updated_spec.params["a"] == 5
+
     def test_resolve_propagates_import_error_for_missing_class(
         self,
         install_fake_import: typing.Callable[[dict[str, typing.Any]], None],

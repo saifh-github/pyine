@@ -1,3 +1,4 @@
+import dataclasses
 import importlib
 import inspect
 import logging
@@ -6,6 +7,7 @@ import pkgutil
 import sys
 import typing
 
+import omegaconf
 import pydantic
 import yaml
 
@@ -239,6 +241,30 @@ def dump_yaml_with_pydantic_support(
     return yaml_str
 
 
+def merge_configs_hierarchically(
+    *configs,
+) -> dict[str, typing.Any]:
+    """Merges multiple config dictionaries hierarchically, ordered as base to override(s)."""
+
+    def _to_primitives(obj: typing.Any) -> typing.Any:
+        if isinstance(obj, pydantic.BaseModel):
+            return _to_primitives(obj.model_dump())
+        if dataclasses.is_dataclass(obj):
+            return _to_primitives(dataclasses.asdict(obj))
+        if isinstance(obj, typing.Mapping):
+            return {k: _to_primitives(v) for k, v in obj.items()}
+        if isinstance(obj, typing.Sequence) and not isinstance(obj, (str, bytes, bytearray)):
+            return [_to_primitives(v) for v in obj]
+        return obj
+
+    assert len(configs) > 0, "at least one config must be provided"
+    output_config = omegaconf.OmegaConf.create(_to_primitives(configs[0]))
+    for overrides in configs[1:]:
+        overrides = omegaconf.OmegaConf.create(_to_primitives(overrides))
+        output_config = omegaconf.OmegaConf.merge(output_config, overrides)
+    return omegaconf.OmegaConf.to_container(output_config, resolve=False)
+
+
 BaseT = typing.TypeVar("BaseT")
 """Base type for classes that can be resolved and instantiated from pydantic configs."""
 
@@ -299,10 +325,12 @@ class ClassImportSpec(
         return {k: v for k, v in self.model_dump().items() if k != "params"}
 
     def get_updated_spec(self, **extra_params) -> "ClassImportSpec[BaseT]":
-        """Returns a new spec with the given extra params kwargs merged in."""
-        config_params = self.get_params_dict()
-        config_params.update(**extra_params)
-        return type(self)(**self.get_non_params_dict(), params=config_params)
+        """Returns a new spec with the given extra params kwargs merged in.
+
+        NOTE: the merge is done using OmegaConf to hierarchically merge the two dicts.
+        """
+        merged_params = merge_configs_hierarchically(self.get_params_dict(), extra_params)
+        return type(self)(**self.get_non_params_dict(), params=merged_params)
 
     # ----------------- below is private stuff that does not affect serialization -----------------
 
