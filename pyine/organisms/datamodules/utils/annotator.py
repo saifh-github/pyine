@@ -443,34 +443,27 @@ def _default_input_variables_builder(
     if config.prompt_config.prompt_name == "code_summary":
         # this is the simplest case: nothing more to do here
         return output
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
     is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
+    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
+    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
     if not is_hint_prompting and not is_issue_prompting:
         raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
-    # -------- prepare meta flags/variables for the generation of code hints and issues --------
-
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-    prior_augment = trace_id.augment_category or ""
-    is_already_hinted = prior_augment.endswith("hinted")
-    is_already_bugged = prior_augment.startswith("bugged")
-    is_already_misleading = prior_augment.endswith("misleading")
-    is_obfuscated = prior_augment.startswith("obfuscated")
-    # note: code might be hinted+bugged, or bugged+misleading, etc.
+    # note: traced code might be hinted+bugged, or bugged+misleading, etc.
 
     # -------- early returns for invalid / unnecessary augments --------
 
-    if is_hint_prompting and not is_stub_prompting and (is_already_hinted or is_already_misleading):
+    if is_hint_prompting and not is_stub_prompting and (trace_id.is_hinted or trace_id.is_misleading):
         return None  # skip; it makes little sense to generate hints on top of hints?
-    if is_mislead_prompting and (is_already_misleading or is_already_hinted):
+    if is_mislead_prompting and (trace_id.is_misleading or trace_id.is_hinted):
         return None  # skip; it might get confusing when both valid and misleading hints are involved
-    if is_stub_prompting and is_already_bugged:
+    if is_stub_prompting and trace_id.is_bugged:
         return None  # we probably should not try to generate stubs on buggy code (cannot verify anything)
-    if is_issue_prompting and not is_mislead_prompting and is_already_bugged:
+    if is_issue_prompting and not is_mislead_prompting and trace_id.is_bugged:
         return None  # adding more bugs on top of bugs just make the bugs less subtle (so less useful?)
-    if is_obfuscated and ((is_issue_prompting and not is_mislead_prompting) or is_stub_prompting):
+    if trace_id.is_obfuscated and ((is_issue_prompting and not is_mislead_prompting) or is_stub_prompting):
         raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
 
     # -------- generic prompt data preparation: inputs/outputs/description --------
@@ -521,22 +514,22 @@ def _default_input_variables_builder(
     # -------- special case: generating hints on buggy code, where code is not already buggy --------
 
     if ((is_hint_prompting and not is_stub_prompting) or is_mislead_prompting) and (
-        config.augment_config.is_bugged_hinting_enabled and not is_already_bugged
+        config.augment_config.is_bugged_hinting_enabled and not trace_id.is_bugged
     ):
-        # try to fetch a buggy version of the code string before applying the hint generation prompt
+        # try to fetch a buggy version of the code string for the hint generation prompt
         for (
-            prompt_info,
+            bug_prompt_info,
             augment_prob,
         ) in config.augment_config.buggy_code_before_hinting_prob_map.items():
             if np.random.random() > augment_prob:
-                continue  # failed random draw for this augment (use bug-less misleading code)
-            if isinstance(prompt_info, tuple):
-                prompt_info = dict(prompt_name=prompt_info[0], prompt_version=prompt_info[1])
+                continue  # failed random draw for this bug type
+            if isinstance(bug_prompt_info, tuple):
+                bug_prompt_info = dict(prompt_name=bug_prompt_info[0], prompt_version=bug_prompt_info[1])
             else:
-                prompt_info = dict(prompt_name=prompt_info)
+                bug_prompt_info = dict(prompt_name=bug_prompt_info)
             buggy_code_records = config._prompt_result_db.get_by_identifier(
                 identifier=str(trace_id.get_parent_identifier()),
-                **prompt_info,
+                **bug_prompt_info,
             )
             if buggy_code_records:
                 # always pick a random choice (default documented strategy)
@@ -583,7 +576,9 @@ def _default_tags_builder(
         if "description" in input_vars:
             assert config.augment_config.fetch_code_descriptions
             output_tags.append("augment:has_code_description")
-        if trace_id.augment_category == "obfuscated":
+        if "obfuscated" in trace_id.augment_category:
+            if trace_id.augment_category != "obfuscated":
+                raise NotImplementedError("missing handling for pre-augmented obfuscated base tags")
             if is_hint_prompting and not is_stub_prompting:
                 output_tags.append("augment:obfuscated_hinted")
             elif is_mislead_prompting:

@@ -254,12 +254,17 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "TraceDatasetWriterConfig":
         """Validates and resolves config settings."""
-        supported_prompts = pyine.prompts.manager.list_prompts()
+        supported_solution_augm_prompts = [
+            # we only support prompts related to modified (buggy) code that is not test-specific
+            prompt_name
+            for prompt_name in pyine.prompts.manager.list_prompts()
+            if prompt_name.startswith("issues/") and prompt_name != "issues/docs"
+        ]
         for prompt_name, fetch_count in self.fetch_augmented_solutions.items():
             if not isinstance(prompt_name, pyine.prompts.PromptNameType):
                 raise ValueError(f"invalid prompt name: {prompt_name}")
-            if prompt_name not in supported_prompts:
-                raise ValueError(f"unknown prompt name: {prompt_name}")
+            if prompt_name not in supported_solution_augm_prompts:
+                raise ValueError(f"unsupported prompt for trace writer: {prompt_name}")
             if not isinstance(fetch_count, int) or fetch_count < 0:
                 raise ValueError(f"invalid fetch count for prompt '{prompt_name}': {fetch_count}")
         if self.prompt_result_db_path is not None:
@@ -656,6 +661,7 @@ def _fetch_augmented_code_to_trace(
             if prompt_records:
                 fetch_count = min(fetch_count, len(prompt_records))
                 picked_idxs = config._rng.choice(len(prompt_records), size=fetch_count, replace=False)
+                augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
                 for record_idx in picked_idxs:
                     augmented_code_to_trace.extend(
                         [
@@ -664,7 +670,7 @@ def _fetch_augmented_code_to_trace(
                                 trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                                     **vars(solution.solution_id),
                                     test_idx=test_tuple.test_idx,
-                                    augment_category=prompt_name,
+                                    augment_category=augm_category,
                                     augment_idx=record_idx,
                                 ),
                                 entrypoint_name=problem.entrypoint_name,
@@ -766,7 +772,7 @@ def _process_one_solution(
     if not traces_to_write:
         log_fn(f"{solution}: skipping solution since all original code exec test(s) failed")
         return traces_to_write
-    # if some test cases passed for the original solution, do the required 'augmentations' now
+    # if some test cases passed with the original code, do the required 'augmented tests' now
     # (note: we will target the PASSING test cases, and hope those will pass again as well)
     passing_test_tuples = [
         orig_trace_ids_to_test_tuple_map[passed_trace_id] for passed_trace_id in traces_to_write.keys()
@@ -1011,8 +1017,8 @@ if __name__ == "__main__":
         # target_problem_ids="/path/to/problem/ids.yaml",
         generate_obfuscated_solutions=True,
         fetch_augmented_solutions={
-            "hints/docs": 1,
-            "hints/tests": 1,
+            "issues/iterators": 1,
+            "issues/todos": 1,
         },
         prompt_result_db_path=None,  # use framework default
         writer_serialization_config=dict(

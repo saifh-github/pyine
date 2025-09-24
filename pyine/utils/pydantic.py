@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import importlib
 import inspect
@@ -258,7 +259,7 @@ def merge_configs_hierarchically(
         return obj
 
     assert len(configs) > 0, "at least one config must be provided"
-    output_config = omegaconf.OmegaConf.create(_to_primitives(configs[0]))
+    output_config = omegaconf.OmegaConf.create(_to_primitives(copy.deepcopy(configs[0])))
     for overrides in configs[1:]:
         overrides = omegaconf.OmegaConf.create(_to_primitives(overrides))
         output_config = omegaconf.OmegaConf.merge(output_config, overrides)

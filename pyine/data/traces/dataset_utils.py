@@ -1,6 +1,7 @@
 import dataclasses
 import datetime
 import fnmatch
+import functools
 import importlib.resources as pkg_resources
 import json
 import logging
@@ -155,8 +156,7 @@ class TraceIdentifier(SolutionIdentifier):
     def __repr__(self) -> str:
         """Returns a string representation of this identifier."""
         out = self._get_augmentless_repr()
-        if self.augment_category is not None or self.augment_idx is not None:
-            assert self.augment_category is not None and self.augment_idx is not None
+        if self.is_augmented:
             out += f"/a:{self.augment_category}:{self.augment_idx:03d}"
         return out
 
@@ -170,6 +170,19 @@ class TraceIdentifier(SolutionIdentifier):
         """Returns a copy of this object without the augmentation information."""
         augmentless_repr = self._get_augmentless_repr()
         return self.from_string(augmentless_repr)
+
+    @functools.cached_property
+    def is_augmented(self) -> bool:
+        """Returns whether this trace is based on 'augmented' (modified) code."""
+        if self.augment_category is not None or self.augment_idx is not None:
+            assert (
+                self.augment_category is not None and self.augment_idx is not None
+            ), "if augmentation is present, both augment category and index must be present"
+            assert not any(
+                [c in self.augment_category for c in ["/", ",", " ", ":"]]
+            ), f"augm category should have been cleaned up: {self.augment_category}"
+            return True
+        return False
 
     @staticmethod
     def from_string(identifier_str: str) -> "TraceIdentifier":
@@ -191,6 +204,53 @@ class TraceIdentifier(SolutionIdentifier):
             augment_category=augment_category,
             augment_idx=augment_idx,
         )
+
+    @functools.cached_property
+    def is_bugged(self) -> bool:
+        """Returns whether this trace is based on bugged code.
+
+        The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
+        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        """
+        return self.is_augmented and (
+            # bugged traces are those generated with issues (except misleading docs)
+            (self.augment_category.startswith("issues_") and self.augment_category != "issues_docs")
+            or "bugged" in self.augment_category
+        )
+
+    @functools.cached_property
+    def is_hinted(self) -> bool:
+        """Returns whether this trace is based on code with helpful hints about code execution.
+
+        The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
+        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        """
+        if not self.is_augmented:
+            return False
+        assert self.augment_category != "hints_stubs", "how can we have a stubbed trace? (those can't be executed)"
+        return self.augment_category.startswith("hints_") or "hinted" in self.augment_category
+
+    @functools.cached_property
+    def is_misleading(self) -> bool:
+        """Returns whether this trace is based on code with misleading hints about code execution.
+
+        The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
+        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        """
+        return self.is_augmented and (self.augment_category == "issues_docs" or "misleading" in self.augment_category)
+
+    @functools.cached_property
+    def is_obfuscated(self) -> bool:
+        """Returns whether this trace is based on obfuscated code."""
+        return self.is_augmented and "obfuscated" in self.augment_category
+
+    @staticmethod
+    def get_clean_augment_category(proposed: str) -> str:
+        """Cleans up an augmentation category string to be used as a trace identifier."""
+        # this will help avoid conflicts later when parsing augment names and generating augment tags
+        for banned_ch in ["/", ",", " ", ":"]:
+            proposed = proposed.replace(banned_ch, "_")
+        return proposed
 
 
 class CodingProblem(pydantic.BaseModel):

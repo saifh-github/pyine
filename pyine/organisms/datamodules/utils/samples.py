@@ -28,16 +28,17 @@ logger = logging.getLogger(__name__)
 
 
 def _get_expected_augment_types() -> list[str]:
-    """Returns the list of expected augmentation types for trace datasets.
+    """Returns the list of expected augmentation types for trace datasets and sample preparation.
 
     Combines the augmentation types from the `SampleInputType` define with all prompt names
-    that are known to the prompt manager.
+    that are known to the prompt manager and that are tied to code augmentations.
     """
-    import pyine.prompts
+    import pyine.prompts.manager
 
     pregenerated_augment_types = [
-        prompt_name
-        for prompt_name in pyine.prompts.get_framework_prompt_manager().list_prompts()
+        pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
+        for prompt_name in pyine.prompts.manager.list_prompts()
+        # some of these might actually be impossible to pregenerate, but we keep the check light
         if prompt_name.startswith("issues/") or prompt_name.startswith("hints/")
     ]
     irrelevant_augment_types = ["original", "stubbed"]  # stubbed code cannot be executed/traced
@@ -92,10 +93,9 @@ class TraceMetadata:
         """Returns all tags associated with this trace's augmentation(s)."""
         out_tags = [t for t in self.tags if t.startswith("augment:")]
         if out_tags:
+            assert self.trace_id.is_augmented, "how can be have augment tags without augmentation?"
             augm_category = self.trace_id.augment_category
-            assert (
-                augm_category is not None and f"augment:{augm_category}" in out_tags
-            ), "found inconsistent augmentation category tags; dataset creation issue?"
+            assert f"augment:{augm_category}" in out_tags, " inconsistent augm tags usage"
         else:
             assert self.trace_id.augment_category is None
         return out_tags
@@ -103,7 +103,9 @@ class TraceMetadata:
     @functools.cached_property
     def is_augmented(self) -> bool:
         """Returns whether this trace is augmented."""
-        return len(self.augment_tags) > 0
+        is_augmented = len(self.augment_tags) > 0
+        assert is_augmented == self.trace_id.is_augmented
+        return is_augmented
 
     @functools.cached_property
     def is_multi_augmented(self) -> bool:
@@ -201,10 +203,10 @@ class TraceDatasetMetadata(pydantic.BaseModel):
         for trace_meta in self.base_traces:
             assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
             seen_trace_ids.add(trace_meta.trace_id)
-            augm_type = trace_meta.trace_id.augment_category
-            if augm_type is not None:
+            if trace_meta.trace_id.is_augmented:
+                augm_type = trace_meta.trace_id.augment_category
                 if augm_type not in expected_augment_types:
-                    raise ValueError(f"unexpected augment type: {augm_type}")
+                    raise ValueError(f"unexpected trace augment type: {augm_type}")
                 assert trace_meta.is_augmented and trace_meta.augment_tags
                 assert any(
                     [t == f"augment:{augm_type}" for t in trace_meta.augment_tags]
@@ -634,7 +636,7 @@ class SampleBuilder(SampleDataParserType):
                 )
                 cousin_traces[augmentless_id]["original"].append(trace.trace_id)
                 continue
-            # the only types of augmented traces that we expect from a trace dataset are:
+            # the only types of augmented traces that we might expect from a trace dataset are:
             #   - traces with code hints or issues (exception 'hints/stubs': those CANNOT ever be traced)
             #   - obfuscated code traces (the only time we ever obfuscate code is in the dataset writer)
             assert not trace.is_multi_augmented, (
@@ -642,22 +644,41 @@ class SampleBuilder(SampleDataParserType):
                 "update the sample builder's trace selection code if dataset writer gets updated for augments"
             )
             augm_category = trace.trace_id.augment_category
-            assert augm_category != "hints/stubs", "how can these have been traced?"
-            is_obfuscated = augm_category == "obfuscated"
-            is_hinted = augm_category.startswith("hints/")
-            is_buggy = augm_category.startswith("issues/")
+            assert augm_category is not None, "branching/attrib logic error somewhere above"
+            assert augm_category != "original", "this is not really an augmentation... (how did this happen?)"
+            is_stubbed = augm_category == "hints_stubs" or augm_category == "stubbed"
             assert (
-                is_obfuscated or is_hinted or is_buggy
+                trace.trace_id.is_obfuscated
+                or trace.trace_id.is_bugged
+                or trace.trace_id.is_hinted
+                or trace.trace_id.is_misleading
+                or is_stubbed
             ), f"trace id {trace.trace_id} has unexpected augment category: {augm_category}"
-            if is_obfuscated:
+            assert not (trace.trace_id.is_hinted and trace.trace_id.is_misleading), "which is it?"
+            if trace.trace_id.is_obfuscated and trace.trace_id.is_misleading:
+                cousin_traces[augmentless_id]["obfuscated_misleading"].append(trace.trace_id)
+            elif trace.trace_id.is_obfuscated and trace.trace_id.is_hinted:
+                cousin_traces[augmentless_id]["obfuscated_hinted"].append(trace.trace_id)
+            elif trace.trace_id.is_obfuscated:
+                assert not trace.trace_id.is_bugged and not is_stubbed, "missing branching logic"
                 cousin_traces[augmentless_id]["obfuscated"].append(trace.trace_id)
-            elif is_buggy:
-                if augm_category == "issues/docs":
-                    cousin_traces[augmentless_id]["misleading"].append(trace.trace_id)
-                else:
-                    cousin_traces[augmentless_id]["bugged"].append(trace.trace_id)
-            elif is_hinted:
+            elif trace.trace_id.is_bugged and trace.trace_id.is_misleading:
+                cousin_traces[augmentless_id]["bugged_misleading"].append(trace.trace_id)
+            elif trace.trace_id.is_bugged and trace.trace_id.is_hinted:
+                cousin_traces[augmentless_id]["bugged_hinted"].append(trace.trace_id)
+            elif trace.trace_id.is_bugged:
+                assert not is_stubbed, "missing branching logic"
+                cousin_traces[augmentless_id]["bugged"].append(trace.trace_id)
+            elif trace.trace_id.is_misleading:
+                assert not is_stubbed, "missing branching logic"
+                cousin_traces[augmentless_id]["misleading"].append(trace.trace_id)
+            elif trace.trace_id.is_hinted:
+                assert not is_stubbed, "missing branching logic"
                 cousin_traces[augmentless_id]["hinted"].append(trace.trace_id)
+            elif is_stubbed:
+                cousin_traces[augmentless_id]["stubbed"].append(trace.trace_id)
+            else:
+                raise NotImplementedError(f"unexpected augment category: {augm_category}")
         assert len(cousin_traces) <= len(traces)
         assert sum([len(c) for t, dicts in cousin_traces.items() for c in dicts.values()]) == len(traces)
         # all 'cousin clusters' will be used to produce ONE trace sample each; pick which one according to strategy

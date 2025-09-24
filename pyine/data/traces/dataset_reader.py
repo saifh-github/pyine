@@ -160,8 +160,7 @@ class DatasetReader(torch.utils.data.Dataset):
                 curr_trace_tags = []
                 curr_trace_tags.extend(problem_data.problem_tags)
                 curr_trace_tags.extend(trace_data.tags)
-                if trace_id.augment_category is not None:
-                    assert not any([c in trace_id.augment_category for c in ["/", ",", " "]])
+                if trace_id.is_augmented:
                     curr_trace_tags.append(f"augment:{trace_id.augment_category}")
                 self.trace_tag_lists.append(curr_trace_tags)
             for augm_key, parent_key in curr_augm_key_to_parent_key.items():
