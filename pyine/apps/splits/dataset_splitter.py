@@ -162,6 +162,13 @@ def main() -> None:
     help="Maximum number of samples to consider for the split; if unspecified, consider all.",
 )
 @click.option(
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite the generated splits file if it already exists.",
+)
+@click.option(
     "--progress/--no-progress",
     "show_progress",
     default=True,
@@ -177,12 +184,13 @@ def split(
     use_difficulty_group: bool,
     use_solution_count_group: bool,
     max_sample_count: int | None,
+    force: bool,
     show_progress: bool,
 ) -> None:
     """Entry point for the dataset splitter CLI."""
     pyine.utils.reprod.entrypoint_setup()
     output_path = pyine.data.utils.splits.get_dataset_split_file_path(dataset_name, must_exist=False)
-    pyine.utils.filesystem.check_output_path_overwrite(output_path)
+    pyine.utils.filesystem.check_output_path_overwrite(output_path, force=force)
     dataset_path = _get_resolved_dataset_path(dataset_name, dataset_path)
     logger.info(f"starting dataset splitting for '{dataset_name}' at: {dataset_path}")
     identifiers, tag_lists, hash_list = pyine.data.utils.splits.get_split_data_from_coding_problem_dataset(

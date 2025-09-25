@@ -807,6 +807,7 @@ def write_dataset(
     output_dataset_path: pathlib.Path,
     config: TraceDatasetWriterConfig,
     verbose: bool = False,
+    force_overwrite: bool = False,
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from a source dataset of coding problems and solutions.
 
@@ -824,6 +825,7 @@ def write_dataset(
         output_dataset_path: Path to the output dataset to write the traces to (LMDB format).
         config: Configuration model for trace dataset writer parameters.
         verbose: Toggles verbose output/logging.
+        force_overwrite: When True, delete any existing output before writing new data.
 
     Returns:
         The LMDBWriter object that was used to write the traces (once writing is complete). This
@@ -844,7 +846,7 @@ def write_dataset(
     if len(problem_data_iter) == 0:
         raise ValueError(f"no problems found in {config.source_dataset_name} source dataset")
     log(f"will process {len(problem_data_iter)} problem(s) in {config.source_dataset_name} source dataset")
-    pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
+    pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path, force=force_overwrite)
     fail_log_path = None
     if config.failed_test_log_dir:
         fail_dir_path = pathlib.Path(config.failed_test_log_dir)

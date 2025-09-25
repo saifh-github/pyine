@@ -35,6 +35,7 @@ Notes:
   one is derived from the configuration hash.
 - For the partition command group, the split files should be those created by the
   `pyine.apps.split.dataset_splitter` CLI app.
+- Pass `--force` to overwrite an existing output without an interactive confirmation.
 """
 
 import logging
@@ -231,6 +232,13 @@ def main() -> None:
     help="Toggles verbose output/logging.",
 )
 @click.option(
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite the output path if it already exists.",
+)
+@click.option(
     "--dry-run",
     "dry_run",
     is_flag=True,
@@ -259,6 +267,7 @@ def traces(
     fetch_augmented_solutions: typing.Sequence[str],
     prompt_result_db_path: pathlib.Path | None,
     verbose: bool,
+    force: bool,
     dry_run: bool,
 ) -> None:
     """Write a traces dataset from a specified source dataset according to the given configuration."""
@@ -327,12 +336,14 @@ def traces(
         click.echo(f"  output_dataset_path = {output_path}")
         click.echo(f"  config  = {config.model_dump()}")
         click.echo(f"  verbose = {verbose}")
+        click.echo(f"  force   = {force}")
         return
     trace_writer.write_dataset(
         root_dataset_path=dataset_path,
         output_dataset_path=output_path,
         config=config,
         verbose=verbose,
+        force_overwrite=force,
     )
     logger.info("all done")
 
@@ -370,6 +381,13 @@ def traces(
     help="Toggles verbose output/logging.",
 )
 @click.option(
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite the output path if it already exists.",
+)
+@click.option(
     "--dry-run",
     "dry_run",
     is_flag=True,
@@ -381,6 +399,7 @@ def deltas_from_traces(
     output_path: pathlib.Path,
     delta_generator: str,
     verbose: bool,
+    force: bool,
     dry_run: bool,
 ) -> None:
     """Write a deltas dataset from an existing traces dataset."""
@@ -392,12 +411,14 @@ def deltas_from_traces(
         click.echo(f"  output_dataset_path = {output_path}")
         click.echo(f"  delta_generator = {delta_generator}")
         click.echo(f"  verbose = {verbose}")
+        click.echo(f"  force   = {force}")
         return
     delta_writer.write_dataset(
         traces_dataset_name_or_path=traces_dataset,
         output_dataset_path=output_path,
         delta_generator=delta_generator,
         verbose=verbose,
+        force_overwrite=force,
     )
     logger.info("all done")
 

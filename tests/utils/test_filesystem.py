@@ -171,16 +171,17 @@ def test_slugify():
     assert fs.slugify("special@#characters") == "specialcharacters"
 
 
-def test_check_output_path_overwrite_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+def test_check_output_path_overwrite_requires_force(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
-    # abort branch
-    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-    with pytest.raises(SystemExit):
+    with pytest.raises(FileExistsError):
         fs.check_output_path_overwrite(out)
     assert out.exists()
-    # confirm deletion
+
+
+def test_check_output_path_overwrite_deletes_when_forced(tmp_path: pathlib.Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
     (out / "x.txt").write_text("x", encoding="utf-8")
-    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    fs.check_output_path_overwrite(out)
+    fs.check_output_path_overwrite(out, force=True)
     assert not out.exists()

@@ -28,6 +28,7 @@ def write_dataset(
     output_dataset_path: pathlib.Path,
     delta_generator: DeltaGeneratorType = DeltaGeneratorType.SIMPLE,
     verbose: bool = False,
+    force_overwrite: bool = False,
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution trace deltas from an existing trace dataset.
 
@@ -44,6 +45,7 @@ def write_dataset(
         output_dataset_path: Path to the output dataset to write the deltas to (LMDB format).
         delta_generator: Type of delta generator to use.
         verbose: Toggles verbose output/logging.
+        force_overwrite: When True, delete any existing output before writing new data.
 
     Returns:
         The LMDBWriter object that was used to write the deltas (once writing is complete). This
@@ -58,7 +60,7 @@ def write_dataset(
     if not traces_dataset_name_or_path.exists():
         raise FileNotFoundError(f"traces dataset not found at: {traces_dataset_name_or_path}")
     trace_reader = pyine.data.traces.dataset_reader.DatasetReader(lmdb_path=traces_dataset_name_or_path)
-    pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path)
+    pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path, force=force_overwrite)
     writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
         dict(

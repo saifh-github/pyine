@@ -195,32 +195,30 @@ def get_human_readable_size(num_bytes: int, suffix: str = "B") -> str:
 
 def check_output_path_overwrite(
     output_path: str | pathlib.Path,
+    *,
+    force: bool = False,
 ) -> None:
-    """Check if the output path exists and prompt the user to overwrite it if needed.
+    """Ensure the output location is safe to write to before creating artifacts.
 
-    If the output does exist and the user confirms the overwrite, the existing output is deleted.
-    Otherwise, the program exits without doing anything.
+    When the target already exists, the caller must explicitly opt into deletion via
+    ``force=True`` (or the CLI equivalent). Otherwise, a ``FileExistsError`` is raised
+    so automated workflows cannot hang waiting for user confirmation.
     """
     output_path = pathlib.Path(output_path).resolve()
-    if output_path.exists():
-        logger.warning(f"Attempting overwrite at: {output_path.absolute()}")
-        overwrite = (
-            input(
-                f"The output already exists at: {output_path.absolute()}\n"
-                "Do you want to delete it so it can be recreated? [y/N]: "
-            )
-            .strip()
-            .lower()
+    if not output_path.exists():
+        return
+    if not force:
+        message = (
+            f"Refusing to overwrite existing output at: {output_path.absolute()} — "
+            "re-run with force=True or pass --force from the CLI to continue."
         )
-        if overwrite != "y":
-            logger.critical("Overwrite operation aborted.")
-            exit(0)
-        else:
-            logger.warning(f"Overwriting existing output at: {output_path.absolute()}")
-            if output_path.is_file():
-                output_path.unlink()
-            elif output_path.is_dir():
-                shutil.rmtree(output_path)
+        logger.error(message)
+        raise FileExistsError(message)
+    logger.warning(f"overwriting existing output at: {output_path.absolute()}")
+    if output_path.is_file():
+        output_path.unlink()
+    elif output_path.is_dir():
+        shutil.rmtree(output_path)
 
 
 def slugify(text: str) -> str:
