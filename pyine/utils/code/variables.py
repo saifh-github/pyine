@@ -1,9 +1,13 @@
 import ast
+import collections
+import dataclasses
 import typing
 
 __all__ = [
-    "AnalyzeDefsResult",
-    "analyze_defs",
+    "AnalysisResult",
+    "analyze_definitions",
+    "DefinitionCluster",
+    "cluster_code_snippets_by_keyword",
 ]
 
 
@@ -194,7 +198,6 @@ class _DefinitionCounter(ast.NodeVisitor):
         self.bound_names.add(node.name)
         # parameters bind names in the function scope (we still count them as "variables defined")
         self._add_params(node.args)
-
         self._nesting += 1
         self.generic_visit(node)
         self._nesting -= 1
@@ -210,14 +213,13 @@ class _DefinitionCounter(ast.NodeVisitor):
             self.class_defs_toplevel += 1
         # class name binds at current scope
         self.bound_names.add(node.name)
-
         self._nesting += 1
         self.generic_visit(node)
         self._nesting -= 1
 
 
-class AnalyzeDefsResult(typing.TypedDict):
-    """Typed dict representing the result of analyze_defs."""
+class AnalysisResult(typing.TypedDict):
+    """Typed dict representing the result of analyze_definitions."""
 
     bound_names: typing.Iterable[str]
     """Iterable of variable names bound anywhere in the code."""
@@ -233,21 +235,21 @@ class AnalyzeDefsResult(typing.TypedDict):
     """Number of class definitions at the module level."""
 
 
-def analyze_defs(
+def analyze_definitions(
     src: str,
-) -> AnalyzeDefsResult:
+) -> AnalysisResult:
     """Analyze Python source code to count definitions and bound variable names.
 
     Args:
         src: The Python source code to analyze.
 
     Returns:
-        A AnalyzeDefsResult dictionary.
+        A typed dictionary (AnalysisResult) containing analysis results.
     """
     tree = ast.parse(src, mode="exec")
     visitor = _DefinitionCounter()
     visitor.visit(tree)
-    return AnalyzeDefsResult(
+    return AnalysisResult(
         bound_names=visitor.bound_names,
         var_count=len(visitor.bound_names),
         func_count_all=visitor.func_defs_all,
@@ -255,3 +257,101 @@ def analyze_defs(
         class_count_all=visitor.class_defs_all,
         class_count_toplevel=visitor.class_defs_toplevel,
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class DefinitionCluster:
+    """Cluster grouping code snippets that share a definition keyword."""
+
+    keyword: str
+    """Keyword (definition) shared by all code snippets that are part of this cluster."""
+    code_snippet_indices: tuple[int, ...]
+    """Indices of the code snippets that share the above keyword (definition)."""
+
+
+def cluster_code_snippets_by_keyword(
+    code_snippets: typing.Sequence[str],
+    min_keyword_frequency: int | None = None,
+    max_keyword_frequency: int | None = None,
+    min_keyword_length: int = 1,
+    banned_keywords: typing.Iterable[str] | None = None,
+    allowed_keywords: typing.Iterable[str] | None = None,
+    keyword_transform: typing.Callable[[str], str] | None = None,
+) -> list[DefinitionCluster]:
+    """Group snippets by shared definition names discovered via analyze_definitions.
+
+    Args:
+        code_snippets: Ordered sequence of Python snippets to analyze.
+        min_keyword_frequency: Optional minimum number of snippets required for a cluster.
+        max_keyword_frequency: Optional maximum number of snippets allowed for a cluster.
+        min_keyword_length: Minimum length required for a keyword to be considered.
+        banned_keywords: Optional iterable of keywords to exclude from clustering.
+        allowed_keywords: Optional whitelist restricting clustering to these keywords.
+        keyword_transform: Optional callable used to normalize keywords before filtering.
+
+    Returns:
+        List of clusters where each cluster holds the keyword and snippet indices sharing it.
+
+    Raises:
+        ValueError: If configuration arguments are inconsistent.
+    """
+    if min_keyword_frequency is not None and min_keyword_frequency < 1:
+        raise ValueError("min_keyword_frequency must be greater than zero when provided")
+    if max_keyword_frequency is not None and max_keyword_frequency < 1:
+        raise ValueError("max_keyword_frequency must be greater than zero when provided")
+    if (
+        min_keyword_frequency is not None
+        and max_keyword_frequency is not None
+        and min_keyword_frequency > max_keyword_frequency
+    ):
+        raise ValueError("min_keyword_frequency cannot exceed max_keyword_frequency")
+    if min_keyword_length < 1:
+        raise ValueError("min_keyword_length must be at least one")
+
+    def normalize_keyword(
+        keyword: str,
+    ) -> str:
+        if keyword_transform:
+            return keyword_transform(keyword)
+        return keyword
+
+    normalized_banned = set()
+    if banned_keywords:
+        normalized_banned = {normalize_keyword(keyword) for keyword in banned_keywords}
+    normalized_allowed: set[str] | None = None
+    if allowed_keywords is not None:
+        normalized_allowed = {normalize_keyword(keyword) for keyword in allowed_keywords}
+    clusters_by_keyword: dict[str, set[int]] = collections.defaultdict(set)
+    for snippet_idx, snippet in enumerate(code_snippets):
+        analysis_result = analyze_definitions(snippet)
+        for raw_keyword_candidate in analysis_result["bound_names"]:
+            keyword_candidate = normalize_keyword(raw_keyword_candidate)
+            if not keyword_candidate:
+                continue
+            if len(keyword_candidate) < min_keyword_length:
+                continue
+            if keyword_candidate in normalized_banned:
+                continue
+            if normalized_allowed is not None and keyword_candidate not in normalized_allowed:
+                continue
+            clusters_by_keyword[keyword_candidate].add(snippet_idx)
+    clusters: list[DefinitionCluster] = []
+    for keyword, snippet_indices in clusters_by_keyword.items():
+        frequency = len(snippet_indices)
+        if min_keyword_frequency is not None and frequency < min_keyword_frequency:
+            continue
+        if max_keyword_frequency is not None and frequency > max_keyword_frequency:
+            continue
+        clusters.append(
+            DefinitionCluster(
+                keyword=keyword,
+                code_snippet_indices=tuple(sorted(snippet_indices)),
+            )
+        )
+    clusters.sort(
+        key=lambda cluster: (
+            -len(cluster.code_snippet_indices),
+            cluster.keyword,
+        )
+    )
+    return clusters
