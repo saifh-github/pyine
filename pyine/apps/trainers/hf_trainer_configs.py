@@ -82,7 +82,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         if isinstance(data, dict):
             lora_config = data.get("lora_config")
             if isinstance(lora_config, dict) and not isinstance(lora_config, peft.LoraConfig):
-                data["lora"] = peft.LoraConfig(**lora_config)
+                data["lora_config"] = peft.LoraConfig(**lora_config)
         return data
 
 
