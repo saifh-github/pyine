@@ -1,7 +1,10 @@
 import ast
 import collections
 import dataclasses
+import logging
 import typing
+
+import tqdm
 
 __all__ = [
     "AnalysisResult",
@@ -9,6 +12,8 @@ __all__ = [
     "DefinitionCluster",
     "cluster_code_snippets_by_keyword",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class _DefinitionCounter(ast.NodeVisitor):
@@ -277,6 +282,8 @@ def cluster_code_snippets_by_keyword(
     banned_keywords: typing.Iterable[str] | None = None,
     allowed_keywords: typing.Iterable[str] | None = None,
     keyword_transform: typing.Callable[[str], str] | None = None,
+    raise_on_error: bool = True,
+    verbose: bool = False,
 ) -> list[DefinitionCluster]:
     """Group snippets by shared definition names discovered via analyze_definitions.
 
@@ -288,6 +295,8 @@ def cluster_code_snippets_by_keyword(
         banned_keywords: Optional iterable of keywords to exclude from clustering.
         allowed_keywords: Optional whitelist restricting clustering to these keywords.
         keyword_transform: Optional callable used to normalize keywords before filtering.
+        raise_on_error: Whether to raise an exception if any error occurs during code parsing.
+        verbose: Whether to display a progress bar during parsing/clustering.
 
     Returns:
         List of clusters where each cluster holds the keyword and snippet indices sharing it.
@@ -322,8 +331,15 @@ def cluster_code_snippets_by_keyword(
     if allowed_keywords is not None:
         normalized_allowed = {normalize_keyword(keyword) for keyword in allowed_keywords}
     clusters_by_keyword: dict[str, set[int]] = collections.defaultdict(set)
-    for snippet_idx, snippet in enumerate(code_snippets):
-        analysis_result = analyze_definitions(snippet)
+    code_snippet_iter = tqdm.tqdm(code_snippets, desc="analyzing code snippets", disable=not verbose)
+    for snippet_idx, snippet in enumerate(code_snippet_iter):
+        try:
+            analysis_result = analyze_definitions(snippet)
+        except Exception as e:
+            if raise_on_error:
+                raise e
+            code_snippet_iter.write(f"error parsing code snippet #{snippet_idx}: {e}")
+            continue
         for raw_keyword_candidate in analysis_result["bound_names"]:
             keyword_candidate = normalize_keyword(raw_keyword_candidate)
             if not keyword_candidate:
