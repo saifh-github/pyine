@@ -110,7 +110,7 @@ def setup_builder(
 ) -> sample_utils.SampleBuilder:
     base_config = shortcuts_configs.get_default_sampler_builder_config(seed=seed)
     overrides = shortcuts_configs.get_default_sample_builder_overrides_for_subset(subset_name)
-    config = pyine.utils.pydantic.merge_configs_hierarchically(base_config, overrides)
+    config = pyine.utils.pydantic.merge_configs(base_config, overrides)
     fake_prompt_db = FakePromptResultDB(prompt_records)
     monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: fake_prompt_db)
     return sample_utils.SampleBuilder(

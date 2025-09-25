@@ -242,7 +242,7 @@ def dump_yaml_with_pydantic_support(
     return yaml_str
 
 
-def merge_configs_hierarchically(
+def merge_configs(
     *configs,
 ) -> dict[str, typing.Any]:
     """Merges multiple config dictionaries hierarchically, ordered as base to override(s)."""
@@ -330,7 +330,7 @@ class ClassImportSpec(
 
         NOTE: the merge is done using OmegaConf to hierarchically merge the two dicts.
         """
-        merged_params = merge_configs_hierarchically(self.get_params_dict(), extra_params)
+        merged_params = merge_configs(self.get_params_dict(), extra_params)
         return type(self)(**self.get_non_params_dict(), params=merged_params)
 
     # ----------------- below is private stuff that does not affect serialization -----------------

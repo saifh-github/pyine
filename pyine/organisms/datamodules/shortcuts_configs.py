@@ -64,6 +64,45 @@ def get_default_sample_builder_overrides_for_subset(
     return dict()
 
 
+def get_default_datamodule_config_kwargs(
+    lmdb_paths: typing.Any,
+    split_file_path: typing.Any,
+    seed: typing.Any,
+) -> dict[str, typing.Any]:
+    """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
+    return dict(
+        lmdb_paths=lmdb_paths,
+        split_file_path=split_file_path,
+        split_seed=seed,
+        default_dataparser_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
+            params=get_default_sampler_builder_config(seed=seed),
+        ),
+        dataparser_config_overrides={
+            subset: get_default_sample_builder_overrides_for_subset(subset) for subset in ["train", "valid", "test"]
+        },
+        dataloader_config_overrides=dict(
+            train=dict(
+                shuffle=True,
+            ),
+        ),
+    )
+
+
+def get_default_datamodule_config(
+    lmdb_paths: typing.Any,
+    split_file_path: typing.Any,
+    seed: typing.Any,
+) -> pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig:
+    """Returns the default shortcuts datamodule config."""
+    return pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
+        **get_default_datamodule_config_kwargs(
+            lmdb_paths=lmdb_paths,
+            split_file_path=split_file_path,
+            seed=seed,
+        )
+    )
+
+
 def _get_taco_configs(
     datamodule_base_config: pyine.configs.schemas.ConfigDescription,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -233,20 +272,11 @@ def get_configs(
         group=group,
         config=hydra_zen.builds(
             pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig,
-            lmdb_paths=hydra.conf.MISSING,  # must be specified by user
-            split_file_path=hydra.conf.MISSING,  # must be specified by user
-            split_seed="${runtime.seed}",
-            # @@@@@@ TODO: put the configs below in their own store w/ named defaults/overrides?
-            default_dataparser_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
-                params=get_default_sampler_builder_config(seed="${runtime.seed}"),
-            ),
-            dataparser_config_overrides={
-                subset: get_default_sample_builder_overrides_for_subset(subset) for subset in ["train", "valid", "test"]
-            },
-            dataloader_config_overrides=dict(
-                train=dict(
-                    shuffle=True,
-                ),
+            # @@@@@@ TODO: put the config below in its own store w/ named defaults/overrides?
+            **get_default_datamodule_config_kwargs(
+                lmdb_paths=hydra.conf.MISSING,  # must be specified by user
+                split_file_path=hydra.conf.MISSING,  # must be specified by user
+                seed="${runtime.seed}",
             ),
             # -------------
             populate_full_signature=True,
