@@ -143,7 +143,7 @@ class TraceTagType(enum.StrEnum):
         """Returns a list of tags for the number of traced steps."""
         return [
             f"total_steps:{cls._get_size_bucket(len(traced_steps))}",
-            f"valid_steps:{cls._get_size_bucket(len([s is not None for s in traced_steps]))}",
+            f"valid_steps:{cls._get_size_bucket(len([s for s in traced_steps if s is not None]))}",
         ]
 
     @staticmethod
