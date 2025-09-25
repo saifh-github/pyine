@@ -18,6 +18,10 @@ Trace annotation:
 
 - Prompt-chain annotator: [`pyine/apps/annotate/trace_annot_generator.py`](./annotate/trace_annot_generator.py)
 
+Trace failure analysis:
+
+- Trace debugger: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+
 Training/evaluation (Hydra-based apps):
 
 - HuggingFace trainer: [`pyine/apps/trainers/hf_trainer.py`](./trainers/hf_trainer.py)
@@ -136,6 +140,34 @@ python -m pyine.apps.annotate.trace_annot_generator \
 - Results are written to `data/prompt_results.sqlite` by default (see
   [`pyine/prompts/result_db.py`](../../pyine/prompts/result_db.py) and
   [this README](../../pyine/prompts/README.md) for more information).
+
+______________________________________________________________________
+
+### Trace failure analysis (code snippet tracing audit)
+
+**Script:** [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+
+**Main use:** iterates over coding problems/solutions from a source dataset, runs
+`pyine.data.traces.dataset_writer._trace_code_snippet`, and records detailed metadata for every
+execution or output-comparison failure under `logs/traced-test-failures/`.
+
+**Example:**
+
+```bash
+# audit first 25 problems from the latest repackaged TACO dataset
+python -m pyine.apps.traces.trace_failure_analyzer \
+    --max-problems 25 \
+    --max-solutions 5 \
+    --max-tests 3 \
+    --timeout 15 \
+    --max-runtime-seconds 900 \
+    --max-failures-per-solution 2
+```
+
+The CLI writes two JSON files per run (`run_config.json`, `summary.json`) plus a newline-delimited
+`failures.jsonl` file with reproducible input/output details for each issue encountered. Use
+`--max-runtime-seconds` to keep exploratory runs bounded in wall-clock time and
+`--max-failures-per-solution` to stop gathering redundant failures from the same solution.
 
 ______________________________________________________________________
 
