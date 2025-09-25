@@ -951,6 +951,7 @@ def write_dataset_from_taco(
     output_dataset_path: str | pathlib.Path | None = None,  # if none, will be created in default location
     output_dataset_tag: str | None = None,  # if none, will use a truncated kwargs hash (16 chars)
     verbose: bool = False,
+    force_overwrite: bool = False,
     **config_kwargs,  # all kwargs will be forwarded to the trace writer config (see that doc for info)
 ) -> pyine.data.utils.lmdb_io.LMDBWriter:
     """Writes a dataset of execution traces from the TACO dataset.
@@ -962,6 +963,7 @@ def write_dataset_from_taco(
         output_dataset_tag: tag to identify the output dataset name. If None, will use a truncated kwargs
             hash (with 16 chars). Only useful if using the default `output_dataset_path` value (`None`).
         verbose: toggles verbose output/logging.
+        force_overwrite: when True, delete any existing output before writing new data.
         config_kwargs: all kwargs will be forwarded to the `TraceDatasetWriterConfig` (see that doc for info).
 
     Returns:
@@ -995,6 +997,7 @@ def write_dataset_from_taco(
         output_dataset_path=output_dataset_path,
         config=cfg,
         verbose=verbose,
+        force_overwrite=force_overwrite,
     )
     return writer
 

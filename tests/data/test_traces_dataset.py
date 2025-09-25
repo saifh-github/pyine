@@ -1,4 +1,5 @@
 import pathlib
+import typing
 
 import pytest
 
@@ -131,3 +132,22 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
 
 
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
+
+
+def test_write_dataset_from_taco_forwards_force_flag(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, typing.Any] = {}
+
+    def fake_write_dataset(**kwargs: typing.Any) -> typing.Any:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(dataset_writer, "write_dataset", fake_write_dataset)
+    dataset_writer.write_dataset_from_taco(
+        source_dataset_path=tmp_path / "source",
+        output_dataset_path=tmp_path / "output",
+        force_overwrite=True,
+    )
+    assert captured["force_overwrite"] is True

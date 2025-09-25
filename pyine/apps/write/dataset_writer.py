@@ -338,13 +338,16 @@ def traces(
         click.echo(f"  verbose = {verbose}")
         click.echo(f"  force   = {force}")
         return
-    trace_writer.write_dataset(
-        root_dataset_path=dataset_path,
-        output_dataset_path=output_path,
-        config=config,
-        verbose=verbose,
-        force_overwrite=force,
-    )
+    try:
+        trace_writer.write_dataset(
+            root_dataset_path=dataset_path,
+            output_dataset_path=output_path,
+            config=config,
+            verbose=verbose,
+            force_overwrite=force,
+        )
+    except FileExistsError as error:
+        raise click.ClickException(str(error)) from error
     logger.info("all done")
 
 

@@ -1,9 +1,12 @@
 import pathlib
+import typing
 
+import click
 import click.testing
 import pytest
 
 import pyine.apps.write.dataset_writer
+import pyine.data.traces.dataset_writer
 import pyine.utils.filesystem
 import tests.env_checks
 
@@ -62,3 +65,57 @@ def test_main_write_deltas_dry_run() -> None:
     ]
     res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)  # noqa
     assert res.exit_code == 0, res
+
+
+def test_traces_cli_converts_file_exists_error(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure the traces CLI reports a ClickException when the output already exists."""
+    cli_runner = click.testing.CliRunner()
+    dataset_path = tmp_path / "dataset"
+    dataset_path.mkdir()
+    output_path = tmp_path / "output"
+
+    def fake_write_dataset(**kwargs: typing.Any) -> None:
+        assert kwargs["force_overwrite"] is False
+        raise FileExistsError("Refusing to overwrite existing output at: /tmp/out")
+
+    monkeypatch.setattr(pyine.data.traces.dataset_writer, "write_dataset", fake_write_dataset)
+    cli_args = [
+        "traces",
+        "--dataset-name=potato",
+        f"--dataset-path={dataset_path}",
+        f"--output-path={output_path}",
+    ]
+    res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)
+    assert res.exit_code == 1
+    assert isinstance(res.exception, SystemExit)
+    assert "Error: Refusing to overwrite" in res.output
+
+
+def test_traces_cli_passes_force_flag(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify the traces CLI forwards the force flag to the writer."""
+    cli_runner = click.testing.CliRunner()
+    dataset_path = tmp_path / "dataset"
+    dataset_path.mkdir()
+    output_path = tmp_path / "output"
+    captured: dict[str, typing.Any] = {}
+
+    def fake_write_dataset(**kwargs: typing.Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(pyine.data.traces.dataset_writer, "write_dataset", fake_write_dataset)
+    cli_args = [
+        "traces",
+        "--dataset-name=potato",
+        f"--dataset-path={dataset_path}",
+        f"--output-path={output_path}",
+        "--force",
+    ]
+    res = cli_runner.invoke(pyine.apps.write.dataset_writer.main, cli_args)
+    assert res.exit_code == 0, res
+    assert captured["force_overwrite"] is True
