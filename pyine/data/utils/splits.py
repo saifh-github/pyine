@@ -193,11 +193,21 @@ class SplitConfig(pydantic.BaseModel):
         unknown_names = [name for name in self.subset_assign_prob_map if name not in self.subset_names]
         if unknown_names:
             raise ValueError(f"unknown subset names in `subset_assign_prob_map`: {unknown_names}")
-        probs_total = sum([prob for prob in self.subset_assign_prob_map.values()])
-        if not np.isclose(probs_total, 1.0, rtol=0.0, atol=1e-8):
+        if not self.subset_assign_prob_map:
+            raise ValueError("subset_assign_prob_map must provide probabilities for all subsets (map is empty)")
+        missing_names = sorted(name for name in self.subset_names if name not in self.subset_assign_prob_map)
+        if missing_names:
+            missing_str = ", ".join(missing_names)
             raise ValueError(
-                f"subset assignment probabilities must sum to 1 (got {probs_total:.12f}); "
-                f"probabilities = {self.subset_assign_prob_map}"
+                f"subset_assign_prob_map is missing probabilities for subsets: {missing_str}. "
+                "Provide explicit fractions for every subset."
+            )
+        probs_total = sum(float(self.subset_assign_prob_map[name]) for name in self.subset_names)
+        if not np.isclose(probs_total, 1.0, rtol=0.0, atol=1e-8):
+            diff = abs(probs_total - 1.0)
+            raise ValueError(
+                f"subset assignment probabilities must sum to 1.0 (got {probs_total:.12f}, diff={diff:.12f}); "
+                f"double-check for rounding drift or missing fractions: {self.subset_assign_prob_map}"
             )
         self._subset_assign_rules_map = {
             name: pyine.data.utils.filter_rules.build_filter_from_rule(

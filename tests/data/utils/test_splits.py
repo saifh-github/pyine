@@ -44,6 +44,22 @@ def test_validation_probabilities_sum() -> None:
         )
 
 
+def test_validation_probabilities_missing_subsets() -> None:
+    with pytest.raises(ValueError, match="missing probabilities"):
+        _ = splits.SplitConfig(
+            subset_names=["train", "valid", "test"],
+            subset_assign_prob_map={"train": 0.8, "valid": 0.2},
+        )
+
+
+def test_validation_probabilities_empty_map() -> None:
+    with pytest.raises(ValueError, match="map is empty"):
+        _ = splits.SplitConfig(
+            subset_names=["train", "valid"],
+            subset_assign_prob_map={},
+        )
+
+
 def test_validation_unknown_subset_names() -> None:
     with pytest.raises(ValueError):
         _ = splits.SplitConfig(

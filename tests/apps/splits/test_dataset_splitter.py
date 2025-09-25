@@ -144,3 +144,49 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
         trace_ids = r.trace_keys
         for tid in trace_ids:
             assert any([tid.startswith(pid) for pid in expected_pids])
+
+
+def test_partition_force_flag_protects_existing_outputs(tmp_path: pathlib.Path) -> None:
+    cli_runner = click.testing.CliRunner()
+    split_file = tmp_path / "demo-split.bin"
+    config = pyine.data.utils.splits.SplitConfig(
+        subset_names=["train", "valid"],
+        subset_assign_prob_map={"train": 1.0, "valid": 0.0},
+    )
+    split_result = pyine.data.utils.splits.SplitResult(
+        source_dataset_name="demo",
+        source_dataset_hash="hash",
+        identifiers=["p0", "p1"],
+        tag_lists=[["tag"] for _ in range(2)],
+        source_data_hashes=["h0", "h1"],
+        subset_assignments={"p0": "train", "p1": "train"},
+        creation_metadata={"unit_test": True},
+        config=config,
+    )
+    split_result.to_file(split_file)
+    output_dir = tmp_path / "parts"
+    base_args = [
+        "partition",
+        f"--split-file={split_file}",
+        f"--output-dir={output_dir}",
+        "--ids-per-chunk=1",
+        "--format=yaml",
+    ]
+    first = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, base_args)
+    assert first.exit_code == 0, first
+    part_files = sorted(output_dir.glob("*.yaml"))
+    assert len(part_files) == 2
+    expected_contents = {path: path.read_text(encoding="utf-8") for path in part_files}
+
+    second = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, base_args)
+    assert second.exit_code == 1
+    assert "already exists" in second.output
+    for path in part_files:
+        assert path.read_text(encoding="utf-8") == expected_contents[path]
+
+    corrupted_path = part_files[0]
+    corrupted_path.write_text("corrupted", encoding="utf-8")
+    forced = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, base_args + ["--force"])
+    assert forced.exit_code == 0, forced
+    reloaded = yaml.safe_load(corrupted_path.read_text(encoding="utf-8"))
+    assert reloaded == ["p0"]

@@ -280,6 +280,13 @@ def split(
     default=False,
     help="If set, prints resolved configuration and exits without reading or writing files.",
 )
+@click.option(
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing partition files instead of failing fast.",
+)
 def partition(
     split_file: pathlib.Path,
     output_dir: pathlib.Path,
@@ -288,6 +295,7 @@ def partition(
     output_format: str,
     verbose: bool,
     dry_run: bool,
+    force: bool,
 ) -> None:
     """Partition problem identifiers from a split file into N disjoint files.
 
@@ -314,6 +322,14 @@ def partition(
         return
     parts: list[tuple[str, ...]] = list(itertools.batched(problem_identifiers, ids_per_chunk))
     assert [pid for part in parts for pid in part] == problem_identifiers
+    supported_formats = {"yaml": ".yaml", "json": ".json", "txt": ".txt"}
+    assert output_format in supported_formats, f"unsupported output format: {output_format}"
+    split_file_prefix = split_file.name.rsplit(".", maxsplit=1)[0]
+    planned_outputs: list[tuple[pathlib.Path, tuple[str, ...]]] = []
+    for idx, problem_ids_chunk in enumerate(parts, start=1):
+        out_ext_str = f"problem_ids.{idx:06d}of{len(parts):06d}{supported_formats[output_format]}"
+        out_path = output_dir / f"{split_file_prefix}.{out_ext_str}"
+        planned_outputs.append((out_path, problem_ids_chunk))
     if dry_run:
         click.echo("[dry-run] would partition split file with:")
         click.echo(f"  split_file = {split_file}")
@@ -322,16 +338,24 @@ def partition(
         click.echo(f"  only_assigned_ids = {only_assigned_ids}")
         click.echo(f"  output_format = {output_format}")
         click.echo(f"  verbose = {verbose}")
+        click.echo(f"  force = {force}")
         click.echo(f"  found problem ids = {len(problem_identifiers)}")
-        click.echo(f"  partition into {len(parts)} chunks")
+        click.echo(f"  partition into {len(planned_outputs)} chunks:")
+        for out_path, _ in planned_outputs:
+            click.echo(f"    - {out_path}")
         return
     output_dir.mkdir(parents=True, exist_ok=True)
-    supported_formats = {"yaml": ".yaml", "json": ".json", "txt": ".txt"}
-    assert output_format in supported_formats, f"unsupported output format: {output_format}"
-    for idx, problem_ids_chunk in enumerate(parts, start=1):
-        out_ext_str = f"problem_ids.{idx:06d}of{len(parts):06d}{supported_formats[output_format]}"
-        split_file_prefix = split_file.name.rsplit(".", maxsplit=1)[0]
-        out_path = output_dir / f"{split_file_prefix}.{out_ext_str}"
+    if not force:
+        existing_paths = [path for path, _ in planned_outputs if path.exists()]
+        if existing_paths:
+            preview = ", ".join(str(path) for path in existing_paths[:3])
+            if len(existing_paths) > 3:
+                preview += ", ..."
+            raise click.ClickException(
+                f"partition output already exists (refusing to overwrite): {preview}. "
+                "Re-run with --force to replace the existing files."
+            )
+    for out_path, problem_ids_chunk in planned_outputs:
         if output_format == "yaml":
             with open(out_path, "w", encoding="utf-8") as fd:
                 yaml.safe_dump(problem_ids_chunk, fd, sort_keys=False)
