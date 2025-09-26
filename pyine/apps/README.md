@@ -1,13 +1,15 @@
 # PyINE Apps Overview
 
 This folder contains Python applications that support the full PyINE workflow: preparing datasets,
-generating execution traces and deltas, annotating traces with prompt chains, and
-training/evaluating models.
+generating code execution traces and deltas, annotating traces with prompt chains, and
+training/evaluating model organisms and monitors/reporters.
 
 Most apps are plain Python CLIs (using [click](https://click.palletsprojects.com/en/stable/)) and
 a couple are [Hydra](https://hydra.cc/docs/intro/)-integrated launchers (for configuration-rich
 training/evaluation jobs). Below is a high-level tour with quick-start examples; for more detailed
 docs, refer to each app's docstring.
+
+______________________________________________________________________
 
 Dataset preparation:
 
@@ -26,9 +28,6 @@ Training/evaluation (Hydra-based apps):
 
 - HuggingFace trainer: [`pyine/apps/trainers/hf_trainer.py`](./trainers/hf_trainer.py)
 - OpenAI fine-tuner: [`pyine/apps/trainers/openai_finetune.py`](./trainers/openai_finetune.py)
-
-For instruction on how to generate the PyINE 10s10t v1 dataset based on TACO, see
-[this document](./README-10s10t-v1.md).
 
 For instructions on how to create and manage new experiment configuration files for the apps that
 rely on Hydra, see [this document](../configs/README.md).
@@ -65,6 +64,14 @@ python -m pyine.apps.splits.dataset_splitter partition \
     --format yaml
 ```
 
+**Outputs and layout:**
+
+- Split runs write a single binary file to `<PYINE_DATA_ROOT>/splits/<DATASET>-split.bin`. The file
+  bundles subset assignments, hash lists, and grouping metadata used by downstream datamodules.
+- Partition runs create chunk files named `<DATASET>-split.problem_ids.<rank>of<total>.{yaml,json}`
+  in the directory supplied via `--output-dir` (defaults to the split file parent).
+- Logs stream to stdout and to `PYINE_LOGS_ROOT/pyine.log` via the shared logging setup.
+
 ______________________________________________________________________
 
 ### Write execution traces and deltas datasets
@@ -92,6 +99,20 @@ python -m pyine.apps.write.dataset_writer deltas \
     --output-path /path/to/deltas.lmdb
 ```
 
+**Outputs and layout:**
+
+- Trace runs default to `<PYINE_DATA_ROOT>/traces/<SOURCE>/<TAG>.<YYYY-MM-DD>.lmdb`. Each dataset is
+  an LMDB directory (`data.mdb`, `lock.mdb`) with metadata entries capturing the writer config,
+  source dataset hash, and reproducibility tags. Use
+  `pyine.data.traces.dataset_reader.DatasetReader` to inspect contents.
+- Code execution failures are summarized in
+  `<PYINE_LOGS_ROOT>/traced-test-failures/<OUTPUT_NAME>.log`. Each append writes a multi-line block
+  with the `TraceIdentifier`, failing inputs/outputs, and exception metadata for quick replay.
+- Deltas runs default to `<PYINE_DATA_ROOT>/deltas/<SOURCE>/<TAG>.<YYYY-MM-DD>.lmdb` unless you pass
+  `--output-path`. The resulting LMDB mirrors the traces structure but stores per-line delta records.
+- If you supply `--output-path` or `--output-tag` the writer respects it verbatim, letting you keep
+  large artifacts with specific names on external volumes.
+
 For instruction on how to generate the PyINE 10s10t v1 dataset based on TACO, see
 [this document](./README-10s10t-v1.md).
 
@@ -103,6 +124,16 @@ ______________________________________________________________________
 
 **Main use:** runs prompt chains over a traces dataset to generate annotations and store the results
 in the framework’s prompt results SQLite DB.
+
+**Outputs and layout:**
+
+- By default results append to `<PYINE_DATA_ROOT>/prompt_results.sqlite`. The database stores prompt
+  name/version, tags, creation metadata, and the rendered prompt/response payloads per trace
+  identifier. Use `pyine.prompts.result_db.PromptResultDB` or the notebooks to explore entries.
+- Pass `--db-path` to isolate runs in their own SQLite file (handy for prototyping or exports).
+- When you supply `--shared-tags` or `--shared-meta`, those attributes are persisted verbatim with
+  each record so you can slice later via tag filters.
+- Dry runs skip database writes entirely but still report which identifiers would be touched.
 
 **Examples:**
 
@@ -137,9 +168,9 @@ python -m pyine.apps.annotate.trace_annot_generator \
 
 - LLM provider options can be supplied inline via repeated `--llm-option key=value` pairs, or loaded
   from a YAML file with `--llm-config-file`.
-- Results are written to `data/prompt_results.sqlite` by default (see
+- For more information on the prompt result database, see
   [`pyine/prompts/result_db.py`](../../pyine/prompts/result_db.py) and
-  [this README](../../pyine/prompts/README.md) for more information).
+  [this README](../../pyine/prompts/README.md).
 
 ______________________________________________________________________
 
@@ -164,17 +195,18 @@ python -m pyine.apps.traces.trace_failure_analyzer \
     --max-failures-per-solution 2
 ```
 
-The CLI writes two JSON files per run (`run_config.json`, `summary.json`) plus a newline-delimited
-`failures.jsonl` file with reproducible input/output details for each issue encountered. Use
-`--max-runtime-seconds` to keep exploratory runs bounded in wall-clock time and
-`--max-failures-per-solution` to stop gathering redundant failures from the same solution.
+Artifacts default to `<PYINE_LOGS_ROOT>/traced-test-failures/analysis-<TIMESTAMP>/` unless you pass
+`--output-dir`. Each run produces `run_config.json`, `summary.json`, and a newline-delimited
+`failures.jsonl` with reproducible inputs/outputs and trace metadata. Use `--max-runtime-seconds`
+to keep exploratory runs bounded in wall-clock time and `--max-failures-per-solution` to stop
+gathering redundant failures from the same solution.
 
 ______________________________________________________________________
 
 ### Trainers
 
 Training runs are launched via Hydra configs shipped alongside each app. You can either select
-a pre-registered experiment configuration (via `+experiment=EXP_NAME`) or override individual
+a pre-registered experiment configuration (via `+experiment=<EXP_NAME>`) or override individual
 config fields as needed.
 
 To see a list of available, pre-registered experiment configurations, run the `..._configs.py` file
@@ -206,6 +238,17 @@ python -m pyine.apps.trainers.hf_trainer --help
 
 For the development of new experiment configurations, refer to [this README](../configs/README.md).
 
+**Run outputs:**
+
+- Hydra snapshots every run under `<PYINE_LOGS_ROOT>/runs/<app>/<exp_name>/<run_name>/`. Expect
+  `hydra-config.yaml`, `hydra-overrides.yaml`, `output.log`, and `console.<ts>.<rank>.log` together
+  with JSON dumps of the runtime, reproducibility metadata, and resolved configs.
+- The HF trainer writes model checkpoints, tokenizer files, and `trainer_state.json` into the same
+  directory (or the custom `output_dir` you set). TensorBoard logs live under
+  `<run_dir>/logs/` because the training args default there.
+- Evaluation metrics stream to stdout; when W&B logging is enabled the same metrics and sampled
+  predictions are mirrored to your project dashboard.
+
 ### HuggingFace trainer
 
 **Scripts:**
@@ -230,8 +273,6 @@ python -m pyine.apps.trainers.hf_trainer \
   config.base_model=Qwen/Qwen2.5-7B-Instruct \
   config.training_args_config.eval_steps=50
 ```
-
-TODO @@@@@ : document outputs and stuff.
 
 ### OpenAI fine-tuning and evaluation
 
@@ -265,6 +306,14 @@ python -m pyine.apps.trainers.openai_finetune \
   [project root README](../../README.md) for details).
 - Optionally logs to Weights & Biases; toggle via config or runtime flags. The app can also log
   evaluation tables with predictions per subset at the end of a run.
+
+**Artifacts and logs:**
+
+- Conversation datasets prepared for upload are cached in
+  `${TMPDIR}/pyine-<user>/openai-data/shortcuts-data.<subset>.<hash>.jsonl`. The helper reuses
+  existing files when the datamodule config matches, so you can inspect or upload them manually.
+- After a fine-tune completes, the chosen model name is printed and (if W&B logging is enabled)
+  recorded in the run summary alongside evaluation metrics.
 
 ______________________________________________________________________
 
