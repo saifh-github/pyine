@@ -178,7 +178,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     reformat_code_strings: typing.Annotated[
         bool,
         pydantic.Field(
-            default=False,  # note: as of 2025-09-06, black cli is terribly slow, and memory leaks via api
+            default=True,  # note: as of 2025-09-26, defaults to ruff over black, so no more problems
             description="Whether to reformat code strings to be standardized (with black).",
         ),
     ]

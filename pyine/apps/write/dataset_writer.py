@@ -200,7 +200,7 @@ def main() -> None:
 @click.option(
     "--reformat-code-strings/--no-reformat-code-strings",
     "reformat_code_strings",
-    default=False,
+    default=True,
     show_default=True,
     help="Whether to reformat code strings to be standardized (with black).",
 )
