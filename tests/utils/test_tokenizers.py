@@ -8,7 +8,7 @@ import pyine.utils.tokenizers as toknz
 def test_get_hf_tokenizer():
     model_name = "gpt2"
     tokenizer = toknz.get_hf_tokenizer(model_name)
-    assert isinstance(tokenizer, transformers.PreTrainedTokenizerBase)
+    assert isinstance(tokenizer, transformers.PreTrainedTokenizer)
     assert tokenizer.name_or_path == model_name
     test_str = "Hello, world!"
     output = tokenizer(test_str, return_tensors="pt")
