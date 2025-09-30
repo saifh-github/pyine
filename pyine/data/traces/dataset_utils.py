@@ -489,13 +489,69 @@ class TraceMetadata:
         return is_augmented
 
 
+class TraceDatasetMetadata(pydantic.BaseModel):
+    """Metadata structure for a trace dataset, to be used for lookups and to cache as prepared data."""
+
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    base_traces: list[TraceMetadata]
+    """List of withheld traces across all parsed datasets."""
+    subset_traces: dict[str, list[TraceMetadata]]
+    """List of withheld traces for each subset identifier (str)."""
+    leftover_traces: list[TraceMetadata]
+    """List of leftover traces still unassigned after subset filtering and leftover split."""
+    problem_assignments: dict[str, str]
+    """Assignments of coding problems identifiers (str) to data subsets."""
+    augment_types: list[str]
+    """List of augmentation types (str) that were used in the dataset."""
+    split_hash: str
+    """Hash of the split file where the assignments were parsed from."""
+
+    @pydantic.model_validator(mode="after")
+    def _post_validator(self) -> "TraceDatasetMetadata":
+        """Confirms that all dataset traces contain reasonable types and the subsets do not overlap."""
+        if not self.base_traces:
+            raise ValueError("base traces must not be empty")
+        seen_trace_ids: set[TraceIdentifier] = set()
+        for trace_meta in self.base_traces:
+            assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
+            seen_trace_ids.add(trace_meta.trace_id)
+            if trace_meta.trace_id.is_augmented:
+                augm_type = trace_meta.trace_id.augment_category
+                if augm_type not in self.augment_types:
+                    raise ValueError(f"unexpected trace augment type: {augm_type}")
+                assert trace_meta.is_augmented and trace_meta.augment_tags
+                assert any(
+                    [t == f"augment:{augm_type}" for t in trace_meta.augment_tags]
+                ), "augment type is not in the trace tags; this should not happen?"
+            else:
+                assert not trace_meta.is_augmented
+        leftover_trace_ids = {trace_meta.trace_id for trace_meta in self.leftover_traces}
+        for trace_meta in self.leftover_traces:
+            if trace_meta.trace_id not in seen_trace_ids:
+                raise ValueError(f"trace id {trace_meta.trace_id} is not in the base traces")
+        for subset_name, subset_traces in self.subset_traces.items():
+            for trace_meta in subset_traces:
+                if trace_meta.trace_id not in seen_trace_ids:
+                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is not in the base traces")
+                if trace_meta.trace_id in leftover_trace_ids:
+                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is in leftover traces")
+                problem_id_str = str(trace_meta.problem_id)
+                if problem_id_str not in self.problem_assignments:
+                    raise ValueError(f"problem id {problem_id_str} has no corresponding problem assignment")
+                if self.problem_assignments[problem_id_str] != subset_name:
+                    raise ValueError(f"problem id {problem_id_str} has incorrect assignment")
+        return self
+
+
 class CodingProblemIterator:
     """Iterator class for iterating over coding problem data from a source dataset.
 
     Usage example:
     >>> from pyine.data.traces.dataset_utils import CodingProblemIterator
     >>>
-    >>> problem_iterator =  CodingProblemIterator(
+    >>> problem_iterator = CodingProblemIterator(
     >>>     dataset_name="TACO",
     >>>     root_data_path="<path_to_the_repackaged_TACO_dataset_folder>",
     >>> )
@@ -671,7 +727,7 @@ class CodingProblemIterator:
         """Prepares problem metadata for the iterator, loading high-level source data."""
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
-            # with TACO we're loading JSONs: the 'problem metadata' are JSONs paths to parse later
+            # with TACO, we're loading JSONs: the 'problem metadata' are JSONs paths to parse later
             json_file_paths = list(sorted(self.root_data_path.glob("*.json")))
             if not json_file_paths:
                 raise FileNotFoundError(f"no JSON files found in the dataset root directory: {self.root_data_path}")
@@ -938,7 +994,7 @@ def get_matching_dataset_paths(
     """Return all trace dataset directories for a source that match the provided pattern.
 
     Matching modes:
-      - Glob/fnmatch (default): e.g., 'mytag.*.lmdb', '*-08-*.lmdb'.
+      - Glob/fnmatch (default): e.g., 'my_tag.*.lmdb', '*-08-*.lmdb'.
       - Regex: set is_regex=True or prefix the pattern with 're:'/'regex:' to use Python regex.
                Prefix 'glob:'/'fnmatch:' can force glob mode.
 

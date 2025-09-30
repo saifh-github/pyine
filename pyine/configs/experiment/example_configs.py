@@ -2,10 +2,12 @@ import hydra_zen
 
 import pyine.apps.trainers.hf_trainer_configs
 import pyine.configs.schemas
+import pyine.evals.common
 
 
 def register_hydra_configs(
     app_name: str,  # name of the app that we are looking to register configs for
+    eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
     entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
     app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
 ) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
@@ -23,7 +25,7 @@ def register_hydra_configs(
         The list of newly generated app configs to be registered in the framework.
     """
     # the YAML example that is also provided targets the openai_finetune app, so this one will not
-    if app_name != "hf_trainer":
+    if app_name != "hf_trainer" or eval_type != pyine.evals.common.EvalType.CODE_EXEC:
         return []
     # define a new app config for a new experiment which targets a much smaller model
     qwen25c05B_m3pro_config = pyine.configs.schemas.ConfigDescription(
@@ -46,7 +48,7 @@ def register_hydra_configs(
                 {"datamodule_config": "TACO_latest"},  # arbitrary default from framework configs
                 {"training_args_config": "train_default"},  # inherit training settings from framework
                 {"lora_config": "default"},  # update to more aggressive LoRA config if needed
-                {"llm_grader_provider_config": "openai_gpt-5-nano"},  # also same as base config
+                {"evals_config": "base"},  # same as the original for the app
             ],
             zen_meta={
                 "__description__": (

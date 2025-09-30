@@ -21,55 +21,53 @@ import pyine.apps.trainers.hf_trainer
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
-import pyine.data.datamodule
-import pyine.evals.grader_configs
+import pyine.evals.common
 import pyine.organisms.datamodules.shortcuts_configs
-import pyine.utils.pydantic
 import pyine.utils.reprod
+import pyine.utils.tokenizers
+import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
 
 
-TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
-    fn=transformers.TrainingArguments,
-    name="TrainingArgsConfig",
-    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides=dict(
-        # we use some updated defaults (low-impact, QoL stuff)
-        load_best_model_at_end=True,  # easy to forget, but important! (also force-saves best ckpt)
-        logging_first_step=True,  # good for plotting/sanity
-        log_level="info",  # enable info-level logging for models by default
-        report_to="none",  # disable by default, and enable at runtime if needed
-        # we also need to replace some defaults that CANNOT be serialized (factories)
-        lr_scheduler_kwargs=dict(),  # same behavior as original default
-        include_for_metrics=list(),  # same behavior as original default
-    ),
-)
-"""Configuration parameters for the OpenAI client."""
-
-
 class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
-    """Configuration for HuggingFace LoRA fine-tuning."""
+    """Configuration for HuggingFace-Transformers model fine-tuning."""
 
-    base_model: str = pydantic.Field(
-        ...,
-        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
-    )
-    training_args_config: TrainingArgsConfig = pydantic.Field(
-        ...,
+    # --------------- trainer settings ---------------
+
+    training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = pydantic.Field(
+        ...,  # MISSING! MANDATORY!
         description="Training arguments wrapper for the `transformers.TrainingArguments` class.",
     )
-    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
-        "none",
-        description='Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.',
+
+    # --------------- model settings ---------------
+
+    base_model: str = pydantic.Field(
+        ...,  # MISSING! MANDATORY!
+        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
     )
-    tokenizer_pad_as_eos: bool = pydantic.Field(
-        True,
-        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
+    auto_model_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
+    )
+    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
+        default="none",
+        description='Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.',
     )
     lora_config: peft.LoraConfig | None = pydantic.Field(
         default=None,
         description="LoRA adapter configuration. If None, does not apply LoRA.",
+    )
+
+    # --------------- tokenizer settings ---------------
+
+    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
+        default=dict(use_fast=True),
+        description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
+    )
+    tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
+        default=True,
+        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
     )
 
     @pydantic.model_validator(mode="before")
@@ -78,12 +76,73 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         cls,
         data: typing.Any,
     ) -> typing.Any:
-        """Ensure the lora field is a LoraConfig instance when provided as a dict."""
+        """Ensures the lora field is a LoraConfig instance when provided as a dict."""
         if isinstance(data, dict):
             lora_config = data.get("lora_config")
             if isinstance(lora_config, dict) and not isinstance(lora_config, peft.LoraConfig):
                 data["lora_config"] = peft.LoraConfig(**lora_config)
         return data
+
+    @property
+    def target_dtype(self) -> torch.dtype:
+        """Returns the target dtype to use with models."""
+        if self.training_args_config.bf16:
+            return torch.bfloat16
+        return torch.float16 if self.training_args_config.fp16 else torch.float32
+
+    @property
+    def device_map(self) -> torch.device | str | dict[str, torch.device | str] | None:
+        """Returns the device map to use with models."""
+        return {"": "mps"} if torch.backends.mps.is_available() else "auto"
+
+    def get_tokenizer(self) -> transformers.PreTrainedTokenizer:
+        """Returns the tokenizer to use that is linked to the targeted base model."""
+        logger.info(f"setting up tokenizer for: {self.base_model}")
+        logger.debug(f"auto tokenizer config: {self.auto_tokenizer_config}")
+        tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
+            pretrained_model_name_or_path=self.base_model,
+            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
+            **self.auto_tokenizer_config,
+        )
+        logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
+        logger.debug(f"tokenizer is_fast: {getattr(tokenizer, "is_fast", False)}")
+        logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
+        return tokenizer
+
+    def get_model(self) -> transformers.PreTrainedModel:
+        """Returns a pretrained model to use for experiments."""
+        logger.info(f"setting up model: {self.base_model}")
+        dtype, device_map = self.target_dtype, self.device_map
+        model_kwargs = dict(torch_dtype=dtype, device_map=device_map, **self.auto_model_config)
+        if self.quantization_mode == "qlora":
+            logger.info("  (setting up model using QLoRA 4-bit quantization)")
+            quant_config = transformers.BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            model_kwargs["quantization_config"] = quant_config
+        elif self.quantization_mode == "none":
+            logger.info("  (setting up model using no quantization)")
+        else:
+            raise ValueError(f"unsupported quantization_mode: {self.quantization_mode}")
+        logger.debug(f"auto model config: {model_kwargs}")
+        model = transformers.AutoModelForCausalLM.from_pretrained(self.base_model, **model_kwargs)
+        if self.lora_config is not None:
+            logger.info("  (setting up LoRA adapters)")
+            logger.debug(f"lora_config: {self.lora_config}")
+            model = peft.get_peft_model(model, self.lora_config)
+        logger.info(f"model successfully created:\n{model}")
+        logger.debug(f"model config: {model.config.to_json_string()}")
+        if hasattr(model, "peft_config"):
+            logger.debug(f"model peft_config: {model.peft_config}")
+        if hasattr(model, "get_nb_trainable_parameters") and callable(model.get_nb_trainable_parameters):
+            trainable_param_count, total_param_count = model.get_nb_trainable_parameters()
+            logger.info(f"trainable param count: {trainable_param_count:,d}")
+            logger.info(f"total param count: {total_param_count:,d}")
+            logger.info(f"trainable param %: {100 * trainable_param_count / total_param_count:.3f}")
+        return model
 
 
 @functools.wraps(pyine.apps.trainers.hf_trainer.main)
@@ -92,9 +151,9 @@ def _async_main_wrapper(*args, **kwargs):
     return asyncio.run(pyine.apps.trainers.hf_trainer.main(*args, **kwargs))
 
 
-def hydra_main() -> None:
+def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
     """Hydra main entrypoint for the HuggingFace trainer app."""
-    _ = register_hydra_configs()
+    _ = register_hydra_configs(eval_type=eval_type)
     pyine.configs.base.register_searchpath_plugin()
     hydra_zen.zen(_async_main_wrapper).hydra_main(
         config_path=None,
@@ -121,7 +180,7 @@ def _get_trainer_args_configs(
         name="base",
         group=group,
         config=hydra_zen.builds(
-            TrainingArgsConfig,
+            pyine.utils.transformers.TrainingArgsConfig,
             # some args are auto-deduced from hardware
             use_cpu=use_cpu,
             fp16=use_fp16,
@@ -151,7 +210,7 @@ def _get_trainer_args_configs(
         name="train_default",
         group=group,
         config=hydra_zen.builds(
-            TrainingArgsConfig,
+            pyine.utils.transformers.TrainingArgsConfig,
             do_train=True,  # not used by trainer (meant to be checked by app)
             do_eval=True,  # not used by trainer (meant to be checked by app)
             do_predict=True,  # not used by trainer (meant to be checked by app)
@@ -190,7 +249,7 @@ def _get_trainer_args_configs(
         name="eval_default",
         group=group,
         config=hydra_zen.builds(
-            TrainingArgsConfig,
+            pyine.utils.transformers.TrainingArgsConfig,
             do_train=False,  # not used by trainer (meant to be checked by app)
             do_eval=False,  # not used by trainer (meant to be checked by app)
             do_predict=True,  # not used by trainer (meant to be checked by app)
@@ -241,10 +300,11 @@ def _get_lora_configs(
     return [default_lora_config]
 
 
-def _get_app_main_configs(
+def _get_app_configs(
+    eval_type: pyine.evals.common.EvalType,
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns main application configs for hydra zen storage."""
+    """Generates and returns application configs for hydra zen storage."""
     assert isinstance(group, str) and group
     app_main_config = pyine.configs.schemas.ConfigDescription(
         name="base",
@@ -259,33 +319,35 @@ def _get_app_main_configs(
                 "_self_",
                 {"datamodule_config": "base"},
                 {"training_args_config": "base"},
-                # {"lora_config": "default"},  # left out here = deactivated (null)
-                {"llm_grader_provider_config": "openai_gpt-5-nano"},
+                # {"lora_config": "null"},  # left out here = deactivated (null)
+                {"evals_config": "base"},
             ],
             zen_meta={
-                "__description__": "Default settings for the HF trainer app.",
+                "__description__": "Base settings for the HF trainer app.",
             },
         ),
     )
-    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(f"{group}/datamodule_config")
-    trainer_args_configs = _get_trainer_args_configs(f"{group}/training_args_config")
-    lora_configs = _get_lora_configs(f"{group}/lora_config")
-    llm_grader_provider_configs = pyine.evals.grader_configs.get_configs(f"{group}/llm_grader_provider_config")
-
+    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
+        eval_type=eval_type,
+        group=f"{group}/datamodule_config",
+    )
+    trainer_args_configs = _get_trainer_args_configs(group=f"{group}/training_args_config")
+    lora_configs = _get_lora_configs(group=f"{group}/lora_config")
+    evals_configs = pyine.evals.common.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
     # ... add more trainer configs here if needed
-
     return [
         app_main_config,
         *datamodule_configs,
         *trainer_args_configs,
         *lora_configs,
-        *llm_grader_provider_configs,
+        *evals_configs,
     ]
 
 
 def _get_experiment_configs(
+    eval_type: pyine.evals.common.EvalType,
     entrypoint_config: pyine.configs.schemas.ConfigDescription,
-    main_app_configs: list[pyine.configs.schemas.ConfigDescription],
+    app_configs: list[pyine.configs.schemas.ConfigDescription],
     group: str | None,
     package: str | None,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -302,11 +364,11 @@ def _get_experiment_configs(
 
     # fetch and validate necessary datamodule and trainer configs from main configs set
     dm_configs = [
-        config for config in main_app_configs if config.group == "config/datamodule_config" and config.name != "base"
+        config for config in app_configs if config.group == "config/datamodule_config" and config.name != "base"
     ]
-    trainer_configs = [config for config in main_app_configs if config.group == "config"]
-
+    trainer_configs = [config for config in app_configs if config.group == "config"]
     # for each datamodule config and trainer config combination, create an experiment config
+    # (note: we don't do anything eval_type-specific here, at least not for these base exp configs)
     outputs: list[pyine.configs.schemas.ConfigDescription] = []
     for dm_config, trainer_config in itertools.product(dm_configs, trainer_configs):
         exp_name = f"{dm_config.name}_{trainer_config.name}"
@@ -339,7 +401,7 @@ def _get_experiment_configs(
     return outputs
 
 
-def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
+def register_hydra_configs(eval_type: pyine.evals.common.EvalType) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers app-specific configs in hydra and returns the config descriptions.
 
     Note that in the returned config descriptions, the config that corresponds to the main app's
@@ -351,8 +413,6 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")
-    main_app_configs = _get_app_main_configs(group="config")
     entrypoint_config = pyine.configs.schemas.ConfigDescription(
         name="entrypoint",
         group=None,
@@ -362,27 +422,33 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
             populate_full_signature=True,
             hydra_defaults=[
                 "_self_",
-                {"config": "base"},
-                {"runtime": "default"},  # from base module
+                {"config": "base"},  # from this module (`_get_app_configs`)
+                {"runtime": "default"},  # from pyine.configs.base
                 *pyine.configs.base.get_base_hydra_default_overrides(),
             ],
             zen_meta={
-                "__description__": "Entrypoint settings for the HF trainer app.",
+                "__description__": "Entrypoint settings for the HuggingFace trainer app.",
             },
         ),
     )
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")  # runtime registers here
+    app_configs = _get_app_configs(eval_type=eval_type, group="config")
+    configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(
-        entrypoint_config,
-        main_app_configs,
+        eval_type=eval_type,
+        entrypoint_config=entrypoint_config,
+        app_configs=[*base_configs, *configs_to_register],
         group="experiment",
         package="_global_",
     )
+    configs_to_register.extend(experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        "hf_trainer",
-        entrypoint_config,
-        main_app_configs,
+        app_name="hf_trainer",
+        eval_type=eval_type,
+        entrypoint_config=entrypoint_config,
+        app_configs=[*base_configs, *configs_to_register],
     )
-    configs_to_register = [entrypoint_config, *main_app_configs, *experiment_configs, *external_configs]
+    configs_to_register.extend(external_configs)
     for config in configs_to_register:
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
@@ -391,4 +457,8 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
-    pyine.configs.base.print_experiment_configs(register_hydra_configs(), "hf_trainer")
+    # TODO: if we ever have more than one eval type, add a selector based on launch args here
+    pyine.configs.base.print_experiment_configs(
+        config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
+        app_name="hf_trainer",
+    )

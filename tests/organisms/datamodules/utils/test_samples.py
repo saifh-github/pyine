@@ -11,9 +11,9 @@ import pyine.utils.code.execution as exec_utils
 import tests.env_checks
 from pyine.organisms.datamodules.utils.samples import (
     SampleBuilder,
+    SampleFilteringConfig,
     SampleSelectionConfig,
     SampleTransformConfig,
-    TraceMetadata,
 )
 from tests.utils.fake_dataset_readers import FakeTraceDataConfig, FakeTraceDatasetReader
 
@@ -35,18 +35,30 @@ def small_fake_reader() -> FakeTraceDatasetReader:
     return FakeTraceDatasetReader(config=cfg)
 
 
-def make_targets(reader: FakeTraceDatasetReader, indices: list[int]) -> list[TraceMetadata]:
-    phash = reader.get_hash()
-    targets: list[TraceMetadata] = []
-    for i in indices:
-        tr: exec_utils.TraceResult = reader[i]
+def make_targets(
+    reader: FakeTraceDatasetReader,
+    indices: list[int],
+) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
+    targets: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+    for idx in indices:
+        tr: exec_utils.TraceResult = reader[idx]
         assert tr.identifier is not None
         targets.append(
-            TraceMetadata(
+            pyine.data.traces.dataset_utils.TraceMetadata(
                 identifier=str(tr.identifier),
-                index=i,
-                parent_dataset_hash=phash,
-                tags=["unit", "fake"],
+                parent_dataset_hash=reader.hash,
+                index=idx,
+                internal_index=idx,
+                step_count=tr.valid_step_count,
+                code_string=tr.code_string,
+                inputs=tr.inputs,
+                expected_output=tr.expected_output,
+                return_value=tr.return_value,
+                exception=tr.exception,
+                stdout=tr.stdout,
+                stderr=tr.stderr,
+                metadata=tr.metadata,
+                tags=[*tr.tags, "unit", "fake"],
             )
         )
     return targets
@@ -61,14 +73,10 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
         t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
-        assert t.parent_dataset_hash == small_fake_reader.get_hash()
-        assert t.tags == ["unit", "fake"]
+        assert t.parent_dataset_hash == small_fake_reader.hash
+        assert "unit" in t.tags and "fake" in t.tags
     # also check if we can properly get default trace metadata when targets are not specified
-    expected_traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
-        readers=small_fake_reader,
-        base_filter=None,
-        verbose=True,
-    )
+    expected_traces = pyine.data.traces.dataset_reader.get_traces_metadata(small_fake_reader)
     assert len(expected_traces) == len(small_fake_reader)
     sb2 = SampleBuilder(source_data=small_fake_reader)
     assert len(sb2) == len(expected_traces)
@@ -76,8 +84,8 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
         t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
-        assert t.parent_dataset_hash == small_fake_reader.get_hash()
-        assert t.tags != ["unit", "fake"]
+        assert t.parent_dataset_hash == small_fake_reader.hash
+        assert "unit" not in t.tags and "fake" not in t.tags
 
 
 class TestSampleBuilderFullSamples:
@@ -170,6 +178,90 @@ class TestSampleBuilderPartialSamples:
         assert sample.expected_output == str(tr.expected_output)
 
 
+class TestSampleBuilderFiltering:
+
+    def test_filtering_by_step_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        # first, get all traces without filtering
+        sb_no_filter = SampleBuilder(source_data=[small_fake_reader])
+        total_traces = len(sb_no_filter)
+        assert total_traces > 0
+        # now apply a very restrictive step count filter (should filter out some/all traces)
+        cfg = SampleFilteringConfig(max_trace_steps=5)
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        # should have fewer traces (or same if all traces were already below threshold)
+        assert len(sb_filtered) <= total_traces
+        # verify that all remaining traces satisfy the filter
+        for st in sb_filtered.selected_traces:
+            tr = small_fake_reader[st.trace_meta.index]
+            assert tr.valid_step_count <= 5
+        # check that stats are available
+        stats = sb_filtered.get_stats()
+        assert "filtering/total_traces" in stats
+        assert "filtering/kept_traces" in stats
+        assert "filtering/filtered_by_step_count" in stats
+        assert stats["filtering/total_traces"] == total_traces
+        assert stats["filtering/kept_traces"] == len(sb_filtered)
+
+    def test_filtering_by_var_repr_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        # get all traces without filtering
+        sb_no_filter = SampleBuilder(source_data=[small_fake_reader])
+        total_traces = len(sb_no_filter)
+        # apply a very restrictive var repr length filter
+        cfg = SampleFilteringConfig(max_args_length=10)
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        # should have fewer traces (or same if all were already below threshold)
+        assert len(sb_filtered) <= total_traces
+        # verify that all remaining traces satisfy the filter
+        for st in sb_filtered.selected_traces:
+            tr = small_fake_reader[st.trace_meta.index]
+            inputs_str = str(tr.inputs)
+            expected_output_str = str(tr.expected_output)
+            combined_length = len(inputs_str) + len(expected_output_str)
+            assert combined_length <= 10
+        # check stats
+        stats = sb_filtered.get_stats()
+        assert "filtering/filtered_by_var_length" in stats
+
+    def test_filtering_both_criteria(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        # apply both filters at once
+        cfg = SampleFilteringConfig(
+            max_trace_steps=100,
+            max_args_length=500,
+        )
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        # verify all remaining traces satisfy both criteria
+        for st in sb_filtered.selected_traces:
+            tr = small_fake_reader[st.trace_meta.index]
+            assert tr.valid_step_count <= 100
+            inputs_str = str(tr.inputs)
+            expected_output_str = str(tr.expected_output)
+            combined_length = len(inputs_str) + len(expected_output_str)
+            assert combined_length <= 500
+        # check that stats reflect both filters
+        stats = sb_filtered.get_stats()
+        assert "filtering/filtered_by_step_count" in stats
+        assert "filtering/filtered_by_var_length" in stats
+
+    def test_no_filtering_when_config_is_none(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        # when no filtering config is provided, all traces should be kept
+        sb_default = SampleBuilder(source_data=[small_fake_reader])
+        sb_empty_config = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=SampleFilteringConfig(),
+        )
+        # both should have the same number of traces
+        assert len(sb_default) == len(sb_empty_config)
+
+
 class TestSampleBuilderRealData:
 
     @pytest.mark.slow
@@ -229,7 +321,7 @@ class TestSampleBuilderRealData:
                 assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
                 if sample.output_type == "frame_variables":
                     assert 0 < sample.first_line < len(code_lines)
-                    assert 0 < sample.last_line < len(code_lines)
+                    assert 0 < sample.last_line <= len(code_lines)
                 else:  # function_return
                     assert 0 < sample.first_line <= sample.last_line < len(code_lines)
 

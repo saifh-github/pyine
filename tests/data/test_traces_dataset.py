@@ -142,6 +142,8 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
     for trace_idx in range(len(reader)):
         problem_data = reader.get_problem_data(trace_idx)
         assert any(["EASY" in t for t in problem_data.problem_tags])
+    traces_metadata = dataset_reader.get_traces_metadata(output_dataset_path)
+    assert len(traces_metadata) == len(reader)
 
 
 def test_write_dataset_from_taco_forwards_force_flag(

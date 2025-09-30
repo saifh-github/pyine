@@ -8,6 +8,7 @@ for an example of how to use this dataset reader.
 
 import fnmatch
 import functools
+import logging
 import pathlib
 import typing
 
@@ -15,9 +16,12 @@ import msgspec
 import torch.utils.data
 
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.filter_rules
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.execution
 import pyine.utils.reprod
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetReader(torch.utils.data.Dataset):
@@ -279,3 +283,43 @@ class DatasetReader(torch.utils.data.Dataset):
     def __str__(self):
         """Returns a string representation of the dataset reader (for debugging purposes)."""
         return f"{self.__class__.__name__}({self.path}) with {len(self)} instances"
+
+
+DatasetOrDatasetPath: typing.TypeAlias = pathlib.Path | typing.AnyStr | DatasetReader
+
+
+def get_traces_metadata(
+    datasets: list[DatasetOrDatasetPath] | DatasetOrDatasetPath,
+    base_filter: pyine.data.utils.filter_rules.FilterType | None = None,
+) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
+    """Returns a list of TraceMetadata objects for all traces in the provided dataset(s).
+
+    Args:
+        datasets: the path or dataset object (or list of) from which to get trace metadata.
+        base_filter: filter to apply to the dataset reader(s) to get target traces. If None, then
+            no filter will be applied, and metadata for all available traces will be returned.
+
+    Returns:
+        A list of TraceMetadata objects for all targeted traces in the provided dataset.
+    """
+    if not isinstance(datasets, list):
+        datasets = [datasets]
+    readers = [d if isinstance(d, torch.utils.data.Dataset) else DatasetReader(d) for d in datasets]
+    logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
+    all_trace_keys = []
+    for reader in readers:
+        all_trace_keys.extend(reader.trace_keys)
+    if len(set(all_trace_keys)) != len(all_trace_keys):
+        raise ValueError("there should be no duplicates in the list of trace keys across all datasets")
+    base_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+    for reader in readers:
+        for trace_idx in range(len(reader)):
+            tags = reader.get_tags(trace_idx)
+            is_banned = base_filter(tags) if base_filter is not None else False
+            if not is_banned:
+                trace_metadata = reader.get_trace_metadata(trace_idx)
+                assert reader.trace_keys[trace_idx] == trace_metadata.identifier
+                assert trace_idx == trace_metadata.index
+                assert reader.hash == trace_metadata.parent_dataset_hash
+                base_traces_meta.append(trace_metadata)
+    return base_traces_meta

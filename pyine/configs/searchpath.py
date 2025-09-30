@@ -8,6 +8,7 @@ import hydra.core.config_search_path
 import hydra.plugins.search_path_plugin
 
 import pyine.configs.schemas
+import pyine.evals.common
 import pyine.utils.filesystem
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
     def get_external_configs(
         cls,
         app_name: str,
+        eval_type: pyine.evals.common.EvalType,
         entrypoint_config: pyine.configs.schemas.ConfigDescription,
         app_configs: list[pyine.configs.schemas.ConfigDescription],
     ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -88,6 +90,7 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
 
         Args:
             app_name: The name of the app for which to generate external configs.
+            eval_type: The type of evaluation for which to generate external configs.
             entrypoint_config: The entrypoint config for the app.
             app_configs: The list of all configs that have already been registered for the app.
 
@@ -125,7 +128,7 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
                     continue  # silently skip files without the expected callable
                 if not isinstance(register_fn, RegisterHydraConfigsFuncType):
                     raise TypeError(f"'register_hydra_configs' function in '{py_path}' is not callable")
-                new_configs = register_fn(app_name, entrypoint_config, app_configs)
+                new_configs = register_fn(app_name, eval_type, entrypoint_config, app_configs)
                 if not isinstance(new_configs, list):
                     logger.warning(
                         f"unexpected return from 'register_hydra_configs' function in '{py_path}': {type(new_configs)}"
@@ -141,6 +144,7 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
                         )
                 if valid_configs:
                     output_configs.extend(valid_configs)
+                    logger.info(f"registered {len(valid_configs)} external configs from '{py_path}'")
         return output_configs
 
 
@@ -151,6 +155,7 @@ class RegisterHydraConfigsFuncType(typing.Protocol):
     def __call__(
         self,
         app_name: str,  # name of the app that we are looking to register configs for
+        eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
         entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
         app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
     ) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register

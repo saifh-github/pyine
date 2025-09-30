@@ -1,4 +1,5 @@
 import types
+import typing
 
 import pytest
 
@@ -25,9 +26,12 @@ class DummyDatamodule:
 
 class DummyDatamoduleConfig:
 
-    def __init__(self, datamodule: DummyDatamodule):
+    def __init__(self, datamodule: DummyDatamodule, eval_subset_names: list[str] | None = None):
         self.datamodule = datamodule
         self.calls: list[bool] = []
+        self.train_subset_names = ["train"]
+        self.valid_subset_names = ["valid"]
+        self.eval_subset_names = eval_subset_names or ["valid"]
 
     def instantiate_datamodule(self, verbose: bool = False) -> DummyDatamodule:
         self.calls.append(verbose)
@@ -42,63 +46,79 @@ class FakeEvaluationResult:
         self.artifacts = artifacts
 
 
+class DummyEvalsConfig:
+
+    def __init__(self, eval_type: typing.Any):
+        self.eval_type = eval_type
+        self.eval_runnable_model_calls: list[dict] = []
+        self.eval_hf_model_calls: list[dict] = []
+        self.define_metrics_calls: list[dict] = []
+        self.log_metrics_calls: list[dict] = []
+        self.log_predictions_calls: list[dict] = []
+
+    async def evaluate_runnable_model(self, **kwargs) -> dict:
+        self.eval_runnable_model_calls.append(kwargs)
+        return dict()
+
+    async def evaluate_hf_model(self, **kwargs) -> dict:
+        self.eval_hf_model_calls.append(kwargs)
+        return dict()
+
+    def define_metrics_for_wandb(self, **kwargs):
+        self.define_metrics_calls.append(kwargs)
+
+    def log_metrics(self, **kwargs):
+        self.log_metrics_calls.append(kwargs)
+
+    def log_predictions(self, **kwargs):
+        self.log_predictions_calls.append(kwargs)
+
+
 def _build_app_config(
     datamodule_config: DummyDatamoduleConfig,
     *,
     use_wandb_logging: bool = False,
-    train_subset_names: list[str] | None = None,
-    valid_subset_names: list[str] | None = None,
-    eval_subset_names: list[str] | None = None,
+    evals_config: DummyEvalsConfig | None = None,
 ) -> trainer_common.AppMainConfig:
+    if evals_config is None:
+        evals_config = DummyEvalsConfig("something")
     return trainer_common.AppMainConfig.model_construct(
         datamodule_config=datamodule_config,
-        llm_grader_provider_config=None,
-        train_subset_names=train_subset_names or ["train"],
-        valid_subset_names=valid_subset_names or ["valid"],
-        eval_subset_names=eval_subset_names or ["valid"],
+        evals_config=evals_config,
         use_wandb_logging=use_wandb_logging,
     )
 
 
-def test_prepare_code_exec_datamodule_basic():
+def test_prepare_datamodule_basic():
     datamodule = DummyDatamodule()
     config = _build_app_config(DummyDatamoduleConfig(datamodule))
-    result = trainer_common.prepare_code_exec_datamodule(config, runtime=None)
+    result = trainer_common.prepare_datamodule(config, runtime=None)
     assert result is datamodule
     assert datamodule.prepared
     assert datamodule.setup_called == 1
     assert datamodule.instantiate_verbose == [True]
 
 
-def test_prepare_code_exec_datamodule_with_wandb_logging(monkeypatch: pytest.MonkeyPatch):
+def test_prepare_datamodule_with_wandb_logging():
     datamodule = DummyDatamodule(stats={"rows": 42})
+    evals_config = DummyEvalsConfig("something")
     config = _build_app_config(
-        DummyDatamoduleConfig(datamodule),
+        DummyDatamoduleConfig(datamodule, ["valid", "test"]),
         use_wandb_logging=True,
-        eval_subset_names=["valid", "test"],
-    )
-    define_calls: list[dict[str, str]] = []
-
-    def fake_define_metrics_for_wandb(**kwargs):
-        define_calls.append(kwargs)
-
-    monkeypatch.setattr(
-        trainer_common.pyine.evals.common,
-        "define_metrics_for_wandb",
-        fake_define_metrics_for_wandb,
+        evals_config=evals_config,
     )
     runtime = types.SimpleNamespace(
         wandb_run=types.SimpleNamespace(summary={}),
         wandb_run_id="run-123",
     )
-    result = trainer_common.prepare_code_exec_datamodule(config, runtime=runtime)
+    result = trainer_common.prepare_datamodule(config, runtime=runtime)
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
-    assert [call["prefix"] for call in define_calls] == ["evals/valid", "evals/test"]
+    assert [call["prefix"] for call in evals_config.define_metrics_calls] == ["evals/valid", "evals/test"]
 
 
 @pytest.mark.asyncio
-async def test_evaluate_code_execution_model_sync_and_async(monkeypatch: pytest.MonkeyPatch):
+async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch):
     metrics_logged: list[tuple[dict[str, float], str]] = []
 
     def fake_print_metrics(metrics, subset, printer):
@@ -111,15 +131,22 @@ async def test_evaluate_code_execution_model_sync_and_async(monkeypatch: pytest.
     async def _async_wrapper():
         return asynchronous_result
 
-    def eval_callback(eval_subset_name, datamodule, llm_grader_provider_config):
+    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
         if eval_subset_name == "sync":
             return synchronous_result
-        return _async_wrapper()
+        return await _async_wrapper()
 
+    evals_config = DummyEvalsConfig("something")
+    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
     datamodule = DummyDatamodule()
-    config = _build_app_config(DummyDatamoduleConfig(datamodule), eval_subset_names=["sync", "async"])
-    results = await trainer_common.evaluate_code_execution_model(
-        eval_callback=eval_callback,
+    config = _build_app_config(
+        DummyDatamoduleConfig(datamodule, eval_subset_names=["sync", "async"]),
+        evals_config=evals_config,
+    )
+    model = types.SimpleNamespace(invoke=lambda x: x)
+    results = await trainer_common.evaluate_model(
+        model=model,
+        tokenizer=None,
         datamodule=datamodule,
         config=config,
         runtime=None,
@@ -129,22 +156,8 @@ async def test_evaluate_code_execution_model_sync_and_async(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_evaluate_code_execution_model_wandb_logging_reopens_run(monkeypatch: pytest.MonkeyPatch):
-    logged_metrics: list[tuple] = []
-    logged_samples: list[tuple] = []
-
+async def test_evaluate_model_wandb_logging_reopens_run(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        trainer_common.pyine.evals.common,
-        "log_eval_metrics_table",
-        lambda **kwargs: logged_metrics.append(kwargs),
-    )
-    monkeypatch.setattr(
-        trainer_common.pyine.evals.common,
-        "log_sample_predictions_table",
-        lambda **kwargs: logged_samples.append(kwargs),
-    )
-
     replacement_run = types.SimpleNamespace(summary={}, logged=[])  # new run returned by wandb.init
 
     def fake_wandb_init(**kwargs):
@@ -152,51 +165,57 @@ async def test_evaluate_code_execution_model_wandb_logging_reopens_run(monkeypat
         return replacement_run
 
     monkeypatch.setattr(trainer_common.wandb, "init", fake_wandb_init)
-
     result = FakeEvaluationResult(metrics={"acc": 0.77}, artifacts=["sample"])
 
-    def eval_callback(*_args, **_kwargs):
+    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
         return result
 
+    evals_config = DummyEvalsConfig("something")
+    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
     runtime = types.SimpleNamespace(
         wandb_run=types.SimpleNamespace(summary={}),  # missing log attr triggers reopen
         wandb_run_id="run-42",
     )
     config = _build_app_config(
-        DummyDatamoduleConfig(DummyDatamodule()),
+        DummyDatamoduleConfig(DummyDatamodule(), eval_subset_names=["subset"]),
         use_wandb_logging=True,
-        eval_subset_names=["subset"],
+        evals_config=evals_config,
     )
-
-    results = await trainer_common.evaluate_code_execution_model(
-        eval_callback=eval_callback,
+    model = types.SimpleNamespace(invoke=lambda x: x)
+    results = await trainer_common.evaluate_model(
+        model=model,
+        tokenizer=None,
         datamodule=DummyDatamodule(),
         config=config,
         runtime=runtime,
     )
-
     assert results["subset"] is result
     assert runtime.wandb_run is replacement_run
-    assert replacement_run.summary["evals/subset/acc"] == 0.77
-    assert logged_metrics and logged_samples
+    assert len(evals_config.log_metrics_calls) == 1
+    assert len(evals_config.log_predictions_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_evaluate_code_execution_model_requires_wandb_run_id():
+async def test_evaluate_model_requires_wandb_run_id():
     result = FakeEvaluationResult(metrics={"acc": 0.5}, artifacts=[])
 
-    def eval_callback(*_args, **_kwargs):
+    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
         return result
+
+    evals_config = DummyEvalsConfig("something")
+    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
 
     runtime = types.SimpleNamespace(wandb_run=types.SimpleNamespace(summary={}), wandb_run_id=None)
     config = _build_app_config(
         DummyDatamoduleConfig(DummyDatamodule()),
         use_wandb_logging=True,
+        evals_config=evals_config,
     )
-
+    model = types.SimpleNamespace(invoke=lambda x: x)
     with pytest.raises(RuntimeError):
-        await trainer_common.evaluate_code_execution_model(
-            eval_callback=eval_callback,
+        await trainer_common.evaluate_model(
+            model=model,
+            tokenizer=None,
             datamodule=DummyDatamodule(),
             config=config,
             runtime=runtime,

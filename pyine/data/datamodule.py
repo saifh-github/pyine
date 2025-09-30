@@ -12,9 +12,12 @@ import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
 import torch.utils.data
+import transformers
 
 import pyine.prompts.manager
 import pyine.prompts.types
+import pyine.utils.filesystem
+import pyine.utils.openai
 import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
@@ -64,7 +67,7 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataLoaderTy
     base_class_path: str = pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType)
     """Base class path for the PyTorch data loader class."""
 
-    params: BaseDataLoaderParamsConfig = BaseDataLoaderParamsConfig()
+    params: pydantic.SerializeAsAny[BaseDataLoaderParamsConfig] = BaseDataLoaderParamsConfig()
     """Default parameters for the data loader."""
 
 
@@ -74,8 +77,9 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     This class defines the default configuration for data parsers and data loaders.
     """
 
-    model_config = pydantic.ConfigDict(frozen=True, extra="allow")
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
+
     datamodule_class_path: typing.Annotated[
         pydantic.StrictStr,
         pydantic.Field(
@@ -83,11 +87,19 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             description="Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'.",
         ),
     ]
+    datamodule_name: typing.Annotated[
+        pydantic.StrictStr | None,
+        pydantic.Field(
+            default=None,
+            min_length=1,
+            description="Name of the datamodule (for debug/logging); will be derived from class name if needed.",
+        ),
+    ]
 
     # --------------- DATA PARSER (torch.utils.data.Dataset-like) CONFIGURATION ---------------
 
     default_dataparser_config: typing.Annotated[
-        BaseDataParserConfig,
+        pydantic.SerializeAsAny[BaseDataParserConfig],
         pydantic.Field(
             # note: no default provided here, so it MUST be specified
             description="Default configuration for the data parsers whose specific settings may be overridden.",
@@ -104,7 +116,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     # --------------- DATA LOADER (torch.utils.data.DataLoader-like) CONFIGURATION ---------------
 
     default_dataloader_config: typing.Annotated[
-        BaseDataLoaderConfig,
+        pydantic.SerializeAsAny[BaseDataLoaderConfig],
         pydantic.Field(
             default=BaseDataLoaderConfig(
                 class_path=pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType),
@@ -131,36 +143,63 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             description="Seed used to initialize internal RNGs for dataset splits.",
         ),
     ]
-    subset_types: typing.Annotated[
+    subset_names: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
             default=tuple(["train", "valid", "test"]),
             min_length=1,
-            description="List of data subsets that the module supports; derived impls can support more/fewer.",
+            description="Data subset names that the data module supports.",
+        ),
+    ]
+    train_subset_names: typing.Annotated[
+        tuple[SubsetNameType, ...],
+        pydantic.Field(
+            default=tuple(["train"]),
+            min_length=1,
+            description="Subset names that are meant for model training.",
+        ),
+    ]
+    valid_subset_names: typing.Annotated[
+        tuple[SubsetNameType, ...],
+        pydantic.Field(
+            default=tuple(["valid"]),
+            min_length=1,
+            description="Subset names that are meant for model validation.",
+        ),
+    ]
+    eval_subset_names: typing.Annotated[
+        tuple[SubsetNameType, ...],
+        pydantic.Field(
+            default=tuple(["valid"]),
+            min_length=1,
+            description="Subset names that are meant for model evaluations.",
+            # Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
+            #       hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
+            #          https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
         ),
     ]
 
     @property
-    def loader_types(self) -> tuple[LoaderNameType, ...]:
-        """Types of data loaders that this particular implementation supports.
+    def loader_names(self) -> tuple[LoaderNameType, ...]:
+        """Returns the dataloader names that this particular implementation supports.
 
-        By default, we assume that these 'types' are the data subsets.
+        By default, we assume that dataloader names match with data subset names.
         """
-        return self.subset_types
+        return self.subset_names
 
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
-    def instantiate_parser(self, subset_type: SubsetNameType, *args, **extra_kwargs) -> BaseDataParserType:
-        """Instantiates a data parser object for the given subset type."""
-        parser_config = self._resolved_dataparser_configs[subset_type]
+    def instantiate_parser(self, subset_name: SubsetNameType, *args, **extra_kwargs) -> BaseDataParserType:
+        """Instantiates a data parser object for the given subset name."""
+        parser_config = self._resolved_dataparser_configs[subset_name]
         parser = parser_config.instantiate(*args, **extra_kwargs)
         if not isinstance(parser, BaseDataParserType):
             raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser)}")
         return parser
 
-    def instantiate_dataloader(self, loader_type: LoaderNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
-        """Instantiates a data loader object for the given loader type."""
-        loader_config = self._resolved_dataloader_configs[loader_type]
+    def instantiate_dataloader(self, loader_name: LoaderNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
+        """Instantiates a data loader object for the given loader name."""
+        loader_config = self._resolved_dataloader_configs[loader_name]
         loader = loader_config.instantiate(*args, **extra_kwargs)
         if not isinstance(loader, BaseDataLoaderType):
             raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader)}")
@@ -187,43 +226,49 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     def _resolve_dataparser_config(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
     ) -> BaseDataParserConfig:
-        """Returns the data parser configuration for the given subset type."""
-        if subset_type not in self.subset_types:
-            raise ValueError(f"invalid subset type: {subset_type}, expected one of: {self.subset_types}")
+        """Returns the data parser configuration for the given subset name."""
+        if subset_name not in self.subset_names:
+            raise ValueError(f"invalid subset name: {subset_name}, expected one of: {self.subset_names}")
         parser_config = self.default_dataparser_config
         assert isinstance(parser_config, pyine.utils.pydantic.ClassImportSpec)
-        if subset_type in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_type]:
-            parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_type])
+        if subset_name in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_name]:
+            parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_name])
         return parser_config
 
     def _resolve_dataloader_config(
         self,
-        loader_type: LoaderNameType,
+        loader_name: LoaderNameType,
     ) -> BaseDataLoaderConfig:
-        """Returns the data loader configuration for the given loader type."""
-        if loader_type not in self.loader_types:
-            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.loader_types}")
+        """Returns the data loader configuration for the given loader name."""
+        if loader_name not in self.loader_names:
+            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.loader_names}")
         loader_config = self.default_dataloader_config
         assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
-        if loader_type in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_type]:
-            loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_type])
+        if loader_name in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_name]:
+            loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_name])
         return loader_config
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "BaseDataModuleConfig":
         """Validates and resolves the data parser and data loader configs."""
-        for subset_type in self.subset_types:
-            self._resolved_dataparser_configs[subset_type] = self._resolve_dataparser_config(subset_type)
-        for loader_type in self.loader_types:
-            self._resolved_dataloader_configs[loader_type] = self._resolve_dataloader_config(loader_type)
+        for subset_name in self.subset_names:
+            self._resolved_dataparser_configs[subset_name] = self._resolve_dataparser_config(subset_name)
+        for loader_name in self.loader_names:
+            self._resolved_dataloader_configs[loader_name] = self._resolve_dataloader_config(loader_name)
         resolved_class = pyine.utils.portability.import_from_dotted_path(self.datamodule_class_path)
         if not isinstance(resolved_class, type) or not callable(resolved_class):
             raise TypeError(f'"{self.datamodule_class_path}" resolved to {resolved_class!r}, which is not a class')
         if not issubclass(resolved_class, BaseDataModule):
             raise TypeError(f'"{self.datamodule_class_path}" is not a subclass of BaseDataModule')
         self._resolved_datamodule_class = resolved_class
+        if any([name not in self.subset_names for name in self.train_subset_names]):
+            raise ValueError(f"some subset name(s) are invalid; got {self.train_subset_names!r}")
+        if any([name not in self.subset_names for name in self.valid_subset_names]):
+            raise ValueError(f"some subset name(s) are invalid; got {self.valid_subset_names!r}")
+        if any([name not in self.subset_names for name in self.eval_subset_names]):
+            raise ValueError(f"some subset name(s) are invalid; got {self.eval_subset_names!r}")
         return self
 
 
@@ -312,7 +357,7 @@ class BaseDataModule(pl.LightningDataModule):
         Returns:
             A data loader (or a collection of them) that provides training samples.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
     def test_dataloader(self) -> pl_types.EVAL_DATALOADERS:
         """Instantiates one or more pytorch dataloaders for testing based on the parsed dataset.
@@ -327,7 +372,7 @@ class BaseDataModule(pl.LightningDataModule):
         Returns:
             A data loader (or a collection of them) that provides testing samples.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
     def val_dataloader(self) -> pl_types.EVAL_DATALOADERS:
         """Instantiates one or more pytorch dataloaders for validation based on the parsed dataset.
@@ -346,7 +391,7 @@ class BaseDataModule(pl.LightningDataModule):
         Returns:
             A data loader (or a collection of them) that provides validation samples.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
     def valid_dataloader(self) -> pl_types.EVAL_DATALOADERS:
         """Instantiates one or more pytorch dataloaders for validation based on the parsed dataset.
@@ -369,12 +414,12 @@ class BaseDataModule(pl.LightningDataModule):
         Return:
             A data loader (or a collection of them) that provides prediction samples.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
     @property
-    def dataloader_types(self) -> tuple[LoaderNameType, ...]:
-        """Types of dataloaders that this particular implementation supports."""
-        return self.config.loader_types
+    def dataloader_names(self) -> tuple[LoaderNameType, ...]:
+        """Returns the dataloader names that this particular implementation supports."""
+        return self.config.loader_names
 
     def get_stats(self, target_subsets: list[SubsetNameType] | None = None) -> dict[str, int | float | str]:
         """Returns a dictionary of useful-to-log statistics."""
@@ -382,37 +427,36 @@ class BaseDataModule(pl.LightningDataModule):
 
     def get_dataloader(
         self,
-        loader_type: LoaderNameType,
+        loader_name: LoaderNameType,
     ) -> pl_types.TRAIN_DATALOADERS | pl_types.EVAL_DATALOADERS:  # noqa
-        """Returns a data loader object (or a collection of) for a given subset type.
+        """Returns a data loader object (or a collection of) for a given name.
 
         This function will verify that the specified subset exists and redirect the getter to the
         correct function that prepares the dataloader(s). By default, we assume that dataloader
         types are linked to data subsets.
         """
-        # pragma: no cover
-        if loader_type not in self.config.loader_types:
-            raise ValueError(f"invalid loader type: {loader_type}, expected one of: {self.config.loader_types}")
-        expected_getter_name = f"{loader_type}_dataloader"
+        if loader_name not in self.config.loader_names:
+            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.config.loader_names}")
+        expected_getter_name = f"{loader_name}_dataloader"
         if not hasattr(self, expected_getter_name):
-            raise ValueError(f"invalid loader type: {loader_type}, no such function: {expected_getter_name}")
+            raise ValueError(f"invalid loader name: {loader_name}, no such function: {expected_getter_name}")
         getter = getattr(self, expected_getter_name)
         if not callable(getter):
-            raise ValueError(f"invalid {loader_type} getter type: {type(getter)}, expected callable")
+            raise ValueError(f"invalid {loader_name} getter type: {type(getter)}, expected callable")
         dataloader = getter()
         return dataloader
 
     def get_parser(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
     ) -> BaseDataParserType:
-        """Returns a data parser object for a given subset type.
+        """Returns a data parser object for a given subset name.
 
         This function exists for users that might not want to use dataloaders directly, and would prefer
         using the data parsers directly instead (e.g. to provide specific transforms, or to use them
         as part of a wider framework such as HuggingFace).
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
 
 class ConversationDataParserConfig(BaseDataParserConfig):
@@ -422,34 +466,53 @@ class ConversationDataParserConfig(BaseDataParserConfig):
     should specify `class_path` and `params`, and optionally `base_class_path` if needed.
     """
 
-    def get_hf_messages_dataset(
+    def generate_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
         raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
-        instantiate_kwargs: dict | None = None,
-        generator_kwargs: dict | None = None,
+        instantiate_kwargs: dict[str, typing.Any] | None = None,
+        keep_in_memory: bool = False,
+        num_workers: int | None = None,
     ) -> "hf_datasets.Dataset":
-        """Returns a HuggingFace messages dataset object.
+        """Generates and returns a HuggingFace messages dataset using an instantiated parser.
 
         This function exists for users that might not want to use raw data loaders directly, and
-        would prefer using already-prepared conversation data for huggingface-based experiments.
+        would prefer using already-prepared message data for huggingface-based experiments.
 
         Returns:
              The HuggingFace messages dataset object.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
 
 class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Specialized configuration class for conversation datamodule objects.
 
-    This class supplements the base class defaults with conversation-specific settings.
+    This class supplements the base class defaults with conversation/message-specific settings. The
+    HuggingFace and OpenAI message datasets instantiated here will be cached locally for reuse (by
+    default).
     """
 
-    prompt_config: pyine.prompts.types.PromptBuildConfig
+    prompt_config: pydantic.SerializeAsAny[pyine.prompts.types.PromptBuildConfig]
     """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
-    chat_generator_config: dict[str, typing.Any] = dict()
-    """Configuration for the hf generator used to when transforming raw sample data to chat model requests."""
+    keep_message_datasets_in_memory: bool = True
+    """Defines whether generated message datasets should be kept in memory."""
+    message_generator_num_workers: int = 6
+    """Defines the number of workers to use when generating message datasets."""
+    apply_chat_template_train_config: dict[str, typing.Any] = dict(
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+    """Configuration to use when applying a tokenizer's chat template onto a messages dataset for SFT training."""
+    apply_chat_template_eval_config: dict[str, typing.Any] = dict(
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    """Configuration to use when applying a tokenizer's chat template onto a messages dataset for evaluations."""
+    apply_chat_template_batching_map_config: dict[str, typing.Any] = dict()
+    """Configuration to use for the batched map operation when applying a tokenizer's chat template."""
+    use_local_dataset_cache: bool = True
+    """Whether to always try to save/load datasets from the local cache or not."""
 
     def get_prompt_template(
         self,
@@ -481,10 +544,11 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     def instantiate_hf_messages_dataset(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
-        **extra_kwargs,
+        keep_original_data: bool = False,
+        parser_kwargs: dict[str, typing.Any] | None = None,
     ) -> hf_datasets.Dataset:
         """Instantiates a `hf_datasets.Dataset` object based on the configured parser settings.
 
@@ -492,35 +556,62 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         prefer using the data parsers for huggingface-based experiments.
 
         Args:
-            subset_type: the subset type to prepare the dataset for.
+            subset_name: the subset name to prepare the dataset for.
             append_answer: whether to append the assistant's response to the conversation messages.
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
+            keep_original_data: whether to keep the original data inside the output samples (e.g.
+                to access metadata in evaluations).
+            parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
 
         Returns:
-            A huggingface dataset object that produces chat-templated 'conversations'.
+            A huggingface dataset that produces chat-templated 'conversations' (lists of messages).
         """
-        parser_config = self._resolved_dataparser_configs[subset_type]
-        assert isinstance(parser_config, ConversationDataParserConfig)
-        named_split = hf_datasets.NamedSplit(name=subset_type)
-        transf_fn = self.get_sample_to_messages_transform(
-            append_answer=append_answer,
-            use_hf_messages=True,
-            merge_system_with_user=merge_system_with_user,
+        hf_datasets_cache_dir = pyine.utils.filesystem.get_data_cache_path() / "hf_datasets"
+        params_hash = pyine.utils.reprod.get_params_hash(
+            self.model_dump(),
+            append_answer,
+            merge_system_with_user,
+            keep_original_data,
+            parser_kwargs,
         )
-        return parser_config.get_hf_messages_dataset(
-            named_split=named_split,
-            raw_transform_fn=transf_fn,
-            instantiate_kwargs=extra_kwargs,
-            generator_kwargs=self.chat_generator_config,
-        )
+        datamodule_name = self.datamodule_name or self._resolved_datamodule_class.__name__
+        dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
+        dataset_path = hf_datasets_cache_dir / dataset_name
+        named_split = hf_datasets.NamedSplit(name=subset_name)
+        if not self.use_local_dataset_cache or not dataset_path.exists():
+            parser_config = self._resolved_dataparser_configs[subset_name]
+            assert isinstance(parser_config, ConversationDataParserConfig)
+            transf_fn = self.get_sample_to_messages_transform(
+                append_answer=append_answer,
+                use_hf_messages=True,
+                merge_system_with_user=merge_system_with_user,
+                keep_original_data=keep_original_data,
+            )
+            dataset = parser_config.generate_hf_messages_dataset(
+                named_split=named_split,
+                raw_transform_fn=transf_fn,
+                instantiate_kwargs=parser_kwargs,
+                keep_in_memory=self.keep_message_datasets_in_memory,
+                num_workers=self.message_generator_num_workers,
+            )
+            if self.use_local_dataset_cache:
+                logger.info(f"saving generated dataset to cache: {dataset_path}")
+                dataset.save_to_disk(dataset_path)
+            return dataset
+        else:
+            logger.info(f"loading already-generated dataset from cache: {dataset_path}")
+            return hf_datasets.Dataset.load_from_disk(
+                dataset_path=dataset_path,
+                keep_in_memory=self.keep_message_datasets_in_memory,
+            )
 
     def instantiate_openai_messages_dataset(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
-        **extra_kwargs,
+        parser_kwargs: dict[str, typing.Any] | None = None,
     ) -> pathlib.Path:
         """Returns the path to an OpenAI-compatible JSONL dataset of chat-templated conversations.
 
@@ -530,23 +621,45 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         OpenAI API to train/validate a model.
 
         Args:
-            subset_type: the subset type to prepare the dataset for.
+            subset_name: the subset name to prepare the dataset for.
             append_answer: whether to append the assistant's response to the conversation messages.
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
+            parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
 
         Returns:
              The path to the written dataset, which can be used for uploads to the OpenAI API.
         """
-        raise NotImplementedError
+        openai_local_data_dir = pyine.utils.openai.get_local_file_directory()
+        params_hash = pyine.utils.reprod.get_params_hash(
+            self.model_dump(),
+            append_answer,
+            merge_system_with_user,
+            parser_kwargs,
+        )
+        datamodule_name = self.datamodule_name or self._resolved_datamodule_class.__name__
+        dataset_file_name = f"{datamodule_name}.{subset_name}.{params_hash}.jsonl"
+        local_output_path = openai_local_data_dir / dataset_file_name
+        if not self.use_local_dataset_cache or not local_output_path.is_file():
+            # note: this impl relies on the huggingface getter to generate the messages (DRY)
+            hf_dataset = self.instantiate_hf_messages_dataset(
+                subset_name=subset_name,
+                append_answer=append_answer,
+                merge_system_with_user=merge_system_with_user,
+                parser_kwargs=parser_kwargs,
+            )
+            # even if we do not use a cache, we need to write the dataset locally for later refs
+            pyine.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
+        return local_output_path
 
     def get_sample_to_messages_transform(
         self,
         append_answer: bool = True,
         use_hf_messages: bool = False,
         merge_system_with_user: bool = False,
+        keep_original_data: bool = False,
     ) -> typing.Callable[[typing.Any], typing.Any]:
-        """Returns the sample transform function used to prepare training/evaluation conversations.
+        """Returns the sample transform function used to prepare training/evaluation messages.
 
         This function exists for users that might not want to use dataloaders directly, and would
         prefer using the data parsers while applying raw data transforms directly instead.
@@ -559,11 +672,14 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             use_hf_messages: whether to use HuggingFace messages format or the langchain format.
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
+            keep_original_data: whether to keep the original data inside the output samples; only
+                usable if `use_hf_messages` is true.
 
         Returns:
              The sample transform function.
         """
-        raise NotImplementedError
+        # this transform is application-specific: it depends on the type of samples provided by parsers
+        raise NotImplementedError("derived class should implement this function")
 
     @pydantic.model_validator(mode="after")
     @typing.override
@@ -601,11 +717,14 @@ class ConversationDataModule(BaseDataModule):
 
     def get_hf_messages_dataset(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
+        keep_original_data: bool = False,
+        tokenizer: transformers.PreTrainedTokenizer | None = None,
+        apply_chat_template_eval_config: bool = False,
     ) -> hf_datasets.Dataset:
-        """Returns a HuggingFace messages dataset object for a given subset type.
+        """Returns a HuggingFace messages dataset object for a given subset name.
 
         This function exists for users that might not want to use raw data loaders directly, and
         would prefer using already-prepared conversation data for huggingface-based experiments.
@@ -614,19 +733,27 @@ class ConversationDataModule(BaseDataModule):
         conversation messages, this function will raise an exception.
 
         Args:
-            subset_type: the subset type to prepare the dataset for.
+            subset_name: the subset name to prepare the dataset for.
             append_answer: whether to append the assistant's response to the conversation messages.
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
+            keep_original_data: whether to keep the original data inside the output samples.
+            tokenizer: provided when we want to apply a chat model template; if None, no such
+                template will be applied, i.e. conversations (lists of messages) will be generated
+                by the dataset. Otherwise, the dataset will generate text blocks (instead of
+                conversations) formatted according to the tokenizer's chat template.
+            apply_chat_template_eval_config: whether to apply the evaluation chat template config
+                to conversation messages (instead of the training one). Has no effect if a tokenizer
+                is not provided.
 
         Returns:
-             The HuggingFace messages dataset object.
+             The HuggingFace dataset object.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")
 
     def get_openai_messages_dataset(
         self,
-        subset_type: SubsetNameType,
+        subset_name: SubsetNameType,
         append_answer: bool = True,
         merge_system_with_user: bool = False,
     ) -> pathlib.Path:
@@ -641,7 +768,7 @@ class ConversationDataModule(BaseDataModule):
         conversation messages, this function will raise an exception.
 
         Args:
-            subset_type: the subset type to prepare the dataset for.
+            subset_name: the subset name to prepare the dataset for.
             append_answer: whether to append the assistant's response to the conversation messages.
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
@@ -649,4 +776,4 @@ class ConversationDataModule(BaseDataModule):
         Returns:
              The path to the written dataset, which can be used for uploads to the OpenAI API.
         """
-        raise NotImplementedError
+        raise NotImplementedError("derived class should implement this function")

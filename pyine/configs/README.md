@@ -138,12 +138,14 @@ function with the following signature:
 
 ```python
 import pyine.configs.schemas
+import pyine.evals.common
 
 def register_hydra_configs(
-    app_name: str,  # should be e.g. 'openai_finetune' or 'hf_trainer'
-    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # entrypoint config for the above app
-    app_configs: list[pyine.configs.schemas.ConfigDescription],  # other registered configs for the app
-) -> list[pyine.configs.schemas.ConfigDescription]:  # returns NEW configs to register for the app
+    app_name: str,  # name of the app that we are looking to register configs for
+    eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
+    app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
+) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
     ...
 ```
 

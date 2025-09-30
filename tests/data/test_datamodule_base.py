@@ -84,15 +84,15 @@ class TestBaseDataModuleConfig:
         assert len(first_train_batch) == 4  # override applied
         assert len(first_valid_batch) == 1  # default from BaseDataLoaderParams
 
-        # invalid subset types raise
+        # invalid subset names raise
         with pytest.raises(ValueError):
             _ = cfg._resolve_dataparser_config("unknown")
         with pytest.raises(ValueError):
             _ = cfg._resolve_dataloader_config("unknown")
 
-    def test_subset_types_customization(self) -> None:
+    def test_subset_names_customization(self) -> None:
         cfg = build_default_config().model_copy(
-            update={"subset_types": tuple(["train", "valid"])},
+            update={"subset_names": tuple(["train", "valid"])},
         )
         # validator should have populated only requested subsets
         # attempting to resolve a non-declared subset should fail
@@ -109,17 +109,17 @@ class DummyDataModule(datamodule.BaseDataModule):
 
     def _make_parser(
         self,
-        subset_type: datamodule.SubsetNameType,
+        subset_name: datamodule.SubsetNameType,
     ) -> tud.Dataset:
-        return self.config.instantiate_parser(subset_type)
+        return self.config.instantiate_parser(subset_name)
 
     def _make_loader(
         self,
-        loader_type: datamodule.LoaderNameType,
+        loader_name: datamodule.LoaderNameType,
     ) -> tud.DataLoader:
-        # assumes loader types == subset types
-        parser = self._make_parser(loader_type)
-        return self.config.instantiate_dataloader(loader_type, dataset=parser)
+        # assumes loader names == subset names
+        parser = self._make_parser(loader_name)
+        return self.config.instantiate_dataloader(loader_name, dataset=parser)
 
     def train_dataloader(
         self,
@@ -139,11 +139,11 @@ class DummyDataModule(datamodule.BaseDataModule):
 
 class TestBaseDataModule:
 
-    def test_dataloader_types_property(self) -> None:
+    def test_dataloader_names_property(self) -> None:
         cfg = build_default_config()
         dm = DummyDataModule(cfg)
-        assert dm.dataloader_types == cfg.subset_types
-        assert dm.dataloader_types == cfg.loader_types
+        assert dm.dataloader_names == cfg.subset_names
+        assert dm.dataloader_names == cfg.loader_names
 
     def test_valid_dataloader_redirect(self) -> None:
         class OnlyVal(datamodule.BaseDataModule):
@@ -195,10 +195,10 @@ class TestBaseDataModule:
         # invalid subset (not declared in config)
         with pytest.raises(ValueError) as exc_info:
             _ = dm_ok.get_dataloader("unknown")
-        assert "invalid loader type" in str(exc_info.value)
+        assert "invalid loader name" in str(exc_info.value)
 
         # declared subset but missing corresponding method -> specific error
-        cfg_missing = base_cfg.model_copy(update={"subset_types": tuple(["train", "foo"])})
+        cfg_missing = base_cfg.model_copy(update={"subset_names": tuple(["train", "foo"])})
         dm_missing = WithTrain(cfg_missing, payload=None)
         with pytest.raises(ValueError) as exc_info:
             _ = dm_missing.get_dataloader("foo")
@@ -223,7 +223,7 @@ class TestBaseDataModule:
             def val_dataloader(self):  # type: ignore[no-untyped-def]
                 raise NotImplementedError
 
-        cfg_bad = base_cfg.model_copy(update={"subset_types": tuple(["train", "bar"])})
+        cfg_bad = base_cfg.model_copy(update={"subset_names": tuple(["train", "bar"])})
         dm_bad = WithBadAttr(cfg_bad)
         with pytest.raises(ValueError) as exc_info:
             _ = dm_bad.get_dataloader("bar")

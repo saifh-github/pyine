@@ -4,7 +4,7 @@ import transformers
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
-import pyine.organisms.datamodules.shortcuts
+import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.utils.reprod
@@ -14,19 +14,19 @@ import tests.env_checks
 def _assert_non_leaking_assignments(metadata):
     traces_to_subsets = dict()
     problems_to_subsets = dict()
-    for subset_type, subset_traces in metadata.subset_traces.items():
+    for subset_name, subset_traces in metadata.subset_traces.items():
         for trace in subset_traces:
             assert trace.identifier not in traces_to_subsets
             if trace.problem_id in problems_to_subsets:
-                assert problems_to_subsets[trace.problem_id] == subset_type
+                assert problems_to_subsets[trace.problem_id] == subset_name
             else:
-                problems_to_subsets[trace.problem_id] = subset_type
-            traces_to_subsets[trace.identifier] = subset_type
+                problems_to_subsets[trace.problem_id] = subset_name
+            traces_to_subsets[trace.identifier] = subset_name
 
 
 @pytest.fixture
-def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig:
-    return pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
+def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig:
+    return pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
         lmdb_paths=[
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
@@ -75,7 +75,7 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     dm.setup()
     assert dm._is_metadata_prepared()
     metadata = dm._load_prepared_metadata()
-    assert isinstance(metadata, pyine.organisms.datamodules.utils.samples.TraceDatasetMetadata)
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
     _assert_non_leaking_assignments(metadata)
     dataloader = dm.train_dataloader()
     assert dataloader.batch_size == 16
@@ -93,7 +93,7 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     assert isinstance(transformed_sample_msgs, list)
     assert all([hasattr(m, "type") and hasattr(m, "content") for m in transformed_sample_msgs])
     print("sample transform works")
-    hf_msgs_dataset = dm.get_hf_messages_dataset(subset_type="train")
+    hf_msgs_dataset = dm.get_hf_messages_dataset(subset_name="train")
     assert isinstance(hf_msgs_dataset, hf_datasets.Dataset)
     assert len(hf_msgs_dataset) == len(parser)  # noqa
     hf_msgs_sample = hf_msgs_dataset[0]
@@ -108,9 +108,6 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
         apply_chat_template_kwargs=dict(
             tokenize=False,
             add_generation_prompt=False,
-        ),
-        batching_map_kwargs=dict(
-            keep_in_memory=True,
         ),
     )
     assert isinstance(hf_batch_dataset, hf_datasets.Dataset)
@@ -144,7 +141,7 @@ def test_shortcuts_datamodule_predefined_split(shortcuts_dm_config):
     dm.setup()
     assert dm._is_metadata_prepared()
     metadata = dm._load_prepared_metadata()
-    assert isinstance(metadata, pyine.organisms.datamodules.utils.samples.TraceDatasetMetadata)
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
     _assert_non_leaking_assignments(metadata)
     train_parser = dm.get_parser("train")
     train_sample, valid_sample = None, None

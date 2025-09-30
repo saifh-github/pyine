@@ -6,7 +6,8 @@ import pyine.apps.trainers.openai_finetune
 import pyine.apps.trainers.openai_finetune_configs
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
-import pyine.organisms.datamodules.shortcuts
+import pyine.evals.code_exec.configs
+import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.openai
 import tests.env_checks
 
@@ -25,15 +26,14 @@ import tests.env_checks
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available, cannot run OpenAI-backed evaluation.",
 )
-async def test_main_evaluates_base_model_with_skip_fine_tuning(
+async def test_code_exec_eval_base_model_with_skip_fine_tuning(
     tmp_path: pathlib.Path,
 ) -> None:
     """End-to-end exercise of main() using the real OpenAI API but skipping fine-tuning."""
-
-    real_dm_config = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig(
-        lmdb_paths=[
-            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
-        ],
+    latest_dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
+    assert latest_dataset_path is not None and latest_dataset_path.exists()
+    real_dm_config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+        lmdb_paths=[latest_dataset_path],
         max_solution_count=2,
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
@@ -49,5 +49,6 @@ async def test_main_evaluates_base_model_with_skip_fine_tuning(
         datamodule_config=real_dm_config,
         openai_client_config=openai_client_config,
         openai_finetuner_config=finetuner_cfg,
+        evals_config=pyine.evals.code_exec.configs.CodeExecEvalsConfig(),
     )
     await pyine.apps.trainers.openai_finetune.main(cfg, skip_fine_tuning=True)

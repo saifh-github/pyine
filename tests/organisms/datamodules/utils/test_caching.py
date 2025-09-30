@@ -46,7 +46,7 @@ class TestCacheStorage:
 
     def test_save_load_and_clear_stored_cache_roundtrip(self, monkeypatch, tmp_path: pathlib.Path) -> None:
         # force deterministic tmp path and params hash so both instances hit the same file
-        monkeypatch.setattr("pyine.utils.filesystem.get_logs_root_path", lambda: tmp_path)
+        monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
         monkeypatch.setattr("pyine.utils.reprod.get_params_hash", lambda *_a, **_k: "ROUNDTRIP")
         monkeypatch.setattr("pyine.utils.reprod.compute_hash", lambda *_a, **_k: "FAKE")
         dataset_name = "FAKE"
@@ -214,7 +214,8 @@ class TestBuildFromDatasetReader:
                 self._dataset_name = dataset_name
                 self._dataset_path = dataset_path
 
-            def get_metadata(self) -> dict:
+            @property
+            def metadata(self) -> dict:
                 return {
                     "parent_dataset": {
                         "dataset_name": self._dataset_name,
@@ -249,7 +250,9 @@ class TestBuildFromDatasetReader:
 
     def test_build_from_reader_fails_on_missing_metadata(self) -> None:
         class _BadReader:
-            def get_metadata(self) -> dict:
+
+            @property
+            def metadata(self) -> dict:
                 return {"parent_dataset": {"dataset_name": "FAKE"}}  # missing dataset_path
 
         with pytest.raises(ValueError, match="missing parent dataset information"):
@@ -257,7 +260,9 @@ class TestBuildFromDatasetReader:
 
     def test_build_from_reader_fails_on_missing_path(self, tmp_path: pathlib.Path) -> None:
         class _Reader:
-            def get_metadata(self) -> dict:
+
+            @property
+            def metadata(self) -> dict:
                 return {
                     "parent_dataset": {
                         "dataset_name": "FAKE",

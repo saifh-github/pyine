@@ -3,6 +3,7 @@ import typing
 
 import langchain_core.callbacks
 import langchain_core.outputs
+import langchain_core.runnables
 import pydantic
 
 CapturedEventType = typing.Literal["llm_start", "llm_end", "llm_error"]
@@ -76,3 +77,12 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             return self.events[-1] if self.events else None
         target_events = [e for e in self.events if e.type == event_type] if self.events else []
         return target_events[-1] if target_events else None
+
+
+def is_invocable_chain(obj: typing.Any) -> bool:
+    """Returns whether the given object is an invocable chain, i.e. it supports 'invoke'."""
+    if isinstance(obj, langchain_core.runnables.Runnable):
+        return True
+    elif hasattr(obj, "invoke") and callable(getattr(obj, "invoke", None)):
+        return True
+    return False

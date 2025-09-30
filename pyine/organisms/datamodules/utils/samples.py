@@ -1,6 +1,7 @@
+# TODO: this module is getting huge, it should probably be a package instead
+
 import collections
 import dataclasses
-import functools
 import logging
 import pathlib
 import typing
@@ -8,7 +9,6 @@ import typing
 import datasets as hf_datasets
 import numpy as np
 import pydantic
-import tqdm
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
@@ -27,7 +27,7 @@ from pyine.utils.code.execution import (
 logger = logging.getLogger(__name__)
 
 
-def _get_expected_augment_types() -> list[str]:
+def get_supported_augment_types() -> list[str]:
     """Returns the list of expected augmentation types for trace datasets and sample preparation.
 
     Combines the augmentation types from the `SampleInputType` define with all prompt names
@@ -56,184 +56,15 @@ def _convert_to_comma_separated_tags(tags: list[str]) -> str:
     return ",".join(tags)
 
 
-@dataclasses.dataclass(frozen=True)
-class TraceMetadata:
-    """Metadata structure for a single trace, to be used for lookups and to cache as prepared data."""
-
-    identifier: str
-    """Unique identifier (str) for the trace."""
-    index: int
-    """Index of this sample in its original dataset."""
-    parent_dataset_hash: str
-    """Hash of the dataset that contains the trace."""
-    tags: list[str]
-    """List of tags associated with the trace (problem+exec+augments)."""
-
-    @functools.cached_property
-    def trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
-        """Returns the trace identifier object for this trace."""
-        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
-
-    @functools.cached_property
-    def solution_id(self) -> pyine.data.traces.dataset_utils.SolutionIdentifier:
-        """Returns the unique identifier for the parent solution to this trace.
-
-        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
-        can be used to get multiple traces, depending on the input arguments used when executing
-        the code snippet, and depending on applied code augmentations.
-        """
-        return self.trace_id.get_parent_identifier()
-
-    @functools.cached_property
-    def problem_id(self) -> pyine.data.traces.dataset_utils.CodingProblemIdentifier:
-        """Returns the unique identifier for the parent problem to this trace.
-
-        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
-        can be used to get multiple traces, depending on the input arguments used when executing
-        the code snippet, and depending on applied code augmentations.
-
-        THIS IS THE ULTIMATE IDENTIFIER THAT SHOULD BE USED FOR SPLITTING PURPOSES. By default, if
-        a trace is assigned to a specific split subset based e.g. on a rule, all traces that belong
-        to the same parent problem will be assigned to the same subset.
-        """
-        return self.solution_id.get_parent_identifier()
-
-    @functools.cached_property
-    def augment_tags(self) -> list[str]:
-        """Returns all tags associated with this trace's augmentation(s)."""
-        out_tags = [t for t in self.tags if t.startswith("augment:")]
-        if out_tags:
-            assert self.trace_id.is_augmented, "how can be have augment tags without augmentation?"
-            augm_category = self.trace_id.augment_category
-            assert f"augment:{augm_category}" in out_tags, " inconsistent augm tags usage"
-        else:
-            assert self.trace_id.augment_category is None
-        return out_tags
-
-    @functools.cached_property
-    def is_augmented(self) -> bool:
-        """Returns whether this trace is augmented."""
-        is_augmented = len(self.augment_tags) > 0
-        assert is_augmented == self.trace_id.is_augmented
-        return is_augmented
-
-    @functools.cached_property
-    def is_multi_augmented(self) -> bool:
-        """Returns whether this trace is multi-augmented (e.g. bugged-hinted, bugged-misleading, etc.)."""
-        multi_augm_categories: list[SampleInputType] = [
-            "obfuscated_hinted",
-            "obfuscated_misleading",
-            "bugged_hinted",
-            "bugged_misleading",
-        ]
-        return any([t in self.augment_tags for t in multi_augm_categories])
-
-    @functools.cached_property
-    def comma_separated_tags(self) -> str:
-        """Returns a comma-separated string of all tags associated with this trace."""
-        return _convert_to_comma_separated_tags(self.tags)
-
-
-def get_traces_metadata(
-    readers: list[pyine.data.traces.dataset_reader.DatasetReader] | pyine.data.traces.dataset_reader.DatasetReader,
-    base_filter: pyine.data.utils.filter_rules.FilterType | None = None,
-    verbose: bool = False,
-) -> list[TraceMetadata]:
-    """Returns a list of TraceMetadata objects for all traces in the provided dataset reader(s).
-
-    Args:
-        readers: list of DatasetReader instances to get all traces from.
-        base_filter: filter to apply to the dataset reader(s) to get target traces. If None, then
-            no filter will be applied, and all available traces will be returned.
-        verbose: whether to display a progress bar during parsing or not.
-
-    Returns:
-        A list of TraceMetadata objects for all targeted traces in the provided dataset.
-    """
-    if not isinstance(readers, list):
-        readers = [readers]
-    logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
-    readers_map = {  # hash-to-reader map to later re-identify the origin of individual traces
-        reader.get_hash(): reader for reader in readers
-    }
-    all_trace_keys = []
-    for reader in readers_map.values():
-        all_trace_keys.extend(reader.trace_keys)
-    if len(set(all_trace_keys)) != len(all_trace_keys):
-        raise ValueError("there should be no duplicates in the list of trace keys across all datasets")
-    prog_bar = tqdm.tqdm(total=len(all_trace_keys), desc="Parsing traces metadata", disable=not verbose)
-    base_traces_meta: list[TraceMetadata] = []
-    for reader_hash, reader in readers_map.items():
-        for trace_idx in range(len(reader)):
-            tags = reader.get_tags(trace_idx)
-            is_banned = base_filter(tags) if base_filter is not None else False
-            if not is_banned:
-                base_traces_meta.append(
-                    TraceMetadata(
-                        identifier=reader.trace_keys[trace_idx],
-                        index=trace_idx,
-                        parent_dataset_hash=reader_hash,
-                        tags=tags,
-                    ),
-                )
-            prog_bar.update(1)
-    prog_bar.close()
-    return base_traces_meta
-
-
-class TraceDatasetMetadata(pydantic.BaseModel):
-    """Metadata structure for a trace dataset, to be used for lookups and to cache as prepared data."""
-
-    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
-    """Pydantic model configuration (freezes the dataclass)."""
-
-    base_traces: list[TraceMetadata]
-    """List of withheld traces across all parsed datasets."""
-    subset_traces: dict[pyine.data.datamodule.SubsetNameType, list[TraceMetadata]]
-    """List of withheld traces for each subset."""
-    leftover_traces: list[TraceMetadata]
-    """List of leftover traces still unassigned after subset filtering and leftover split."""
-    problem_assignments: dict[str, pyine.data.datamodule.SubsetNameType]
-    """Assignments of coding problems identifiers (str) to data subsets."""
-    split_hash: str
-    """Hash of the split file where the assignments were parsed from."""
-
-    @pydantic.model_validator(mode="after")
-    def _post_validator(self) -> "TraceDatasetMetadata":
-        """Confirms that all dataset traces contain reasonable types and the subsets do not overlap."""
-        if not self.base_traces:
-            raise ValueError("base traces must not be empty")
-        seen_trace_ids: set[pyine.data.traces.dataset_utils.TraceIdentifier] = set()
-        expected_augment_types = _get_expected_augment_types()
-        for trace_meta in self.base_traces:
-            assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
-            seen_trace_ids.add(trace_meta.trace_id)
-            if trace_meta.trace_id.is_augmented:
-                augm_type = trace_meta.trace_id.augment_category
-                if augm_type not in expected_augment_types:
-                    raise ValueError(f"unexpected trace augment type: {augm_type}")
-                assert trace_meta.is_augmented and trace_meta.augment_tags
-                assert any(
-                    [t == f"augment:{augm_type}" for t in trace_meta.augment_tags]
-                ), "augment type is not in the trace tags; this should not happen?"
-            else:
-                assert not trace_meta.is_augmented and not trace_meta.is_multi_augmented
-        leftover_trace_ids = {trace_meta.trace_id for trace_meta in self.leftover_traces}
-        for trace_meta in self.leftover_traces:
-            if trace_meta.trace_id not in seen_trace_ids:
-                raise ValueError(f"trace id {trace_meta.trace_id} is not in the base traces")
-        for subset_name, subset_traces in self.subset_traces.items():
-            for trace_meta in subset_traces:
-                if trace_meta.trace_id not in seen_trace_ids:
-                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is not in the base traces")
-                if trace_meta.trace_id in leftover_trace_ids:
-                    raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is in leftover traces")
-                problem_id_str = str(trace_meta.problem_id)
-                if problem_id_str not in self.problem_assignments:
-                    raise ValueError(f"problem id {problem_id_str} has no corresponding problem assignment")
-                if self.problem_assignments[problem_id_str] != subset_name:
-                    raise ValueError(f"problem id {problem_id_str} has incorrect assignment")
-        return self
+def _is_multi_augmented(tags: list[str]) -> bool:
+    """Returns whether the trace associated with the provided tags is multi-augmented."""
+    multi_augm_categories: list[SampleInputType] = [
+        "obfuscated_hinted",
+        "obfuscated_misleading",
+        "bugged_hinted",
+        "bugged_misleading",
+    ]
+    return any([t in tags for t in multi_augm_categories])
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate
@@ -399,7 +230,7 @@ class SampleTransformConfig(pydantic.BaseModel):
     """Optional seed to initialize internal RNG for sampling decisions; None => nondeterministic."""
     transform_strategy: SampleTransformStrategyType = "never"
     """Strategy deciding when to create partial samples (see type docstring for more info)."""
-    too_long_total_steps_threshold: int = pydantic.Field(default=10000, ge=1)
+    too_long_total_steps_threshold: int = pydantic.Field(default=10_000, ge=1)
     """Minimum total trace steps threshold to treat a trace as 'too long'."""
     too_long_valid_steps_threshold: int = pydantic.Field(default=1000, ge=1)
     """Minimum valid (code-string-related) steps to treat a trace as 'too long'."""
@@ -492,6 +323,25 @@ class SampleSelectionConfig(pydantic.BaseModel):
         return self
 
 
+class SampleFilteringConfig(pydantic.BaseModel):
+    """Configuration class specifying arguments to filter traces based on their properties."""
+
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    max_trace_steps: int | None = pydantic.Field(default=10_000, ge=1)
+    """Maximum number of (valid, in-scope) execution steps allowed in a trace; exceeding traces are skipped."""
+    max_args_length: int | None = pydantic.Field(default=1000, ge=1)
+    """Maximum combined length (in chars) of inputs and expected outputs; exceeding traces are skipped."""
+
+    @pydantic.model_validator(mode="after")
+    def _validate_and_resolve(self) -> "SampleFilteringConfig":
+        """Validates the content of the config beyond basic validation."""
+        if self.max_trace_steps is None and self.max_args_length is None:
+            logger.warning("SampleFilteringConfig has no active filters; all traces will pass filtering")
+        return self
+
+
 def _draw_type(
     prob_map: dict[typing.Hashable, float],
     rng: np.random.Generator,
@@ -521,7 +371,7 @@ LMDBDatasetReadersOrPathsType = (
 class _TraceSampleSelectionResult:
     """Result of the sample selection process for a single trace."""
 
-    trace_meta: TraceMetadata
+    trace_meta: pyine.data.traces.dataset_utils.TraceMetadata
     """The metadata associated with the trace from which to generate a sample."""
     code_type: SampleInputType
     """The type of the code snippet that will be used in the generated sample."""
@@ -532,11 +382,13 @@ class _TraceSampleSelectionResult:
 class SampleBuilder(SampleDataParserType):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
-    The role of this class is to provide sample selection and preparation (transformation)
-    strategies to build training/evaluation code execution samples from raw traces. By 'selection',
-    we mean the strategy used to select which version of a traced code problem solution to use
-    (augmented with hints/issues or not). By 'transformation', we mean the strategy used to
-    transform a raw trace result into a set of input + expected output variables for prompts/models.
+    The role of this class is to provide sample filtering, selection, and transformation
+    strategies to build training/evaluation samples from raw code execution traces. By 'filtering',
+    we mean the strategy used to skip/ignore some traces based on their length or on the length of
+    their input/output arguments. By 'selection', we mean the strategy used to select which
+    version of a traced code problem solution to use (augmented with hints/issues or not). By
+    'transformation', we mean the strategy used to transform a raw trace result into a set of
+    input + expected output variables for prompts/models.
 
     The transformation strategy (specified via `SampleTransformConfig`) determines when to ask
     models to predict the execution of full code snippets ('program_output'), and when to predict
@@ -561,27 +413,34 @@ class SampleBuilder(SampleDataParserType):
     def __init__(
         self,
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
-        traces: list[TraceMetadata] | None = None,  # if `None`, will target all available traces
-        transform_config: SampleTransformConfig | dict | None = None,
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] | None = None,  # if none, targets all
+        filtering_config: SampleFilteringConfig | dict | None = None,
         selection_config: SampleSelectionConfig | dict | None = None,
-        prompt_result_db_path: str | None = None,  # if `None`, will use framework default
+        transform_config: SampleTransformConfig | dict | None = None,
+        prompt_result_db_path: str | None = None,  # if none, will use framework default
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces."""
-        if transform_config is None:
-            transform_config = SampleTransformConfig()
-        elif isinstance(transform_config, dict):
-            transform_config = SampleTransformConfig(**transform_config)
-        self.transform_config = transform_config
+        if filtering_config is None:
+            filtering_config = SampleFilteringConfig()
+        elif isinstance(filtering_config, dict):
+            filtering_config = SampleFilteringConfig(**filtering_config)
+        self.filtering_config = filtering_config
         if selection_config is None:
             selection_config = SampleSelectionConfig()
         elif isinstance(selection_config, dict):
             selection_config = SampleSelectionConfig(**selection_config)
         self.selection_config = selection_config
+        if transform_config is None:
+            transform_config = SampleTransformConfig()
+        elif isinstance(transform_config, dict):
+            transform_config = SampleTransformConfig(**transform_config)
+        self.transform_config = transform_config
         if prompt_result_db_path is None:
             self.prompt_result_db = pyine.prompts.get_framework_db()
         else:
             self.prompt_result_db = pyine.prompts.PromptResultDB(prompt_result_db_path)
         self.readers_map, traces = self._init_readers_and_trace_metadata(source_data=source_data, traces=traces)
+        traces = self._filter_traces(traces=traces, filtering_config=filtering_config)
         self.selected_traces = self._select_samples_from_traces(
             traces=traces,
             selection_config=selection_config,
@@ -595,8 +454,11 @@ class SampleBuilder(SampleDataParserType):
     @staticmethod
     def _init_readers_and_trace_metadata(
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
-        traces: list[TraceMetadata] | None,  # if `None`, will target all available traces
-    ) -> tuple[dict[str, pyine.data.traces.dataset_reader.DatasetReader], list[TraceMetadata]]:
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] | None,  # if none, targets all
+    ) -> tuple[
+        dict[str, pyine.data.traces.dataset_reader.DatasetReader],
+        list[pyine.data.traces.dataset_utils.TraceMetadata],
+    ]:
         """Initializes a list of LMDB readers and a list of target traces."""
         if not isinstance(source_data, list):
             source_data = [source_data]
@@ -604,16 +466,11 @@ class SampleBuilder(SampleDataParserType):
         for src_idx, src in enumerate(source_data):
             if isinstance(src, (str, pathlib.Path)):
                 source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
-        readers_map = {r.get_hash(): r for r in source_data}
+        readers_map = {r.hash: r for r in source_data}
         assert len(readers_map) > 0
         if traces is None:
             logger.debug("(targeting all available traces)")
-            # create a list of metadata structs for ALL available traces
-            traces = pyine.organisms.datamodules.utils.samples.get_traces_metadata(
-                readers=source_data,
-                base_filter=None,
-                verbose=False,
-            )
+            traces = pyine.data.traces.dataset_reader.get_traces_metadata(source_data)
         else:
             logger.debug(f"(targeting {len(traces)} traces)")
         assert isinstance(traces, list)
@@ -621,16 +478,53 @@ class SampleBuilder(SampleDataParserType):
         assert all([0 <= t.index < len(readers_map[t.parent_dataset_hash]) for t in traces])
         return readers_map, traces
 
+    def _filter_traces(
+        self,
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        filtering_config: SampleFilteringConfig,
+    ) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
+        """Filters traces based on the filtering configuration."""
+        if filtering_config.max_trace_steps is None and filtering_config.max_args_length is None:
+            logger.debug("no filtering criteria to apply, keeping all traces")
+            return traces
+        filtered_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        filtered_by_step_count = 0
+        filtered_by_var_length = 0
+        for trace_meta in traces:
+            if filtering_config.max_trace_steps is not None:
+                if trace_meta.step_count > filtering_config.max_trace_steps:
+                    filtered_by_step_count += 1
+                    continue
+            if filtering_config.max_args_length is not None:
+                inputs_str = str(trace_meta.inputs)
+                expected_output_str = str(trace_meta.expected_output)
+                combined_length = len(inputs_str) + len(expected_output_str)
+                if combined_length > filtering_config.max_args_length:
+                    filtered_by_var_length += 1
+                    continue
+            filtered_traces.append(trace_meta)
+        logger.info(
+            f"trace filtering: kept {len(filtered_traces)}/{len(traces)} traces "
+            f"(filtered {filtered_by_step_count} by step count, {filtered_by_var_length} by var length)"
+        )
+        self._filtering_stats = {
+            "total_traces": len(traces),
+            "kept_traces": len(filtered_traces),
+            "filtered_by_step_count": filtered_by_step_count,
+            "filtered_by_var_length": filtered_by_var_length,
+        }
+        return filtered_traces
+
     @staticmethod
     def _select_samples_from_traces(
-        traces: list[TraceMetadata],
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
         selection_config: SampleSelectionConfig,
         prompt_result_db: pyine.prompts.PromptResultDB,
     ) -> list[_TraceSampleSelectionResult]:
         """Selects samples to generate from traces according to the specified strategy/options."""
         # first, scan all available traces and identify which augment group they belong to
         TraceIdType = pyine.data.traces.dataset_utils.TraceIdentifier  # noqa
-        trace_lut: dict[TraceIdType, TraceMetadata] = dict()
+        trace_lut: dict[TraceIdType, pyine.data.traces.dataset_utils.TraceMetadata] = dict()
         cousin_traces: dict[TraceIdType, dict[SampleInputType, list[TraceIdType]]] = {}
         for trace in traces:
             assert trace.trace_id not in trace_lut, "trace id already exists in trace lut?"
@@ -649,7 +543,7 @@ class SampleBuilder(SampleDataParserType):
             # the only types of augmented traces that we might expect from a trace dataset are:
             #   - traces with code hints or issues (exception 'hints/stubs': those CANNOT ever be traced)
             #   - obfuscated code traces (the only time we ever obfuscate code is in the dataset writer)
-            assert not trace.is_multi_augmented, (
+            assert not _is_multi_augmented(trace.tags), (
                 "current implementation does not support multi-augmented traces; "
                 "update the sample builder's trace selection code if dataset writer gets updated for augments"
             )
@@ -811,7 +705,7 @@ class SampleBuilder(SampleDataParserType):
 
     @staticmethod
     def _build_code_summaries_lut(
-        traces: list[TraceMetadata],
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
         prompt_result_db: pyine.prompts.PromptResultDB,
     ) -> dict[pyine.data.traces.dataset_utils.SolutionIdentifier, str]:  # sid to code description map
         """Builds a lookup table of code summaries for each trace."""
@@ -833,12 +727,15 @@ class SampleBuilder(SampleDataParserType):
         # note: we cannot provide stats on the transformed samples as their types are resolved later
         code_type_counts = collections.Counter([s.code_type for s in self.selected_traces])
         code_override_flags = [bool(c.code_override) for c in self.selected_traces]
-        return {
+        stats = {
             "sample_count": len(self.selected_traces),
             **{f"code_type_counts/{k}": c for k, c in code_type_counts.items()},
             "code_overrides_count": sum(code_override_flags),
             "code_summaries_count": len(self.code_summaries),
         }
+        if hasattr(self, "_filtering_stats"):
+            stats.update({f"filtering/{k}": v for k, v in self._filtering_stats.items()})
+        return stats
 
     def __len__(self) -> int:
         """Returns the number of traces that will be converted into samples."""
@@ -998,7 +895,7 @@ class SampleBuilder(SampleDataParserType):
     def _get_function_call_sample(
         self,
         trace_data: pyine.utils.code.execution.TraceResult,
-        trace_meta: TraceMetadata,
+        trace_meta: pyine.data.traces.dataset_utils.TraceMetadata,
         trace_code_type: SampleInputType,
         rng: np.random.Generator,
     ) -> SampleData | None:
@@ -1101,7 +998,7 @@ class SampleBuilder(SampleDataParserType):
     def _get_code_segment_sample(
         self,
         trace_data: pyine.utils.code.execution.TraceResult,
-        trace_meta: TraceMetadata,
+        trace_meta: pyine.data.traces.dataset_utils.TraceMetadata,
         trace_code_type: SampleInputType,
         target_output_type: SampleOutputType,
         rng: np.random.Generator,
@@ -1211,42 +1108,68 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
     class_path: str = pyine.utils.portability.get_fully_qualified_name(SampleBuilder)
     """Fully qualified class path for the trace parser."""
     params: dict[str, typing.Any] = dict(
-        transform_config=SampleTransformConfig(),
+        filtering_config=SampleFilteringConfig(),
         selection_config=SampleSelectionConfig(),
+        transform_config=SampleTransformConfig(),
     )
     """Default parameters for the dataset trace parser."""
 
+    @staticmethod
+    def _sample_builder_iter(
+        sample_builder_config: "SampleBuilderConfig",
+        sample_idxs: list[int] | None = None,
+        instantiate_kwargs: dict[str, typing.Any] | None = None,
+        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
+    ):
+        """Yields dict samples from a SampleBuilder instance.
+
+        Kept static/top-level-friendly for to keep pickling happy in `get_hf_messages_dataset`.
+        """
+        sample_builder = sample_builder_config.instantiate(**(instantiate_kwargs or {}))
+        assert isinstance(sample_builder, SampleBuilder)
+        sample_idxs = sample_idxs or list(range(len(sample_builder)))
+        for sample_idx in sample_idxs:
+            sample_data = sample_builder[sample_idx]
+            assert isinstance(sample_data, SampleData)
+            sample_dict = sample_data._asdict()
+            if raw_transform_fn is not None:
+                sample_dict = raw_transform_fn(sample_dict)
+            yield sample_dict
+
     @typing.override
-    def get_hf_messages_dataset(
+    def generate_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
         raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
-        instantiate_kwargs: dict | None = None,
-        generator_kwargs: dict | None = None,
+        instantiate_kwargs: dict[str, typing.Any] | None = None,
+        keep_in_memory: bool = False,
+        num_workers: int | None = None,
     ) -> "hf_datasets.Dataset":
-        """Returns a huggingface-compatible generator using a SampleBuilder instance."""
-
-        def _sample_builder_generator():
-            sample_builder = self.instantiate(**(instantiate_kwargs or {}))
-            for sample_idx in range(len(sample_builder)):
-                sample_data = sample_builder[sample_idx]
-                yield sample_data._asdict()  # noqa
-
+        """Generates and returns a huggingface messages dataset using a SampleBuilder instance."""
         dataset = hf_datasets.Dataset.from_generator(
-            generator=_sample_builder_generator,
+            generator=SampleBuilderConfig._sample_builder_iter,
+            gen_kwargs=dict(
+                sample_builder_config=self,
+                instantiate_kwargs=instantiate_kwargs,
+            ),
             split=named_split,
-            **(generator_kwargs or {}),
-        ).map(raw_transform_fn or (lambda x: x))
+            keep_in_memory=keep_in_memory,
+        )
+        dataset = dataset.map(
+            function=raw_transform_fn,
+            keep_in_memory=keep_in_memory,
+            num_proc=num_workers,
+        )
         return dataset
 
     @staticmethod
     def get_special_subset_param_overrides(
-        subset_type: pyine.data.datamodule.SubsetNameType,
+        subset_name: pyine.data.datamodule.SubsetNameType,
     ) -> dict[str, typing.Any]:
-        """Returns special subset parameter overrides (if any) for the given subset type."""
+        """Returns special subset parameter overrides (if any) for the given subset name."""
         special_subset_overrides: dict[str, typing.Any] = dict()
         for suffix in typing.get_args(SampleInputType):
-            if suffix != "original" and subset_type.endswith(f"_{suffix}"):
+            if suffix != "original" and subset_name.endswith(f"_{suffix}"):
                 special_subset_overrides = dict(
                     selection_config=SampleSelectionConfig(
                         seed=0,

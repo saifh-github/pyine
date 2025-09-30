@@ -42,6 +42,8 @@ import hashlib
 import random
 import typing
 
+import torch.utils.data
+
 import pyine.data.deltas.dataset_utils as deltas_utils
 import pyine.data.traces.dataset_utils as traces_utils
 import pyine.utils.code.execution as exec_utils
@@ -99,7 +101,7 @@ class _FakeBase:
         return None
 
 
-class FakeTraceDatasetReader(_FakeBase):
+class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
     """Fake replacement for pyine.data.traces.dataset_reader.DatasetReader.
 
     This class mimics the core interface of the real reader while generating realistic

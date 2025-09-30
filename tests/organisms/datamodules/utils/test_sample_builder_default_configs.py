@@ -2,6 +2,7 @@ import typing
 
 import pytest
 
+import pyine.data.traces.dataset_utils as dataset_utils
 import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
 import pyine.organisms.datamodules.utils.samples as sample_utils
 import pyine.prompts
@@ -19,7 +20,8 @@ class FakeDatasetReader:
         self._traces = traces
         self.trace_keys = [typing.cast(str, trace.identifier) for trace in traces]
 
-    def get_hash(self) -> str:
+    @property
+    def hash(self) -> str:
         return self._dataset_hash
 
     def __len__(self) -> int:
@@ -70,7 +72,7 @@ def build_trace_artifacts(
     identifier: str,
     tags: list[str],
     return_value: int,
-) -> tuple[sample_utils.TraceMetadata, execution_utils.TraceResult]:
+) -> tuple[dataset_utils.TraceMetadata, execution_utils.TraceResult]:
     trace_result = execution_utils.TraceResult(
         identifier=identifier,
         code_string=f"def solution():\n    return {return_value}\n",
@@ -91,10 +93,20 @@ def build_trace_artifacts(
         metadata={},
         tags=tags,
     )
-    trace_metadata = sample_utils.TraceMetadata(
+    trace_metadata = dataset_utils.TraceMetadata(
         identifier=identifier,
-        index=trace_idx,
         parent_dataset_hash=dataset_hash,
+        index=trace_idx,
+        internal_index=trace_idx,
+        step_count=trace_result.valid_step_count,
+        code_string=trace_result.code_string,
+        inputs=trace_result.inputs,
+        expected_output=trace_result.expected_output,
+        return_value=trace_result.return_value,
+        exception=trace_result.exception,
+        stdout=trace_result.stdout,
+        stderr=trace_result.stderr,
+        metadata=trace_result.metadata,
         tags=tags,
     )
     return trace_metadata, trace_result
@@ -102,22 +114,23 @@ def build_trace_artifacts(
 
 def setup_builder(
     monkeypatch: pytest.MonkeyPatch,
-    traces: list[sample_utils.TraceMetadata],
+    traces: list[dataset_utils.TraceMetadata],
     reader: FakeDatasetReader,
     seed: int,
     subset_name: str,
     prompt_records: dict[str, list[FakePromptResult]] | None = None,
 ) -> sample_utils.SampleBuilder:
-    base_config = shortcuts_configs.get_default_sampler_builder_config(seed=seed)
-    overrides = shortcuts_configs.get_default_sample_builder_overrides_for_subset(subset_name)
+    base_config = shortcuts_configs._get_default_sampler_builder_config(seed=seed)
+    overrides = shortcuts_configs._get_default_sample_builder_overrides_for_subset(subset_name)
     config = pyine.utils.pydantic.merge_configs(base_config, overrides)
     fake_prompt_db = FakePromptResultDB(prompt_records)
     monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: fake_prompt_db)
     return sample_utils.SampleBuilder(
         source_data=reader,
         traces=traces,
-        transform_config=config["transform_config"],
+        filtering_config=config["filtering_config"],
         selection_config=config["selection_config"],
+        transform_config=config["transform_config"],
     )
 
 
@@ -125,7 +138,7 @@ def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) 
     dataset_hash = "fake-valid"
     original_identifier = "TACO/valid/p000001/s0000/t0000"
     hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:issues_generic:000"
-    trace_metadatas: list[sample_utils.TraceMetadata] = []
+    trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(
         [
@@ -203,7 +216,7 @@ def test_train_overrides_enable_random_hint_selection(monkeypatch: pytest.Monkey
                 result="fake obfuscated + hinted code",
             ),
         ]
-    trace_metadatas: list[sample_utils.TraceMetadata] = []
+    trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(trace_specifications):
         metadata, result = build_trace_artifacts(
@@ -318,7 +331,7 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(monkeypatch: pytest.Monkey
                 result=f"def solution_{solution_idx}():\n    raise NotImplementedError('stubbed')\n",
             )
         ]
-    trace_metadatas: list[sample_utils.TraceMetadata] = []
+    trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(trace_specifications):
         metadata, result = build_trace_artifacts(

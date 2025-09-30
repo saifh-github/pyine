@@ -1,6 +1,5 @@
 """OpenAI API model fine-tuning CLI app."""
 
-import functools
 import logging
 import sys
 import typing
@@ -37,48 +36,77 @@ def _compute_estimated_train_token_count(
         model_id=config.openai_finetuner_config.params.base_model,
         raise_if_not_found=False,
     )
-    if len(config.train_subset_names) == 1:
-        tr_file_path = dm.get_openai_messages_dataset(config.train_subset_names[0])
-        messages = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
-    else:
-        messages: list[list[dict[str, str]]] = []
-        for subset_name in config.train_subset_names:
-            tr_file_path = dm.get_openai_messages_dataset(subset_name)
-            messages += pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
     token_count = 0
-    for msg in messages:
-        if isinstance(msg, dict):
-            token_count += len(tokenizer.encode(msg["content"]))
-        elif isinstance(msg, list):
-            for m in msg:
-                assert isinstance(m, dict), "what kind of structure is this?"
-                token_count += len(tokenizer.encode(m["content"]))
+    for subset_name in config.datamodule_config.train_subset_names:
+        tr_file_path = dm.get_openai_messages_dataset(subset_name)
+        messages = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
+        for msg in messages:
+            if isinstance(msg, dict):
+                token_count += len(tokenizer.encode(msg["content"]))
+            elif isinstance(msg, list):
+                for m in msg:
+                    assert isinstance(m, dict), "what kind of structure is this?"
+                    token_count += len(tokenizer.encode(m["content"]))
     return token_count
 
 
-async def _evaluate(
-    model_name: str,
-    eval_subset_name: str,
+def train(
     client: openai.OpenAI,
     datamodule: pyine.data.datamodule.ConversationDataModule,
-    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None,
-) -> pyine.evals.common.EvaluationResult:
-    """Evaluates the given OpenAI model on the specified subset."""
-    model = pyine.utils.llm_providers.get_model_from_provider(
-        provider="openai",
-        model=model_name,
-        client=client.chat.completions,
+    config: "pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig",
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+) -> str:
+    """Fine-tune an OpenAI model on a given dataset and returns the resulting model name.
+
+    Args:
+        client: The OpenAI API client to use for fine-tuning.
+        datamodule: The datamodule to fetch data from.
+        config: The app config object to fetch settings from.
+        runtime: The runtime config object to fetch settings from.
+
+    Returns:
+        The name of the fine-tuned model.
+    """
+    approx_tokens = _compute_estimated_train_token_count(config, datamodule)
+    logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
+    finetuner = config.openai_finetuner_config.instantiate(client)
+    if len(config.train_subset_names) != 1:
+        raise ValueError("must provide exactly one train dataset for openai finetuner")
+    tr_file_path = datamodule.get_openai_messages_dataset(
+        subset_name=config.train_subset_names[0],
+        append_answer=config.needs_answers_in_train_dataset(),
+        merge_system_with_user=not config.supports_system_prompt(),
     )
-    eval_parser = datamodule.get_parser(eval_subset_name)
-    assert isinstance(eval_parser, pyine.organisms.datamodules.utils.samples.SampleBuilder)
-    eval_parser = typing.cast(pyine.organisms.datamodules.utils.samples.SampleBuilder, eval_parser)
-    evaluation_result = await pyine.evals.common.evaluate_langchain_runnable_on_subset(
-        chain=datamodule.config.get_prompt_chain(model),
-        parser=eval_parser,
-        llm_grader_provider_config=llm_grader_provider_config,
-        verbose=True,
+    tr_file_id = finetuner.ensure_uploaded(tr_file_path)
+    if len(config.valid_subset_names) != 1:
+        raise ValueError("must provide exactly one valid dataset for openai finetuner")
+    va_file_path = datamodule.get_openai_messages_dataset(
+        subset_name=config.valid_subset_names[0],
+        append_answer=config.needs_answers_in_train_dataset(),
+        merge_system_with_user=not config.supports_system_prompt(),
     )
-    return evaluation_result
+    va_file_id = finetuner.ensure_uploaded(va_file_path)
+    job_id = finetuner.create_job(tr_file_id, va_file_id)
+    if config.use_wandb_logging:
+        assert runtime is not None and runtime.wandb_run_id is not None
+        logger.info(f"using W&B blocking sync under run id: {runtime.wandb_run_id}")
+        wandb.integration.openai.fine_tuning.WandbLogger.sync(
+            fine_tune_job_id=job_id,
+            openai_client=client,
+            project="pyine",
+            wait_for_job_success=True,
+            reinit="return_previous",  # noqa; reuse already-existing run
+        )
+    else:
+        try:
+            finetuner.stream_job_events(job_id)  # streams events without blocking
+        except KeyboardInterrupt:
+            logger.info("stopped streaming events; continuing to poll status...")
+    model_name = finetuner.wait_for_job(job_id)
+    if not model_name:
+        logger.error("fine-tune failed or no model name returned")
+        sys.exit(1)
+    return model_name
 
 
 async def main(
@@ -94,53 +122,25 @@ async def main(
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
-    pyine.utils.reprod.entrypoint_setup(
-        runtime_config=runtime,
-        main_config=config,
-        use_wandb_logging=config.use_wandb_logging,
-    )
+    try:
+        pyine.utils.reprod.entrypoint_setup(
+            runtime_config=runtime,
+            main_config=config,
+            use_wandb_logging=config.use_wandb_logging,
+        )
+    except pyine.utils.reprod.DryRunExit:
+        return
 
-    dm = pyine.apps.trainers.common.prepare_code_exec_datamodule(config, runtime)
-
+    dm = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
     client: openai.OpenAI = config.openai_client_config.instantiate()
+
     if not skip_fine_tuning:
-        approx_tokens = _compute_estimated_train_token_count(config, dm)
-        logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
-        finetuner = config.openai_finetuner_config.instantiate(client)
-        assert len(config.train_subset_names) == 1, "openai trainer only supports one train dataset"
-        tr_file_path = dm.get_openai_messages_dataset(
-            subset_type=config.train_subset_names[0],
-            append_answer=config.needs_answers_in_train_dataset(),
-            merge_system_with_user=not config.supports_system_prompt(),
+        model_name = train(
+            client=client,
+            datamodule=dm,
+            config=config,
+            runtime=runtime,
         )
-        tr_file_id = finetuner.ensure_uploaded(tr_file_path)
-        assert len(config.valid_subset_names) == 1, "openai trainer only supports one valid dataset"
-        va_file_path = dm.get_openai_messages_dataset(
-            subset_type=config.valid_subset_names[0],
-            append_answer=config.needs_answers_in_train_dataset(),
-            merge_system_with_user=not config.supports_system_prompt(),
-        )
-        va_file_id = finetuner.ensure_uploaded(va_file_path)
-        job_id = finetuner.create_job(tr_file_id, va_file_id)
-        if config.use_wandb_logging:
-            assert runtime is not None and runtime.wandb_run_id is not None
-            logger.info(f"using W&B blocking sync under run id: {runtime.wandb_run_id}")
-            wandb.integration.openai.fine_tuning.WandbLogger.sync(
-                fine_tune_job_id=job_id,
-                openai_client=client,
-                project="pyine",
-                wait_for_job_success=True,
-                reinit="return_previous",  # noqa; reuse already-existing run
-            )
-        else:
-            try:
-                finetuner.stream_job_events(job_id)  # streams events without blocking
-            except KeyboardInterrupt:
-                logger.info("stopped streaming events; continuing to poll status...")
-        model_name = finetuner.wait_for_job(job_id)
-        if not model_name:
-            logger.error("fine-tune failed or no model name returned")
-            sys.exit(1)
     else:
         # use the base model directly as the target to evaluate
         model_name = config.openai_finetuner_config.params.base_model
@@ -149,17 +149,29 @@ async def main(
     if config.use_wandb_logging:
         run_is_finished = getattr(runtime.wandb_run, "_is_finished", True)
         if run_is_finished:
-            # the openai integration 'finalized' the run, re-open it to log the last few metrics/summaries
+            # the openai integration 'finalized' the run; re-open it to log the last few metrics/summaries
             # (we replace the original run obj with a re-opened one, hopefully just for summary updates)
             wandb_api = wandb.Api()
             runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
         runtime.wandb_run.summary.update({"model_name": model_name})
 
-    eval_callback = functools.partial(_evaluate, model_name=model_name, client=client)
-    await pyine.apps.trainers.common.evaluate_code_execution_model(eval_callback, dm, config, runtime)
+    model_for_evals = pyine.utils.llm_providers.get_model_from_provider(
+        provider="openai",
+        model=model_name,
+        client=client.chat.completions,
+    )
+    text_generation_pipeline_for_evals = dm.config.get_prompt_chain(model_for_evals)
+    await pyine.apps.trainers.common.evaluate_model(
+        model=text_generation_pipeline_for_evals,
+        tokenizer=None,
+        datamodule=dm,
+        config=config,
+        runtime=runtime,
+    )
 
 
 if __name__ == "__main__":
     import pyine.apps.trainers.openai_finetune_configs
 
-    pyine.apps.trainers.openai_finetune_configs.hydra_main()
+    # TODO: if we ever have more than one eval type, make new entrypoint scripts w/ different eval types
+    pyine.apps.trainers.openai_finetune_configs.hydra_main(pyine.evals.common.EvalType.CODE_EXEC)

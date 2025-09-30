@@ -2,14 +2,18 @@ import inspect
 import logging
 import typing
 
+import langchain_core.runnables
 import pydantic
+import transformers
 import wandb
 
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.utils.langchain
 import pyine.utils.llm_providers
+import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
 
@@ -17,33 +21,25 @@ logger = logging.getLogger(__name__)
 class AppMainConfig(pydantic.BaseModel):
     """Trainer application main entrypoint configuration settings.
 
-    Should apply to all trainers that intend to train models to perform code execution.
+    Should apply to all trainers that intend to train/evaluate models.
     """
 
-    datamodule_config: pyine.data.datamodule.ConversationDataModuleConfig
+    model_config = pydantic.ConfigDict(extra="allow")
+    """Pydantic model configuration (allow extra fields)."""
+
+    datamodule_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataModuleConfig]
     """Configuration for the datamodule to use."""
-    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
-    """Configuration for the LLM grader provider to use. If not specified, skips LLM grader evals."""
-    train_subset_names: list[str] = pydantic.Field(default=["train"], min_length=1)
-    """Subset names to train on."""
-    valid_subset_names: list[str] = pydantic.Field(default=["valid"], min_length=1)
-    """Subset names to validate on."""
-    eval_subset_names: list[str] = ["valid", "valid_obfuscated"]
-    """Subset names to use for final evaluations.
-
-    Note: should be kept to 'validation' instead of 'testing' subsets until experiments are done,
-    and all hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
-        https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
-    """
+    evals_config: pydantic.SerializeAsAny[pyine.evals.common.BaseEvalsConfig]
+    """Configuration for the task evaluation strategy to use."""
     use_wandb_logging: bool = False
     """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
 
 
-def prepare_code_exec_datamodule(
+def prepare_datamodule(
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> pyine.data.datamodule.ConversationDataModule:
-    """Prepares the configured code execution datamodule and returns it.
+) -> pyine.data.datamodule.BaseDataModule:
+    """Prepares the configured datamodule and returns it.
 
     Args:
         config: The application configuration, which should contain the datamodule config.
@@ -58,48 +54,77 @@ def prepare_code_exec_datamodule(
     dm.setup()
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets = config.train_subset_names + config.valid_subset_names + config.eval_subset_names
+        target_subsets = (
+            config.datamodule_config.train_subset_names
+            + config.datamodule_config.valid_subset_names
+            + config.datamodule_config.eval_subset_names
+        )
         dm_stats = dm.get_stats(target_subsets)
         dm_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(dm_stats)
-        for eval_subset_name in config.eval_subset_names:
-            pyine.evals.common.define_metrics_for_wandb(
+        for eval_subset_name in config.datamodule_config.eval_subset_names:
+            config.evals_config.define_metrics_for_wandb(
                 wandb_run=runtime.wandb_run,
                 prefix=f"evals/{eval_subset_name}",
             )
     return dm
 
 
-class EvaluationCallbackType(typing.Protocol):
-    """Protocol used to represent a callback used to evaluate a model."""
-
-    def __call__(
-        self,
-        eval_subset_name: str,
-        datamodule: pyine.data.datamodule.ConversationDataModule,
-        llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None,
-    ) -> pyine.evals.common.EvaluationResult: ...
-
-
-async def evaluate_code_execution_model(
-    eval_callback: EvaluationCallbackType,
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+async def evaluate_model(
+    model: langchain_core.runnables.Runnable | transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizer | None,
+    datamodule: pyine.data.datamodule.BaseDataModule,
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> dict[str, pyine.evals.common.EvaluationResult]:
-    """Evaluates the given model on the specified data subset."""
-    evaluation_results: dict[str, pyine.evals.common.EvaluationResult] = {}
-    for eval_subset_name in config.eval_subset_names:
-        logger.info(f"running evaluation on the {eval_subset_name} subset...")
-        evaluation_result = eval_callback(
-            eval_subset_name=eval_subset_name,
-            datamodule=datamodule,
-            llm_grader_provider_config=config.llm_grader_provider_config,
-        )
-        if inspect.isawaitable(evaluation_result):
-            evaluation_result = await evaluation_result
-        pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
-        evaluation_results[eval_subset_name] = evaluation_result
+) -> dict[str, typing.Any]:
+    """Evaluates the given model on the specified data subset using the internal evals config.
+
+    Args:
+        model: The model to evaluate, in either a langchain runnable or in HF-transformers format.
+        tokenizer: The tokenizer to use for evaluation, if applicable (only for HF-T models).
+        datamodule: The datamodule from which to load the evaluation data.
+        config: The application configuration, which should contain the evals config.
+        runtime: The runtime configuration, which may contain W&B run information.
+
+    Returns:
+        The evaluation results as a dictionary of metrics.
+    """
+    evaluation_results: dict[str, typing.Any] = {}
+    if config.evals_config.eval_type is None:
+        return evaluation_results
+    if pyine.utils.transformers.is_hf_model(model):
+        if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
+            raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
+        for eval_subset_name in config.datamodule_config.eval_subset_names:
+            logger.info(f"running trained model evaluation on the {eval_subset_name} subset...")
+            evaluation_result = await config.evals_config.evaluate_hf_model(
+                model=model,
+                tokenizer=tokenizer,
+                datamodule=datamodule,
+                eval_subset_name=eval_subset_name,
+                verbose=True,
+            )
+            if inspect.isawaitable(evaluation_result):
+                evaluation_result = await evaluation_result
+            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
+            evaluation_results[eval_subset_name] = evaluation_result
+    else:
+        if not pyine.utils.langchain.is_invocable_chain(model):
+            raise ValueError(f"invalid model ({type(model)})")
+        if tokenizer is not None:
+            raise NotImplementedError("tokenizer support in runnable chain eval is not implemented")
+        for eval_subset_name in config.datamodule_config.eval_subset_names:
+            logger.info(f"running chain evaluation on the {eval_subset_name} subset...")
+            evaluation_result = await config.evals_config.evaluate_runnable_model(
+                chain=model,
+                datamodule=datamodule,
+                eval_subset_name=eval_subset_name,
+                verbose=True,
+            )
+            if inspect.isawaitable(evaluation_result):
+                evaluation_result = await evaluation_result
+            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
+            evaluation_results[eval_subset_name] = evaluation_result
     if config.use_wandb_logging and evaluation_results:
         wandb_run_id = runtime.wandb_run_id
         if wandb_run_id is None:
@@ -108,16 +133,14 @@ async def evaluate_code_execution_model(
             # reopen the run in case it was closed (e.g. like the openai integration always does)
             runtime.wandb_run = wandb.init(id=runtime.wandb_run_id, resume="must")
         logger.info(f"logging evaluation results to wandb run id: {wandb_run_id}...")
-        pyine.evals.common.log_eval_metrics_table(
+        config.evals_config.log_metrics(
             wandb_run=runtime.wandb_run,
             results_by_subset=evaluation_results,
         )
         for subset_name, subset_result in evaluation_results.items():
-            pyine.evals.common.log_sample_predictions_table(
+            config.evals_config.log_predictions(
                 wandb_run=runtime.wandb_run,
                 subset_name=subset_name,
-                artifacts=subset_result.artifacts,
+                subset_results=subset_result,
             )
-            prefixed_metrics = {f"evals/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
-            runtime.wandb_run.summary.update(prefixed_metrics)
     return evaluation_results

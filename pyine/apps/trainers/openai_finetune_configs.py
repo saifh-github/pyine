@@ -11,22 +11,17 @@ import typing
 
 import hydra_zen
 import hydra_zen.typing
+import pydantic
 
 import pyine.apps.trainers.common
 import pyine.apps.trainers.openai_finetune
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
-import pyine.data.datamodule
-import pyine.data.traces.dataset_utils
-import pyine.data.utils.splits
-import pyine.evals.grader_configs
-import pyine.organisms.datamodules.shortcuts
+import pyine.evals.common
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.models.utils.openai
-import pyine.utils.llm_providers
 import pyine.utils.openai
-import pyine.utils.portability
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -39,9 +34,9 @@ class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     traces datamodule.
     """
 
-    openai_client_config: pyine.utils.openai.OpenAIClientConfig
+    openai_client_config: pydantic.SerializeAsAny[pyine.utils.openai.OpenAIClientConfig]
     """Configuration for the OpenAI client to use."""
-    openai_finetuner_config: pyine.utils.openai.OpenAIFineTunerConfig
+    openai_finetuner_config: pydantic.SerializeAsAny[pyine.utils.openai.OpenAIFineTunerConfig]
     """Configuration for the OpenAI fine-tuner to use."""
 
     def needs_answers_in_train_dataset(self) -> bool:
@@ -62,9 +57,9 @@ def _async_main_wrapper(*args, **kwargs):
     return asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
 
 
-def hydra_main() -> None:
+def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
     """Hydra main entrypoint for the OpenAI fine-tuner app."""
-    _ = register_hydra_configs()
+    _ = register_hydra_configs(eval_type=eval_type)
     pyine.configs.base.register_searchpath_plugin()
     hydra_zen.zen(_async_main_wrapper).hydra_main(
         config_path=None,
@@ -166,10 +161,11 @@ def _get_ft_params_configs(
     return [default_sft_params_config, default_rlft_params_config, default_pred_grader_rlft_method_config]
 
 
-def _get_app_main_configs(
+def _get_app_configs(
+    eval_type: pyine.evals.common.EvalType,
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns main application configs for hydra zen storage."""
+    """Generates and returns application configs for hydra zen storage."""
     assert isinstance(group, str) and group
     app_main_config = pyine.configs.schemas.ConfigDescription(
         name="base",
@@ -184,29 +180,34 @@ def _get_app_main_configs(
                 {"datamodule_config": "base"},
                 {"openai_client_config": "default"},
                 {"openai_finetuner_config": "openai_gpt-4.1-mini_default_sft"},
-                {"llm_grader_provider_config": "openai_gpt-5-nano"},
+                {"evals_config": "base"},
             ],
             zen_meta={
-                "__description__": "Default settings for the OpenAI fine-tuner app.",
+                "__description__": "Base settings for the OpenAI fine-tuner app.",
             },
         ),
     )
-    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(f"{group}/datamodule_config")
-    openai_client_configs = pyine.configs.base.get_openai_client_configs(f"{group}/openai_client_config")
-    ft_params_configs = _get_ft_params_configs(f"{group}/openai_finetuner_config")
-    llm_grader_provider_configs = pyine.evals.grader_configs.get_configs(f"{group}/llm_grader_provider_config")
+    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
+        eval_type=eval_type,
+        group=f"{group}/datamodule_config",
+    )
+    openai_client_configs = pyine.configs.base.get_openai_client_configs(group=f"{group}/openai_client_config")
+    ft_params_configs = _get_ft_params_configs(group=f"{group}/openai_finetuner_config")
+    evals_configs = pyine.evals.common.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
+    # ... add more trainer configs here if needed
     return [
         app_main_config,
         *datamodule_configs,
         *openai_client_configs,
         *ft_params_configs,
-        *llm_grader_provider_configs,
+        *evals_configs,
     ]
 
 
 def _get_experiment_configs(
+    eval_type: pyine.evals.common.EvalType,
     entrypoint_config: pyine.configs.schemas.ConfigDescription,
-    main_app_configs: list[pyine.configs.schemas.ConfigDescription],
+    app_configs: list[pyine.configs.schemas.ConfigDescription],
     group: str | None,
     package: str | None,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -222,11 +223,11 @@ def _get_experiment_configs(
     """
     # fetch and validate necessary datamodule and openai client configs from main configs set
     dm_configs = [
-        config for config in main_app_configs if config.group == "config/datamodule_config" and config.name != "base"
+        config for config in app_configs if config.group == "config/datamodule_config" and config.name != "base"
     ]
-    assert sum([c.name == "timeout300s" and c.group == "config/openai_client_config" for c in main_app_configs]) == 1
-
+    assert sum([c.name == "timeout300s" and c.group == "config/openai_client_config" for c in app_configs]) == 1
     # for each datamodule config we found, create an eval-only and a regular fine-tuning experiment config
+    # (note: we don't do anything eval_type-specific here, at least not for these base exp configs)
     outputs: list[pyine.configs.schemas.ConfigDescription] = []
     for config_type_str, dm_config in itertools.product(["_eval_only", ""], dm_configs):
         exp_name = f"{dm_config.name}{config_type_str}"
@@ -260,7 +261,7 @@ def _get_experiment_configs(
     return outputs
 
 
-def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
+def register_hydra_configs(eval_type: pyine.evals.common.EvalType) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers app-specific configs in hydra and returns the config descriptions.
 
     Note that in the returned config descriptions, the config that corresponds to the main app's
@@ -272,8 +273,6 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("openai_finetune")
-    main_app_configs = _get_app_main_configs(group="config")
     entrypoint_config = pyine.configs.schemas.ConfigDescription(
         name="entrypoint",
         group=None,
@@ -284,8 +283,8 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
             populate_full_signature=True,
             hydra_defaults=[
                 "_self_",
-                {"config": "base"},
-                {"runtime": "default"},  # from base module
+                {"config": "base"},  # from this module (`_get_app_configs`)
+                {"runtime": "default"},  # from pyine.configs.base
                 *pyine.configs.base.get_base_hydra_default_overrides(),
             ],
             zen_meta={
@@ -293,18 +292,24 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
             },
         ),
     )
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("openai_finetune")
+    app_configs = _get_app_configs(eval_type=eval_type, group="config")
+    configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(
-        entrypoint_config,
-        main_app_configs,
+        eval_type=eval_type,
+        entrypoint_config=entrypoint_config,
+        app_configs=[*base_configs, *configs_to_register],
         group="experiment",
         package="_global_",
     )
+    configs_to_register.extend(experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        "openai_finetune",
-        entrypoint_config,
-        main_app_configs,
+        app_name="openai_finetune",
+        eval_type=eval_type,
+        entrypoint_config=entrypoint_config,
+        app_configs=[*base_configs, *configs_to_register],
     )
-    configs_to_register = [entrypoint_config, *main_app_configs, *experiment_configs, *external_configs]
+    configs_to_register.extend(external_configs)
     for config in configs_to_register:
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
@@ -313,4 +318,8 @@ def register_hydra_configs() -> list[pyine.configs.schemas.ConfigDescription]:
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
-    pyine.configs.base.print_experiment_configs(register_hydra_configs(), "openai_finetune")
+    # TODO: if we ever have more than one eval type, add a selector based on launch args here
+    pyine.configs.base.print_experiment_configs(
+        config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
+        app_name="openai_finetune",
+    )

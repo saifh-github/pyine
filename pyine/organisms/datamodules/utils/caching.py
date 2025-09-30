@@ -146,8 +146,8 @@ class CodingProblemTestDataCache:
     def _cache_path(self) -> pathlib.Path:
         """Returns the file path used to store cache data in the logs directory."""
         params_hash = pyine.utils.reprod.get_params_hash(self.dataset_path, self.dataset_hash)
-        tmpdir = pyine.utils.filesystem.get_logs_root_path()
-        return tmpdir / "cache" / f"testcases-cache.{self.dataset_name}.{params_hash}.msgspec"
+        root = pyine.utils.filesystem.get_data_root_path()
+        return root / "cache" / f"testcases-cache.{self.dataset_name}.{params_hash}.msgspec"
 
     @classmethod
     def build_from_dataset(
@@ -155,9 +155,8 @@ class CodingProblemTestDataCache:
         dataset_reader: pyine.data.traces.dataset_reader.DatasetReader,
     ) -> "CodingProblemTestDataCache | None":
         """Construct a cache of test case data from dataset metadata (if possible)."""
-        metadata = dataset_reader.get_metadata()
-        assert isinstance(metadata, dict), f"unexpected metadata type: {type(metadata)}"
-        parent_info = metadata.get("parent_dataset", {})
+        assert isinstance(dataset_reader.metadata, dict), f"unexpected metadata type: {type(dataset_reader.metadata)}"
+        parent_info = dataset_reader.metadata.get("parent_dataset", {})
         assert isinstance(parent_info, dict), f"unexpected parent dataset info type: {type(parent_info)}"
         dataset_name = parent_info.get("dataset_name")
         dataset_path = parent_info.get("dataset_path")

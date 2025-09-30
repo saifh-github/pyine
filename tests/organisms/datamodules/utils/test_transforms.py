@@ -46,9 +46,9 @@ def transforms_with_fakes(monkeypatch):
     # provide minimal BasePromptTemplate to satisfy type annotations in imported modules
     lc_prompts.BasePromptTemplate = type("BasePromptTemplate", (), {})
 
-    # fake transformers with a minimal tokenizer base class
+    # fake transformers with a minimal tokenizer class
     transformers_mod = types.ModuleType("transformers")
-    transformers_mod.PreTrainedTokenizerBase = type("PreTrainedTokenizerBase", (), {})
+    transformers_mod.PreTrainedTokenizer = type("PreTrainedTokenizer", (), {})
     # add placeholders to satisfy any third-party imports that expect them
     transformers_mod.AutoModel = type("AutoModel", (), {})
     transformers_mod.AutoTokenizer = type("AutoTokenizer", (), {})
@@ -80,6 +80,9 @@ def transforms_with_fakes(monkeypatch):
     sys.modules.pop("pyine.organisms.datamodules.utils.transforms", None)
     transforms_mod = importlib.import_module("pyine.organisms.datamodules.utils.transforms")
     return transforms_mod
+
+
+# add test for keep orig sample data
 
 
 def test_create_sample_transform_string_no_answer(monkeypatch, transforms_with_fakes):
@@ -152,7 +155,7 @@ def test_apply_model_template_to_messages_basic(transforms_with_fakes):
     datasets_mod = sys.modules["datasets"]
     transformers_mod = sys.modules["transformers"]
 
-    class DummyTokenizer(transformers_mod.PreTrainedTokenizerBase):
+    class DummyTokenizer(transformers_mod.PreTrainedTokenizer):
         eos_token = "<eos>"
 
         def apply_chat_template(self, messages_batch, **kwargs):
