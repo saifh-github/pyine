@@ -6,6 +6,8 @@ import re
 import shutil
 import tempfile
 
+import dotenv
+
 import pyine
 
 logger = logging.getLogger(__name__)
@@ -102,6 +104,13 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     return tmpdir
 
 
+def get_data_cache_path() -> pathlib.Path:
+    """Returns the path to the dataset cache directory (underneath the data root dir)."""
+    out_path = get_data_root_path() / "cache"
+    out_path.mkdir(parents=True, exist_ok=True)
+    return out_path
+
+
 def get_username() -> str:
     """Returns the username from the environment or password database.
 
@@ -125,16 +134,11 @@ def find_dotenv_file(start: str | pathlib.Path | None = None) -> pathlib.Path | 
         p = pathlib.Path(override).expanduser().resolve()
         if p.is_file():
             return p
-    # if python-dotenv is available, defer to its search (from CWD)
+    # defer search to python-dotenv (from CWD)
     start = pathlib.Path(start or pathlib.Path.cwd()).resolve()
-    try:
-        from dotenv import find_dotenv  # optional
-
-        if start == pathlib.Path.cwd().resolve():
-            path_str = find_dotenv(filename=".env", usecwd=True, raise_error_if_not_found=False)
-            return pathlib.Path(path_str).resolve() if path_str else None
-    except ImportError:
-        pass
+    if start == pathlib.Path.cwd().resolve():
+        path_str = dotenv.find_dotenv(filename=".env", usecwd=True, raise_error_if_not_found=False)
+        return pathlib.Path(path_str).resolve() if path_str else None
     # minimal stdlib fallback: walk up to filesystem root
     for folder in (start, *start.parents):
         candidate = folder / ".env"

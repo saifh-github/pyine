@@ -85,6 +85,14 @@ def test_get_logs_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp
     assert fs.get_logs_root_path() == tmp_path / "logs"
 
 
+def test_get_data_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    custom = tmp_path / "cache_parent"
+    monkeypatch.setenv(fs.DATA_ROOT_ENV_VAR, str(custom))
+    data_cache_dir_path = fs.get_data_cache_path()
+    assert data_cache_dir_path == (custom / "cache").resolve()
+    assert data_cache_dir_path.exists() and data_cache_dir_path.is_dir()
+
+
 def test_get_username(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fs.getpass, "getuser", lambda: "tester", raising=True)
     assert fs.get_username() == "tester"
