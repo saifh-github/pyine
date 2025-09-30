@@ -78,7 +78,9 @@ class DatasetReader(torch.utils.data.Dataset):
         self.trace_keys: list[str] = encoded_data["trace_keys"]
         self.trace_key_to_problem_key: dict[str, str] = encoded_data["trace_key_to_problem_key"]
         self.augment_key_to_parent_trace_key: dict[str, str] = encoded_data["augment_key_to_parent_trace_key"]
-        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = encoded_data["trace_metadata"]
+        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = [
+            pyine.data.traces.dataset_utils.TraceMetadata(**trace_meta) for trace_meta in encoded_data["trace_metadata"]
+        ]
         # indices lists are private attributes, as they correspond to indices from the internal database
         self._trace_indices: list[int] = encoded_data["trace_indices"]
         self._trace_idx_to_problem_idx: dict[int, int] = encoded_data["trace_idx_to_problem_idx"]

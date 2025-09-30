@@ -141,6 +141,7 @@ class FakeTraceDatasetReader(_FakeBase):
         self._generate_data()
 
     # ---------------------------- public API ----------------------------
+
     def __len__(self) -> int:
         return len(self.trace_keys)
 
@@ -160,7 +161,29 @@ class FakeTraceDatasetReader(_FakeBase):
         problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
         return self._problems[problem_idx].problem_tags
 
+    def get_trace_metadata(self, index_or_key: int | str) -> traces_utils.TraceMetadata:
+        idx = self._resolve_index(index_or_key)
+        problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
+        trace_data = self[idx]
+        return traces_utils.TraceMetadata(
+            identifier=trace_data.identifier,
+            parent_dataset_hash=self.hash,
+            index=idx,
+            internal_index=idx,
+            step_count=trace_data.valid_step_count,
+            code_string=trace_data.code_string,
+            inputs=trace_data.inputs,
+            expected_output=trace_data.expected_output,
+            return_value=trace_data.return_value,
+            exception=trace_data.exception,
+            stdout=trace_data.stdout,
+            stderr=trace_data.stderr,
+            metadata=trace_data.metadata,
+            tags=[*self._problems[problem_idx].problem_tags, *trace_data.tags],
+        )
+
     # ---------------------------- internals ----------------------------
+
     def _resolve_index(self, index_or_key: int | str) -> int:
         if isinstance(index_or_key, int):
             if not (0 <= index_or_key < len(self)):
