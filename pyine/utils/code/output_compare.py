@@ -475,7 +475,6 @@ def compare_exec_output_with_llm(
         llm: The language model to use inside the runnable prompt chain.
         runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         options: Options that control how outputs are compared by an LLM grader.
-        # TODO: @@@@@ add optional prompt results db to bypass invocation if possible, or log new version?
 
     Returns:
         Grading outcome with score and optional reasoning.

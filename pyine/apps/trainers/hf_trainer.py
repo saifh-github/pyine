@@ -35,7 +35,7 @@ def _compute_metrics(
     inputs,
     loss,
 ) -> dict[str, float]:
-    # @@@@@@@ TODO do something here?
+    # @@@@@@@ TODO do something here? (training metrics)
     # rely on eval loss for model selection; no extra metrics computed
     return {}
 

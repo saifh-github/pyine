@@ -120,7 +120,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------
 
-    lmdb_paths: typing.Annotated[tuple[pathlib.Path], pydantic.Field(min_length=1)]  # must be specified!
+    lmdb_paths: typing.Annotated[tuple[pathlib.Path, ...], pydantic.Field(min_length=1)]  # must be specified!
     """Sequence of paths pointing to LMDB datasets containing execution traces."""
     default_dataparser_config: pydantic.SerializeAsAny[
         pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
@@ -425,7 +425,7 @@ def _get_taco_configs(
                             "__description__": (
                                 "Specifies the full 26 instances of the PyINE-TACO 10s10t v1 trace dataset. "
                                 "Used for full-sized experiments on the entire dataset proposed in our first "
-                                "paper. See @@@@@@@ TODO URL for more information."
+                                "paper. See `pyine/apps/README-10s10t-v1.md` for more information."
                             ),
                         },
                     )

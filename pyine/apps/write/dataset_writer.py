@@ -210,7 +210,7 @@ def main() -> None:
     "reformat_code_strings",
     default=True,
     show_default=True,
-    help="Whether to reformat code strings to be standardized (with black).",
+    help="Whether to reformat code strings to be standardized (with ruff or black).",
 )
 @click.option(
     "--generate-obfuscated-solutions/--no-generate-obfuscated-solutions",

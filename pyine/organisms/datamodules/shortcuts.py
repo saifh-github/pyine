@@ -283,7 +283,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             merge_system_with_user=merge_system_with_user,
             keep_original_data=keep_original_data,
             parser_kwargs=dict(
-                source_data=self.config.lmdb_paths.copy(),  # defer instantiation to the generator due to pickling
+                source_data=self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
                 traces=subset_traces,
             ),
         )

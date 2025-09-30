@@ -155,7 +155,7 @@ def prepare_examples_from_conversations(
         # only return columns needed for training; others are discarded via remove_columns below
         return dict(input_ids=out_input_ids, prompt_len=out_prompt_len)
 
-    # @@@@@@@@ TODO: if this map becomes a bottleneck, add batching w/ fast tokenizer, tune num_proc, use cache
+    # TODO: if this map becomes a bottleneck, add batching w/ fast tokenizer, tune num_proc, use cache
     # (worse case scenario, we can switch to a streaming/iterable dataset?)
     dataset = convo_ds.map(
         _split_to_examples,
