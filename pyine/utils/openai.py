@@ -31,10 +31,10 @@ AssistantMessageType = openai.types.chat.chat_completion_assistant_message_param
 
 
 def get_local_file_directory() -> pathlib.Path:
-    """Returns the path used to store prepared OpenAI data upload files in the local tmpdir."""
-    tmpdir = pyine.utils.filesystem.get_tmp_dir() / "openai-data"
-    tmpdir.mkdir(parents=True, exist_ok=True)
-    return tmpdir
+    """Returns the path used to store prepared OpenAI data upload files."""
+    dir_path = pyine.utils.filesystem.get_data_cache_path() / "openai-data"
+    dir_path.mkdir(parents=True, exist_ok=True)
+    return dir_path
 
 
 def write_dataset_to_jsonl(
@@ -303,7 +303,7 @@ class OpenAIClientConfig(pyine.utils.pydantic.ClassImportSpec[openai.OpenAI]):
 
     class_path: str = "openai.OpenAI"
     base_class_path: str = "openai.OpenAI"  # not actually relevant/used
-    params: OpenAIClientParamsConfig = OpenAIClientParamsConfig()
+    params: pydantic.SerializeAsAny[OpenAIClientParamsConfig] = OpenAIClientParamsConfig()
 
 
 OpenAIFineTunerHyperparamsConfig = openai.types.fine_tuning.fine_tuning_job.Hyperparameters
