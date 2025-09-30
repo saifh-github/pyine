@@ -69,8 +69,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000001of000026.yaml \
     --output-tag="10s10t.000001of000026"
@@ -79,8 +77,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000002of000026.yaml \
     --output-tag="10s10t.000002of000026"
@@ -89,8 +85,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000003of000026.yaml \
     --output-tag="10s10t.000003of000026"
@@ -99,8 +93,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000004of000026.yaml \
     --output-tag="10s10t.000004of000026"
@@ -109,8 +101,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000005of000026.yaml \
     --output-tag="10s10t.000005of000026"
@@ -119,8 +109,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000006of000026.yaml \
     --output-tag="10s10t.000006of000026"
@@ -129,8 +117,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000007of000026.yaml \
     --output-tag="10s10t.000007of000026"
@@ -139,8 +125,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000008of000026.yaml \
     --output-tag="10s10t.000008of000026"
@@ -149,8 +133,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000009of000026.yaml \
     --output-tag="10s10t.000009of000026"
@@ -159,8 +141,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000010of000026.yaml \
     --output-tag="10s10t.000010of000026"
@@ -169,8 +149,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000011of000026.yaml \
     --output-tag="10s10t.000011of000026"
@@ -179,8 +157,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000012of000026.yaml \
     --output-tag="10s10t.000012of000026"
@@ -189,8 +165,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000013of000026.yaml \
     --output-tag="10s10t.000013of000026"
@@ -199,8 +173,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000014of000026.yaml \
     --output-tag="10s10t.000014of000026"
@@ -209,8 +181,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000015of000026.yaml \
     --output-tag="10s10t.000015of000026"
@@ -219,8 +189,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000016of000026.yaml \
     --output-tag="10s10t.000016of000026"
@@ -229,8 +197,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000017of000026.yaml \
     --output-tag="10s10t.000017of000026"
@@ -239,8 +205,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000018of000026.yaml \
     --output-tag="10s10t.000018of000026"
@@ -249,8 +213,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000019of000026.yaml \
     --output-tag="10s10t.000019of000026"
@@ -259,8 +221,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000020of000026.yaml \
     --output-tag="10s10t.000020of000026"
@@ -269,8 +229,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000021of000026.yaml \
     --output-tag="10s10t.000021of000026"
@@ -279,8 +237,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000022of000026.yaml \
     --output-tag="10s10t.000022of000026"
@@ -289,8 +245,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000023of000026.yaml \
     --output-tag="10s10t.000023of000026"
@@ -299,8 +253,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000024of000026.yaml \
     --output-tag="10s10t.000024of000026"
@@ -309,8 +261,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000025of000026.yaml \
     --output-tag="10s10t.000025of000026"
@@ -319,8 +269,6 @@ python -m pyine.apps.write.dataset_writer traces \
     --dataset-name=TACO \
     --max-solutions-per-problem=10 \
     --max-tests-per-solution=10 \
-    --max-trace-var-repr-length=10000 \
-    --max-trace-valid-events=20000 \
     --generate-obfuscated-solutions \
     --target-problem-ids=data/splits/TACO-split.problem_ids.000026of000026.yaml \
     --output-tag="10s10t.000026of000026"

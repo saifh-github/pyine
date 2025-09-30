@@ -34,7 +34,7 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
     ) -> None:
         super().__init__(lmdb_path=lmdb_path)
         # first, make sure this is actually a deltas dataset, and not just a regular traces dataset
-        if "trace_count" not in self.reader.get_metadata()["parent_dataset"]:
+        if "parent_dataset" not in self.metadata or "trace_count" not in self.metadata["parent_dataset"]:
             raise RuntimeError(f"this is not a deltas dataset: {lmdb_path}")
         # split the trace indices/keys into trace results and deltas
         assert len(self._trace_indices) == len(self.trace_keys)

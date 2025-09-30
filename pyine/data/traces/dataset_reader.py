@@ -29,8 +29,11 @@ class DatasetReader(torch.utils.data.Dataset):
     form a 'test', and the execution attempt is considered successful if the output value matches
     the expected value.
 
-    Note: this readers does NOT attempt to structure the traces into deltas, so they will be quite
-    verbose, likely too much so for most applications with reasoning models.
+    Upon initialization, the reader attempts to load the prepared trace metadata from the dataset's
+    LMDB directory. If the metadata is not found, it will prepare the metadata and save it there.
+
+    Note: this readers does NOT attempt to structure the trace steps into deltas, so they will be
+    quite verbose, likely too much so for most applications with reasoning models.
 
     Args:
         lmdb_path: Path to the LMDB database containing code traces.
@@ -43,15 +46,15 @@ class DatasetReader(torch.utils.data.Dataset):
         super().__init__()
         self.path = lmdb_path
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
-        self._init_trace_maps()
+        self._init_trace_metadata()
 
-    def _are_trace_maps_prepared(self) -> bool:
-        """Returns True if the trace maps are prepared and ready to be used."""
-        return self._get_prepared_trace_maps_file_path().is_file()
+    def _is_metadata_prepared(self) -> bool:
+        """Returns True if the trace maps and metadata are prepared and ready to be used."""
+        return self._get_prepared_metadata_path().is_file()
 
-    def _save_prepared_trace_maps(self) -> None:
-        """Saves the prepared trace maps to the lmdb directory."""
-        trace_maps = dict(
+    def _save_prepared_metadata(self) -> None:
+        """Saves the prepared trace maps and metadata to the lmdb directory."""
+        trace_maps_and_metadata = dict(
             problem_indices=self._problem_indices,
             problem_keys=self.problem_keys,
             trace_indices=self._trace_indices,
@@ -60,45 +63,44 @@ class DatasetReader(torch.utils.data.Dataset):
             trace_key_to_problem_key=self.trace_key_to_problem_key,
             augment_idx_to_parent_trace_idx=self._augment_idx_to_parent_trace_idx,
             augment_key_to_parent_trace_key=self.augment_key_to_parent_trace_key,
-            trace_tag_lists=self.trace_tag_lists,
+            trace_metadata=self.trace_metadata,
         )
-        encoded_data = msgspec.msgpack.encode(trace_maps)
-        with open(self._get_prepared_trace_maps_file_path(), "wb") as fd:
+        encoded_data = msgspec.msgpack.encode(trace_maps_and_metadata)
+        with open(self._get_prepared_metadata_path(), "wb") as fd:
             fd.write(encoded_data)
 
-    def _load_prepared_trace_maps(self):
-        """Loads the prepared trace maps from the lmdb directory."""
-        with open(self._get_prepared_trace_maps_file_path(), "rb") as fd:
+    def _load_prepared_metadata(self):
+        """Loads the prepared trace maps and metadata from the lmdb directory."""
+        with open(self._get_prepared_metadata_path(), "rb") as fd:
             encoded_data = msgspec.msgpack.decode(fd.read())
         # key lists are public attributes, as there is little chance of confusion about their contents
         self.problem_keys: list[str] = encoded_data["problem_keys"]
         self.trace_keys: list[str] = encoded_data["trace_keys"]
         self.trace_key_to_problem_key: dict[str, str] = encoded_data["trace_key_to_problem_key"]
         self.augment_key_to_parent_trace_key: dict[str, str] = encoded_data["augment_key_to_parent_trace_key"]
-        self.trace_tag_lists: list[list[str]] = encoded_data["trace_tag_lists"]
+        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = encoded_data["trace_metadata"]
         # indices lists are private attributes, as they correspond to indices from the internal database
         self._trace_indices: list[int] = encoded_data["trace_indices"]
         self._trace_idx_to_problem_idx: dict[int, int] = encoded_data["trace_idx_to_problem_idx"]
         self._augment_idx_to_parent_trace_idx: dict[int, int] = encoded_data["augment_idx_to_parent_trace_idx"]
 
-    def _clear_prepared_trace_maps(self) -> None:
-        """Clears the prepared trace maps from the lmdb directory."""
-        if self._are_trace_maps_prepared():
-            self._get_prepared_trace_maps_file_path().unlink()
+    def _clear_prepared_metadata(self) -> None:
+        """Clears the prepared trace metadata from the lmdb directory."""
+        if self._is_metadata_prepared():
+            self._get_prepared_metadata_path().unlink()
 
-    def _get_prepared_trace_maps_file_path(self) -> pathlib.Path:
-        """Returns the file path used to store prepared trace maps in the lmdb directory."""
-        # note: the file name that will be created contains a hash that depends on input params
+    def _get_prepared_metadata_path(self) -> pathlib.Path:
+        """Returns the file path used to store prepared trace metadata in the lmdb directory."""
         assert self.path.is_dir(), f"unexpected non-directory lmdb path: {self.path}"
-        return self.path / "trace_maps.msgspec"
+        return self.path / "trace_metadata.msgspec"
 
-    def _init_trace_maps(self, force: bool = False) -> None:
-        """Initializes the trace index maps potentially using already-cached data."""
+    def _init_trace_metadata(self, force: bool = False) -> None:
+        """Initializes the trace index maps and metadata potentially using already-cached data."""
         # note: the indices kept in the lists below are INTERNAL ones that map to the lmdb content
-        if not force and self._are_trace_maps_prepared():
-            self._load_prepared_trace_maps()
+        if not force and self._is_metadata_prepared():
+            self._load_prepared_metadata()
             return
-        self._clear_prepared_trace_maps()
+        self._clear_prepared_metadata()
         self._problem_indices, self.problem_keys = self.reader.get_indices(
             pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
             return_keys=True,
@@ -113,13 +115,13 @@ class DatasetReader(torch.utils.data.Dataset):
         self.trace_key_to_problem_key: dict[str, str] = {}
         self._augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
-        self.trace_tag_lists: list[list[str]] = []
-        for iter_idx, (problem_idx, problem_key) in enumerate(zip(self._problem_indices, self.problem_keys)):
+        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        for prob_iter_idx, (problem_idx, problem_key) in enumerate(zip(self._problem_indices, self.problem_keys)):
             if not problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX):
                 raise ValueError(f"malformed problem key: {problem_key}")
             # fix problem key by removing the problem metadata suffix
             problem_key = problem_key[: -len(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX)]
-            self.problem_keys[iter_idx] = problem_key
+            self.problem_keys[prob_iter_idx] = problem_key
             problem_data = self.reader.get(problem_idx)
             problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
             curr_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
@@ -162,7 +164,24 @@ class DatasetReader(torch.utils.data.Dataset):
                 curr_trace_tags.extend(trace_data.tags)
                 if trace_id.is_augmented:
                     curr_trace_tags.append(f"augment:{trace_id.augment_category}")
-                self.trace_tag_lists.append(curr_trace_tags)
+                self.trace_metadata.append(
+                    pyine.data.traces.dataset_utils.TraceMetadata(
+                        identifier=trace_data.identifier,
+                        parent_dataset_hash=self.hash,
+                        index=len(self.trace_metadata),  # increments as we append new traces to this list
+                        internal_index=trace_idx,
+                        step_count=trace_data.valid_step_count,
+                        code_string=trace_data.code_string,
+                        inputs=trace_data.inputs,
+                        expected_output=trace_data.expected_output,
+                        return_value=trace_data.return_value,
+                        exception=trace_data.exception,
+                        stdout=trace_data.stdout,
+                        stderr=trace_data.stderr,
+                        metadata=trace_data.metadata,
+                        tags=curr_trace_tags,
+                    )
+                )
             for augm_key, parent_key in curr_augm_key_to_parent_key.items():
                 if parent_key not in self.trace_keys:
                     raise KeyError(f"augmentation parent trace key {parent_key} not found in dataset")
@@ -170,21 +189,24 @@ class DatasetReader(torch.utils.data.Dataset):
                 parent_idx = self._trace_indices[self.trace_keys.index(parent_key)]
                 self._augment_idx_to_parent_trace_idx[augm_idx] = parent_idx
             self.augment_key_to_parent_trace_key.update(curr_augm_key_to_parent_key)
-        self._save_prepared_trace_maps()
+        self._save_prepared_metadata()
 
     def __len__(self) -> int:
         """Returns the total number of traces in the dataset accessible via ``__getitem__``"""
         return len(self.trace_keys)
 
-    def get_metadata(self) -> dict[str, typing.Any]:
+    @functools.cached_property
+    def metadata(self) -> dict[str, typing.Any]:
         """Returns a dictionary of all metadata stored in the database."""
         return self.reader.get_metadata()
 
-    def get_size_on_disk(self) -> int:
-        """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
+    @functools.cached_property
+    def size_on_disk(self) -> int:
+        """Returns the total size of the LMDB dataset stored on disk (in bytes)."""
         return self.reader.get_size_on_disk()
 
-    def get_hash(self) -> str:
+    @functools.cached_property
+    def hash(self) -> str:
         """Returns the hash of this dataset (computed from relevant lmdb files on disk)."""
         # note: we don't compute the hash over the entire lmdb dir, just over the file that matters
         # (that folder will likely contain other stuff such as processing logs and metadata caches)
@@ -192,9 +214,10 @@ class DatasetReader(torch.utils.data.Dataset):
         assert expected_data_mdb_file.is_file(), f"missing data.mdb file: {expected_data_mdb_file}"
         return pyine.utils.reprod.compute_hash(expected_data_mdb_file)
 
-    def get_parent_dataset_name(self) -> str:
+    @functools.cached_property
+    def parent_dataset_name(self) -> str:
         """Returns the name of the parent dataset used to create this dataset."""
-        return self.reader.get_metadata()["parent_dataset"]["dataset_name"]
+        return self.metadata["parent_dataset"]["dataset_name"]
 
     def _get_trace_idx_from_idx_or_key(self, index_or_key: int | str) -> int:
         """Returns an external trace index from an external index or key."""
@@ -240,10 +263,15 @@ class DatasetReader(torch.utils.data.Dataset):
         problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
         return problem_data
 
+    def get_trace_metadata(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.TraceMetadata:
+        """Returns the metadata associated with a trace by external index or key."""
+        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        return self.trace_metadata[trace_idx]
+
     def get_tags(self, index_or_key: int | str) -> list[str]:
         """Returns a list of tags for a given trace so that we can decide whether to filter it."""
         trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
-        output_tags = self.trace_tag_lists[trace_idx].copy()
+        output_tags = self.trace_metadata[trace_idx].tags.copy()
         return output_tags
 
     def __str__(self):

@@ -230,7 +230,7 @@ def test_mini_taco_deltas_dataset(
     )
     assert output_dataset_path.exists()
     delta_reader = pyine.data.deltas.dataset_reader.DatasetReader(output_dataset_path)
-    assert delta_reader.get_metadata()["delta_generator"] == delta_gen.value
+    assert delta_reader.metadata["delta_generator"] == delta_gen.value
     deltas_list_count = len(delta_reader)  # noqa
     assert deltas_list_count >= 10
     for deltas in delta_reader:
@@ -238,10 +238,10 @@ def test_mini_taco_deltas_dataset(
     # deltas dataset should still be compatible with traces dataset reader
     trace_reader = pyine.data.traces.dataset_reader.DatasetReader(output_dataset_path)
     assert len(trace_reader) == deltas_list_count
-    assert trace_reader.get_metadata() == delta_reader.get_metadata()
-    assert trace_reader.get_size_on_disk() == delta_reader.get_size_on_disk()
-    assert trace_reader.get_parent_dataset_name() == delta_reader.get_parent_dataset_name()
-    assert trace_reader.get_hash() == delta_reader.get_hash()
+    assert trace_reader.metadata == delta_reader.metadata
+    assert trace_reader.size_on_disk == delta_reader.size_on_disk
+    assert trace_reader.parent_dataset_name == delta_reader.parent_dataset_name
+    assert trace_reader.hash == delta_reader.hash
     # but traces dataset should not be compatible with deltas dataset reader
     with pytest.raises(RuntimeError):
         _ = pyine.data.deltas.dataset_reader.DatasetReader(traces_dataset_path)

@@ -65,10 +65,10 @@ def write_dataset(
     writer.write_metadata(
         dict(
             parent_dataset=dict(
-                dataset_name=trace_reader.get_parent_dataset_name(),
+                dataset_name=trace_reader.parent_dataset_name,
                 dataset_path=str(traces_dataset_name_or_path),
-                dataset_hash=trace_reader.get_hash(),
-                dataset_metadata=trace_reader.get_metadata(),
+                dataset_hash=trace_reader.hash,
+                dataset_metadata=trace_reader.metadata,
                 trace_count=len(trace_reader),
             ),
             delta_generator=delta_generator.value,

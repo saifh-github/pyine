@@ -125,6 +125,14 @@ def main() -> None:
     help="Maximum number of tests per solution (hard cap, may discard picked candidates, None = no max).",
 )
 @click.option(
+    "--max-tests-args-length",
+    "max_tests_args_length",
+    type=int,
+    default=1000,
+    show_default=True,
+    help="Maximum length of test inputs and outputs, in characters (hard cap; None = no max).",
+)
+@click.option(
     "--max-trace-events-per-line",
     "max_trace_events_per_line",
     type=int,
@@ -136,7 +144,7 @@ def main() -> None:
     "--max-trace-var-repr-length",
     "max_trace_var_repr_length",
     type=int,
-    default=None,
+    default=10_000,
     show_default=True,
     help="Maximum length of variable representation strings, in characters (None = no max).",
 )
@@ -144,7 +152,7 @@ def main() -> None:
     "--max-trace-valid-events",
     "max_trace_valid_events",
     type=int,
-    default=None,
+    default=20_000,
     show_default=True,
     help="Maximum number of (valid, in-scope) events allowed per trace (None = no max).",
 )
@@ -253,6 +261,7 @@ def traces(
     max_output_traces: int | None,
     max_solutions_per_problem: int | None,
     max_tests_per_solution: int | None,
+    max_tests_args_length: int | None,
     max_trace_events_per_line: int | None,
     max_trace_var_repr_length: int | None,
     max_trace_valid_events: int | None,
@@ -296,6 +305,7 @@ def traces(
         max_output_traces=max_output_traces,
         max_solutions_per_problem=max_solutions_per_problem,
         max_tests_per_solution=max_tests_per_solution,
+        max_tests_args_length=max_tests_args_length,
         max_trace_events_per_line=max_trace_events_per_line,
         max_trace_var_repr_length=max_trace_var_repr_length,
         max_trace_valid_events=max_trace_valid_events,

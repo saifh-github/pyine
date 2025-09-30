@@ -100,6 +100,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum number of tests to trace per solution. If None, no maximum.",
         ),
     ]
+    max_tests_args_length: typing.Annotated[
+        pydantic.PositiveInt | None,
+        pydantic.Field(
+            default=None,
+            description="Maximum length of test inputs and outputs, in characters. If None, no maximum.",
+        ),
+    ]
     max_trace_events_per_line: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
@@ -438,13 +445,23 @@ def _get_test_tuples(
 ) -> list[_TestTuple]:
     """Gets a list of test tuples to use for tracing/verifying solutions for a coding problem."""
     max_test_count = min((config.max_tests_per_solution or problem.test_count), problem.test_count)
-    test_tuples = list(enumerate(itertools.islice(problem.test_inout_pairs, max_test_count)))
-    if len(test_tuples) == 0:
+    if max_test_count == 0:
         raise ValueError(f"no test cases found for problem: {problem}")
-    return [
+    candidate_test_tuples = [
         _TestTuple(test_idx=test_idx, inputs=test_inputs, outputs=test_outputs)
-        for test_idx, (test_inputs, test_outputs) in test_tuples
+        for test_idx, (test_inputs, test_outputs) in enumerate(problem.test_inout_pairs)
     ]
+    if config.max_tests_args_length is not None:
+        candidate_test_tuples = [
+            test_tuple
+            for test_tuple in candidate_test_tuples
+            if (
+                len(str(test_tuple.inputs)) < config.max_tests_args_length
+                and len(str(test_tuple.outputs)) < config.max_tests_args_length
+            )
+        ]
+    output_test_tuples = candidate_test_tuples[:max_test_count]
+    return output_test_tuples
 
 
 def _get_traces_to_write(
@@ -869,7 +886,7 @@ def write_dataset(
                     dataset_hash=pyine.utils.reprod.compute_hash(root_dataset_path),
                     problem_count=len(problem_data_iter),
                 ),
-                **config.model_dump(),
+                writer_config=config.model_dump(mode="json"),
             ),
         )
         contains_banned_tags = pyine.data.utils.filter_rules.build_filter_from_rule(
@@ -882,14 +899,17 @@ def write_dataset(
             if err_msg is not None:
                 log(err_msg)
                 continue
+            # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs to use)
+            test_tuples = _get_test_tuples(problem=problem, config=config)
+            if not test_tuples:
+                log(f"{problem}: no valid test case found")
+                continue
             # identify which solutions are near-duplicates by clustering, and keep one solution per cluster
             code_dupe_clusters = pyine.utils.code.validation.find_near_duplicate_code_clusters(
                 code_strings=[s.code for s in solutions],
                 threshold=config.min_solution_dissimilarity,
             )
             retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
-            # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs)
-            test_tuples = _get_test_tuples(problem=problem, config=config)
             # iterate over solutions for the current coding problem, and trace each one with all available inputs/outputs
             solutions_to_trace = []
             for solution_idx, solution in enumerate(solutions):

@@ -59,9 +59,8 @@ class TestFakeTraceDatasetReader:
         assert len(trace_reader._problem_indices) == small_config.num_problems
         assert len(trace_reader.problem_keys) == small_config.num_problems
 
-        metadata = trace_reader.get_metadata()
-        assert "parent_dataset" in metadata
-        assert "dataset_name" in metadata["parent_dataset"]
+        assert "parent_dataset" in trace_reader.metadata
+        assert "dataset_name" in trace_reader.metadata["parent_dataset"]
 
     def test_getitem_by_index_and_key(
         self,

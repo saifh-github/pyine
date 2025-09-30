@@ -407,6 +407,88 @@ class ProblemIdPattern(pydantic.BaseModel):
     """Whether the problem identifier pattern is a regex."""
 
 
+@dataclasses.dataclass(frozen=True)
+class TraceMetadata:
+    """Metadata structure for a single trace, to be used for lookups and to cache as prepared data."""
+
+    identifier: str
+    """Unique identifier (str) for the trace, which is also the trace key in the LMDB database."""
+    parent_dataset_hash: str
+    """Hash of the dataset that contains the trace."""
+    index: int
+    """Index of this trace in the dataset (i.e. its position in the list of traces)."""
+    internal_index: int
+    """Internal index of this trace in the dataset (i.e. its position in the LMDB database)."""
+    step_count: int
+    """Number of (valid, in-scope) execution steps in this trace."""
+    code_string: str
+    """The original code string that was executed to generate the trace."""
+    inputs: pydantic.JsonValue | None
+    """The inputs that were passed to the code for execution (if any)."""
+    expected_output: pydantic.JsonValue | None
+    """The expected output of the code (if any); may be used for later verifications."""
+    return_value: typing.Any | None
+    """The return value of the executed code, if any."""
+    exception: pyine.utils.code.execution.TraceException | None
+    """Contains information about the exception that occurred, if any."""
+    stdout: str
+    """The captured stdout output during execution (in full)."""
+    stderr: str
+    """The captured stderr output during execution (in full)."""
+    metadata: dict[str, pydantic.JsonValue]
+    """A dictionary containing metadata about the execution environment & settings."""
+    tags: list[str]
+    """List of tags (labels) associated with the trace (combining problem+exec+augments tags)."""
+
+    @functools.cached_property
+    def trace_id(self) -> TraceIdentifier:
+        """Returns the trace identifier object for this trace."""
+        return TraceIdentifier.from_string(self.identifier)
+
+    @functools.cached_property
+    def solution_id(self) -> SolutionIdentifier:
+        """Returns the unique identifier for the parent solution to this trace.
+
+        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
+        can be used to get multiple traces, depending on the input arguments used when executing
+        the code snippet, and depending on applied code augmentations.
+        """
+        return self.trace_id.get_parent_identifier()
+
+    @functools.cached_property
+    def problem_id(self) -> CodingProblemIdentifier:
+        """Returns the unique identifier for the parent problem to this trace.
+
+        Each trace is linked with a solution (i.e. a code snippet) to a coding problem. Each solution
+        can be used to get multiple traces, depending on the input arguments used when executing
+        the code snippet, and depending on applied code augmentations.
+
+        THIS IS THE ULTIMATE IDENTIFIER THAT SHOULD BE USED FOR SPLITTING PURPOSES. By default, if
+        a trace is assigned to a specific split subset based e.g. on a rule, all traces that belong
+        to the same parent problem will be assigned to the same subset.
+        """
+        return self.solution_id.get_parent_identifier()
+
+    @functools.cached_property
+    def augment_tags(self) -> list[str]:
+        """Returns all tags associated with this trace's augmentation(s)."""
+        out_tags = [t for t in self.tags if t.startswith("augment:")]
+        if out_tags:
+            assert self.trace_id.is_augmented, "how can be have augment tags without augmentation?"
+            augm_category = self.trace_id.augment_category
+            assert f"augment:{augm_category}" in out_tags, " inconsistent augm tags usage"
+        else:
+            assert self.trace_id.augment_category is None
+        return out_tags
+
+    @functools.cached_property
+    def is_augmented(self) -> bool:
+        """Returns whether this trace is augmented."""
+        is_augmented = len(self.augment_tags) > 0
+        assert is_augmented == self.trace_id.is_augmented
+        return is_augmented
+
+
 class CodingProblemIterator:
     """Iterator class for iterating over coding problem data from a source dataset.
 

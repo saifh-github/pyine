@@ -6,6 +6,7 @@ import pytest
 import pyine.data.traces.dataset_reader as dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
 import pyine.data.traces.dataset_writer as dataset_writer
+import pyine.utils.code.execution as exec_utils
 import pyine.utils.filesystem as fs_utils
 import tests.env_checks
 
@@ -90,8 +91,20 @@ def test_mini_taco_traces_dataset(
     )
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
-    assert reader.get_metadata()["parent_dataset"]["dataset_name"] == "TACO"
+    assert reader.parent_dataset_name == "TACO"
     assert len(reader) >= wanted_trace_count
+    assert reader.size_on_disk > 0
+    for trace_idx, trace_data in enumerate(reader):  # noqa
+        assert isinstance(trace_data, exec_utils.TraceResult)
+        trace_metadata = reader.get_trace_metadata(trace_idx)
+        assert isinstance(trace_metadata, dataset_utils.TraceMetadata)
+        assert trace_data.identifier == trace_metadata.identifier
+        assert trace_data.identifier in reader.trace_keys
+        assert trace_metadata.parent_dataset_hash == reader.hash
+        assert trace_metadata.index == trace_idx
+        assert trace_metadata.internal_index == reader._trace_indices[trace_idx]
+        assert trace_metadata.code_string == trace_data.code_string
+        assert trace_metadata.step_count == trace_data.valid_step_count
 
 
 @pytest.mark.slow
@@ -119,7 +132,7 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
     )
     assert output_dataset_path.exists()
     reader = dataset_reader.DatasetReader(output_dataset_path)
-    assert reader.get_metadata()["parent_dataset"]["dataset_name"] == "TACO"
+    assert reader.metadata["parent_dataset"]["dataset_name"] == "TACO"
     assert len(reader) >= wanted_trace_count
     # check written traces to make sure we do have some augments
     assert len(reader.augment_key_to_parent_trace_key) > 0
@@ -129,9 +142,6 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
     for trace_idx in range(len(reader)):
         problem_data = reader.get_problem_data(trace_idx)
         assert any(["EASY" in t for t in problem_data.problem_tags])
-
-
-# @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
 
 
 def test_write_dataset_from_taco_forwards_force_flag(

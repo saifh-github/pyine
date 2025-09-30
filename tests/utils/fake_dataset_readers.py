@@ -71,7 +71,8 @@ class FakeTraceDataConfig:
 
 class _FakeBase:
 
-    def get_metadata(self) -> dict[str, typing.Any]:  # pragma: no cover - trivial
+    @property
+    def metadata(self) -> dict[str, typing.Any]:
         return {
             "parent_dataset": {
                 "dataset_name": getattr(self, "_dataset_name", "FAKE"),
@@ -81,17 +82,20 @@ class _FakeBase:
             }
         }
 
-    def get_parent_dataset_name(self) -> str:  # pragma: no cover - trivial
-        return self.get_metadata()["parent_dataset"]["dataset_name"]
+    @property
+    def parent_dataset_name(self) -> str:
+        return self.metadata["parent_dataset"]["dataset_name"]
 
-    def get_size_on_disk(self) -> int:  # pragma: no cover - trivial
+    @property
+    def size_on_disk(self) -> int:
         return 0
 
-    def get_hash(self) -> str:  # pragma: no cover - trivial
-        hsrc = f"{self.get_parent_dataset_name()}::{len(self)}::{self.__class__.__name__}"  # noqa
+    @property
+    def hash(self) -> str:
+        hsrc = f"{self.parent_dataset_name}::{len(self)}::{self.__class__.__name__}"  # noqa
         return hashlib.sha256(hsrc.encode()).hexdigest()[:16]
 
-    def close(self) -> None:  # pragma: no cover - trivial
+    def close(self) -> None:
         return None
 
 
@@ -166,7 +170,7 @@ class FakeTraceDatasetReader(_FakeBase):
             if index_or_key not in self.trace_keys:
                 raise KeyError(f"key {index_or_key} not found in fake dataset")
             return self.trace_keys.index(index_or_key)
-        else:  # pragma: no cover
+        else:
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
 
     def _generate_data(self) -> None:
@@ -353,7 +357,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
             else:
                 # mirror real deltas reader behavior which asserts on invalid keys
                 raise AssertionError(f"key {index_or_key} not found in fake deltas dataset")
-        else:  # pragma: no cover
+        else:
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
         return self._deltas[idx]
 

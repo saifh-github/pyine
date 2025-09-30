@@ -107,8 +107,9 @@ def benchmark_serialization_methods(
                     serialization_config=cfg,
                 )
                 writer.put_batch(items=entries)
+                writer.close()
             else:
-                dataset_writer.write_dataset_from_taco(
+                writer = dataset_writer.write_dataset_from_taco(
                     output_dataset_path=database_path,
                     max_output_traces=num_samples,
                     max_solutions_per_problem=2,
@@ -118,7 +119,6 @@ def benchmark_serialization_methods(
                     allow_imperfect_solutions=True,
                     writer_serialization_config=cfg,
                 )
-            writer.close()
             postwrite_time = datetime.datetime.now()
             write_time_taken = (postwrite_time - prewrite_time).total_seconds()
             database_size = writer.get_size_on_disk()
