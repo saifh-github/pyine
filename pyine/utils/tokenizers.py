@@ -4,13 +4,12 @@ import tiktoken
 import transformers
 
 
-@functools.wraps(transformers.AutoTokenizer.from_pretrained)
 def get_hf_tokenizer(
     pretrained_model_name_or_path: str,
     set_padding_to_eos_if_needed: bool = False,
     override_padding_to_right_side: bool = False,
     **kwargs,
-) -> transformers.PreTrainedTokenizerBase:
+) -> transformers.PreTrainedTokenizer:
     """Get a hf tokenizer from a pretrained model name or path and additional kwargs.
 
     Also optionally sets the tokenizer's padding token to the EOS token if missing, and sets
@@ -18,6 +17,8 @@ def get_hf_tokenizer(
     """
     tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_model_name_or_path, **kwargs)
     if set_padding_to_eos_if_needed and tokenizer.pad_token is None:
+        # many causal LMs don't define a PAD token, but the hf Trainer expects one for padding batches
+        # (reuse EOS as PAD so padding uses a benign but already-known token id)
         tokenizer.pad_token = tokenizer.eos_token
     if override_padding_to_right_side:
         tokenizer.padding_side = "right"
