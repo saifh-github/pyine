@@ -47,10 +47,24 @@ clean-coverage: ## Removes only coverage artifacts (keeps other logs)
 	rm -rf htmlcov
 
 stats: ## Shows a quick snapshot of git activity and tracked files
+	@echo "=== Git Status ==="
 	@git rev-parse --abbrev-ref HEAD | awk '{print "Active branch: " $$1}'
 	@git log -1 --pretty="Last commit: %h %cr %an - %s"
 	@git rev-list --count HEAD | awk '{print "Total commits: " $$1}'
+	@git shortlog -s -n --all | wc -l | awk '{print "Contributors: " $$1}'
+	@echo ""
+	@echo "=== Recent Activity ==="
+	@git log --since="7 days ago" --oneline | wc -l | awk '{print "Commits (last 7 days): " $$1}'
+	@git log --since="30 days ago" --oneline | wc -l | awk '{print "Commits (last 30 days): " $$1}'
+	@echo ""
+	@echo "=== Code Churn (last 30 days) ==="
+	@git log --since="30 days ago" --pretty=tformat: --numstat | awk '{adds+=$$1; dels+=$$2} END {printf "Insertions: %d\nDeletions: %d\nNet change: %+d\n", adds, dels, adds-dels}'
+	@echo ""
+	@echo "=== Repository Info ==="
 	@git ls-files | wc -l | awk '{print "Tracked files: " $$1}'
+	@du -sh .git 2>/dev/null | awk '{print "Repository size: " $$1}' || echo "Repository size: N/A"
+	@echo ""
+	@echo "=== Lines of Code ==="
 	@printf '%s\n' \
 		"import collections" \
 		"import pathlib" \
@@ -59,6 +73,7 @@ stats: ## Shows a quick snapshot of git activity and tracked files
 		"repo_root = pathlib.Path().resolve()" \
 		"result = subprocess.run(['git', 'ls-files'], check=True, text=True, capture_output=True)" \
 		"counts = collections.Counter()" \
+		"dir_counts = collections.Counter()" \
 		"total = 0" \
 		"for relative_path in result.stdout.splitlines():" \
 		"    path = repo_root / relative_path" \
@@ -74,8 +89,24 @@ stats: ## Shows a quick snapshot of git activity and tracked files
 		"        suffix = '<no-ext>'" \
 		"    counts[suffix] += file_loc" \
 		"    total += file_loc" \
+		"    " \
+		"    # Track top-level directory" \
+		"    parts = pathlib.Path(relative_path).parts" \
+		"    if len(parts) > 1:" \
+		"        dir_counts[parts[0]] += 1" \
+		"    else:" \
+		"        dir_counts['<root>'] += 1" \
 		"" \
 		"print(f'Total tracked lines: {total}')" \
-		"for suffix, value in counts.most_common():" \
-		"    print(f'{suffix:>10}: {value}')" \
+		"print(f'By file type:')" \
+		"for suffix, value in counts.most_common(10):" \
+		"    pct = 100 * value / total if total > 0 else 0" \
+		"    print(f'  {suffix:>10}: {value:>7} ({pct:>5.1f}%)')" \
+		"" \
+		"if len(counts) > 10:" \
+		"    print(f'  ... and {len(counts) - 10} more')" \
+		"" \
+		"print(f'\\nFiles by directory:')" \
+		"for dirname, count in dir_counts.most_common(10):" \
+		"    print(f'  {dirname:>15}: {count:>4} files')" \
 	| python -
