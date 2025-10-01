@@ -94,8 +94,7 @@ class MockInput:
                     return method(*args, **kwargs)
 
                 return wrapper
-            else:
-                return stdin_attr
+            return stdin_attr
         except AttributeError as e:
             raise AttributeError(f"'{self.__class__.__name__}' nor sys.stdin has attrib '{name}'") from e
 

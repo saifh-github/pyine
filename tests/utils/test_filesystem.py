@@ -187,7 +187,9 @@ def test_check_output_path_overwrite_requires_force(tmp_path: pathlib.Path) -> N
     assert out.exists()
 
 
-def test_check_output_path_overwrite_deletes_when_forced(tmp_path: pathlib.Path) -> None:
+def test_check_output_path_overwrite_deletes_when_forced(
+    tmp_path: pathlib.Path,
+) -> None:
     out = tmp_path / "out"
     out.mkdir()
     (out / "x.txt").write_text("x", encoding="utf-8")

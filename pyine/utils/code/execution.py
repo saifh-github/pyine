@@ -151,18 +151,18 @@ class TraceTagType(enum.StrEnum):
         """Returns a string for the size bucket of the traced steps."""
         if count == 0:
             return "0"
-        elif 0 < count <= 10:
+        if 0 < count <= 10:
             return "1_10"
-        elif 10 < count <= 100:
+        if 10 < count <= 100:
             return "10_100"
-        elif 100 < count <= 1000:
+        if 100 < count <= 1000:
             return "100_1k"
-        elif 1000 < count <= 10_000:
+        if 1000 < count <= 10_000:
             return "1k_10k"
-        elif 10_000 < count <= 100_000:
+        if 10_000 < count <= 100_000:
             return "10k_100k"
-        else:  # > 100_000
-            return "100k_plus"
+        # > 100_000
+        return "100k_plus"
 
 
 class TraceException(typing.NamedTuple):
@@ -297,8 +297,7 @@ class TraceResult(pydantic.BaseModel):
         """Returns a string representation of the trace result based on its identifier."""
         if self.identifier is not None:
             return str(self.identifier)
-        else:
-            return str(self.model_dump_json())
+        return str(self.model_dump_json())
 
     @property
     def code_string_with_line_numbers(self) -> str:
@@ -435,7 +434,7 @@ def _safe_execute_and_trace_code(
         logger.debug(f"tracing subprocess returned results (name={identifier})")
         assert isinstance(returned_val, TraceResult)
         return returned_val
-    elif status == "raised":
+    if status == "raised":
         assert isinstance(returned_val, Exception)
         logger.debug(f"tracing subprocess raised exception: {returned_val}")
         raise returned_val
@@ -494,7 +493,7 @@ def _unsafe_execute_and_trace_code(
         code_blocks = {
             TraceKey(
                 file=EXEC_TRACE_FILE_NAME,
-                object=code_block_data.name if code_block_data.name else EXEC_BLOCK_OBJ_NAME,
+                object=(code_block_data.name if code_block_data.name else EXEC_BLOCK_OBJ_NAME),
                 line=code_block_line,
             ): code_block_data
             for code_block_line, code_block_data in code_blocks.items()
@@ -668,29 +667,29 @@ def _unsafe_execute_and_trace_code(
     if inputs is None or (isinstance(inputs, collections.abc.Sized) and not inputs):
         trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
     try:
-        with pyine.utils.timers.TimeLimit(timeout_seconds):
-            with (
-                contextlib.redirect_stdout(stdout_capture),
-                contextlib.redirect_stderr(stderr_capture),
-            ):  # noqa
-                if entrypoint_name is not None:
+        with (
+            pyine.utils.timers.TimeLimit(timeout_seconds),
+            contextlib.redirect_stdout(stdout_capture),
+            contextlib.redirect_stderr(stderr_capture),
+        ):  # noqa
+            if entrypoint_name is not None:
+                with trace_context(_trace_callback):
+                    exec(compiled_code, exec_namespace)
+                if entrypoint_name and entrypoint_name in exec_namespace:
+                    # note for later: if this is buggy/annoying, could add call inside code string itself
+                    entrypoint_step_idx = last_trace_step_idx
+                    entrypoint = exec_namespace[entrypoint_name]
+                    entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
+                        entrypoint, inputs
+                    )
+                    with trace_context(_trace_callback):
+                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
+                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
+            else:
+                with pyine.utils.code.input_mock.MockInputContext(str(inputs)):
                     with trace_context(_trace_callback):
                         exec(compiled_code, exec_namespace)
-                    if entrypoint_name and entrypoint_name in exec_namespace:
-                        # note for later: if this is buggy/annoying, could add call inside code string itself
-                        entrypoint_step_idx = last_trace_step_idx
-                        entrypoint = exec_namespace[entrypoint_name]
-                        entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
-                            entrypoint, inputs
-                        )
-                        with trace_context(_trace_callback):
-                            return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
-                        trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
-                else:
-                    with pyine.utils.code.input_mock.MockInputContext(str(inputs)):
-                        with trace_context(_trace_callback):
-                            exec(compiled_code, exec_namespace)
-                _capture_buffers()
+            _capture_buffers()
     except (TimeoutError, TracingCapException):
         # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise
@@ -792,8 +791,7 @@ def execute_and_trace_code(
     """
     if not use_safe_execution:
         return _unsafe_execute_and_trace_code(*args, **kwargs)
-    else:
-        return _safe_execute_and_trace_code(*args, **kwargs)
+    return _safe_execute_and_trace_code(*args, **kwargs)
 
 
 def format_traced_code_execution(
@@ -842,7 +840,10 @@ def format_traced_code_execution(
                             result.append(f"      {var_name}: <unable to display value>")
                 if trace_event.local_variables:
                     result.append("    Local Variables:")
-                    for intern_name, intern_value in trace_event.local_variables.items():
+                    for (
+                        intern_name,
+                        intern_value,
+                    ) in trace_event.local_variables.items():
                         try:
                             result.append(f"      {intern_name}: {pprint.pformat(intern_value)}")
                         except Exception:

@@ -170,9 +170,9 @@ class PromptConfig(pydantic.BaseModel):
         formatted_examples = []
         for idx, example in enumerate(examples, 1):
             prompt_template = self.example_template.get_partially_rendered_prompt(**(extra_variables or {}))
-            assert (
-                EXAMPLE_OUTPUT_KEY in prompt_template.input_variables
-            ), f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
+            assert EXAMPLE_OUTPUT_KEY in prompt_template.input_variables, (
+                f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
+            )
             example_vars = example.input_variables.copy()
             if EXAMPLE_OUTPUT_KEY in example_vars:
                 assert example_vars[EXAMPLE_OUTPUT_KEY] == example.output, "unexpected output value in example"
@@ -233,9 +233,9 @@ class PromptConfig(pydantic.BaseModel):
             else:
                 examples_block_template = DefaultExamplesBlockTemplate
             examples_block_template = examples_block_template.get_partially_rendered_prompt()
-            assert (
-                "examples_str" in examples_block_template.input_variables
-            ), "examples block template must include 'examples_str' variable"
+            assert "examples_str" in examples_block_template.input_variables, (
+                "examples block template must include 'examples_str' variable"
+            )
             block_variables = dict(examples_block_variables) if examples_block_variables else {}
             assert "examples_str" not in block_variables, "overlap between input/output variable names"
             examples_str = self.get_examples_as_text(

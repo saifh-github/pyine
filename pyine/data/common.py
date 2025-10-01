@@ -123,7 +123,10 @@ def resolve_matching_dataset_paths(
         pattern_is_regex = False
         normalized_pattern = pattern.split(":", 1)[1]
 
-    all_dirs = sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: p.relative_to(root).as_posix())
+    all_dirs = sorted(
+        (p for p in root.rglob("*") if p.is_dir()),
+        key=lambda p: p.relative_to(root).as_posix(),
+    )
     if not all_dirs:
         raise FileNotFoundError(f"no {kind} dataset directories found in {root}")
 

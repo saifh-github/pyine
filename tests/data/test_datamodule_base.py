@@ -60,7 +60,6 @@ def build_default_config() -> datamodule.BaseDataModuleConfig:
 
 
 class TestBaseDataModuleConfig:
-
     def test_resolve_and_instantiate_parser_and_loader(self) -> None:
         cfg = build_default_config()
 
@@ -138,7 +137,6 @@ class DummyDataModule(datamodule.BaseDataModule):
 
 
 class TestBaseDataModule:
-
     def test_dataloader_names_property(self) -> None:
         cfg = build_default_config()
         dm = DummyDataModule(cfg)

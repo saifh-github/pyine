@@ -756,15 +756,14 @@ def fetch_or_generate_prompt_results(
                         )
                     )
                     break  # proceed to the next record
-                else:
-                    # not satisfactory: retry if allowed; otherwise raise
-                    if retry_count >= max_unsatisfactory_retries:
-                        raise ValidationFailedError(
-                            f"LLM output did not pass validation"
-                            f" (after {retry_count} retries; max allowed {max_unsatisfactory_retries})."
-                        )
-                    retry_count += 1
-                    continue
+                # not satisfactory: retry if allowed; otherwise raise
+                if retry_count >= max_unsatisfactory_retries:
+                    raise ValidationFailedError(
+                        f"LLM output did not pass validation"
+                        f" (after {retry_count} retries; max allowed {max_unsatisfactory_retries})."
+                    )
+                retry_count += 1
+                continue
     combined_records = _dedupe_records(existing_records + new_records)
     return combined_records
 
@@ -802,11 +801,11 @@ class TypedPromptResultFetcher(typing.Generic[T]):
         if self._decoder is not None:
             return self._decoder(text)
         if self._type is None:
-            return typing.cast(typing.Any, text)
+            return typing.cast("typing.Any", text)
         if self._type is str:
-            return typing.cast(T, text)
+            return typing.cast("T", text)
         if isinstance(self._type, type) and issubclass(self._type, pydantic.BaseModel):
-            return typing.cast(T, self._type.model_validate_json(text))
+            return typing.cast("T", self._type.model_validate_json(text))
         if isinstance(self._type, type) and dataclasses.is_dataclass(self._type):
             data = orjson.loads(text)
             assert isinstance(data, dict)
@@ -814,20 +813,16 @@ class TypedPromptResultFetcher(typing.Generic[T]):
         if self._type in (dict, list, tuple, set):
             data = orjson.loads(text)
             if self._type is set:
-                return typing.cast(T, set(data))
+                return typing.cast("T", set(data))
             if self._type is tuple:
-                return typing.cast(T, tuple(data))
-            return typing.cast(T, data)
-        if (
-            isinstance(self._type, type)
-            and hasattr(self._type, "from_json")
-            and callable(getattr(self._type, "from_json"))
-        ):
-            return typing.cast(T, self._type.from_json(text))
+                return typing.cast("T", tuple(data))
+            return typing.cast("T", data)
+        if isinstance(self._type, type) and hasattr(self._type, "from_json") and callable(self._type.from_json):
+            return typing.cast("T", self._type.from_json(text))
         # ultimate fallback: just load via json as-is
         data = orjson.loads(text)
         if isinstance(data, self._type):
-            return typing.cast(T, data)
+            return typing.cast("T", data)
         raise ValueError(
             f"Could not decode result string into the requested type: {getattr(self._type, '__name__', self._type)}"
         )

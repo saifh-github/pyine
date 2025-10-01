@@ -79,7 +79,12 @@ async def reprocess_code_samples(
             for solution in sample["solutions"]:
                 validation_errors, analysis_outputs = [], []
                 if not isinstance(solution, str):
-                    expected_keys = {"orig_code", "code", "validation_errors", "analysis_outputs"}
+                    expected_keys = {
+                        "orig_code",
+                        "code",
+                        "validation_errors",
+                        "analysis_outputs",
+                    }
                     assert isinstance(solution, dict) and expected_keys.issubset(solution.keys())
                     orig_code = solution["orig_code"]
                     solution = solution["code"]
@@ -90,9 +95,9 @@ async def reprocess_code_samples(
                 try:
                     solution_token_count = _count_tokens(solution)
                     query_token_count = solution_token_count + prompt_token_count
-                    assert (
-                        query_token_count <= max_token_count
-                    ), f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
+                    assert query_token_count <= max_token_count, (
+                        f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
+                    )
                     pyine.utils.code.validation.validate_code(solution)
                 except Exception as e:
                     validation_errors.append(str(e))

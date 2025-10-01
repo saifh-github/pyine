@@ -122,7 +122,9 @@ class DatasetReader(torch.utils.data.Dataset):
         self._augment_idx_to_parent_trace_idx: dict[int, int] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
         self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
-        for prob_iter_idx, (problem_idx, problem_key) in enumerate(zip(self._problem_indices, self.problem_keys)):
+        for prob_iter_idx, (problem_idx, problem_key) in enumerate(
+            zip(self._problem_indices, self.problem_keys, strict=False)
+        ):
             if not problem_key.endswith(pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX):
                 raise ValueError(f"malformed problem key: {problem_key}")
             # fix problem key by removing the problem metadata suffix
@@ -141,9 +143,10 @@ class DatasetReader(torch.utils.data.Dataset):
             curr_trace_indices, curr_trace_keys = zip(
                 *[
                     (idx, key)
-                    for idx, key in zip(curr_trace_indices, curr_trace_keys)
+                    for idx, key in zip(curr_trace_indices, curr_trace_keys, strict=False)
                     if not key.endswith(pyine.data.traces.dataset_utils.DELTAS_SUFFIX)
-                ]
+                ],
+                strict=False,
             )
             if len(curr_trace_indices) == 0:
                 raise ValueError(f"no trace data found for problem: {problem_key}")
@@ -152,7 +155,7 @@ class DatasetReader(torch.utils.data.Dataset):
             self._trace_indices.extend(curr_trace_indices)
             self.trace_keys.extend(curr_trace_keys)
             curr_augm_key_to_parent_key: dict[str, str] = {}
-            for trace_idx, trace_key in zip(curr_trace_indices, curr_trace_keys):
+            for trace_idx, trace_key in zip(curr_trace_indices, curr_trace_keys, strict=False):
                 self._trace_idx_to_problem_idx[trace_idx] = problem_idx
                 self.trace_key_to_problem_key[trace_key] = problem_key
                 if fnmatch.fnmatch(trace_key, curr_augm_trace_data_pattern):
@@ -231,7 +234,7 @@ class DatasetReader(torch.utils.data.Dataset):
             if not (0 <= index_or_key < len(self)):
                 raise IndexError(f"index {index_or_key} out of range")
             return index_or_key
-        elif isinstance(index_or_key, str):
+        if isinstance(index_or_key, str):
             if index_or_key not in self.trace_keys:
                 raise KeyError(f"key {index_or_key} not found in dataset")
             return self.trace_keys.index(index_or_key)

@@ -104,7 +104,7 @@ def write_dataset(
         delta_counts.append(len(deltas))
     log(f"done; wrote {len(delta_counts)} outputs to LMDB dataset at: {writer.path}!")
     writer.close()
-    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+    log(f"\t(dataset size: {writer.get_size_on_disk() / 1024**2:.2f} MB)")
     if delta_counts:
         avg_delta_count = sum(delta_counts) / len(delta_counts)
         log(f"\t(delta count avg={avg_delta_count:.1f}, min={min(delta_counts)}, max={max(delta_counts)})")

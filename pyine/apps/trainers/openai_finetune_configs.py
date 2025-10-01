@@ -158,7 +158,11 @@ def _get_ft_params_configs(
             },
         ),
     )
-    return [default_sft_params_config, default_rlft_params_config, default_pred_grader_rlft_method_config]
+    return [
+        default_sft_params_config,
+        default_rlft_params_config,
+        default_pred_grader_rlft_method_config,
+    ]
 
 
 def _get_app_configs(
@@ -261,7 +265,9 @@ def _get_experiment_configs(
     return outputs
 
 
-def register_hydra_configs(eval_type: pyine.evals.common.EvalType) -> list[pyine.configs.schemas.ConfigDescription]:
+def register_hydra_configs(
+    eval_type: pyine.evals.common.EvalType,
+) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers app-specific configs in hydra and returns the config descriptions.
 
     Note that in the returned config descriptions, the config that corresponds to the main app's

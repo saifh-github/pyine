@@ -150,11 +150,9 @@ class DatasetReader:
                 all_valid_keys = all([isinstance(k, (str, int, float)) for k in val.keys()])
                 all_valid_subtypes = all([self._is_valid_type(subval) for subval in val.values()])
                 return all_valid_keys and all_valid_subtypes
-            else:
-                all_valid_subtypes = all([self._is_valid_type(subval) for subval in val])
-                return all_valid_subtypes
-        else:
-            return isinstance(val, (str, int, float)) or val is None
+            all_valid_subtypes = all([self._is_valid_type(subval) for subval in val])
+            return all_valid_subtypes
+        return isinstance(val, (str, int, float)) or val is None
 
     def get_broken_indices(self) -> list[int]:
         """
@@ -189,7 +187,7 @@ class DatasetReader:
         for sample_idx in tqdm.tqdm(list(range(len(self)))):
             try:
                 sample = self[sample_idx]
-            except Exception as e:
+            except Exception:
                 continue
             valid_sample_idxs.append(sample_idx)
             solutions = sample["solutions"]
@@ -199,7 +197,7 @@ class DatasetReader:
                     try:
                         pyine.utils.code.validation.validate_code(solution)
                         validated_solutions.append(solution)
-                    except Exception as e:
+                    except Exception:
                         continue
                 if not validated_solutions:
                     continue  # this sample is not valid anymore

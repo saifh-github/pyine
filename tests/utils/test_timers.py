@@ -47,17 +47,15 @@ def test_time_limit_executes_within_time() -> None:
 
 def test_time_limit_raises_timeout_error() -> None:
     """Test that a timeout error is raised when code exceeds the time limit."""
-    with pytest.raises(TimeoutError):
-        with timers.TimeLimit(0.1):
-            time.sleep(0.3)  # exceeds the time limit
+    with pytest.raises(TimeoutError), timers.TimeLimit(0.1):
+        time.sleep(0.3)  # exceeds the time limit
 
 
 def test_time_limit_with_custom_message() -> None:
     """Test that a custom timeout message is used when provided."""
     custom_message = "Execution exceeded allowed time"
-    with pytest.raises(TimeoutError, match=custom_message):
-        with timers.TimeLimit(0.1, timeout_message=custom_message):
-            time.sleep(0.3)
+    with pytest.raises(TimeoutError, match=custom_message), timers.TimeLimit(0.1, timeout_message=custom_message):
+        time.sleep(0.3)
 
 
 def test_time_limit_on_timeout_callback() -> None:
@@ -68,9 +66,8 @@ def test_time_limit_on_timeout_callback() -> None:
         nonlocal callback_triggered
         callback_triggered = True  # mark callback as triggered
 
-    with pytest.raises(TimeoutError):
-        with timers.TimeLimit(0.1, on_timeout=on_timeout_callback):
-            time.sleep(0.3)
+    with pytest.raises(TimeoutError), timers.TimeLimit(0.1, on_timeout=on_timeout_callback):
+        time.sleep(0.3)
 
     assert callback_triggered is True
 
@@ -79,10 +76,9 @@ def test_time_limit_exit_restores_signal() -> None:
     """Test that TimeLimit restores the previous signal handler upon exit."""
     prev_signal_handler = signal.getsignal(signal.SIGALRM)
 
-    with pytest.raises(TimeoutError):
-        with timers.TimeLimit(0.1):
-            assert signal.getsignal(signal.SIGALRM) is not prev_signal_handler
-            time.sleep(0.3)
+    with pytest.raises(TimeoutError), timers.TimeLimit(0.1):
+        assert signal.getsignal(signal.SIGALRM) is not prev_signal_handler
+        time.sleep(0.3)
 
     assert signal.getsignal(signal.SIGALRM) is prev_signal_handler
 
@@ -150,6 +146,5 @@ def test_parse_timedelta_valid_and_invalid():
 def test_time_limit_raises_when_sigalrm_missing(monkeypatch: pytest.MonkeyPatch):
     # Simulate platform without SIGALRM
     monkeypatch.delattr(signal, "SIGALRM", raising=False)
-    with pytest.raises(ValueError):
-        with timers.TimeLimit(0.01):
-            pass
+    with pytest.raises(ValueError), timers.TimeLimit(0.01):
+        pass

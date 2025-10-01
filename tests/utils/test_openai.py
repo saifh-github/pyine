@@ -19,7 +19,6 @@ obj_expiration_days = 5  # if rerunning tests and encountering old test files, d
 
 
 class TestLocalDatasetIO:
-
     def test_get_local_file_directory(self) -> None:
         dir_path = openai_utils.get_local_file_directory()
         assert isinstance(dir_path, pathlib.Path)
@@ -103,7 +102,6 @@ class TestLocalDatasetIO:
 
 
 class TestMessageConversion:
-
     def test_convert_dict_messages_and_tool_calls(self) -> None:
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -138,7 +136,10 @@ class TestMessageConversion:
 
     def test_convert_multimodal_and_generic_object(self) -> None:
         # multimodal: content list should be preserved as a list of dicts
-        multimodal = [{"type": "text", "text": "hello"}, {"type": "text", "text": "world"}]
+        multimodal = [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": "world"},
+        ]
         out = openai_utils.convert_messages_to_openai([{"role": "user", "content": multimodal}])
         assert isinstance(out, list) and len(out) == 1
         assert isinstance(out[0]["content"], list)
@@ -205,7 +206,6 @@ def client() -> openai_sdk.OpenAI:
     reason="OpenAI API key or network not available",
 )
 class TestOpenAIIntegration:
-
     @pytest.fixture(scope="class")
     def tuner(self, client: openai_sdk.OpenAI) -> openai_utils.OpenAIFineTuner:
         # use a distinctive suffix to enable easy cleanup and tracking
@@ -381,7 +381,6 @@ class TestOpenAIIntegration:
     reason="OpenAI API key or network not available",
 )
 class TestCleanups:
-
     @pytest.mark.slow
     def test_cleanup_files(self, client: openai_sdk.OpenAI) -> None:
         cleanup = functools.partial(

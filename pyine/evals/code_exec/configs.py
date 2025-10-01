@@ -10,7 +10,6 @@ import langchain_core.runnables
 import torch
 import tqdm
 import transformers
-import wandb
 
 import pyine.configs.schemas
 import pyine.data.datamodule
@@ -22,6 +21,7 @@ import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.transformers
+import wandb
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,9 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             CodeExecEvalResult: Aggregated metrics and captured prediction artifacts.
         """
         sample_generator = datamodule.get_parser(eval_subset_name)
-        assert isinstance(
-            sample_generator, pyine.organisms.datamodules.utils.samples.SampleBuilder
-        ), "this code execution evaluator only supports sample builder-based parsers"
+        assert isinstance(sample_generator, pyine.organisms.datamodules.utils.samples.SampleBuilder), (
+            "this code execution evaluator only supports sample builder-based parsers"
+        )
         _log = logger.info if verbose else logger.debug
         evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(llm_provider_config=self.llm_grader_provider_config)
         token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
@@ -98,7 +98,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 sample_idx: typing.Hashable,
                 executor: concurrent.futures.Executor,
             ) -> concurrent.futures.Future:
-                sample_idx = typing.cast(int, sample_idx)
+                sample_idx = typing.cast("int", sample_idx)
                 sample = sample_generator[sample_idx]
                 assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
                 assert sample_idx not in sample_lut
@@ -110,7 +110,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
             def _process_result(sample_idx: typing.Hashable, response: langchain_core.messages.AIMessage):
                 nonlocal token_usage
-                sample_idx = typing.cast(int, sample_idx)
+                sample_idx = typing.cast("int", sample_idx)
                 sample = sample_lut.pop(sample_idx)
                 assert isinstance(response, langchain_core.messages.AIMessage)
                 sample_data_store[sample.identifier] = sample
@@ -304,7 +304,8 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             assert sample_eval.identifier in sample_data_store, "missing sample data for evaluation?"
             prediction_artifacts.append(
                 pyine.evals.code_exec.utils.CodeExecEvalArtifact(
-                    sample=sample_data_store[sample_eval.identifier], eval_result=sample_eval
+                    sample=sample_data_store[sample_eval.identifier],
+                    eval_result=sample_eval,
                 )
             )
         return pyine.evals.code_exec.utils.CodeExecEvalResult(metrics=output_metrics, artifacts=prediction_artifacts)

@@ -81,8 +81,10 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
 
 def is_invocable_chain(obj: typing.Any) -> bool:
     """Returns whether the given object is an invocable chain, i.e. it supports 'invoke'."""
-    if isinstance(obj, langchain_core.runnables.Runnable):
-        return True
-    elif hasattr(obj, "invoke") and callable(getattr(obj, "invoke", None)):
+    if (
+        isinstance(obj, langchain_core.runnables.Runnable)
+        or hasattr(obj, "invoke")
+        and callable(getattr(obj, "invoke", None))
+    ):
         return True
     return False

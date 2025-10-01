@@ -5,12 +5,12 @@ import hydra_zen
 import langchain_core.runnables
 import pydantic
 import transformers
-import wandb
 
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.transformers
+import wandb
 
 
 class EvalType(enum.StrEnum):
@@ -64,7 +64,8 @@ class BaseEvalsConfig(pydantic.BaseModel):
         description="Batch size to use when generating predictions in evals.",
     )
     eval_runnable_config: RunnableEvalConfig = pydantic.Field(
-        default=RunnableEvalConfig(), description="Configuration for runnable code execution evaluations."
+        default=RunnableEvalConfig(),
+        description="Configuration for runnable code execution evaluations.",
     )
 
     # ---------------- public overridable evaluation methods ----------------
@@ -89,8 +90,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         """
         if self.eval_type is None:
             return dict()
-        else:
-            raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     async def evaluate_hf_model(
         self,
@@ -114,8 +114,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         """
         if self.eval_type is None:
             return dict()
-        else:
-            raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     def define_metrics_for_wandb(
         self,
@@ -125,8 +124,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         """Defines the evaluation metrics for the given wandb run."""
         if self.eval_type is None:
             return
-        else:
-            raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     def log_metrics(
         self,
@@ -149,8 +147,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         """
         if self.eval_type is None:
             return None
-        else:
-            raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     def log_predictions(
         self,
@@ -180,8 +177,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         """
         if self.eval_type is None:
             return None
-        else:
-            raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
 
 def get_evals_configs(
@@ -193,7 +189,7 @@ def get_evals_configs(
         import pyine.evals.code_exec.configs
 
         return pyine.evals.code_exec.configs.get_evals_configs(group=group)
-    elif eval_type is None:
+    if eval_type is None:
         return [
             pyine.configs.schemas.ConfigDescription(
                 name="base",
@@ -207,5 +203,4 @@ def get_evals_configs(
                 description="Default evaluation settings (no evals unless overridden).",
             )
         ]
-    else:
-        raise NotImplementedError(f"evaluation type {eval_type} not implemented")
+    raise NotImplementedError(f"evaluation type {eval_type} not implemented")

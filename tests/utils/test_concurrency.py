@@ -138,7 +138,10 @@ async def test_per_request_timeout_marks_error_only_for_slow_tasks():
     slow = DummyRunnable(result="too slow", delay=0.2)
     fast = DummyRunnable(result="ok", delay=0.01)
     out = await pyine.utils.concurrency.run_independent(
-        jobs=[pyine.utils.concurrency.Job(slow, {}), pyine.utils.concurrency.Job(fast, {})],
+        jobs=[
+            pyine.utils.concurrency.Job(slow, {}),
+            pyine.utils.concurrency.Job(fast, {}),
+        ],
         max_inflight=2,
         timeout=0.1,
     )
@@ -155,7 +158,10 @@ async def test_exceptions_are_captured_per_job():
     boom = DummyRunnable(exc=ValueError("boom"))
     ok = DummyRunnable(result=42)
     out = await pyine.utils.concurrency.run_independent(
-        jobs=[pyine.utils.concurrency.Job(boom, {}), pyine.utils.concurrency.Job(ok, {})],
+        jobs=[
+            pyine.utils.concurrency.Job(boom, {}),
+            pyine.utils.concurrency.Job(ok, {}),
+        ],
         timeout=1.0,
     )
     assert out[0].ok is False

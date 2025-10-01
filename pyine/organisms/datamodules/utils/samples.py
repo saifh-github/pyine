@@ -17,6 +17,7 @@ import pyine.data.utils.filter_rules
 import pyine.prompts
 import pyine.utils.code.blocks
 import pyine.utils.code.execution
+import pyine.utils.concurrency
 import pyine.utils.portability
 import pyine.utils.reprod
 from pyine.utils.code.execution import (
@@ -41,7 +42,10 @@ def get_supported_augment_types() -> list[str]:
         # some of these might actually be impossible to pregenerate, but we keep the check light
         if prompt_name.startswith("issues/") or prompt_name.startswith("hints/")
     ]
-    irrelevant_augment_types = ["original", "stubbed"]  # stubbed code cannot be executed/traced
+    irrelevant_augment_types = [
+        "original",
+        "stubbed",
+    ]  # stubbed code cannot be executed/traced
     dynamic_augment_types = [t for t in typing.get_args(SampleInputType) if t not in irrelevant_augment_types]
     return [*dynamic_augment_types, *pregenerated_augment_types]
 
@@ -415,7 +419,7 @@ class SampleBuilder(SampleDataParserType):
     def __init__(
         self,
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
-        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] | None = None,  # if none, targets all
+        traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None) = None,  # if none, targets all
         filtering_config: SampleFilteringConfig | dict | None = None,
         selection_config: SampleSelectionConfig | dict | None = None,
         transform_config: SampleTransformConfig | dict | None = None,
@@ -456,7 +460,7 @@ class SampleBuilder(SampleDataParserType):
     @staticmethod
     def _init_readers_and_trace_metadata(
         source_data: LMDBDatasetReadersOrPathsType,  # noqa
-        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] | None,  # if none, targets all
+        traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None),  # if none, targets all
     ) -> tuple[
         dict[str, pyine.data.traces.dataset_reader.DatasetReader],
         list[pyine.data.traces.dataset_utils.TraceMetadata],
@@ -591,11 +595,14 @@ class SampleBuilder(SampleDataParserType):
         # all 'cousin clusters' will be used to produce ONE trace sample each; pick which one according to strategy
         rng = np.random.default_rng(selection_config.seed)
         output_selections: list[_TraceSampleSelectionResult] = []
-        for orig_trace_id, trace_map in cousin_traces.items():  # for each cousin trace cluster...
+        for (
+            orig_trace_id,
+            trace_map,
+        ) in cousin_traces.items():  # for each cousin trace cluster...
             assert orig_trace_id in trace_lut, "augmentless id not found in trace lut?"
             target_type = _draw_type(selection_config.input_type_prob_map, rng)  # draw the sample type...
             assert target_type is not None, "unexpected default fallback for input type draw"
-            target_type = typing.cast(SampleInputType, target_type)
+            target_type = typing.cast("SampleInputType", target_type)
             target_trace_meta = trace_lut[orig_trace_id]  # might override this below if targeted obfs code
             if target_type == "original":
                 # keep the original trace as-is, with no code snippet override
@@ -623,7 +630,7 @@ class SampleBuilder(SampleDataParserType):
                     picked_idx = int(rng.integers(0, len(trace_map[target_type])))
                     picked_trace_id = trace_map[target_type][picked_idx]
                 elif selection_config.choice_strategy == "latest":
-                    picked_trace_id = list(sorted(trace_map[target_type], key=lambda tid: str(tid)))[-1]
+                    picked_trace_id = sorted(trace_map[target_type], key=lambda tid: str(tid))[-1]
                 else:
                     raise NotImplementedError("unsupported random selection strategy")
                 # keep that trace as-is with no override under the assumption that the traced code is already augmented
@@ -814,7 +821,7 @@ class SampleBuilder(SampleDataParserType):
         sample_tags.append("sample_output_type:program_output")
         return SampleData(
             identifier=trace_data.identifier,
-            code=selected_trace.code_override if selected_trace.code_override else trace_data.code_string,
+            code=(selected_trace.code_override if selected_trace.code_override else trace_data.code_string),
             description=self.code_summaries.get(selected_trace.trace_meta.solution_id, ""),
             entrypoint=str(trace_data.entrypoint_name),
             first_line=0,
@@ -892,7 +899,7 @@ class SampleBuilder(SampleDataParserType):
             return default_fallback
         # otherwise, decide what kind of output type to generate for the partial sample
         output_type = _draw_type(self.transform_config.output_type_prob_map, rng, default_fallback)
-        output_type = typing.cast(SampleOutputType, output_type)
+        output_type = typing.cast("SampleOutputType", output_type)
         return output_type
 
     def _get_function_call_sample(
@@ -970,11 +977,17 @@ class SampleBuilder(SampleDataParserType):
                 continue
             matched_call_block = trace_data.code_blocks.get(str(call_event.trace_key), None)
             if matched_call_block is not None:  # if the function is external, we won't have a matched block
-                first_line, last_line = matched_call_block.start_line, matched_call_block.end_line
+                first_line, last_line = (
+                    matched_call_block.start_line,
+                    matched_call_block.end_line,
+                )
             else:
                 # corresponds to an external call; we'll assign first line == last line
                 # @@@@ TODO: if there are a lot of external calls, might want to hint/doc them specifically
-                first_line, last_line = call_event.trace_key.line, call_event.trace_key.line
+                first_line, last_line = (
+                    call_event.trace_key.line,
+                    call_event.trace_key.line,
+                )
             sample_tags = trace_meta.tags.copy()
             description = self.code_summaries.get(trace_meta.solution_id, "")
             if description:
@@ -1008,7 +1021,11 @@ class SampleBuilder(SampleDataParserType):
     ) -> SampleData | None:
         """Returns a sample for a segment of the given trace."""
         # note: we can get here with a 'function_return' target output if this was a fallback call
-        assert target_output_type in ["function_return", "frame_variables", "next_step_key"]
+        assert target_output_type in [
+            "function_return",
+            "frame_variables",
+            "next_step_key",
+        ]
         if target_output_type == "function_return":
             target_output_type = "frame_variables"  # override this now with something we can handle below
         if target_output_type == "next_step_key":
@@ -1072,15 +1089,24 @@ class SampleBuilder(SampleDataParserType):
             segment_size = segment_end_idx - segment_start_idx
             assert 0 < segment_size <= max_step_count, "segment size is not valid"
             if self.transform_config.combine_local_and_global_vars_for_partial_samples:
-                input_vars = {**segment_start.global_variables, **segment_start.local_variables}
-                output_vars = {**segment_end.global_variables, **segment_end.local_variables}
+                input_vars = {
+                    **segment_start.global_variables,
+                    **segment_start.local_variables,
+                }
+                output_vars = {
+                    **segment_end.global_variables,
+                    **segment_end.local_variables,
+                }
             else:
                 input_vars = segment_start.local_variables
                 output_vars = segment_end.local_variables
             input_vars_str, output_vars_str = repr(input_vars), repr(output_vars)
             if not self._satisfies_str_caps(input_vars_str, output_vars_str):
                 continue  # enforce inputs/output str length cap
-            first_line, last_line = segment_start.trace_key.line, segment_end.trace_key.line
+            first_line, last_line = (
+                segment_start.trace_key.line,
+                segment_end.trace_key.line,
+            )
             sample_tags = trace_meta.tags.copy()
             description = self.code_summaries.get(trace_meta.solution_id, "")
             if description:
@@ -1122,7 +1148,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         sample_builder_config: "SampleBuilderConfig",
         sample_idxs: list[int] | None = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
-        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
+        raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
     ):
         """Yields dict samples from a SampleBuilder instance.
 
@@ -1143,7 +1169,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
     def generate_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
-        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
+        raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         keep_in_memory: bool = False,
         num_workers: int | None = None,
@@ -1158,10 +1184,18 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             split=named_split,
             keep_in_memory=keep_in_memory,
         )
+        num_proc = num_workers
+        if num_proc is not None and num_proc > 0:
+            if not pyine.utils.concurrency.ensure_spawn_start_method():
+                logger.warning(
+                    "Falling back to single-process HF dataset mapping because the 'spawn' start method"
+                    " could not be configured."
+                )
+                num_proc = None
         dataset = dataset.map(
             function=raw_transform_fn,
             keep_in_memory=keep_in_memory,
-            num_proc=num_workers,
+            num_proc=num_proc,
         )
         return dataset
 

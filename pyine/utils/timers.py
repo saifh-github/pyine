@@ -103,10 +103,8 @@ class TimeLimit:
     Examples:
         >>> with TimeLimit(1.5):
         ...     time.sleep(1)  # This will complete normally
-        ...
         >>> with TimeLimit(1.5):
         ...     time.sleep(10)  # This will raise TimeoutError after 1.5 seconds
-        ...
         Traceback (most recent call last):
             ...
         TimeoutError: code execution timed out after 1.5 seconds
@@ -217,7 +215,7 @@ def get_human_readable_time(seconds: int | float) -> str:
             value = secs / factor
             return f"{value:.3f}{unit}"
     # fallback (shouldn’t really be reached)
-    return f"{secs/1e-9:.1f}ns"
+    return f"{secs / 1e-9:.1f}ns"
 
 
 _TIMEDELTA_PATTERN = re.compile(

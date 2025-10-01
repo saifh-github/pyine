@@ -394,9 +394,13 @@ async def main(
                 f"could not resolve latest trace dataset for source '{dataset_latest_from}': {exc}"
             ) from exc
         effective_dataset_path = resolved_path
-        logger.info("resolved latest dataset for '%s' to: %s", dataset_latest_from, effective_dataset_path)
+        logger.info(
+            "resolved latest dataset for '%s' to: %s",
+            dataset_latest_from,
+            effective_dataset_path,
+        )
     else:
-        effective_dataset_path = typing.cast(pathlib.Path, dataset_path)
+        effective_dataset_path = typing.cast("pathlib.Path", dataset_path)
     dataset = _build_dataset_reader(effective_dataset_path, dataset_loader)
 
     # resolve target dataset indices: --target-indices and/or --target-split-file/--target-split-subset
@@ -518,7 +522,7 @@ async def main(
         max_unsatisfactory_retries=max_unsatisfactory_retries,
         force_generation=force_generation,
         shared_tags=shared_tags_list,
-        shared_meta=typing.cast(dict[str, typing.Any] | None, shared_meta_dict or None),
+        shared_meta=typing.cast("dict[str, typing.Any] | None", shared_meta_dict or None),
     )
 
     # -------- launch the annotation process --------

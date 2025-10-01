@@ -74,8 +74,7 @@ def _get_default_sampler_builder_config(
     )
     if as_pydantic:
         return pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate(dict(params=config_params))
-    else:
-        return config_params
+    return config_params
 
 
 def _get_default_sample_builder_overrides_for_subset(
@@ -172,8 +171,8 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
     subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)] = (
-        _get_supported_subset_names()  # should never need to override this default
-    )
+        _get_supported_subset_names()
+    )  # should never need to override this default
     """List of data subsets that the module supports; some subsets override sample selection strategy."""
     eval_subset_names: tuple[str, ...] = ("valid", "valid_obfuscated")
     """Subset names that are meant for model evaluation.
@@ -222,14 +221,14 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         parser_config = self.default_dataparser_config
         if isinstance(parser_config, dict):
             parser_config = pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate(parser_config)
-        assert isinstance(
-            parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
-        ), f"unexpected type for default dataparser config: {type(parser_config)}"
+        assert isinstance(parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig), (
+            f"unexpected type for default dataparser config: {type(parser_config)}"
+        )
         if subset_name in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_name]:
             config_overrides = self.dataparser_config_overrides[subset_name]
-            assert isinstance(
-                config_overrides, dict
-            ), f"unexpected type for {subset_name} dataparser config overrides: {type(config_overrides)}"
+            assert isinstance(config_overrides, dict), (
+                f"unexpected type for {subset_name} dataparser config overrides: {type(config_overrides)}"
+            )
             parser_config = parser_config.get_updated_spec(**config_overrides)
         special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
         if special_subset_overrides:
@@ -315,8 +314,7 @@ def get_datamodule_config(
     )
     if as_pydantic:
         return ShortcutBiasDataModuleConfig.model_validate(config_kwargs)
-    else:
-        return config_kwargs
+    return config_kwargs
 
 
 def _get_taco_configs(

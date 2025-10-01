@@ -737,15 +737,21 @@ def _default_output_validator(
         if is_issue_prompting and not is_mislead_prompting:
             assert "augment:bugged" in tags, "missing augment tag for bugged code"
             return output_is_different  # we want a different output for bugged code
-        else:
-            assert is_hint_prompting or is_mislead_prompting, "branching logic mistake somewhere"
-            if any([bug_tag in tags for bug_tag in ["augment:bugged_hinted", "augment:bugged_misleading"]]):
-                assert _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
-                # we are actually hinting a BUGGED code snippet, so expect a different output
-                return output_is_different
-            else:
-                assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
-                return not output_is_different  # we want the original output for hinted code
+        assert is_hint_prompting or is_mislead_prompting, "branching logic mistake somewhere"
+        if any(
+            [
+                bug_tag in tags
+                for bug_tag in [
+                    "augment:bugged_hinted",
+                    "augment:bugged_misleading",
+                ]
+            ]
+        ):
+            assert _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
+            # we are actually hinting a BUGGED code snippet, so expect a different output
+            return output_is_different
+        assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
+        return not output_is_different  # we want the original output for hinted code
     # ultimate fallback: accept everything (we don't know how to validate it)
     return True
 
@@ -854,7 +860,10 @@ async def annotate_trace_dataset(
         A small report dictionary with annotation outcome counts.
     """
     model = pyine.utils.llm_providers.get_model_from_provider_config(config.llm_provider_config)
-    prompt_name, prompt_version = config.prompt_config.prompt_name, config.prompt_config.version
+    prompt_name, prompt_version = (
+        config.prompt_config.prompt_name,
+        config.prompt_config.version,
+    )
     is_mislead_prompt = prompt_name == "issues/docs"
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
@@ -920,7 +929,7 @@ async def annotate_trace_dataset(
         sample_idx: typing.Hashable,
         executor: concurrent.futures.Executor,
     ) -> concurrent.futures.Future | None:
-        sample_idx = typing.cast(int, sample_idx)
+        sample_idx = typing.cast("int", sample_idx)
         trace, problem = dataset[sample_idx], dataset.get_problem_data(sample_idx)
         sample_id = identifier_getter(trace, problem, config)
         if sample_id is None:
@@ -1047,9 +1056,7 @@ def _process_one_annotation(
         rep.error_messages.append(f"{id_str}: {e}")
         rep.error_message_tracebacks.append("".join(traceback.format_exception(e)))
         if isinstance(e, pyine.prompts.result_db.ValidationFailedError):
-            logger.warning(
-                f"result validation failed for {id_str} " f"(attempts: {config.max_unsatisfactory_retries}) "
-            )
+            logger.warning(f"result validation failed for {id_str} (attempts: {config.max_unsatisfactory_retries}) ")
         else:
             logger.exception(f"failed to process and annotate data for {id_str};\n{e}")
     return rep

@@ -80,7 +80,7 @@ def apply_patch(
         # add any remaining lines from the original file
         patched_lines.extend(original_lines[original_line_idx:])
         return "".join(patched_lines), True
-    except Exception as e:
+    except Exception:
         # any error during parsing or applying means failure
         logger.exception("failed to apply patch")
         return text, False

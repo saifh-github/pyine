@@ -43,7 +43,7 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
             pattern=deltas_pattern,
             return_keys=True,
         )
-        for dkey, didx in zip(self.deltas_keys, self._deltas_indices):
+        for dkey, didx in zip(self.deltas_keys, self._deltas_indices, strict=False):
             assert dkey not in self.trace_keys
             assert didx not in self._trace_indices
         if len(self._trace_indices) != len(self._deltas_indices):

@@ -262,7 +262,7 @@ def test_prepare_examples_from_conversations_flattens_assistant_turns(
     actual: list[tuple[list[int], int]] = []
     for row_idx in range(prepared.num_rows):
         row = prepared[row_idx]
-        for input_ids, prompt_len in zip(row["input_ids"], row["prompt_len"]):
+        for input_ids, prompt_len in zip(row["input_ids"], row["prompt_len"], strict=False):
             actual.append((input_ids, prompt_len))
     assert actual == expected
 

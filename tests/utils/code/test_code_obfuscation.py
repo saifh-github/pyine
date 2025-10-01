@@ -80,7 +80,9 @@ def test_rename_global_variables_disabled(sample_code):
     # locals are still renamed by default
     assert "local_var" not in obfuscated
     obfuscated = code_obf.obfuscate_code(
-        sample_code, rename_global_variables=True, preserve_global_names=["MyTestClass", "math"]
+        sample_code,
+        rename_global_variables=True,
+        preserve_global_names=["MyTestClass", "math"],
     )
     assert "MyTestClass" in obfuscated
     assert "math" in obfuscated

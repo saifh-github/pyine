@@ -195,8 +195,8 @@ def convert_messages_to_openai(
             for p in _content:
                 if isinstance(p, dict):
                     parts.append(p)
-                elif hasattr(p, "model_dump") and callable(getattr(p, "model_dump")):
-                    parts.append(typing.cast(dict, p.model_dump()))
+                elif hasattr(p, "model_dump") and callable(p.model_dump):
+                    parts.append(typing.cast("dict", p.model_dump()))
                 else:
                     parts.append({"type": "text", "text": str(p)})
             return parts
@@ -238,7 +238,10 @@ def convert_messages_to_openai(
                         arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
                         entry: dict[str, typing.Any] = {
                             "type": "function",
-                            "function": {"name": name or "unknown", "arguments": arguments},
+                            "function": {
+                                "name": name or "unknown",
+                                "arguments": arguments,
+                            },
                         }
                         if "id" in tc:
                             entry["id"] = tc["id"]
@@ -280,7 +283,10 @@ def convert_messages_to_openai(
             msg_dict = {"role": "function", "name": str(name), "content": content}
         elif hasattr(orig_msg, "role"):
             # generic ChatMessage or similar
-            msg_dict = {"role": str(getattr(orig_msg, "role", "user")), "content": content}
+            msg_dict = {
+                "role": str(getattr(orig_msg, "role", "user")),
+                "content": content,
+            }
         else:
             # fallback: attempt to use .type as role or default to 'user'
             role = str(getattr(orig_msg, "type", "user"))
@@ -411,7 +417,7 @@ class OpenAIFineTuner:
 
     def list_remote_files(
         self,
-        purpose: str | None = None,  # note: we do not override this one with internal config value
+        purpose: (str | None) = None,  # note: we do not override this one with internal config value
         pattern: str | None = None,  # optional regex pattern for matching
     ) -> list[openai.types.FileObject]:
         """Returns remote files that are available for a specific purpose (or for any)."""

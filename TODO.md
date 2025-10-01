@@ -5,7 +5,9 @@ Last review date: 2025-09-24
 **High priority:**
 
 - Make the HuggingFace trainer DDP-aware: in `pyine/apps/trainers/hf_trainer.py` detect `LOCAL_RANK`/`torch.distributed`, drop the current `device_map="auto"` path in favour of per-rank placement, guard `Trainer` checkpoints/eval/W&B logging so they only run on rank 0, and wrap `prepare_datamodule` so `prepare_data()` runs once with a barrier before other ranks continue.
-- Build consolidated EDA over prompt result tables so we can spot failure patterns quickly; start from `notebooks/prompt_result_viewer.ipynb`, add aggregation helpers in `pyine/prompts/result_db.py`, and publish summary dashboards that compare runs side by side.
+- Refactor shortcuts datamodule to have a base interface for anything samples-related, and make the shortcuts dm itself
+  only related to the learning of a "shortcuts" bias by models (based on data preparation settings); this will help
+  simplify the creation of other dm classes that are also sample-based but that have different biases later.
 
 **Medium priority:**
 
@@ -24,3 +26,4 @@ Last review date: 2025-09-24
 **Nice-to-have feature ideas:**
 
 - Allow the HF trainer CLI to load a saved LoRA/adapter checkpoint and run evaluation-only jobs by implementing the `do_train=False` branch in `pyine/apps/trainers/hf_trainer.py` instead of raising `NotImplementedError`.
+- Build a new app to do side-by-side comparisons of prompts and prompting results using wandb weave.

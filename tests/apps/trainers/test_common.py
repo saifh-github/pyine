@@ -7,7 +7,6 @@ import pyine.apps.trainers.common as trainer_common
 
 
 class DummyDatamodule:
-
     def __init__(self, stats: dict[str, int] | None = None):
         self.prepared = False
         self.setup_called = 0
@@ -25,7 +24,6 @@ class DummyDatamodule:
 
 
 class DummyDatamoduleConfig:
-
     def __init__(self, datamodule: DummyDatamodule, eval_subset_names: list[str] | None = None):
         self.datamodule = datamodule
         self.calls: list[bool] = []
@@ -40,14 +38,12 @@ class DummyDatamoduleConfig:
 
 
 class FakeEvaluationResult:
-
     def __init__(self, metrics: dict[str, float], artifacts: list[str]):
         self.metrics = metrics
         self.artifacts = artifacts
 
 
 class DummyEvalsConfig:
-
     def __init__(self, eval_type: typing.Any):
         self.eval_type = eval_type
         self.eval_runnable_model_calls: list[dict] = []
@@ -114,7 +110,10 @@ def test_prepare_datamodule_with_wandb_logging():
     result = trainer_common.prepare_datamodule(config, runtime=runtime)
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
-    assert [call["prefix"] for call in evals_config.define_metrics_calls] == ["evals/valid", "evals/test"]
+    assert [call["prefix"] for call in evals_config.define_metrics_calls] == [
+        "evals/valid",
+        "evals/test",
+    ]
 
 
 @pytest.mark.asyncio
@@ -156,7 +155,9 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_model_wandb_logging_reopens_run(monkeypatch: pytest.MonkeyPatch):
+async def test_evaluate_model_wandb_logging_reopens_run(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", lambda *args, **kwargs: None)
     replacement_run = types.SimpleNamespace(summary={}, logged=[])  # new run returned by wandb.init
 

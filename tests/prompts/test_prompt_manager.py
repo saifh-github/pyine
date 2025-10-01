@@ -10,7 +10,6 @@ import pyine.prompts.utils as prompt_utils
 
 
 class TestPromptManager:
-
     def test_fake_manager_init(self, mocker):
         manager = prompt_manager.PromptManager(package_name="custom.package", prompts_subdir="custom_dir")
         assert manager.package_name == "custom.package"
@@ -26,7 +25,11 @@ class TestPromptManager:
         mock_package_files.joinpath.return_value = mock_prompt_file
         mock_versioned_config = mocker.MagicMock()
         mock_versioned_config.versions = {"v1.0.0": "config1", "v2.0.0": "config2"}
-        mocker.patch.object(prompt_utils.VersionedPromptConfig, "from_yaml", return_value=mock_versioned_config)
+        mocker.patch.object(
+            prompt_utils.VersionedPromptConfig,
+            "from_yaml",
+            return_value=mock_versioned_config,
+        )
         result = manager.list_prompt_versions("test_prompt")
         assert result == ["v1.0.0", "v2.0.0"]
 

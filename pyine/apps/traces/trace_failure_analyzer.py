@@ -198,7 +198,10 @@ def run_trace_failure_analysis(
             if run_deadline is not None and time.perf_counter() >= run_deadline:
                 if "max_runtime_seconds" not in limits_hit:
                     limits_hit.append("max_runtime_seconds")
-                logger.info("reached max runtime limit (%.2fs), stopping iteration", max_runtime_seconds)
+                logger.info(
+                    "reached max runtime limit (%.2fs), stopping iteration",
+                    max_runtime_seconds,
+                )
                 break
             if max_problems is not None and problem_idx >= max_problems:
                 if "max_problems" not in limits_hit:
@@ -210,7 +213,11 @@ def run_trace_failure_analysis(
                 logger.debug("skipping problem flagged to discard: %s", problem.problem_id)
                 continue
             stats["problems_processed"] += 1
-            logger.info("processing problem %s (%d solutions)", problem.problem_id, len(solutions))
+            logger.info(
+                "processing problem %s (%d solutions)",
+                problem.problem_id,
+                len(solutions),
+            )
             selected_solutions = solutions
             if max_solutions is not None:
                 selected_solutions = selected_solutions[:max_solutions]
@@ -219,7 +226,10 @@ def run_trace_failure_analysis(
                 if run_deadline is not None and time.perf_counter() >= run_deadline:
                     if "max_runtime_seconds" not in limits_hit:
                         limits_hit.append("max_runtime_seconds")
-                    logger.info("reached max runtime limit (%.2fs) within solution loop", max_runtime_seconds)
+                    logger.info(
+                        "reached max runtime limit (%.2fs) within solution loop",
+                        max_runtime_seconds,
+                    )
                     break
                 if solution.should_discard() and not allow_banned:
                     stats["solutions_skipped"] += 1
@@ -238,7 +248,10 @@ def run_trace_failure_analysis(
                     if run_deadline is not None and time.perf_counter() >= run_deadline:
                         if "max_runtime_seconds" not in limits_hit:
                             limits_hit.append("max_runtime_seconds")
-                        logger.info("reached max runtime limit (%.2fs) within test loop", max_runtime_seconds)
+                        logger.info(
+                            "reached max runtime limit (%.2fs) within test loop",
+                            max_runtime_seconds,
+                        )
                         break
                     stats["test_cases_run"] += 1
                     trace_request = _build_trace_request(
@@ -418,10 +431,12 @@ def run_trace_failure_analysis(
         "max_failures_per_solution": max_failures_per_solution,
     }
     summary_path.write_text(
-        json.dumps(summary_payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(summary_payload, default=_json_default, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     run_config_path.write_text(
-        json.dumps(run_config_payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(run_config_payload, default=_json_default, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     logger.info("run completed: %s", summary_payload)
     return out_dir

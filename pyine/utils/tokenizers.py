@@ -44,5 +44,4 @@ def get_openai_tokenizer(
         model_lower = model_id.lower()
         if model_lower.startswith(("gpt-4o", "o4", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini")):
             return tiktoken.get_encoding("o200k_base")
-        else:
-            return tiktoken.get_encoding("cl100k_base")
+        return tiktoken.get_encoding("cl100k_base")

@@ -27,7 +27,6 @@ def capture_stderr() -> StdStreamCapture:
 
 
 class TestStdStreamCapture:
-
     def test_text_and_bytes_write_with_redirect_stdout(
         self,
         capture_stdout: StdStreamCapture,

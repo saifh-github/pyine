@@ -469,7 +469,7 @@ class ConversationDataParserConfig(BaseDataParserConfig):
     def generate_hf_messages_dataset(
         self,
         named_split: "hf_datasets.NamedSplit",
-        raw_transform_fn: typing.Callable[[dict[str, typing.Any]], typing.Any] | None = None,
+        raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         keep_in_memory: bool = False,
         num_workers: int | None = None,
@@ -599,12 +599,11 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
                 logger.info(f"saving generated dataset to cache: {dataset_path}")
                 dataset.save_to_disk(dataset_path)
             return dataset
-        else:
-            logger.info(f"loading already-generated dataset from cache: {dataset_path}")
-            return hf_datasets.Dataset.load_from_disk(
-                dataset_path=dataset_path,
-                keep_in_memory=self.keep_message_datasets_in_memory,
-            )
+        logger.info(f"loading already-generated dataset from cache: {dataset_path}")
+        return hf_datasets.Dataset.load_from_disk(
+            dataset_path=dataset_path,
+            keep_in_memory=self.keep_message_datasets_in_memory,
+        )
 
     def instantiate_openai_messages_dataset(
         self,

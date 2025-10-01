@@ -104,7 +104,9 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         return instantiate_model(self)
 
 
-def instantiate_tokenizer(config: HFTrainerAppMainConfig) -> transformers.PreTrainedTokenizer:
+def instantiate_tokenizer(
+    config: HFTrainerAppMainConfig,
+) -> transformers.PreTrainedTokenizer:
     """Instantiates and returns the tokenizer tied to the config's targeted base model."""
     logger.info(f"setting up tokenizer for: {config.base_model}")
     logger.debug(f"auto tokenizer config: {config.auto_tokenizer_config}")
@@ -238,7 +240,10 @@ def _get_trainer_args_configs(
             save_total_limit=3,  # maximum checkpoints to keep (overwrites oldest if exceeded)
             load_best_model_at_end=True,  # whether to load the best checkpoint after training (loss-based default)
             remove_unused_columns=False,  # safer with custom collators/generation
-            include_for_metrics=["inputs", "loss"],  # data to forward to the compute_metrics callback
+            include_for_metrics=[
+                "inputs",
+                "loss",
+            ],  # data to forward to the compute_metrics callback
             # dataloader_drop_last=True,  # might want to keep this off for small demos/tests
             # dataloader_num_workers=4,  # might want to keep default (0) for small demos/debug
             # group_by_length=True,  # might be useful for some experiments, but off by default
@@ -270,7 +275,10 @@ def _get_trainer_args_configs(
             # prediction_loss_only=False,  # unclear if we should use this
             max_steps=0,  # should not be doing any training in this config
             remove_unused_columns=False,  # safer with custom collators/generation
-            include_for_metrics=["inputs", "loss"],  # data to forward to the compute_metrics callback
+            include_for_metrics=[
+                "inputs",
+                "loss",
+            ],  # data to forward to the compute_metrics callback
             # dataloader_num_workers=4,  # might want to keep default (0) for small demos/debug
             # -------------
             builds_bases=(base_config.config,),
@@ -410,7 +418,9 @@ def _get_experiment_configs(
     return outputs
 
 
-def register_hydra_configs(eval_type: pyine.evals.common.EvalType) -> list[pyine.configs.schemas.ConfigDescription]:
+def register_hydra_configs(
+    eval_type: pyine.evals.common.EvalType,
+) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers app-specific configs in hydra and returns the config descriptions.
 
     Note that in the returned config descriptions, the config that corresponds to the main app's

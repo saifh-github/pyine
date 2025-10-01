@@ -110,8 +110,8 @@ class OutcomeEvaluator:
     def __init__(
         self,
         strip_hard_checks: bool = True,
-        soft_checks_config: pyine.utils.code.output_compare.CompareOptions | None = None,
-        llm_grader_config: pyine.utils.code.output_compare.LLMCompareOptions | None = None,
+        soft_checks_config: (pyine.utils.code.output_compare.CompareOptions | None) = None,
+        llm_grader_config: (pyine.utils.code.output_compare.LLMCompareOptions | None) = None,
         llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
         use_async_llm_grader: bool = True,
         runnable_name: str | None = None,
@@ -165,15 +165,16 @@ class OutcomeEvaluator:
                     config=config,
                 ),
             )
-        else:
-            response = self._llm_grader_chain.invoke(
-                dict(expected_output=expected, predicted_output=predicted),
-                config=config,
-            )
-            return self._decode_response(response)
+        response = self._llm_grader_chain.invoke(
+            dict(expected_output=expected, predicted_output=predicted),
+            config=config,
+        )
+        return self._decode_response(response)
 
     @staticmethod
-    def _decode_response(response: float | pyine.utils.code.output_compare.GradingResult) -> float:
+    def _decode_response(
+        response: float | pyine.utils.code.output_compare.GradingResult,
+    ) -> float:
         """Helper to decode a response from the LLM grader."""
         if isinstance(response, float):
             return response
@@ -231,7 +232,7 @@ class OutcomeEvaluator:
             raise ValueError("identifiers, expected_list, and predicted_list must have equal lengths")
         if tags is not None and len(tags) != len(identifiers):
             raise ValueError("tags array count must match identifiers length if provided.")
-        for idx, (sid, exp, pred) in enumerate(zip(identifiers, expected_list, predicted_list)):
+        for idx, (sid, exp, pred) in enumerate(zip(identifiers, expected_list, predicted_list, strict=False)):
             self.add_sample(
                 identifier=sid,
                 expected=exp,
@@ -351,7 +352,7 @@ class OutcomeEvaluator:
             if futures:
                 scores = await asyncio.gather(*futures)
                 # re-assign the scores to the original items
-                for item_idx, score in zip(future_item_idxs, scores):
+                for item_idx, score in zip(future_item_idxs, scores, strict=False):
                     selected_items[item_idx].llm_score = self._decode_response(score)
 
     @staticmethod

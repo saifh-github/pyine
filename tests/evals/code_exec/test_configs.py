@@ -93,7 +93,9 @@ def _build_message(identifier: str) -> langchain_core.messages.AIMessage:
 
 
 @pytest.mark.asyncio
-async def test_evaluate_runnable_model_sequential(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_evaluate_runnable_model_sequential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     samples = [_FakeSample("s0"), _FakeSample("s1")]
     data_module = _FakeDataModule(samples)
     chain_calls: list[dict[str, str]] = []
@@ -107,7 +109,10 @@ async def test_evaluate_runnable_model_sequential(monkeypatch: pytest.MonkeyPatc
             return _build_message(payload["identifier"])
 
     async def fake_get_metrics(evaluator, token_usage):
-        return {"accuracy": len(evaluator.results), "total_tokens": token_usage.total_tokens}
+        return {
+            "accuracy": len(evaluator.results),
+            "total_tokens": token_usage.total_tokens,
+        }
 
     def fake_tqdm(iterable, **_kwargs):
         return iterable
@@ -165,7 +170,9 @@ async def test_evaluate_runnable_model_sequential(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_evaluate_runnable_model_parallel(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_evaluate_runnable_model_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     samples = [_FakeSample("p0"), _FakeSample("p1"), _FakeSample("p2")]
     data_module = _FakeDataModule(samples)
     submitted: list[int] = []
@@ -301,15 +308,25 @@ async def test_evaluate_runnable_model_parallel(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_evaluate_hf_model_generates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_evaluate_hf_model_generates_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     samples = [
         {
             "text": "prompt-0",
-            "sample_data": {"identifier": "h0", "expected_output": "exp0", "comma_separated_tags": "a,b"},
+            "sample_data": {
+                "identifier": "h0",
+                "expected_output": "exp0",
+                "comma_separated_tags": "a,b",
+            },
         },
         {
             "text": "prompt-1",
-            "sample_data": {"identifier": "h1", "expected_output": "exp1", "comma_separated_tags": ""},
+            "sample_data": {
+                "identifier": "h1",
+                "expected_output": "exp1",
+                "comma_separated_tags": "",
+            },
         },
     ]
 
@@ -347,7 +364,10 @@ async def test_evaluate_hf_model_generates_results(monkeypatch: pytest.MonkeyPat
             truncation: bool,
             max_length: int,
         ) -> dict[str, list[int]]:
-            return {"input_ids": list(range(len(text))), "attention_mask": [1] * len(text)}
+            return {
+                "input_ids": list(range(len(text))),
+                "attention_mask": [1] * len(text),
+            }
 
     class _FakeModel:
         def __init__(self) -> None:

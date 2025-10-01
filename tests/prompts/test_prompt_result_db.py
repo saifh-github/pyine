@@ -108,7 +108,10 @@ def test_group_queries_and_tag_filter(db: PromptResultDB):
     assert {r.identifier for r in all_items} == {"id1", "id2"}
     # filter by prompt name+version
     p1_only = db.get_by_group("g1", prompt_name="p", prompt_version="1")
-    assert {(r.identifier, r.prompt_version) for r in p1_only} == {("id1", "1"), ("id2", "1")}
+    assert {(r.identifier, r.prompt_version) for r in p1_only} == {
+        ("id1", "1"),
+        ("id2", "1"),
+    }
     # apply filter to drop any item with a wip:* tag
     filtered = db.get_by_group("g1", tag_filter_rule="-wip:*")
     assert {r.identifier for r in filtered} == {"id1"}
@@ -135,7 +138,7 @@ def test_thread_safety_on_versions(db: PromptResultDB):
         versions = sorted(f.result() for f in futures)
     assert len(versions) == n
     assert len(set(versions)) == n
-    assert all(earlier < later for earlier, later in zip(versions, versions[1:]))
+    assert all(earlier < later for earlier, later in zip(versions, versions[1:], strict=False))
     all_for_id = db.get_by_identifier(identifier)
     assert len(all_for_id) == n
     assert all(
@@ -159,7 +162,13 @@ def test_get_by_identifier_max_age_and_tag_filter(db: PromptResultDB):
     import datetime as _dt
 
     old_cm = CreationMeta(created_at=_dt.datetime.now(datetime.UTC) - _dt.timedelta(minutes=30))
-    db.store(identifier="age_tag", prompt="p", result="old", tags=["wip:yes"], creation_meta=old_cm)
+    db.store(
+        identifier="age_tag",
+        prompt="p",
+        result="old",
+        tags=["wip:yes"],
+        creation_meta=old_cm,
+    )
     db.store(identifier="age_tag", prompt="p", result="new", tags=["ok"])
     recent_only = db.get_by_identifier("age_tag", max_result_age=_dt.timedelta(minutes=10))
     assert [r.result for r in recent_only] == ["new"]
@@ -280,7 +289,6 @@ def test_typed_prompt_result_fetcher_decode_record_dict():
 def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     db: PromptResultDB, monkeypatch: pytest.MonkeyPatch
 ):
-
     class Item(pydantic.BaseModel):
         v: int
 
@@ -417,8 +425,20 @@ def test_get_all_results_ordering_and_filters(db: PromptResultDB):
     cm_mid = CreationMeta(created_at=now - datetime.timedelta(minutes=10))
     cm_new = CreationMeta(created_at=now - datetime.timedelta(minutes=5))
     db.store(identifier="id_b", prompt="pb", result="rb", creation_meta=cm_mid, tags=["ok"])
-    db.store(identifier="id_a", prompt="pa_old", result="ra_old", creation_meta=cm_old, tags=["wip:yes"])
-    db.store(identifier="id_a", prompt="pa_new", result="ra_new", creation_meta=cm_new, tags=["ok"])
+    db.store(
+        identifier="id_a",
+        prompt="pa_old",
+        result="ra_old",
+        creation_meta=cm_old,
+        tags=["wip:yes"],
+    )
+    db.store(
+        identifier="id_a",
+        prompt="pa_new",
+        result="ra_new",
+        creation_meta=cm_new,
+        tags=["ok"],
+    )
     all_recs = db.get_all_results()
     assert [(r.identifier, r.prompt) for r in all_recs] == [
         ("id_a", "pa_old"),

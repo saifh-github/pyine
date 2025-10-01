@@ -107,10 +107,9 @@ class DeltaGeneratorType(enum.StrEnum):
         s = s.lower()
         if s == cls.SIMPLE.name.lower():
             return DeltaGeneratorType.SIMPLE
-        elif s == cls.DEEPDIFF.name.lower():
+        if s == cls.DEEPDIFF.name.lower():
             return DeltaGeneratorType.DEEPDIFF
-        else:
-            raise ValueError(f"invalid delta generator type: {s}")
+        raise ValueError(f"invalid delta generator type: {s}")
 
 
 class TraceDeltaList(pydantic.BaseModel):
@@ -352,8 +351,7 @@ class _EventPairIterator:
             if increment:
                 self.iter_idx += 1
             return next_step
-        else:
-            return None
+        return None
 
     def increment_iter_idx(self) -> None:
         """Increments the iterator index."""

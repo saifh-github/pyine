@@ -22,7 +22,7 @@ def setup_function(_fn):  # ensure registry clean before each test file function
 def test_register_model_and_lookup(monkeypatch: pytest.MonkeyPatch):
     # invalid model type
     with pytest.raises(ValueError):
-        pyd.PydanticYAMLLoader.register_model("bad", typing.cast(type, int))  # type: ignore[arg-type,assignment]
+        pyd.PydanticYAMLLoader.register_model("bad", typing.cast("type", int))  # type: ignore[arg-type,assignment]
 
     # proper registration and idempotency
     pyd.PydanticYAMLLoader.register_model("mymodel", MyModel)
@@ -32,7 +32,9 @@ def test_register_model_and_lookup(monkeypatch: pytest.MonkeyPatch):
     assert pyd.PydanticYAMLLoader.get_model_tag_by_class(MyModel) == "mymodel"
 
 
-def test_register_models_from_module_success_and_failure(monkeypatch: pytest.MonkeyPatch):
+def test_register_models_from_module_success_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     # success on current module
     pyd.PydanticYAMLLoader.register_models_from_module(__name__)
     tag = f"{__name__}.MyModel"
@@ -163,7 +165,6 @@ def fixture_install_fake_import(
 
 
 class TestClassImportSpec:
-
     def test_resolve_success(
         self,
         install_fake_import: typing.Callable[[dict[str, typing.Any]], None],
@@ -451,7 +452,6 @@ def f_annot(p: typing.Annotated[str | None, "tag"] = None):
 
 
 class TestModelFromCallable:
-
     def test_required_vs_optional_and_types(self):
         Model = pyd.model_from_callable(f_basic)
         assert Model.model_fields["a"].default is pydantic.fields.PydanticUndefined

@@ -7,7 +7,6 @@ import pyine.evals.common
 
 
 class TestEvalType:
-
     def test_code_exec_enum(self) -> None:
         assert hasattr(pyine.evals.common.EvalType, "CODE_EXEC")
         assert pyine.evals.common.EvalType.CODE_EXEC == "code_exec"
@@ -15,9 +14,10 @@ class TestEvalType:
 
 
 class TestBaseEvalsConfig:
-
     @pytest.mark.asyncio
-    async def test_evaluate_runnable_model_returns_empty_dict_when_eval_type_none(self) -> None:
+    async def test_evaluate_runnable_model_returns_empty_dict_when_eval_type_none(
+        self,
+    ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
         mock_chain = unittest.mock.MagicMock()
         mock_datamodule = unittest.mock.MagicMock()
@@ -41,7 +41,9 @@ class TestBaseEvalsConfig:
             )
 
     @pytest.mark.asyncio
-    async def test_evaluate_hf_model_returns_empty_dict_when_eval_type_none(self) -> None:
+    async def test_evaluate_hf_model_returns_empty_dict_when_eval_type_none(
+        self,
+    ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
         mock_model = unittest.mock.MagicMock()
         mock_tokenizer = unittest.mock.MagicMock()

@@ -123,12 +123,17 @@ def test_train_streams_events_and_returns_model(monkeypatch: pytest.MonkeyPatch,
         runtime=None,
     )
     assert model_name == "ft-model-1"
-    assert fake_finetuner.uploaded == [str(tmp_path / "train.jsonl"), str(tmp_path / "valid.jsonl")]
+    assert fake_finetuner.uploaded == [
+        str(tmp_path / "train.jsonl"),
+        str(tmp_path / "valid.jsonl"),
+    ]
     assert train_calls == ["job-1"]
 
 
 @pytest.mark.asyncio
-async def test_main_skip_fine_tuning_updates_wandb(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_main_skip_fine_tuning_updates_wandb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     evaluate_calls: list[dict[str, object]] = []
     provider_calls: list[dict[str, object]] = []
     wandb_updates: list[dict[str, object]] = []

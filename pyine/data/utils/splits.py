@@ -105,7 +105,7 @@ class SplitConfig(pydantic.BaseModel):
             if not group_sidxs:
                 continue
             curr_subset_assigns = rng.choice(self.subset_names, size=len(group_sidxs), p=probs, replace=True)
-            for sidx, subset in zip(group_sidxs, curr_subset_assigns.tolist()):
+            for sidx, subset in zip(group_sidxs, curr_subset_assigns.tolist(), strict=False):
                 sid = identifiers[sidx]
                 assert sid not in assignments, f"sample {sid} already assigned"
                 assignments[sid] = subset
@@ -166,7 +166,7 @@ class SplitConfig(pydantic.BaseModel):
             raise ValueError("identifiers must be unique")
         assignments: dict[SampleIdentifierType, SubsetNameType] = {}
         unassigned_indices: list[int] = []
-        for idx, (sid, tags) in enumerate(zip(identifiers, tag_lists)):
+        for idx, (sid, tags) in enumerate(zip(identifiers, tag_lists, strict=False)):
             assigned = False
             for subset_name, filter_fn in self._subset_assign_rules_map.items():
                 if not filter_fn(tags):  # match found

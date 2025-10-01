@@ -68,25 +68,24 @@ def get_portable_representation(
     base_types = (int, float, bool, str, bytes, list, tuple, set, dict, BaseException)
     if isinstance(obj, base_types) or obj is None:
         return _truncate(repr(obj))  # all these base types need no special handling
-    elif isinstance(obj, np.ndarray):
+    if isinstance(obj, np.ndarray):
         return _truncate(f"numpy.{repr(obj)}")  # prefix numpy package name before 'array'
-    elif isinstance(obj, pd.DataFrame):
+    if isinstance(obj, pd.DataFrame):
         return _truncate(f"pandas.DataFrame({obj.to_json()})")  # get a serializable output
-    elif isinstance(obj, pd.Series):
+    if isinstance(obj, pd.Series):
         return _truncate(f"pandas.Series({obj.to_json()})")  # get a serializable output
-    elif inspect.ismodule(obj):
+    if inspect.ismodule(obj):
         return _truncate(f"<module '{obj.__name__}'>")
-    elif callable(obj):
+    if callable(obj):
         return _truncate(f"<callable '{get_portable_function_name(obj)}'>")
-    elif hasattr(obj, "__class__") and not isinstance(obj, type):
+    if hasattr(obj, "__class__") and not isinstance(obj, type):
         return _truncate(f"<instance '{get_fully_qualified_name(obj)}'>")
-    else:
-        # fallback for any other object; clean the default repr of memory addresses
-        # noinspection PyBroadException
-        try:
-            return _truncate(_clean_lingering_addresses_and_paths(repr(obj)))
-        except Exception:
-            return _truncate(f"<unprintable '{type(obj).__name__}'>")
+    # fallback for any other object; clean the default repr of memory addresses
+    # noinspection PyBroadException
+    try:
+        return _truncate(_clean_lingering_addresses_and_paths(repr(obj)))
+    except Exception:
+        return _truncate(f"<unprintable '{type(obj).__name__}'>")
 
 
 def format_object_changes(
@@ -133,7 +132,7 @@ def format_object_changes(
         change_count = len(diff_indices[0])
         if change_count > max_count:
             return None  # too many changes
-        for index_tuple in zip(*diff_indices):
+        for index_tuple in zip(*diff_indices, strict=False):
             index_str = ",".join(str(index_component) for index_component in index_tuple)
             value = current_obj[index_tuple]
             metadata = f"shape={current_obj.shape},dtype={current_obj.dtype}"
@@ -180,7 +179,9 @@ def format_object_changes(
     elif isinstance(current_obj, (list, tuple)):
         if len(past_obj) != len(current_obj):
             return None  # different lengths, too complex to track
-        changed_indices = [index for index, (past, current) in enumerate(zip(past_obj, current_obj)) if past != current]
+        changed_indices = [
+            index for index, (past, current) in enumerate(zip(past_obj, current_obj, strict=False)) if past != current
+        ]
         if len(changed_indices) > max_count:
             return None  # too many changes
         metadata = f"len={len(current_obj)}"
@@ -201,7 +202,7 @@ def format_object_changes(
         changed_attrs = {
             attr
             for attr in set(past_attrs.keys()) | set(current_attrs.keys())
-            if past_attrs.get(attr, None) != current_attrs.get(attr, None)
+            if past_attrs.get(attr) != current_attrs.get(attr)
         }
         total_changes = len(changed_attrs)
         if total_changes > max_count:
@@ -209,7 +210,7 @@ def format_object_changes(
         class_name = current_obj.__class__.__name__
         module = current_obj.__class__.__module__
         for attr in changed_attrs:
-            changes.append(f"instance:{module}.{class_name}:changed({attr}):{current_attrs.get(attr, None)}")
+            changes.append(f"instance:{module}.{class_name}:changed({attr}):{current_attrs.get(attr)}")
     else:
         # unsupported type
         return None
@@ -254,13 +255,12 @@ def get_portable_function_name(callabl: typing.Callable) -> str:
         base = _qual(module, qualname)
     elif (
         # plain functions, including nested and class/staticmethod functions
-        isinstance(callabl, (types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType))
+        isinstance(
+            callabl,
+            (types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType),
+        )
         or inspect.isbuiltin(callabl)
-    ):
-        module = getattr(callabl, "__module__", None)
-        qualname = getattr(callabl, "__qualname__", getattr(callabl, "__name__", "<?>"))
-        base = _qual(module, qualname)
-    elif isinstance(callabl, type):  # handle classes (constructors are callable)
+    ) or isinstance(callabl, type):
         module = getattr(callabl, "__module__", None)
         qualname = getattr(callabl, "__qualname__", getattr(callabl, "__name__", "<?>"))
         base = _qual(module, qualname)
@@ -652,7 +652,10 @@ def render_config(
     ]
     cns.print(
         rich.panel.Panel(
-            rich.console.Group(*body_parts), title=title or default_title, expand=True, box=rich.box.ROUNDED
+            rich.console.Group(*body_parts),
+            title=title or default_title,
+            expand=True,
+            box=rich.box.ROUNDED,
         )
     )
     return

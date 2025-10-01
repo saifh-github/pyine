@@ -5,6 +5,12 @@ import dataclasses
 import inspect
 import threading
 import typing
+import warnings
+
+try:  # pragma: no cover - optional dependency when datasets not installed
+    import multiprocess as _mp
+except ModuleNotFoundError:  # pragma: no cover - fallback path
+    _mp = None
 
 __all__ = [
     "SupportsAInvoke",
@@ -13,6 +19,7 @@ __all__ = [
     "get_shared_executor",
     "run_in_parallel",
     "run_independent",
+    "ensure_spawn_start_method",
     "SlidingWindowExecutionError",
 ]
 
@@ -24,6 +31,61 @@ MaybeAsyncCallable = typing.Callable[P, typing.Awaitable[T]] | typing.Callable[P
 _shared_proc_pool: concurrent.futures.ProcessPoolExecutor | None = None
 _shared_thread_pool: concurrent.futures.ThreadPoolExecutor | None = None
 _shared_lock = threading.Lock()
+
+
+def ensure_spawn_start_method(
+    *,
+    force: bool = True,
+) -> bool:
+    """Ensure multiprocess-based pools use the safe 'spawn' start method on macOS.
+
+    HuggingFace datasets rely on :mod:`multiprocess` when running `Dataset.map` with
+    ``num_proc > 1``. The default start method on POSIX platforms is ``fork``, which
+    triggers runtime warnings (and can deadlock) when used from multi-threaded
+    processes—exactly the scenario we hit in our datamodule integration tests.
+
+    This helper requests the "spawn" context before any pools are created. If the
+    dependency is unavailable or the start method cannot be changed, the caller can
+    inspect the returned boolean and downgrade to a single-process fallback.
+
+    Args:
+        force: Whether to force-reset the start method when one was already
+            configured. The default (True) mirrors the behaviour we need during
+            tests where no pools have been spawned yet.
+
+    Returns:
+        ``True`` if the "spawn" method is confirmed active, ``False`` otherwise.
+    """
+
+    if _mp is None:  # dependency missing; nothing to enforce
+        return False
+
+    try:
+        current = _mp.get_start_method(allow_none=True)  # type: ignore[arg-type]
+    except TypeError:  # pragma: no cover - older multiprocess
+        try:
+            current = _mp.get_start_method()
+        except RuntimeError:
+            current = None
+    except RuntimeError:
+        current = None
+
+    if current == "spawn":
+        return True
+
+    try:
+        _mp.set_start_method("spawn", force=force)
+        return True
+    except (RuntimeError, ValueError) as exc:
+        warnings.warn(
+            f"Failed to set multiprocess start method to 'spawn' ({exc!s}); falling back to already configured method.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        try:
+            return _mp.get_start_method(allow_none=True) == "spawn"  # type: ignore[arg-type]
+        except (TypeError, RuntimeError):  # pragma: no cover - defensive fallback
+            return False
 
 
 def get_shared_executor(
@@ -51,11 +113,10 @@ def get_shared_executor(
                 _shared_proc_pool = concurrent.futures.ProcessPoolExecutor()
                 atexit.register(lambda: _shared_proc_pool.shutdown(cancel_futures=True))
             return _shared_proc_pool
-        else:
-            if _shared_thread_pool is None:
-                _shared_thread_pool = concurrent.futures.ThreadPoolExecutor()
-                atexit.register(lambda: _shared_thread_pool.shutdown(cancel_futures=True))
-            return _shared_thread_pool
+        if _shared_thread_pool is None:
+            _shared_thread_pool = concurrent.futures.ThreadPoolExecutor()
+            atexit.register(lambda: _shared_thread_pool.shutdown(cancel_futures=True))
+        return _shared_thread_pool
 
 
 def run_in_parallel(
@@ -127,7 +188,10 @@ def run_in_parallel(
             # cancel_futures ensures pending tasks are canceled on shutdown if exceptions occur upstream
             if isinstance(
                 local_executor,
-                (concurrent.futures.ThreadPoolExecutor, concurrent.futures.ProcessPoolExecutor),
+                (
+                    concurrent.futures.ThreadPoolExecutor,
+                    concurrent.futures.ProcessPoolExecutor,
+                ),
             ):
                 local_executor.shutdown(cancel_futures=True)
             else:
@@ -305,7 +369,6 @@ async def run_with_sliding_window(
 
         # report outputs and continue filling window as long as the iterator is not dry
         while in_flight or not iterator_is_dry:
-
             # fill window to max size until iterator is dry
             while not iterator_is_dry and len(in_flight) < max_in_flight_jobs:
                 try:

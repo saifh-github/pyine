@@ -2,7 +2,6 @@ import pyine.utils.code.variables
 
 
 class TestClusterCodeSnippetsByKeyword:
-
     def test_cluster_code_snippets_by_keyword__groups_shared_keywords(self) -> None:
         code_snippets = [
             "def foo():\n    return 1\n",

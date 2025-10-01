@@ -173,7 +173,7 @@ def _generic_pydantic_constructor(
     """
     if tag_suffix not in loader._model_registry:
         available_tags = list(loader._model_registry.keys())
-        raise ValueError(f"unknown Pydantic model tag: '{tag_suffix}'. " f"available tags: {available_tags}")
+        raise ValueError(f"unknown Pydantic model tag: '{tag_suffix}'. available tags: {available_tags}")
     model_class = loader._model_registry[tag_suffix]
     try:
         data = loader.construct_mapping(node, deep=True)  # will load data as a dictionary
@@ -314,8 +314,7 @@ class ClassImportSpec(
         constr_params.update(extra_kwargs)
         if self.params_key is None:
             return self._resolved_class(*args, **constr_params)
-        else:
-            return self._resolved_class(*args, **{self.params_key: constr_params})
+        return self._resolved_class(*args, **{self.params_key: constr_params})
 
     def get_params_dict(self) -> dict[str, typing.Any]:
         """Returns the parameters held inside the config as a dictionary for obj instantiation."""

@@ -71,7 +71,10 @@ class CodingProblemTestDataCache:
         self.dataset_path = dataset_path
         self.dataset_hash = pyine.utils.reprod.compute_hash(self.dataset_path)
         self._rng = np.random.RandomState(random_seed)
-        self._cache: dict[pyine.data.traces.dataset_utils.CodingProblemIdentifier, list[CachedTestData]] = dict()
+        self._cache: dict[
+            pyine.data.traces.dataset_utils.CodingProblemIdentifier,
+            list[CachedTestData],
+        ] = dict()
         if use_cache_storage and self._stored_cache_available:
             self._load_stored_cache()
         else:
@@ -95,7 +98,10 @@ class CodingProblemTestDataCache:
     def _prepare_cache_using_iterator(
         iterator: typing.Iterable[tuple[pyine.data.traces.dataset_utils.CodingProblem, typing.Any]],
     ) -> dict[pyine.data.traces.dataset_utils.CodingProblemIdentifier, list[CachedTestData]]:
-        cache: dict[pyine.data.traces.dataset_utils.CodingProblemIdentifier, list[CachedTestData]] = dict()
+        cache: dict[
+            pyine.data.traces.dataset_utils.CodingProblemIdentifier,
+            list[CachedTestData],
+        ] = dict()
         for problem, _solutions in iterator:
             assert problem.problem_id not in cache, "bug in iterator or non-unique problem ids?"
             cache[problem.problem_id] = []
@@ -231,7 +237,10 @@ class CodingProblemTestDataCache:
         if sample_from_top_k is not None:
             if sample_from_top_k < 1:
                 raise ValueError("sample_from_top_k must be at least 1")
-            candidates = sorted(candidates, key=lambda cand: abs(orig_test_case.outputs_length - cand.outputs_length))
+            candidates = sorted(
+                candidates,
+                key=lambda cand: abs(orig_test_case.outputs_length - cand.outputs_length),
+            )
             candidates = candidates[:sample_from_top_k]
         if not candidates:
             return None

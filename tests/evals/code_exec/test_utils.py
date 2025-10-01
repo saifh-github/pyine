@@ -10,7 +10,6 @@ import tests.env_checks
 
 
 class _DummyGraderChain:
-
     def __init__(
         self,
         scorer: collections.abc.Callable[[str, str], float],
@@ -23,8 +22,8 @@ class _DummyGraderChain:
         *args,
         **kwargs,
     ) -> float:
-        expected = typing.cast(str, data["expected_output"])
-        predicted = typing.cast(str, data["predicted_output"])
+        expected = typing.cast("str", data["expected_output"])
+        predicted = typing.cast("str", data["predicted_output"])
         return float(self._scorer(expected, predicted))
 
     async def ainvoke(

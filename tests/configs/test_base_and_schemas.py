@@ -7,7 +7,9 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 
 
-def test_register_searchpath_plugin_registers_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_register_searchpath_plugin_registers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registered = []
 
     class _FakePlugins:
@@ -33,7 +35,7 @@ def test_print_experiment_configs_lists_expected_sections(
     class _HydraContext:
         def __enter__(self):
             calls["initialize"] += 1
-            return None
+            return
 
         def __exit__(self, exc_type, exc, tb):
             return False

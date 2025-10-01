@@ -18,7 +18,9 @@ import pyine.utils.filesystem
 import pyine.utils.reprod
 
 if typing.TYPE_CHECKING:
-    from pyine.organisms.datamodules.shortcuts_configs import ShortcutBiasDataModuleConfig
+    from pyine.organisms.datamodules.shortcuts_configs import (
+        ShortcutBiasDataModuleConfig,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     ) -> None:
         super().__init__(config)
         self.verbose = verbose
-        self.config: "ShortcutBiasDataModuleConfig" = config
+        self.config: ShortcutBiasDataModuleConfig = config
         self._metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None = None
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
         self._subset_parsers: dict[
@@ -103,7 +105,8 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
     def _apply_max_solution_count_cap(
         self,
         subset_traces_meta: dict[
-            pyine.data.datamodule.SubsetNameType, list[pyine.data.traces.dataset_utils.TraceMetadata]
+            pyine.data.datamodule.SubsetNameType,
+            list[pyine.data.traces.dataset_utils.TraceMetadata],
         ],
         unassigned_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
     ) -> None:  # updates to the provided args are done in-place
@@ -142,7 +145,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         with open(self._get_prepared_metadata_file_path(), "wb") as fd:
             fd.write(encoded_data)
 
-    def _load_prepared_metadata(self) -> pyine.data.traces.dataset_utils.TraceDatasetMetadata:
+    def _load_prepared_metadata(
+        self,
+    ) -> pyine.data.traces.dataset_utils.TraceDatasetMetadata:
         """Loads the prepared metadata from a local tmpdir."""
         with open(self._get_prepared_metadata_file_path(), "rb") as fd:
             encoded_data = msgspec.msgpack.decode(fd.read())
@@ -199,7 +204,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
                 traces=subset_traces,
             )
             self._subset_parsers[subset_name] = typing.cast(
-                pyine.organisms.datamodules.utils.samples.SampleBuilder,
+                "pyine.organisms.datamodules.utils.samples.SampleBuilder",
                 parser,
             )
         return self._subset_parsers[subset_name]
@@ -222,8 +227,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
                 if f"{prefix}_{suffix}" == subset_name:
                     return self._metadata.subset_traces[prefix]
             raise ValueError(f"subset {subset_name} is not defined in the metadata's split table")
-        else:
-            return self._metadata.subset_traces[subset_name]
+        return self._metadata.subset_traces[subset_name]
 
     def _is_setup_complete(self) -> bool:
         """Returns True if the setup is complete and the data parsers/loaders are ready to be used."""
@@ -336,17 +340,23 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         )
 
     @typing.override
-    def train_dataloader(self) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    def train_dataloader(
+        self,
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
         """Return the training data loader."""
         return self.make_dataloader("train")
 
     @typing.override
-    def val_dataloader(self) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    def val_dataloader(
+        self,
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
         """Return the validation data loader."""
         return self.make_dataloader("valid")
 
     @typing.override
-    def test_dataloader(self) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    def test_dataloader(
+        self,
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
         """Return the test data loader."""
         return self.make_dataloader("test")
 

@@ -18,7 +18,7 @@ class FakeDatasetReader:
     ) -> None:
         self._dataset_hash = dataset_hash
         self._traces = traces
-        self.trace_keys = [typing.cast(str, trace.identifier) for trace in traces]
+        self.trace_keys = [typing.cast("str", trace.identifier) for trace in traces]
 
     @property
     def hash(self) -> str:
@@ -173,7 +173,9 @@ def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) 
     assert sample.has_code_override is False
 
 
-def test_train_overrides_enable_random_hint_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_train_overrides_enable_random_hint_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dataset_hash = "fake-train-hinted"
     trace_specifications = []
     prompt_records = {}
@@ -276,7 +278,12 @@ def test_train_overrides_enable_random_hint_selection(monkeypatch: pytest.Monkey
     saw_orig, saw_hinted, saw_obfs, saw_obfs_hinted = False, False, False, False
     for sample_idx in range(len(builder_with_records)):
         selected = builder_with_records.selected_traces[sample_idx]
-        assert selected.code_type in ["original", "hinted", "obfuscated", "obfuscated_hinted"]
+        assert selected.code_type in [
+            "original",
+            "hinted",
+            "obfuscated",
+            "obfuscated_hinted",
+        ]
         picked_identifier = selected.trace_meta.identifier
         expected_solution_identifier = f"TACO/train/p000010/s{sample_idx:04d}"
         expected_trace_identifier_prefix = f"{expected_solution_identifier}/t0001"
@@ -306,7 +313,10 @@ def test_train_overrides_enable_random_hint_selection(monkeypatch: pytest.Monkey
             assert sample.code in ["fake hinted code", "fake obfuscated + hinted code"]
         else:
             assert sample.has_code_override is False
-            assert sample.code not in ["fake hinted code", "fake obfuscated + hinted code"]
+            assert sample.code not in [
+                "fake hinted code",
+                "fake obfuscated + hinted code",
+            ]
         assert sample.description == "some description of the code"
         tags = sample.comma_separated_tags.split(",")
         assert "augment:has_code_description" in tags
@@ -315,7 +325,9 @@ def test_train_overrides_enable_random_hint_selection(monkeypatch: pytest.Monkey
     assert saw_orig and saw_hinted and saw_obfs and saw_obfs_hinted
 
 
-def test_train_overrides_fetch_stubbed_from_prompt_db(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_train_overrides_fetch_stubbed_from_prompt_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dataset_hash = "fake-train-stubbed"
     trace_specifications = []
     prompt_records = {}

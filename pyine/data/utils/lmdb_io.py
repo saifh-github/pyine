@@ -102,10 +102,7 @@ class LMDBWriter:
 
         Writing multiple values in batch:
         >>> with LMDBWriter("path/to/db") as writer:
-        ...     data = {
-        ...         "key1": {"data": "value1"},
-        ...         "key2": {"data": "value2"}
-        ...     }
+        ...     data = {"key1": {"data": "value1"}, "key2": {"data": "value2"}}
         ...     writer.put_batch(data)
 
         Writing with different serialization methods:
@@ -121,17 +118,14 @@ class LMDBWriter:
 
         Writing metadata:
         >>> with LMDBWriter("path/to/db") as writer:
-        ...     metadata = {
-        ...         "dataset_name": "example",
-        ...         "version": "1.0"
-        ...     }
+        ...     metadata = {"dataset_name": "example", "version": "1.0"}
         ...     writer.write_metadata(metadata)
 
         Specifying custom map size and readers:
         >>> writer = LMDBWriter(
         ...     "path/to/db",
         ...     map_size=2 * 1024 * 1024 * 1024,  # 2GB
-        ...     max_readers=256
+        ...     max_readers=256,
         ... )
         >>> writer.put("key1", {"data": "value1"})
         >>> writer.close()
@@ -266,7 +260,11 @@ class LMDBWriter:
         """Writes fixed metadata fields as well as reproducibility tags to the database."""
         with self.env.begin(write=True) as txn:
             # store the next internal key for continuity (if needed)
-            txn.put(_NEXT_INTERNAL_KEY, struct.pack(">Q", self._next_internal_key), overwrite=True)
+            txn.put(
+                _NEXT_INTERNAL_KEY,
+                struct.pack(">Q", self._next_internal_key),
+                overwrite=True,
+            )
             self._write_metadata_value(txn, "map_size", self.map_size)
             self._write_metadata_value(txn, "sample_count", len(self.key_map))
             self._write_metadata_value(txn, "key_map", self.key_map)
@@ -407,7 +405,7 @@ class LMDBReader:
         Basic usage to read a value by key or index:
         >>> reader = LMDBReader("path/to/db")
         >>> value_by_key = reader.get("key1")  # get by key
-        >>> value_by_index = reader.get(0)     # get by index
+        >>> value_by_index = reader.get(0)  # get by index
         >>> reader.close()
 
         Reading metadata:
@@ -585,10 +583,9 @@ class LMDBReader:
         index_key_pairs = [((_decode_sample_key(self.key_map[key])), key) for key in matched_keys]
         index_key_pairs.sort()
         if return_keys:
-            indices, keys = zip(*index_key_pairs) if index_key_pairs else ([], [])
+            indices, keys = zip(*index_key_pairs, strict=False) if index_key_pairs else ([], [])
             return list(indices), list(keys)
-        else:
-            return [idx for idx, _ in index_key_pairs]
+        return [idx for idx, _ in index_key_pairs]
 
     def iter_from(
         self,

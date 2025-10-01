@@ -47,7 +47,10 @@ def _apply_prompt_template_to_sample(
         assert sum([isinstance(m, langchain_core.messages.SystemMessage) for m in output]) <= 1
         assert sum([isinstance(m, langchain_core.messages.HumanMessage) for m in output]) == 1
         assert sum([isinstance(m, langchain_core.messages.AIMessage) for m in output]) == 0  # added below
-        assert len(output) in [1, 2]  # we currently only support single-turn transforms here
+        assert len(output) in [
+            1,
+            2,
+        ]  # we currently only support single-turn transforms here
         if merge_system_with_user and len(output) == 2:
             output: list[langchain_core.messages.BaseMessage] = [
                 langchain_core.messages.HumanMessage(output[0].content + "\n\n" + output[1].content)

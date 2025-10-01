@@ -5,7 +5,6 @@ import sys
 import typing
 
 import openai
-import wandb
 import wandb.integration.openai.fine_tuning
 
 import pyine.apps.trainers.common
@@ -20,6 +19,7 @@ import pyine.utils.llm_providers
 import pyine.utils.openai
 import pyine.utils.reprod
 import pyine.utils.tokenizers
+import wandb
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def train(
 
 async def main(
     config: "pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig",
-    runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
+    runtime: (pyine.configs.schemas.RuntimeConfig | None) = None,  # None unless launched via hydra
     skip_fine_tuning: bool = False,  # used to evaluate the base model directly
 ) -> None:
     """Main function for the script; performs fine-tuning and evaluation for an OpenAI model.

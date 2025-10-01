@@ -5,9 +5,9 @@ import typing
 import hydra.conf
 import hydra_zen.typing
 import pydantic
-import wandb
 
 import pyine.utils.reprod
+import wandb
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ class ConfigDescription(pydantic.BaseModel):
     def _attach_config_attributes(self) -> "ConfigDescription":
         """Attaches description/name/group to the config."""
         # @@@@ might need to update zen exclude?
-        setattr(self.config, "__description__", self.description)
-        setattr(self.config, "__cfg_name__", self.name)
-        setattr(self.config, "__cfg_group__", self.group)
+        self.config.__description__ = self.description
+        self.config.__cfg_name__ = self.name
+        self.config.__cfg_group__ = self.group
         return self

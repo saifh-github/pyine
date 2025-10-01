@@ -111,8 +111,7 @@ class PromptManager:
                         f"Available versions: {available_versions}"
                     )
                 return versioned_config.versions[version]
-            else:
-                return versioned_config.get_default()
+            return versioned_config.get_default()
         except yaml.YAMLError as e:
             raise ValueError(f"Invalid YAML in {prompt_path}: {e}") from e
         except pydantic.ValidationError as e:

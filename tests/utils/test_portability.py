@@ -138,7 +138,7 @@ def test_get_portable_representation_various_types():
             return 0
 
     c = CallableNoName()
-    setattr(c, "__module__", None)
+    c.__module__ = None
     anon_repr = portability.get_portable_representation(c)
     assert anon_repr.startswith("<callable '")
     assert anon_repr.endswith("CallableNoName.__call__'>")
@@ -291,7 +291,6 @@ def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
 
 
 class TestGetFullyQualifiedName:
-
     def test_local_function(self):
         def foo():
             pass
@@ -311,7 +310,6 @@ class TestGetFullyQualifiedName:
 
 
 class TestImportFromDottedPath:
-
     def test_import_builtin_module(self):
         module = portability.import_from_dotted_path("math")
         assert module.__name__ == "math"

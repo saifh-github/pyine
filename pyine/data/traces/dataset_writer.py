@@ -7,7 +7,6 @@ See the `write_dataset` function for more information.
 import dataclasses
 import datetime
 import functools
-import itertools
 import logging
 import os
 import pathlib
@@ -488,7 +487,7 @@ def _get_traces_to_write(
     if not (len(results) == len(errors) == len(to_trace)):
         raise RuntimeError("unexpected number of results/errors")
     successful_traces = {}
-    for trace_idx, (run_result, run_error) in enumerate(zip(results, errors)):
+    for trace_idx, (run_result, run_error) in enumerate(zip(results, errors, strict=False)):
         code_to_trace = to_trace[trace_idx]
         if run_error:
             if isinstance(run_error, pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS):
@@ -503,7 +502,10 @@ def _get_traces_to_write(
             exception_msg = (f", '{str(run_error)}'" if str(run_error) else "") + ", origin: " + exception_origin_msg
             full_error_msg = f"({type(run_error).__name__})" + exception_msg
             log_fn(f"{code_to_trace.trace_id}: failed to execute: {full_error_msg}")
-            if not isinstance(run_error, (pyine.utils.code.execution.TracingCapException, TimeoutError)):
+            if not isinstance(
+                run_error,
+                (pyine.utils.code.execution.TracingCapException, TimeoutError),
+            ):
                 # don't log cap or timeout errors (those are config-adjustable and shouldn't really matter)
                 _log_failed_test_to_disk(
                     code_to_trace=code_to_trace,
@@ -534,7 +536,10 @@ def _get_traces_to_write(
 def _trace_code_snippet(
     code_snippet: _CodeToTrace,
     config: TraceDatasetWriterConfig,
-) -> tuple[pyine.utils.code.execution.TraceResult, pyine.utils.code.output_compare.CompareResult]:
+) -> tuple[
+    pyine.utils.code.execution.TraceResult,
+    pyine.utils.code.output_compare.CompareResult,
+]:
     """Traces a (potentially augmented) solution with a specific input and returns the result.
 
     Both tracing results and expected vs found output comparison results are returned. The latter
@@ -588,7 +593,10 @@ def _trace_code_snippet(
         # the exec raised a catchable exception; the only way this was a 'success' is if we also expected one
         exception_test_result = comp(str(trace_result.exception), str(test_outputs))
         if exception_test_result:
-            return trace_result, exception_test_result  # we're done, we can leave already
+            return (
+                trace_result,
+                exception_test_result,
+            )  # we're done, we can leave already
         exception_test_result.reason = f"execution raised unexpected exception: {trace_result.exception}"
         if trace_result.exception.type == SystemExit.__name__:
             # that was likely called on purpose, i.e. the program finished and produced something
@@ -645,8 +653,8 @@ def _fetch_augmented_code_to_trace(
         obfuscated_code = pyine.utils.code.obfuscation.obfuscate_code(
             solution.code,  # obfuscate the original code snippet directly
             reformat_output=True,  # always reformat the result to get more consistent traces
-            preserved_local_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
-            preserve_global_names=[problem.entrypoint_name] if problem.entrypoint_name else [],
+            preserved_local_names=([problem.entrypoint_name] if problem.entrypoint_name else []),
+            preserve_global_names=([problem.entrypoint_name] if problem.entrypoint_name else []),
         )
         augmented_code_to_trace.extend(
             [
@@ -730,7 +738,7 @@ def _process_solutions(
     if not (len(results) == len(errors) == len(solutions)):
         raise RuntimeError("unexpected number of results/errors")
     outputs_to_write = {}
-    for solution_idx, (run_result, run_error) in enumerate(zip(results, errors)):
+    for solution_idx, (run_result, run_error) in enumerate(zip(results, errors, strict=False)):
         solution = solutions[solution_idx]
         if run_error:
             if isinstance(run_error, pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS):
@@ -778,7 +786,7 @@ def _process_one_solution(
         for test_tuple in test_tuples
     ]
     orig_trace_ids_to_test_tuple_map = {  # keep this around to know what tuples worked afterwards
-        str(c.trace_id): t for c, t in zip(orig_code_to_trace, test_tuples)
+        str(c.trace_id): t for c, t in zip(orig_code_to_trace, test_tuples, strict=False)
     }
     log_fn(f"{solution}: tracing orig code with {len(orig_code_to_trace)} tests...")
     traces_to_write = _get_traces_to_write(
@@ -958,7 +966,7 @@ def write_dataset(
     finally:
         log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")
         writer.close()
-        log(f"\t(dataset size: {writer.get_size_on_disk() / 1024 ** 2:.2f} MB)")
+        log(f"\t(dataset size: {writer.get_size_on_disk() / 1024**2:.2f} MB)")
         if trace_event_counts:
             avg_event_count = sum(trace_event_counts) / len(trace_event_counts)
             log(
@@ -967,9 +975,9 @@ def write_dataset(
 
 
 def write_dataset_from_taco(
-    source_dataset_path: str | pathlib.Path | None = None,  # if none, will try to auto-detect it
-    output_dataset_path: str | pathlib.Path | None = None,  # if none, will be created in default location
-    output_dataset_tag: str | None = None,  # if none, will use a truncated kwargs hash (16 chars)
+    source_dataset_path: (str | pathlib.Path | None) = None,  # if none, will try to auto-detect it
+    output_dataset_path: (str | pathlib.Path | None) = None,  # if none, will be created in default location
+    output_dataset_tag: (str | None) = None,  # if none, will use a truncated kwargs hash (16 chars)
     verbose: bool = False,
     force_overwrite: bool = False,
     **config_kwargs,  # all kwargs will be forwarded to the trace writer config (see that doc for info)

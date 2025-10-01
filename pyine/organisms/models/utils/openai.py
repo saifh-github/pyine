@@ -8,8 +8,6 @@ import openai.types.fine_tuning
 import openai.types.graders
 import pydantic
 
-import pyine.utils.openai
-
 DefaultPromptMsgsType = typing.Literal["default"]
 
 
@@ -111,6 +109,9 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
             assert len(messages) == 2
             assert isinstance(messages[0], langchain_core.messages.SystemMessage)
             assert isinstance(messages[1], langchain_core.prompts.HumanMessagePromptTemplate)
-            messages = [messages[0], {"role": "user", "content": messages[1].prompt.template}]
+            messages = [
+                messages[0],
+                {"role": "user", "content": messages[1].prompt.template},
+            ]
             self._resolved_pred_grader_prompt_messages = pyine.utils.openai.convert_messages_to_openai(messages)
         return self

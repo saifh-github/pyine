@@ -248,7 +248,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
             result_db.PromptResultRecord(
                 identifier=identifier,
                 prompt_name=prompt_config.prompt_name,
-                prompt_version=typing.cast(str | None, getattr(prompt_config, "version", None)),
+                prompt_version=typing.cast("str | None", getattr(prompt_config, "version", None)),
                 group=group,
                 creation_meta=creation_meta,
                 prompt="prompt",
@@ -258,11 +258,19 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
             )
         ]
 
-    def _id_resolver(trace: exec_utils.TraceResult, _: du.CodingProblem, __: annotator.AnnotationOptions) -> str:
+    def _id_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
         assert trace.identifier is not None
         return str(du.TraceIdentifier.from_string(str(trace.identifier)).get_parent_identifier())
 
-    def _group_resolver(_: exec_utils.TraceResult, problem: du.CodingProblem, __: annotator.AnnotationOptions) -> str:
+    def _group_resolver(
+        _: exec_utils.TraceResult,
+        problem: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
         return str(problem.problem_id)
 
     def _input_builder(
@@ -340,11 +348,19 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
             )
         ]
 
-    def _id_resolver(trace: exec_utils.TraceResult, _: du.CodingProblem, __: annotator.AnnotationOptions) -> str:
+    def _id_resolver(
+        trace: exec_utils.TraceResult,
+        _: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
         assert trace.identifier is not None
         return str(du.TraceIdentifier.from_string(str(trace.identifier)).get_parent_identifier())
 
-    def _group_resolver(_: exec_utils.TraceResult, problem: du.CodingProblem, __: annotator.AnnotationOptions) -> str:
+    def _group_resolver(
+        _: exec_utils.TraceResult,
+        problem: du.CodingProblem,
+        __: annotator.AnnotationOptions,
+    ) -> str:
         return str(problem.problem_id)
 
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch_same_count)
@@ -373,7 +389,9 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_bad_id_handling_increments_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bad_id_handling_increments_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pid, sid, tid = _make_ids()
     problem = _make_problem(pid)
     # first ok, second broken (invalid identifier that cannot resolve)
@@ -460,7 +478,15 @@ async def test_bad_id_handling_increments_skips(monkeypatch: pytest.MonkeyPatch)
         ("hints/docs", "trace", "solution", True, True, True, "augment:hinted"),
         ("hints/tests", "trace", "solution", True, True, True, "augment:hinted"),
         ("hints/stubs", "solution", "problem", True, False, False, "augment:stubbed"),
-        ("issues/iterators", "solution", "problem", True, False, False, "augment:bugged"),
+        (
+            "issues/iterators",
+            "solution",
+            "problem",
+            True,
+            False,
+            False,
+            "augment:bugged",
+        ),
         ("issues/todos", "solution", "problem", True, False, False, "augment:bugged"),
     ],
 )
@@ -486,7 +512,7 @@ async def test_supported_prompts_prepare_input_variables(
         prepopulate_summary=prompt_name != "code_summary",
     )
 
-    report = typing.cast(annotator.AnnotationReport, captured.pop("report"))
+    report = typing.cast("annotator.AnnotationReport", captured.pop("report"))
     assert report.total_samples == 1
     assert report.skipped_samples == 0
     assert report.errors == 0
@@ -730,7 +756,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
         test_cache=_StubTestCache(),
     )
 
-    report = typing.cast(annotator.AnnotationReport, captured.pop("report"))
+    report = typing.cast("annotator.AnnotationReport", captured.pop("report"))
     assert report.total_samples == 1
     assert report.skipped_samples == 0
     assert report.errors == 0

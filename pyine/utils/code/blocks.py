@@ -69,9 +69,9 @@ def identify_code_blocks(
     code_blocks = _capture_child_nodes(ast.parse(code_string))
     blocks_map = {}
     for block in code_blocks:
-        assert (
-            block.start_line not in blocks_map
-        ), f"found multiple blocks on same line! see L{block.start_line} in:\n{code_string}"
+        assert block.start_line not in blocks_map, (
+            f"found multiple blocks on same line! see L{block.start_line} in:\n{code_string}"
+        )
         blocks_map[block.start_line] = block
     return dict(sorted(blocks_map.items()))
 

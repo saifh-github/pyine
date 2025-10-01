@@ -9,7 +9,9 @@ import pyine.organisms.datamodules.utils.caching as caching
 import tests.env_checks
 
 
-def make_cached_test_data_list(values: list[tuple[object, object]]) -> list[caching.CachedTestData]:
+def make_cached_test_data_list(
+    values: list[tuple[object, object]],
+) -> list[caching.CachedTestData]:
     return [
         caching.CachedTestData(
             test_idx=idx,
@@ -21,7 +23,6 @@ def make_cached_test_data_list(values: list[tuple[object, object]]) -> list[cach
 
 
 class TestCachedTestData:
-
     def test_length_and_signature_for_basic_types(self) -> None:
         a = caching.CachedTestData(test_idx=0, inputs=123, outputs=45.6)
         b = caching.CachedTestData(test_idx=1, inputs="abc", outputs=[1, 2, 3])
@@ -43,7 +44,6 @@ class TestCachedTestData:
 
 
 class TestCacheStorage:
-
     def test_save_load_and_clear_stored_cache_roundtrip(self, monkeypatch, tmp_path: pathlib.Path) -> None:
         # force deterministic tmp path and params hash so both instances hit the same file
         monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
@@ -92,7 +92,6 @@ class TestCacheStorage:
 
 
 class TestSampling:
-
     def _make_cache_single_problem(
         self,
     ) -> tuple[caching.CodingProblemTestDataCache, traces_utils.CodingProblemIdentifier]:
@@ -206,7 +205,6 @@ class TestSampling:
 
 
 class TestBuildFromDatasetReader:
-
     def test_build_from_reader_validates_metadata_and_path(self, monkeypatch, tmp_path: pathlib.Path) -> None:
         # prepare a fake reader that returns the expected metadata shape
         class _FakeReader:
@@ -250,7 +248,6 @@ class TestBuildFromDatasetReader:
 
     def test_build_from_reader_fails_on_missing_metadata(self) -> None:
         class _BadReader:
-
             @property
             def metadata(self) -> dict:
                 return {"parent_dataset": {"dataset_name": "FAKE"}}  # missing dataset_path
@@ -260,7 +257,6 @@ class TestBuildFromDatasetReader:
 
     def test_build_from_reader_fails_on_missing_path(self, tmp_path: pathlib.Path) -> None:
         class _Reader:
-
             @property
             def metadata(self) -> dict:
                 return {

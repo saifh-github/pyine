@@ -7,7 +7,6 @@ This app wires together:
 - a Trainer that handles batching/padding/masking + the training loop.
 """
 
-import collections
 import logging
 import pathlib
 import typing
@@ -135,7 +134,7 @@ def train(
 
 async def main(
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
-    runtime: pyine.configs.schemas.RuntimeConfig | None = None,  # None unless launched via hydra
+    runtime: (pyine.configs.schemas.RuntimeConfig | None) = None,  # None unless launched via hydra
 ) -> None:
     """Main function for the script; performs fine-tuning and evaluation for huggingface model.
 

@@ -156,7 +156,10 @@ def test_resolve_matching_dataset_paths_glob_default(monkeypatch, tmp_path, kind
         source_dataset_name=src,
         pattern="*.2025-08-*.lmdb",  # shell-style glob
     )
-    assert [p.name for p in matched] == ["alpha.2025-08-01.lmdb", "gamma.2025-08-05.lmdb"]
+    assert [p.name for p in matched] == [
+        "alpha.2025-08-01.lmdb",
+        "gamma.2025-08-05.lmdb",
+    ]
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])

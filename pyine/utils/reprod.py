@@ -18,9 +18,9 @@ import pydantic
 import rich
 import torch
 import transformers
-import wandb
 
 import pyine.utils.portability  # for yaml path dump fixer
+import wandb
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas
@@ -180,7 +180,7 @@ def compute_hash(
             for chunk in iter(lambda: f.read(chunk_size), b""):
                 h.update(chunk)
         return h.hexdigest()
-    elif path_obj.is_dir():
+    if path_obj.is_dir():
         # directory case - combine hashes of all files
         dir_hash = hashlib.new(algorithm)
         all_files = []
@@ -200,14 +200,12 @@ def compute_hash(
                 if raise_on_error:
                     # default behavior: we probably don't expect a dataset to contain bad files
                     raise e
-                else:
-                    # otherwise, include error information in the hash if we can't read a file
-                    file_hash.update(f"ERROR: {str(e)}".encode())
+                # otherwise, include error information in the hash if we can't read a file
+                file_hash.update(f"ERROR: {str(e)}".encode())
             combined = f"{path_hash}:{file_hash.hexdigest()}".encode()
             dir_hash.update(combined)
         return dir_hash.hexdigest()
-    else:
-        raise ValueError(f"path does not exist: {path_obj}")
+    raise ValueError(f"path does not exist: {path_obj}")
 
 
 def set_seed(
@@ -474,7 +472,7 @@ def load_logged_app_config(
     """
     experiment_log_dir = pathlib.Path(experiment_log_dir).expanduser()
     assert experiment_log_dir.is_dir(), f"invalid experiment log dir: {experiment_log_dir}"
-    potential_config_paths = list(sorted(experiment_log_dir.glob("config.*.rank*.json")))
+    potential_config_paths = sorted(experiment_log_dir.glob("config.*.rank*.json"))
     if not potential_config_paths:
         return dict()
     config_path = potential_config_paths[0]

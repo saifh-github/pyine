@@ -89,7 +89,6 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
 
 
 class TestSampleBuilderFullSamples:
-
     def test_full_trace_when_never(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
@@ -116,7 +115,6 @@ class TestSampleBuilderFullSamples:
 
 
 class TestSampleBuilderPartialSamples:
-
     def test_partial_sample_basic(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
@@ -179,7 +177,6 @@ class TestSampleBuilderPartialSamples:
 
 
 class TestSampleBuilderFiltering:
-
     def test_filtering_by_step_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # first, get all traces without filtering
         sb_no_filter = SampleBuilder(source_data=[small_fake_reader])
@@ -263,7 +260,6 @@ class TestSampleBuilderFiltering:
 
 
 class TestSampleBuilderRealData:
-
     @pytest.mark.slow
     @pytest.mark.skipif(
         tests.env_checks.TACO_TRACES_DATASET_MISSING,
@@ -393,7 +389,14 @@ print(x)
         # 6 RETURN main
         steps: list[TestPrivateSampleMethods._FakeEvent] = []
         steps.append(self._FakeEvent(exec_utils.TraceEventType.CALL, 0, self._FakeKey("main", 1)))
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 1, self._FakeKey("main", 2), local_vars={"x": 1}))
+        steps.append(
+            self._FakeEvent(
+                exec_utils.TraceEventType.LINE,
+                1,
+                self._FakeKey("main", 2),
+                local_vars={"x": 1},
+            )
+        )
         steps.append(
             self._FakeEvent(
                 exec_utils.TraceEventType.CALL,
@@ -402,14 +405,38 @@ print(x)
                 arguments=(1,),
             )
         )
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 3, self._FakeKey("foo", 101), local_vars={"y": 2}))
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.RETURN, 4, self._FakeKey("foo", 103), return_value=5))
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.LINE, 5, self._FakeKey("main", 5), local_vars={"x": 6}))
+        steps.append(
+            self._FakeEvent(
+                exec_utils.TraceEventType.LINE,
+                3,
+                self._FakeKey("foo", 101),
+                local_vars={"y": 2},
+            )
+        )
+        steps.append(
+            self._FakeEvent(
+                exec_utils.TraceEventType.RETURN,
+                4,
+                self._FakeKey("foo", 103),
+                return_value=5,
+            )
+        )
+        steps.append(
+            self._FakeEvent(
+                exec_utils.TraceEventType.LINE,
+                5,
+                self._FakeKey("main", 5),
+                local_vars={"x": 6},
+            )
+        )
         steps.append(self._FakeEvent(exec_utils.TraceEventType.RETURN, 6, self._FakeKey("main", 6)))
         return TestPrivateSampleMethods._FakeTrace(steps=steps)
 
     def test_get_code_segment_sample_skips_inner_calls(
-        self, small_fake_reader: FakeTraceDatasetReader, nested_call_trace: "_FakeTrace", mocker
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+        nested_call_trace: "_FakeTrace",
+        mocker,
     ) -> None:
         cfg = SampleTransformConfig(
             min_partial_trace_steps=1,
@@ -505,7 +532,6 @@ def test_code_summary_is_used_from_prompt_db(small_fake_reader: FakeTraceDataset
 
 
 class TestSelectTraces:
-
     def test_select_traces_original_and_obfuscated_skip(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # original: should keep all clusters (no augmented variants exist => one per trace)
         sb_original = SampleBuilder(
@@ -558,11 +584,31 @@ class TestSelectTraces:
             pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_id_str).get_parent_identifier()
         )
         # store two hinted variants for the trace (latest should pick the last one)
-        db.store(identifier=trace_id_str, prompt="hint", result="hint_v1", prompt_name="hints/thingy1")
-        db.store(identifier=trace_id_str, prompt="hint", result="hint_v2", prompt_name="hints/thingy2")
+        db.store(
+            identifier=trace_id_str,
+            prompt="hint",
+            result="hint_v1",
+            prompt_name="hints/thingy1",
+        )
+        db.store(
+            identifier=trace_id_str,
+            prompt="hint",
+            result="hint_v2",
+            prompt_name="hints/thingy2",
+        )
         # store two bug variants for the solution (random should pick one deterministically by seed)
-        db.store(identifier=sol_id_str, prompt="issues", result="bug_A", prompt_name="issues/simple")
-        db.store(identifier=sol_id_str, prompt="issues", result="bug_B", prompt_name="issues/complex")
+        db.store(
+            identifier=sol_id_str,
+            prompt="issues",
+            result="bug_A",
+            prompt_name="issues/simple",
+        )
+        db.store(
+            identifier=sol_id_str,
+            prompt="issues",
+            result="bug_B",
+            prompt_name="issues/complex",
+        )
         # hinted + latest => should include exactly the targeted trace cluster with the latest override
         sb_hinted = SampleBuilder(
             source_data=[small_fake_reader],

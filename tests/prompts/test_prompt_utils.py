@@ -7,7 +7,6 @@ import pyine.prompts.utils as prompt_utils
 
 
 class TestPromptConfig:
-
     @pytest.fixture
     def sample_metadata(self):
         return prompt_utils.PromptMetadata(
@@ -172,7 +171,6 @@ Note: The Faithfulness Secret Sauce"""
 
 
 class TestVersionedPromptConfig:
-
     @pytest.fixture
     def sample_yaml_content_w_default(self):
         return """\

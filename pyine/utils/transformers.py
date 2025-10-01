@@ -327,7 +327,7 @@ class BatchwisePaddingCollator:
         )
         # labels mirror input ids but ignore loss on prompt and padding positions
         labels = input_ids.clone()
-        for row_idx, (input_l, prompt_l) in enumerate(zip(input_len, prompt_len)):
+        for row_idx, (input_l, prompt_l) in enumerate(zip(input_len, prompt_len, strict=False)):
             labels[row_idx, :prompt_l] = self.ignore_index
             labels[row_idx, input_l:] = self.ignore_index
         output = ExampleBatchTensors(
@@ -388,8 +388,8 @@ def _get_base_pretrained_model(obj: typing.Any) -> transformers.PreTrainedModel 
     if isinstance(obj, transformers.PreTrainedModel):
         return obj
     # pipelines have a `.model` that *is* a PreTrainedModel
-    if hasattr(cur, "model") and isinstance(getattr(cur, "model"), transformers.PreTrainedModel):
-        return getattr(cur, "model")
+    if hasattr(cur, "model") and isinstance(cur.model, transformers.PreTrainedModel):
+        return cur.model
     while id(cur) not in seen:
         seen.add(id(cur))
         if isinstance(cur, transformers.PreTrainedModel):
@@ -402,28 +402,28 @@ def _get_base_pretrained_model(obj: typing.Any) -> transformers.PreTrainedModel 
             cur = cand
             continue
         if hasattr(cur, "base_model"):
-            cand = getattr(cur, "base_model")
+            cand = cur.base_model
             if isinstance(cand, transformers.PreTrainedModel):
                 return cand
             cur = cand
             continue
         # TRL wrapper exposes `.pretrained_model`
         if hasattr(cur, "pretrained_model"):
-            cand = getattr(cur, "pretrained_model")
+            cand = cur.pretrained_model
             if isinstance(cand, transformers.PreTrainedModel):
                 return cand
             cur = cand
             continue
         # generic wrapper stacks
         if hasattr(cur, "module"):  # nn.DataParallel / DDP / FSDP / DeepSpeed
-            cur = getattr(cur, "module")
+            cur = cur.module
             continue
         if hasattr(cur, "_orig_mod"):  # accelerate
-            cur = getattr(cur, "_orig_mod")
+            cur = cur._orig_mod
             continue
         # be careful with `.model`: unwrap only if it looks like a top-level HF model
         if hasattr(cur, "model"):
-            cand = getattr(cur, "model")
+            cand = cur.model
             if isinstance(cand, transformers.PreTrainedModel):
                 return cand
         break
@@ -550,7 +550,10 @@ def run_text_generation(
                 skip_special_tokens=True,
                 # clean_up_tokenization_spaces=False,
             )
-            curr_output = {generated_tokens_key: new_tokens_ids, generated_text_key: new_text}
+            curr_output = {
+                generated_tokens_key: new_tokens_ids,
+                generated_text_key: new_text,
+            }
             # carry over targeted (or all) metadata fields with the input batch order
             if forward_batch_keys:
                 curr_target_keys = forward_batch_keys

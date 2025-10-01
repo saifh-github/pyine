@@ -4,8 +4,14 @@ import subprocess
 import sys
 import types
 
-import black
 import pytest
+
+try:
+    import black
+
+    BLACK_AVAILABLE = True
+except ImportError:
+    BLACK_AVAILABLE = False
 
 import pyine.utils.code.formatting as fmt
 
@@ -31,7 +37,10 @@ def test_format_code_ruff_cli_invocation(monkeypatch: pytest.MonkeyPatch):
     assert cmd[1:5] == ["format", "--line-length", "99", "--quiet"]
 
 
-def test_format_code_ruff_cli_failure_falls_back_to_black(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
+def test_format_code_ruff_cli_failure_falls_back_to_black(
+    monkeypatch: pytest.MonkeyPatch,
+):
     def fake_which(executable_name: str) -> str | None:
         return "/usr/bin/ruff" if executable_name == "ruff" else None
 
@@ -48,7 +57,10 @@ def test_format_code_ruff_cli_failure_falls_back_to_black(monkeypatch: pytest.Mo
     assert formatted == "black fallback\n"
 
 
-def test_format_code_black_api_returns_original_on_nothing_changed(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
+def test_format_code_black_api_returns_original_on_nothing_changed(
+    monkeypatch: pytest.MonkeyPatch,
+):
     def _raise_nothing_changed(code_string, mode):
         raise black.NothingChanged
 
@@ -57,7 +69,10 @@ def test_format_code_black_api_returns_original_on_nothing_changed(monkeypatch: 
     assert fmt.format_code(code, formatter="black") == code
 
 
-def test_format_code_black_api_raises_value_error_on_invalid_input(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
+def test_format_code_black_api_raises_value_error_on_invalid_input(
+    monkeypatch: pytest.MonkeyPatch,
+):
     def _raise_invalid_input(code_string, mode):
         raise black.InvalidInput("bad code")
 
@@ -66,6 +81,7 @@ def test_format_code_black_api_raises_value_error_on_invalid_input(monkeypatch: 
         _ = fmt.format_code("def bad(:", formatter="black")
 
 
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
 def test_format_code_black_cli_uses_black_binary(monkeypatch: pytest.MonkeyPatch):
     captured_command: dict[str, list[str]] = {}
 
@@ -94,6 +110,7 @@ def test_format_code_black_cli_uses_black_binary(monkeypatch: pytest.MonkeyPatch
     assert cmd[1:5] == ["--line-length", "88", "--pyi", "--skip-string-normalization"]
 
 
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
 def test_format_code_black_cli_fallbacks_to_module(monkeypatch: pytest.MonkeyPatch):
     captured_command: dict[str, list[str]] = {}
 
@@ -115,7 +132,10 @@ def test_format_code_black_cli_fallbacks_to_module(monkeypatch: pytest.MonkeyPat
     assert cmd[1:4] == ["-m", "black", "--line-length"]
 
 
-def test_format_code_black_cli_failure_raises_value_error(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
+def test_format_code_black_cli_failure_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
     def fake_which(executable_name: str) -> str | None:
         return "/usr/bin/black" if executable_name == "black" else None
 
@@ -129,6 +149,7 @@ def test_format_code_black_cli_failure_raises_value_error(monkeypatch: pytest.Mo
     assert "error formatting code" in str(exc_info.value)
 
 
+@pytest.mark.skipif(not BLACK_AVAILABLE, reason="black not installed")
 def test_format_code_black_api_unavailable(monkeypatch: pytest.MonkeyPatch):
     real_import = builtins.__import__
 

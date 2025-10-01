@@ -231,7 +231,7 @@ def _compare_text_with_numeric_tolerance(a: str, b: str, opt: CompareOptions) ->
     b_parts = _split_with_numbers(b)
     if len(a_parts) != len(b_parts):
         return _fail(f"Token structure differs: {len(a_parts)} tokens vs {len(b_parts)} tokens")
-    for idx, (ak, av), (bk, bv) in zip(range(len(a_parts)), a_parts, b_parts):
+    for idx, (ak, av), (bk, bv) in zip(range(len(a_parts)), a_parts, b_parts, strict=False):
         if ak != bk:
             return _fail(f"Token kind mismatch at token {idx}: {ak} vs {bk}, i.e. {av!r} vs {bv!r}")
         if ak == "text":
@@ -360,27 +360,26 @@ def _compare_sequences(
     if len(a_list) != len(b_list):
         return _fail_path(path, f"Length differs: {len(a_list)} != {len(b_list)}")
     if order_matters:
-        for i, (ai, bi) in enumerate(zip(a_list, b_list)):
+        for i, (ai, bi) in enumerate(zip(a_list, b_list, strict=False)):
             res = _compare_objects(ai, bi, opt, path=f"{path}[{i}]" if path else f"[{i}]")
             if not res.equal:
                 return res
         return _ok()
-    else:
-        # order-insensitive multiset comparison via matching
-        used = [False] * len(b_list)
-        for i, ai in enumerate(a_list):
-            matched = False
-            for j, bj in enumerate(b_list):
-                if used[j]:
-                    continue
-                res = _compare_objects(ai, bj, opt, path="")
-                if res.equal:
-                    used[j] = True
-                    matched = True
-                    break
-            if not matched:
-                return _fail_path(path, f"No match for element at index {i}: {ai!r}")
-        return _ok()
+    # order-insensitive multiset comparison via matching
+    used = [False] * len(b_list)
+    for i, ai in enumerate(a_list):
+        matched = False
+        for j, bj in enumerate(b_list):
+            if used[j]:
+                continue
+            res = _compare_objects(ai, bj, opt, path="")
+            if res.equal:
+                used[j] = True
+                matched = True
+                break
+        if not matched:
+            return _fail_path(path, f"No match for element at index {i}: {ai!r}")
+    return _ok()
 
 
 def _compare_sets(a: set, b: set, opt: CompareOptions, path: str) -> CompareResult:

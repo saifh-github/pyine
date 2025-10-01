@@ -194,13 +194,13 @@ class TestLMDBWriteAndRead:
         assert len(indices) == 3
         assert len(keys) == 3
         assert all(k.startswith("problem_") for k in keys)
-        assert all(reader.get(idx) == test_data[key] for idx, key in zip(indices, keys))
+        assert all(reader.get(idx) == test_data[key] for idx, key in zip(indices, keys, strict=False))
 
         indices, keys = reader.get_indices("*", return_keys=True)
         assert len(indices) == len(test_data)
         assert len(keys) == len(test_data)
         assert indices == sorted(indices)
-        for idx, key in zip(indices, keys):
+        for idx, key in zip(indices, keys, strict=False):
             assert reader.get(idx) == test_data[key]
 
         indices, keys = reader.get_indices("nonexistent_*", return_keys=True)

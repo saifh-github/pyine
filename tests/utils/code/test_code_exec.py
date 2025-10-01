@@ -379,7 +379,7 @@ def func(b: str) -> int:
     valid_safe_steps = [s for s in safe_trace_result.traced_steps if s is not None]
     valid_unsafe_steps = [s for s in unsafe_trace_result.traced_steps if s is not None]
     assert len(valid_safe_steps) == len(valid_unsafe_steps)
-    for safe_step, unsafe_step in zip(valid_safe_steps, valid_unsafe_steps):
+    for safe_step, unsafe_step in zip(valid_safe_steps, valid_unsafe_steps, strict=False):
         assert safe_step.trace_key == unsafe_step.trace_key
         assert safe_step.event_type == unsafe_step.event_type
         assert safe_step.global_variables == unsafe_step.global_variables

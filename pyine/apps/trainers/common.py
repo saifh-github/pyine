@@ -5,7 +5,6 @@ import typing
 import langchain_core.runnables
 import pydantic
 import transformers
-import wandb
 
 import pyine.configs.schemas
 import pyine.data.datamodule
@@ -14,6 +13,7 @@ import pyine.evals.utils
 import pyine.utils.langchain
 import pyine.utils.llm_providers
 import pyine.utils.transformers
+import wandb
 
 logger = logging.getLogger(__name__)
 

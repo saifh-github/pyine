@@ -1,5 +1,4 @@
 import datetime
-import logging
 import pathlib
 import pickle
 import shutil
@@ -90,7 +89,7 @@ def benchmark_serialization_methods(
         data_size = sys.getsizeof(pickle.dumps(obj=entries, protocol=pickle.HIGHEST_PROTOCOL))
         # IMPORTANT NOTE: since the data is RANDOM, this might be worse-case for compression!
         # (so don't look at compression ratio, just look at the speed, and even then, with grain of salt)
-        print(f"prepared {len(entries)} samples for a raw total of {data_size / 1024 ** 2:.2f} MB")
+        print(f"prepared {len(entries)} samples for a raw total of {data_size / 1024**2:.2f} MB")
     else:
         # nothing to do here, will run dataset write in foor loop below
         pass

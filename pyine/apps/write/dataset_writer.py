@@ -43,7 +43,6 @@ import click
 
 import pyine.data.deltas.dataset_utils as delta_utils
 import pyine.data.deltas.dataset_writer as delta_writer
-import pyine.data.traces.dataset_utils as trace_utils
 import pyine.data.traces.dataset_writer as trace_writer
 import pyine.data.utils.lmdb_io
 import pyine.prompts

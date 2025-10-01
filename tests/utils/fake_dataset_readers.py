@@ -72,7 +72,6 @@ class FakeTraceDataConfig:
 
 
 class _FakeBase:
-
     @property
     def metadata(self) -> dict[str, typing.Any]:
         return {
@@ -191,12 +190,11 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
             if not (0 <= index_or_key < len(self)):
                 raise IndexError(f"index {index_or_key} out of range")
             return index_or_key
-        elif isinstance(index_or_key, str):
+        if isinstance(index_or_key, str):
             if index_or_key not in self.trace_keys:
                 raise KeyError(f"key {index_or_key} not found in fake dataset")
             return self.trace_keys.index(index_or_key)
-        else:
-            raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
+        raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
 
     def _generate_data(self) -> None:
         # prepare problems
@@ -314,32 +312,30 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         if self._cfg.code_kind == "script" or self._cfg.entrypoint_name is None:
             # use stdin-like mode in tracer (no entrypoint), but we'll still keep a function pattern
             # for code_blocks richness; however, tracing will run whole script body.
-            return "total = 0\n" "for i in range(3):\n" "    total += i\n" "print(total)\n"
-        else:
-            # function-based code with deterministic operations and small variation per solution;
-            # expect one input value `x` passed to the entrypoint.
-            if s_idx % 2 == 0:
-                return (
-                    "def solution(x):\n"
-                    "    x = int(x)\n"
-                    "    total = 0\n"
-                    "    for i in range(x):\n"
-                    "        total += i\n"
-                    "    print(total)\n"
-                    "    return 2 * x\n"
-                )
-            else:
-                return (
-                    "def solution(x):\n"
-                    "    x = int(x)\n"
-                    "    val = x * x\n"
-                    "    if x % 2 == 0:\n"
-                    "        val = val + x\n"
-                    "    else:\n"
-                    "        val = val - x\n"
-                    "    print(val)\n"
-                    "    return 2 * x\n"
-                )
+            return "total = 0\nfor i in range(3):\n    total += i\nprint(total)\n"
+        # function-based code with deterministic operations and small variation per solution;
+        # expect one input value `x` passed to the entrypoint.
+        if s_idx % 2 == 0:
+            return (
+                "def solution(x):\n"
+                "    x = int(x)\n"
+                "    total = 0\n"
+                "    for i in range(x):\n"
+                "        total += i\n"
+                "    print(total)\n"
+                "    return 2 * x\n"
+            )
+        return (
+            "def solution(x):\n"
+            "    x = int(x)\n"
+            "    val = x * x\n"
+            "    if x % 2 == 0:\n"
+            "        val = val + x\n"
+            "    else:\n"
+            "        val = val - x\n"
+            "    print(val)\n"
+            "    return 2 * x\n"
+        )
 
 
 class FakeDeltaDatasetReader(FakeTraceDatasetReader):

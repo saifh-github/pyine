@@ -41,7 +41,6 @@ def delta_reader(
 
 
 class TestFakeTraceDatasetReader:
-
     def test_lengths_and_keys_are_consistent(
         self,
         trace_reader: FakeTraceDatasetReader,
@@ -118,7 +117,6 @@ class TestFakeTraceDatasetReader:
 
 
 class TestFakeDeltaDatasetReader:
-
     def test_lengths_and_keys_are_consistent(
         self,
         delta_reader: FakeDeltaDatasetReader,
@@ -127,7 +125,7 @@ class TestFakeDeltaDatasetReader:
         assert len(delta_reader.deltas_keys) == len(delta_reader)
         assert len(delta_reader._trace_indices) == len(delta_reader.trace_keys) == len(delta_reader)
         # deltas keys match the corresponding trace keys + suffix
-        for tkey, dkey in zip(delta_reader.trace_keys, delta_reader.deltas_keys):
+        for tkey, dkey in zip(delta_reader.trace_keys, delta_reader.deltas_keys, strict=False):
             assert dkey.startswith(tkey)
             assert dkey.endswith(traces_utils.DELTAS_SUFFIX)
 

@@ -60,10 +60,9 @@ def patch_datasets(monkeypatch, train_samples, test_samples):
         assert name == "BAAI/TACO"
         if split == "train":
             return FakeSubset(train_samples)
-        elif split == "test":
+        if split == "test":
             return FakeSubset(test_samples)
-        else:
-            raise AssertionError("unexpected split")
+        raise AssertionError("unexpected split")
 
     monkeypatch.setattr(taco_reader.hf_datasets, "load_dataset", _fake_load_dataset)
 

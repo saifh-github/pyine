@@ -21,7 +21,9 @@ Version 1.3 adds support for `hydra_convert="object"`, absolute config path spec
 """
 
 
-def get_hydra_runtime_configs(group: str = "runtime") -> list[pyine.configs.schemas.ConfigDescription]:
+def get_hydra_runtime_configs(
+    group: str = "runtime",
+) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns runtime configs for hydra zen storage."""
     default_runtime_config = pyine.configs.schemas.ConfigDescription(
         name="default",
@@ -58,7 +60,9 @@ def get_hydra_runtime_configs(group: str = "runtime") -> list[pyine.configs.sche
     return [default_runtime_config, dry_run_runtime_config]
 
 
-def get_openai_client_configs(group: str) -> list[pyine.configs.schemas.ConfigDescription]:
+def get_openai_client_configs(
+    group: str,
+) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns OpenAI client configs for hydra zen storage."""
     default_openai_client_config = pyine.configs.schemas.ConfigDescription(
         name="default",

@@ -8,7 +8,6 @@ from pyine.utils.code.input_mock import MockInput, MockInputContext
 
 
 class TestMockInput:
-
     inputs_str = "line1\nline2\nline3\n"
 
     @pytest.fixture
@@ -83,7 +82,6 @@ class TestMockInput:
 
 
 class TestMockInputContext:
-
     def test_context_manager_basics(self):
         original_stdin = sys.stdin
         with MockInputContext("mocked input"):
@@ -93,9 +91,8 @@ class TestMockInputContext:
 
     def test_exception_handling(self):
         original_stdin = sys.stdin
-        with pytest.raises(ValueError):
-            with MockInputContext("mock"):
-                raise ValueError("Test exception")
+        with pytest.raises(ValueError), MockInputContext("mock"):
+            raise ValueError("Test exception")
         assert sys.stdin is original_stdin  # noqa
 
     def test_nested_contexts(self):

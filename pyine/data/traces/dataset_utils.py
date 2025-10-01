@@ -77,8 +77,7 @@ def compare_result_strings(proposed: str, reference: str) -> bool:
     if is_float(proposed) and is_float(reference):
         rtol, atol = pyine.utils.portability.estimate_tolerance(reference)
         return bool(np.isclose(float(proposed), float(reference), rtol=rtol, atol=atol))
-    else:
-        return proposed == reference
+    return proposed == reference
 
 
 @dataclasses.dataclass(frozen=True)
@@ -177,12 +176,12 @@ class TraceIdentifier(SolutionIdentifier):
     def is_augmented(self) -> bool:
         """Returns whether this trace is based on 'augmented' (modified) code."""
         if self.augment_category is not None or self.augment_idx is not None:
-            assert (
-                self.augment_category is not None and self.augment_idx is not None
-            ), "if augmentation is present, both augment category and index must be present"
-            assert not any(
-                [c in self.augment_category for c in ["/", ",", " ", ":"]]
-            ), f"augm category should have been cleaned up: {self.augment_category}"
+            assert self.augment_category is not None and self.augment_idx is not None, (
+                "if augmentation is present, both augment category and index must be present"
+            )
+            assert not any([c in self.augment_category for c in ["/", ",", " ", ":"]]), (
+                f"augm category should have been cleaned up: {self.augment_category}"
+            )
             return True
         return False
 
@@ -522,9 +521,9 @@ class TraceDatasetMetadata(pydantic.BaseModel):
                 if augm_type not in self.augment_types:
                     raise ValueError(f"unexpected trace augment type: {augm_type}")
                 assert trace_meta.is_augmented and trace_meta.augment_tags
-                assert any(
-                    [t == f"augment:{augm_type}" for t in trace_meta.augment_tags]
-                ), "augment type is not in the trace tags; this should not happen?"
+                assert any([t == f"augment:{augm_type}" for t in trace_meta.augment_tags]), (
+                    "augment type is not in the trace tags; this should not happen?"
+                )
             else:
                 assert not trace_meta.is_augmented
         leftover_trace_ids = {trace_meta.trace_id for trace_meta in self.leftover_traces}
@@ -560,7 +559,7 @@ class CodingProblemIterator:
     >>>     print(f"{problem.problem_id=}")
     >>>     for solution in solutions:
     >>>         print(f"{solution.solution_id=}")
-    >>>     # ...
+    >>> # ...
     """
 
     @dataclasses.dataclass(frozen=True)
@@ -796,7 +795,7 @@ class CodingProblemIterator:
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
             # with TACO, we're loading JSONs: the 'problem metadata' are JSONs paths to parse later
-            json_file_paths = list(sorted(self.root_data_path.glob("*.json")))
+            json_file_paths = sorted(self.root_data_path.glob("*.json"))
             if not json_file_paths:
                 raise FileNotFoundError(f"no JSON files found in the dataset root directory: {self.root_data_path}")
             output_paths = []
@@ -810,12 +809,11 @@ class CodingProblemIterator:
                     continue  # skip banned samples (likely due to code analysis failure)
                 # optionally filter by a target pattern
                 if self._target_pattern is not None:
-                    if self._target_pattern.is_regex and not re.fullmatch(
-                        self._target_pattern.pattern, json_file_path.name
-                    ):
-                        continue
-                    elif not self._target_pattern.is_regex and not fnmatch.fnmatch(
-                        json_file_path.name, self._target_pattern.pattern
+                    if (
+                        self._target_pattern.is_regex
+                        and not re.fullmatch(self._target_pattern.pattern, json_file_path.name)
+                        or not self._target_pattern.is_regex
+                        and not fnmatch.fnmatch(json_file_path.name, self._target_pattern.pattern)
                     ):
                         continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
@@ -837,8 +835,7 @@ class CodingProblemIterator:
             if not output_paths:
                 raise ValueError("no valid JSON files left after filtering")
             return output_paths
-        else:
-            raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
+        raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
 
     def _load_banned_data(
         self,
@@ -870,8 +867,7 @@ class CodingProblemIterator:
             data["__root_hash__"] = pyine.utils.reprod.compute_hash(json_file)
             data["__problem_idx__"] = int(json_file.stem)  # for TACO, should be a unique problem number
             return data
-        else:
-            raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
+        raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
 
     def _process_data(
         self,
@@ -882,8 +878,8 @@ class CodingProblemIterator:
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
             parsing_errors = []
-            if not problem_data or problem_data.get("error", None):
-                parsing_errors.append(problem_data.get("error", None))
+            if not problem_data or problem_data.get("error"):
+                parsing_errors.append(problem_data.get("error"))
             problem_idx = problem_data["__problem_idx__"]  # for TACO, this is a unique id across subsets
             problem_id = CodingProblemIdentifier(
                 dataset=self.dataset_name,
@@ -896,7 +892,7 @@ class CodingProblemIterator:
             outputs_array = problem_data["input_output"]["outputs"]
             assert isinstance(inputs_array, list) and isinstance(outputs_array, list)
             assert len(inputs_array) == len(outputs_array)
-            test_inout_pairs = [(inputs, outputs) for inputs, outputs in zip(inputs_array, outputs_array)]
+            test_inout_pairs = [(inputs, outputs) for inputs, outputs in zip(inputs_array, outputs_array, strict=False)]
             entrypoint_name = problem_data["input_output"].get("fn_name", None)
 
             def _tag_cleaner(x):
@@ -948,7 +944,7 @@ class CodingProblemIterator:
                             parent_id=problem_id,
                             solution_id=solution_id,
                             code=solution_code,
-                            analysis_errors=analysis_errors if analysis_errors else None,
+                            analysis_errors=(analysis_errors if analysis_errors else None),
                             analysis_results=analysis_results,
                             is_banned=solution_id.solution_idx in banned_solution_idxs,
                         )

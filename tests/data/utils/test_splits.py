@@ -174,7 +174,10 @@ def test_stratified_grouping_and_default_group(
     cfg = splits.SplitConfig(
         seed=7,
         subset_names=["train", "valid"],
-        subset_assign_prob_map={"train": 1.0, "valid": 0.0},  # deterministic to simplify checks
+        subset_assign_prob_map={
+            "train": 1.0,
+            "valid": 0.0,
+        },  # deterministic to simplify checks
         stratif_group_rules=["+group:A", "+group:B"],
         rules_are_case_sensitive=True,
     )
