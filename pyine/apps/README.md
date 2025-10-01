@@ -20,9 +20,9 @@ Trace annotation:
 
 - Prompt-chain annotator: [`pyine/apps/annotate/trace_annot_generator.py`](./annotate/trace_annot_generator.py)
 
-Trace repair:
+Trace analysis and repair:
 
-- IO rewrite pipeline: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+- Problem data (I/O) rewrite pipeline: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
 
 Training/evaluation (Hydra-based apps):
 
