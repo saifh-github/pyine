@@ -174,14 +174,13 @@ python -m pyine.apps.annotate.trace_annot_generator \
 
 ______________________________________________________________________
 
-### Trace input/output rewrite (LLM-assisted repair)
+### Trace problem data (input/output) rewrite (LLM-assisted repair)
 
 **Script:** [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
 
-**Main use:** iterates over coding problems in a dataset, invokes the
-`input_output_rewrite` prompt, validates the generated samples against bundled solutions, and stores
-successful repairs in a cache-backed JSON file (defaults to
-`<PYINE_DATA_CACHE>/taco_input_output_overrides.json`).
+**Main use:** iterates over coding problems in a dataset, invokes the `input_output_rewrite` prompt
+where necessary, validates the generated samples against bundled solutions, and stores successful
+repairs in a cache-backed JSON file (saved by default in `<PYINE_DATA_CACHE>`).
 
 **Example:**
 
@@ -197,8 +196,8 @@ python -m pyine.apps.traces.trace_failure_analyzer \
     --problem 017304.json
 ```
 
-Repairs append immediately to the cache file (or the custom path supplied via `--override-log`),
-making the run resilient to interruptions.
+Repairs are appended to any already-existing cache file (or the custom path supplied via
+`--override-log`), making the run resilient to interruptions.
 
 ______________________________________________________________________
 
