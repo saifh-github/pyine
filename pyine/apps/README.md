@@ -69,7 +69,7 @@ python -m pyine.apps.splits.dataset_splitter partition \
 - Split runs write a single binary file to `<PYINE_DATA_ROOT>/splits/<DATASET>-split.bin`. The file
   bundles subset assignments, hash lists, and grouping metadata used by downstream datamodules.
 - Partition runs create chunk files named `<DATASET>-split.problem_ids.<rank>of<total>.{yaml,json}`
-  in the directory supplied via `--output-dir` (defaults to the split file parent).
+  in the directory supplied via `--output-dir`.
 - Logs stream to stdout and to `PYINE_LOGS_ROOT/pyine.log` via the shared logging setup.
 
 ______________________________________________________________________
@@ -290,7 +290,7 @@ python -m pyine.apps.trainers.openai_finetune_configs
 **Examples:**
 
 ```bash
-# evaluate the default base model directly (i.e. no fine-tuning; relies on )
+# evaluate the default base model directly (i.e. no fine-tuning; relies on skip_fine_tuning=true)
 python -m pyine.apps.trainers.openai_finetune \
   +experiment=TACO_latest \
   skip_fine_tuning=true

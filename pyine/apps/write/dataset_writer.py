@@ -10,13 +10,11 @@ Examples:
     Write a traces dataset from the latest repackaged TACO dataset with caps and verbose logging:
     ```bash
         python -m pyine.apps.write.dataset_writer traces \
-            --dataset-name TACO
-            --output-dataset-path /tmp/traces.lmdb \
+            --dataset-name TACO \
             --max-output-traces 1000 \
             --max-solutions-per-problem 10 \
             --max-tests-per-solution 10 \
-            --max-trace-var-repr-length 10000 \
-            --max-trace-valid-events 20000 \
+            --output-tag demo-run \
             --verbose
     ```
 
@@ -24,17 +22,16 @@ Examples:
     ```bash
         python -m pyine.apps.write.dataset_writer deltas \
             --traces-dataset /data/my_traces.lmdb \
-            --output-dataset-path /data/my_deltas.lmdb \
+            --output-path /data/my_deltas.lmdb \
             --verbose
     ```
 
 
 Notes:
-- If `--dataset-path` is omitted for the traces command group, the latest dataset is used.
-- If `--output-dataset-path` is omitted, a default location is computed; if no explicit tag is given,
-  one is derived from the configuration hash.
-- For the partition command group, the split files should be those created by the
-  `pyine.apps.split.dataset_splitter` CLI app.
+- If `--dataset-path` is omitted for the traces command, the latest dataset for the specified
+  source is resolved automatically when supported.
+- If `--output-path` is omitted for traces, a default location is computed; provide `--output-tag`
+  to influence the generated path, or set `--output-path` explicitly for full control.
 - Pass `--force` to overwrite an existing output without an interactive confirmation.
 """
 
