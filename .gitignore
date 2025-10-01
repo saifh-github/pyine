@@ -22,6 +22,7 @@ venv/
 .venv/
 
 # IDE specific files
+.aiassistant/
 .idea/
 .junie/
 .vscode/
