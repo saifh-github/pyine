@@ -192,7 +192,9 @@ class SampleData(typing.NamedTuple):
 
     def get_tag_list(self) -> list[str]:
         """Returns the list of tags for this trace in its original format (one tag = one item)."""
-        return self.comma_separated_tags.split(",")
+        if not self.comma_separated_tags:
+            return []
+        return [tag for tag in self.comma_separated_tags.split(",") if tag]
 
 
 SampleDataParserType = pyine.data.datamodule.BaseDataParserType[SampleData]
