@@ -103,7 +103,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     max_tests_args_length: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
-            default=None,
+            default=1000,
             description="Maximum length of test inputs and outputs, in characters. If None, no maximum.",
         ),
     ]
@@ -117,14 +117,14 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     max_trace_var_repr_length: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
-            default=None,
+            default=10_000,
             description="Maximum length of variable representation strings, in characters.",
         ),
     ]
     max_trace_valid_events: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
-            default=None,
+            default=20_000,
             description="Maximum number of (valid, in-scope) events allowed per trace. If None, no maximum.",
         ),
     ]

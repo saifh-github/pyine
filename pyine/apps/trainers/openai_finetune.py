@@ -70,18 +70,18 @@ def train(
     approx_tokens = _compute_estimated_train_token_count(config, datamodule)
     logger.info(f"training tokens count estimate: ~{approx_tokens:,}")
     finetuner = config.openai_finetuner_config.instantiate(client)
-    if len(config.train_subset_names) != 1:
+    if len(config.datamodule_config.train_subset_names) != 1:
         raise ValueError("must provide exactly one train dataset for openai finetuner")
     tr_file_path = datamodule.get_openai_messages_dataset(
-        subset_name=config.train_subset_names[0],
+        subset_name=config.datamodule_config.train_subset_names[0],
         append_answer=config.needs_answers_in_train_dataset(),
         merge_system_with_user=not config.supports_system_prompt(),
     )
     tr_file_id = finetuner.ensure_uploaded(tr_file_path)
-    if len(config.valid_subset_names) != 1:
+    if len(config.datamodule_config.valid_subset_names) != 1:
         raise ValueError("must provide exactly one valid dataset for openai finetuner")
     va_file_path = datamodule.get_openai_messages_dataset(
-        subset_name=config.valid_subset_names[0],
+        subset_name=config.datamodule_config.valid_subset_names[0],
         append_answer=config.needs_answers_in_train_dataset(),
         merge_system_with_user=not config.supports_system_prompt(),
     )

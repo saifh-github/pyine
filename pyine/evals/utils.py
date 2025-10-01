@@ -43,6 +43,10 @@ class TokenUsageInfo:
 
     def __add__(self, other: typing.Any) -> "TokenUsageInfo":
         """Add two TokenUsageInfo objects together, returning a new object with the result."""
+        if self == self.get_default():
+            return other
+        if other == self.get_default():
+            return self
         return TokenUsageInfo(
             total_tokens=self._combine_field(self.total_tokens, other.total_tokens, "total_tokens"),
             prompt_tokens=self._combine_field(self.prompt_tokens, other.prompt_tokens, "prompt_tokens"),
@@ -53,6 +57,15 @@ class TokenUsageInfo:
 
     def __iadd__(self, other: typing.Any) -> "TokenUsageInfo":
         """Add two TokenUsageInfo objects together, in-place."""
+        if other == self.get_default():
+            return self
+        if self == self.get_default():
+            self.total_tokens = other.total_tokens
+            self.prompt_tokens = other.prompt_tokens
+            self.cached_tokens = other.cached_tokens
+            self.reasoning_tokens = other.reasoning_tokens
+            self.completion_tokens = other.completion_tokens
+            return self
         self.total_tokens = self._combine_field(self.total_tokens, other.total_tokens, "total_tokens")
         self.prompt_tokens = self._combine_field(self.prompt_tokens, other.prompt_tokens, "prompt_tokens")
         self.cached_tokens = self._combine_field(self.cached_tokens, other.cached_tokens, "cached_tokens")

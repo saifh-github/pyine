@@ -503,7 +503,7 @@ class SampleBuilder(SampleDataParserType):
                     filtered_by_var_length += 1
                     continue
             filtered_traces.append(trace_meta)
-        logger.info(
+        logger.debug(
             f"trace filtering: kept {len(filtered_traces)}/{len(traces)} traces "
             f"(filtered {filtered_by_step_count} by step count, {filtered_by_var_length} by var length)"
         )
