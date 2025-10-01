@@ -460,8 +460,9 @@ class SampleBuilder(SampleDataParserType):
         list[pyine.data.traces.dataset_utils.TraceMetadata],
     ]:
         """Initializes a list of LMDB readers and a list of target traces."""
-        if not isinstance(source_data, list):
+        if not isinstance(source_data, (list, tuple)):
             source_data = [source_data]
+        source_data = list(source_data)
         logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join([str(s) for s in source_data])}")
         for src_idx, src in enumerate(source_data):
             if isinstance(src, (str, pathlib.Path)):

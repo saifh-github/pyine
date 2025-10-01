@@ -483,7 +483,7 @@ def run_text_generation(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
     dataloader: torch.utils.data.DataLoader,
-    gen_config: GenerationConfig,
+    gen_config: transformers.GenerationConfig,
     forward_batch_keys: list[str] | bool | None = None,
     generated_text_key: str = "prediction",
     generated_tokens_key: str = "generated_tokens",
@@ -504,8 +504,8 @@ def run_text_generation(
         dataloader: Iterable of batches. Each batch must be a dict with keys
             ``"input_ids"``, ``"attention_mask"``, and ``"input_len"``; lengths in ``input_len``
             are used to strip the prompt from the decoded sequences.
-        gen_config: Generation settings converted into ``transformers.GenerationConfig`` for calls
-            to ``model.generate``.
+        gen_config: Generation settings already converted into a ``transformers.GenerationConfig``
+            object for calls to ``model.generate``.
         forward_batch_keys: Extra batch keys to copy into each output item. If a list, only those
             keys are forwarded. If True, forwards all keys present in the input batch. If None or
             empty, no additional keys are forwarded.
@@ -537,7 +537,7 @@ def run_text_generation(
             generation_result = model.generate(
                 input_ids=input_ids,
                 attention_mask=attn_mask,
-                generation_config=transformers.GenerationConfig(**gen_config.model_dump()),
+                generation_config=gen_config,
                 return_dict_in_generate=True,
             )
         # note: generation_result.sequences includes the prompt + newly generated tokens
