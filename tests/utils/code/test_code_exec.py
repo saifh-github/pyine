@@ -2,7 +2,8 @@ import sys
 
 import pytest
 
-import pyine.utils.code.blocks as code_blocks
+import pyine.utils.code.blocks
+import pyine.utils.code.execution
 from pyine.utils.code.execution import (
     EXEC_MODULE_OBJ_NAME,
     EXEC_TRACE_FILE_NAME,
@@ -400,8 +401,8 @@ def _build_dummy_trace_result() -> tuple[TraceResult, TraceEvent, TraceKey]:
         trace_step_idx=0,
         trace_key=trace_key,
     )
-    dummy_block = code_blocks.CodeBlock(
-        type=code_blocks.BlockType.FUNCTION,
+    dummy_block = pyine.utils.code.blocks.CodeBlock(
+        type=pyine.utils.code.blocks.BlockType.FUNCTION,
         name="fn",
         depth=0,
         parent_line=None,
@@ -625,3 +626,79 @@ def test_safe_execute_times_out_and_kills_process(monkeypatch: pytest.MonkeyPatc
             code_string="",
             inputs=None,
         )
+
+
+def test_trace_tag_type_size_buckets_cover_ranges() -> None:
+    buckets = {
+        0: "0",
+        5: "1_10",
+        50: "10_100",
+        500: "100_1k",
+        5000: "1k_10k",
+        50000: "10k_100k",
+        150000: "100k_plus",
+    }
+    for count, expected in buckets.items():
+        traced_steps = [object() for _ in range(count)]
+        tags = TraceTagType.get_step_count_tags(traced_steps)
+        assert tags[0].endswith(expected)
+        assert tags[1].endswith(expected)
+
+
+def test_trace_result_properties(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        pyine.utils.code.execution.pyine.utils.portability,
+        "get_code_with_numbered_lines",
+        lambda code: f"numbered:{code}",
+    )
+    trace_key = pyine.utils.code.execution.TraceKey("file.py", "func", 10)
+    trace_event = pyine.utils.code.execution.TraceEvent(
+        event_type=pyine.utils.code.execution.TraceEventType.LINE,
+        stack_trace=[trace_key],
+        global_variables={"g": "1"},
+        local_variables={"x": "2"},
+        arguments=None,
+        return_value="3",
+        stdout="out",
+        stderr="err",
+        exception=None,
+        trace_step_idx=1,
+        trace_key=trace_key,
+    )
+    trace_result = pyine.utils.code.execution.TraceResult(
+        identifier="trace-1",
+        code_string="print('hi')",
+        code_blocks={},
+        inputs=None,
+        expected_output=None,
+        max_valid_events=None,
+        max_events_per_line=None,
+        max_var_repr_length=None,
+        traced_steps=[None, trace_event, None],
+        traced_steps_map={},
+        entrypoint_name="main",
+        entrypoint_step_idx=1,
+        return_value="ok",
+        exception=None,
+        stdout="stdout",
+        stderr="",
+        metadata={},
+        tags=[],
+    )
+    assert "numbered:" in trace_result.code_string_with_line_numbers
+    assert trace_result.total_step_count == 3
+    assert trace_result.valid_step_count == 1
+
+
+def test_trace_context_sets_and_restores_trace() -> None:
+    events: list[str] = []
+
+    def tracer(frame, event, arg):  # noqa
+        events.append(event)
+        return tracer
+
+    original_trace = sys.gettrace()
+    with pyine.utils.code.execution.trace_context(tracer):
+        _ = sum(range(3))
+    assert events
+    assert sys.gettrace() is original_trace

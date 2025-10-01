@@ -1,0 +1,111 @@
+import types
+
+import pytest
+
+import pyine.configs.base
+import pyine.configs.schemas
+import pyine.configs.searchpath
+
+
+def test_register_searchpath_plugin_registers_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    registered = []
+
+    class _FakePlugins:
+        def register(self, plugin):
+            registered.append(plugin)
+
+    fake_plugins = _FakePlugins()
+    monkeypatch.setattr(
+        pyine.configs.base.hydra.core.plugins.Plugins,
+        "instance",
+        classmethod(lambda cls: fake_plugins),
+    )
+    pyine.configs.base.register_searchpath_plugin()
+    assert registered == [pyine.configs.searchpath.SearchPathPlugin]
+
+
+def test_print_experiment_configs_lists_expected_sections(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = {"initialize": 0, "render": []}
+
+    class _HydraContext:
+        def __enter__(self):
+            calls["initialize"] += 1
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        pyine.configs.base.hydra,
+        "initialize",
+        lambda **_kwargs: _HydraContext(),
+    )
+    monkeypatch.setattr(
+        pyine.configs.base.hydra,
+        "compose",
+        lambda **_kwargs: {"config": "value"},
+    )
+    monkeypatch.setattr(
+        pyine.configs.base.pyine.utils.portability,
+        "render_config",
+        lambda cfg, composed: calls["render"].append((cfg, composed)),
+    )
+    experiment = types.SimpleNamespace(name="exp_a", group="experiment", config=types.SimpleNamespace())
+    ignored = types.SimpleNamespace(name="other", group="misc", config=types.SimpleNamespace())
+    pyine.configs.base.print_experiment_configs([experiment, ignored], "app")
+    captured = capsys.readouterr().out
+    assert "+experiment=exp_a" in captured
+    assert calls["initialize"] == 1
+    assert calls["render"] == [(experiment.config, {"config": "value"})]
+
+
+def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_calls: list[dict[str, object]] = []
+
+    class _FakeRun:
+        def __init__(self) -> None:
+            self.id = "run-id"
+            self.offline = False
+            self.name = "run-name"
+            self.url = None
+            self.tags = ("tag",)
+            self.notes = "note"
+
+    def fake_wandb_init(**kwargs):
+        run_calls.append(kwargs)
+        return _FakeRun()
+
+    monkeypatch.setattr(
+        pyine.configs.schemas.wandb,
+        "init",
+        fake_wandb_init,
+    )
+    runtime = pyine.configs.schemas.RuntimeConfig(
+        exp_name="exp",
+        run_name="run",
+    )
+    run_id = runtime.init_wandb(project="proj")
+    assert run_id == "run-id"
+    runtime.add_wandb_tag("extra")
+    assert "extra" in runtime.wandb_run.tags
+    assert runtime.wandb_run_id == "run-id"
+    assert run_calls and run_calls[0]["project"] == "proj"
+
+
+def test_runtime_config_wandb_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = pyine.configs.schemas.RuntimeConfig(
+        exp_name="exp",
+        run_name="run",
+        dry_run=True,
+    )
+    with pytest.raises(RuntimeError):
+        runtime.init_wandb()
+    runtime = pyine.configs.schemas.RuntimeConfig(
+        exp_name="exp",
+        run_name="run",
+    )
+    with pytest.raises(RuntimeError):
+        runtime.add_wandb_tag("extra")

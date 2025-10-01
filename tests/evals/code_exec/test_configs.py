@@ -1,0 +1,501 @@
+import dataclasses
+import types
+
+import langchain_core.messages
+import pytest
+
+import pyine.evals.code_exec.configs
+import pyine.evals.common
+
+
+class _FakeSample:
+    def __init__(self, identifier: str) -> None:
+        self.identifier = identifier
+        self.expected_output = f"expected-{identifier}"
+        self._tags = ["tag"]
+
+    def _asdict(self) -> dict[str, str]:
+        return {"identifier": self.identifier}
+
+    def get_tag_list(self) -> list[str]:
+        return list(self._tags)
+
+
+class _FakeSampleBuilder(list):
+    def __init__(self, samples: list[_FakeSample]) -> None:
+        super().__init__(samples)
+
+
+class _FakeDataModule:
+    def __init__(self, samples: list[_FakeSample]) -> None:
+        self._samples = samples
+
+    def get_parser(
+        self,
+        subset_name: str,
+    ) -> _FakeSampleBuilder:
+        return _FakeSampleBuilder(self._samples)
+
+
+@dataclasses.dataclass
+class _FakeSampleEval:
+    identifier: str
+    hard_match: bool = True
+    soft_match: str | None = None
+    llm_score: float | None = None
+    tags: list[str] | None = None
+
+
+class _FakeOutcomeEvaluator:
+    def __init__(self, llm_provider_config=None) -> None:
+        self.llm_provider_config = llm_provider_config
+        self.results: list[_FakeSampleEval] = []
+        self.added: list[tuple[str, str, str, list[str]]] = []
+
+    def add_sample(
+        self,
+        identifier: str,
+        expected: str,
+        predicted: str,
+        tags: list[str] | None,
+    ) -> None:
+        self.added.append((identifier, expected, predicted, tags or []))
+        self.results.append(
+            _FakeSampleEval(
+                identifier=identifier,
+                tags=tags or [],
+            ),
+        )
+
+
+@dataclasses.dataclass
+class _FakeArtifact:
+    sample: object
+    eval_result: object
+
+
+@dataclasses.dataclass
+class _FakeEvalResult:
+    metrics: dict[str, object]
+    artifacts: list[_FakeArtifact]
+
+
+def _build_message(identifier: str) -> langchain_core.messages.AIMessage:
+    return langchain_core.messages.AIMessage(
+        content=f"prediction-{identifier}",
+        usage_metadata={
+            "total_tokens": 2,
+            "prompt_tokens": 1,
+            "input_tokens": 1,
+            "output_tokens": 1,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_runnable_model_sequential(monkeypatch: pytest.MonkeyPatch) -> None:
+    samples = [_FakeSample("s0"), _FakeSample("s1")]
+    data_module = _FakeDataModule(samples)
+    chain_calls: list[dict[str, str]] = []
+
+    class _FakeChain:
+        def invoke(
+            self,
+            payload: dict[str, str],
+        ) -> langchain_core.messages.AIMessage:
+            chain_calls.append(payload)
+            return _build_message(payload["identifier"])
+
+    async def fake_get_metrics(evaluator, token_usage):
+        return {"accuracy": len(evaluator.results), "total_tokens": token_usage.total_tokens}
+
+    def fake_tqdm(iterable, **_kwargs):
+        return iterable
+
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        "SampleBuilder",
+        _FakeSampleBuilder,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        "SampleData",
+        _FakeSample,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "OutcomeEvaluator",
+        _FakeOutcomeEvaluator,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalArtifact",
+        _FakeArtifact,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalResult",
+        _FakeEvalResult,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "get_metrics",
+        fake_get_metrics,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.tqdm,
+        "tqdm",
+        fake_tqdm,
+    )
+
+    config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+        eval_runnable_config=pyine.evals.common.RunnableEvalConfig(parallel=False),
+    )
+    result = await config.evaluate_runnable_model(
+        chain=_FakeChain(),
+        datamodule=data_module,
+        eval_subset_name="subset",
+        verbose=True,
+    )
+
+    assert isinstance(result, _FakeEvalResult)
+    assert len(result.artifacts) == 2
+    assert result.metrics["accuracy"] == 2
+    assert chain_calls[0]["identifier"] == "s0"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_runnable_model_parallel(monkeypatch: pytest.MonkeyPatch) -> None:
+    samples = [_FakeSample("p0"), _FakeSample("p1"), _FakeSample("p2")]
+    data_module = _FakeDataModule(samples)
+    submitted: list[int] = []
+    progress_reports: list[int] = []
+
+    class _FakeChain:
+        def invoke(
+            self,
+            payload: dict[str, str],
+        ) -> langchain_core.messages.AIMessage:
+            return _build_message(payload["identifier"])
+
+    async def fake_get_metrics(evaluator, token_usage):
+        return {"accuracy": len(evaluator.results), "tokens": token_usage.total_tokens}
+
+    def fake_tqdm(iterable=None, total=None, **_kwargs):
+        class _Prog:
+            def __init__(self, total):
+                self.total = total
+                self.history: list[int] = []
+
+            def update(self, value):
+                self.history.append(value)
+
+            def write(self, _msg):
+                return None
+
+            def close(self):
+                return None
+
+        if iterable is None:
+            return _Prog(total)
+        return iterable
+
+    class _FakeExecutor:
+        def submit(self, fn, payload):
+            return _FakeFuture(fn(payload))
+
+    async def fake_run_with_sliding_window(
+        *,
+        input_items,
+        submit_one,
+        process_result,
+        progress_callback,
+        **_kwargs,
+    ) -> None:
+        completed: list[int] = []
+        executor = _FakeExecutor()
+        for item in input_items:
+            submitted.append(item)
+            future_or_response = submit_one(item, executor=executor)
+            if hasattr(future_or_response, "result"):
+                response = future_or_response.result()
+            else:
+                response = future_or_response
+            process_result(item, response)
+            completed.append(item)
+            await progress_callback([], completed)
+
+    class _FakeFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self):
+            return self._result
+
+    def fake_submit_one(sample_idx, executor):
+        message = _build_message(f"p{sample_idx}")
+        return _FakeFuture(message)
+
+    async def fake_progress_callback(_pending, completed):
+        progress_reports.append(len(completed))
+
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        "SampleBuilder",
+        _FakeSampleBuilder,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        "SampleData",
+        _FakeSample,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "OutcomeEvaluator",
+        _FakeOutcomeEvaluator,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalArtifact",
+        _FakeArtifact,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalResult",
+        _FakeEvalResult,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "get_metrics",
+        fake_get_metrics,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.tqdm,
+        "tqdm",
+        fake_tqdm,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.concurrency,
+        "run_with_sliding_window",
+        fake_run_with_sliding_window,
+    )
+
+    config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+        eval_runnable_config=pyine.evals.common.RunnableEvalConfig(
+            parallel=True,
+            max_workers=2,
+            max_in_flight_jobs=2,
+            async_metrics_compute_rate=1,
+        ),
+    )
+
+    result = await config.evaluate_runnable_model(
+        chain=_FakeChain(),
+        datamodule=data_module,
+        eval_subset_name="subset",
+        verbose=True,
+    )
+
+    assert submitted == [0, 1, 2]
+    assert result.metrics["accuracy"] == 3
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hf_model_generates_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    samples = [
+        {
+            "text": "prompt-0",
+            "sample_data": {"identifier": "h0", "expected_output": "exp0", "comma_separated_tags": "a,b"},
+        },
+        {
+            "text": "prompt-1",
+            "sample_data": {"identifier": "h1", "expected_output": "exp1", "comma_separated_tags": ""},
+        },
+    ]
+
+    class _FakeDataset(list):
+        def map(
+            self,
+            fn,
+            desc: str,
+        ) -> "_FakeDataset":
+            mapped = _FakeDataset([fn(item) for item in self])
+            return mapped
+
+        def sort(
+            self,
+            key: str,
+            reverse: bool,
+        ) -> "_FakeDataset":
+            return _FakeDataset(sorted(self, key=lambda item: item[key], reverse=reverse))
+
+    class _FakeConversationDataModule:
+        def get_hf_messages_dataset(
+            self,
+            subset_name: str,
+            append_answer: bool,
+            keep_original_data: bool,
+            tokenizer,
+            apply_chat_template_eval_config: bool,
+        ) -> _FakeDataset:
+            return _FakeDataset(samples)
+
+    class _FakeTokenizer:
+        def __call__(
+            self,
+            text: str,
+            truncation: bool,
+            max_length: int,
+        ) -> dict[str, list[int]]:
+            return {"input_ids": list(range(len(text))), "attention_mask": [1] * len(text)}
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.config = types.SimpleNamespace()
+            self.generation_config = types.SimpleNamespace(
+                max_new_tokens=10,
+                max_length=32,
+                validate=lambda: None,
+            )
+
+    @dataclasses.dataclass
+    class _FakeSampleData:
+        identifier: str
+        expected_output: str
+        comma_separated_tags: str
+
+        def get_tag_list(self) -> list[str]:
+            if not self.comma_separated_tags:
+                return []
+            return self.comma_separated_tags.split(",")
+
+    def fake_is_hf_model(_model):
+        return True
+
+    def fake_supports_text_generation(_model):
+        return True
+
+    def fake_infer_effective_max_seq_len(_model, _tokenizer):
+        return 16
+
+    def fake_batchwise_padding_collator(**_kwargs):
+        return "collator"
+
+    def fake_run_text_generation(**_kwargs):
+        outputs = []
+        for idx, batch in enumerate(_kwargs["dataloader"]):
+            outputs.append(
+                {
+                    "sample_idx": batch["sample_idx"],
+                    "prediction": f"pred-{idx}",
+                    "generated_tokens": [0, 1],
+                },
+            )
+        return outputs
+
+    async def fake_get_metrics(evaluator, token_usage):
+        return {"count": len(evaluator.results), "tokens": token_usage.total_tokens}
+
+    def fake_data_loader(dataset, **_kwargs):
+        return dataset
+
+    def fake_tqdm(iterable, **_kwargs):
+        return iterable
+
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        "SampleData",
+        _FakeSampleData,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.data.datamodule,
+        "ConversationDataModule",
+        _FakeConversationDataModule,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "is_hf_model",
+        fake_is_hf_model,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "supports_text_generation",
+        fake_supports_text_generation,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "infer_effective_max_seq_len",
+        fake_infer_effective_max_seq_len,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "BatchwisePaddingCollator",
+        fake_batchwise_padding_collator,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "run_text_generation",
+        fake_run_text_generation,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "OutcomeEvaluator",
+        _FakeOutcomeEvaluator,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalArtifact",
+        _FakeArtifact,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "CodeExecEvalResult",
+        _FakeEvalResult,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        "get_metrics",
+        fake_get_metrics,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.tqdm,
+        "tqdm",
+        fake_tqdm,
+    )
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.torch.utils.data,
+        "DataLoader",
+        fake_data_loader,
+    )
+
+    config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+        eval_generation_max_new_tokens_override=5,
+    )
+    result = await config.evaluate_hf_model(
+        model=_FakeModel(),
+        tokenizer=_FakeTokenizer(),
+        datamodule=_FakeConversationDataModule(),
+        eval_subset_name="subset",
+        verbose=True,
+    )
+
+    assert isinstance(result, _FakeEvalResult)
+    assert result.metrics["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hf_model_type_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = pyine.evals.code_exec.configs.CodeExecEvalsConfig()
+    monkeypatch.setattr(
+        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        "is_hf_model",
+        lambda *_args, **_kwargs: False,
+    )
+
+    with pytest.raises(TypeError):
+        await config.evaluate_hf_model(
+            model=object(),
+            tokenizer=None,
+            datamodule=object(),
+            eval_subset_name="subset",
+        )

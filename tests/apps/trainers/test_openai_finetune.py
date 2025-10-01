@@ -1,4 +1,6 @@
+import json
 import pathlib
+import types
 
 import pytest
 
@@ -10,6 +12,197 @@ import pyine.evals.code_exec.configs
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.openai
 import tests.env_checks
+
+
+def test_compute_estimated_train_token_count_handles_nested_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    train_path = tmp_path / "train.jsonl"
+    train_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"content": "hello world"}),
+                json.dumps(
+                    [
+                        {"content": "nested"},
+                        {"content": "message"},
+                    ],
+                ),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeTokenizer:
+        def encode(self, content: str) -> list[int]:
+            return list(range(len(content.split())))
+
+    class _FakeConfig:
+        def __init__(self) -> None:
+            self.openai_finetuner_config = types.SimpleNamespace(params=types.SimpleNamespace(base_model="test"))
+
+    class _FakeDataModule:
+        def get_openai_messages_dataset(self, subset_name: str) -> str:
+            assert subset_name == "train"
+            return str(train_path)
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.utils.tokenizers,
+        "get_openai_tokenizer",
+        lambda **_kwargs: _FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.utils.openai,
+        "read_dataset_from_jsonl",
+        lambda path: [json.loads(line) for line in open(path, encoding="utf-8").read().splitlines()],
+    )
+    config = _FakeConfig()
+    config.datamodule_config = types.SimpleNamespace(train_subset_names=["train"])
+    dm = _FakeDataModule()
+    count = pyine.apps.trainers.openai_finetune._compute_estimated_train_token_count(config, dm)
+    assert count == 4
+
+
+def test_train_streams_events_and_returns_model(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    train_calls: list[str] = []
+
+    class _FakeFinetuner:
+        def __init__(self) -> None:
+            self.uploaded = []
+            self.jobs = []
+
+        def ensure_uploaded(self, path: str) -> str:
+            self.uploaded.append(path)
+            return f"file-{len(self.uploaded)}"
+
+        def create_job(self, train_file: str, valid_file: str) -> str:
+            self.jobs.append((train_file, valid_file))
+            return "job-1"
+
+        def stream_job_events(self, job_id: str) -> None:
+            raise KeyboardInterrupt
+
+        def wait_for_job(self, job_id: str) -> str:
+            train_calls.append(job_id)
+            return "ft-model-1"
+
+    class _FakeDataModule:
+        def get_openai_messages_dataset(
+            self,
+            subset_name: str,
+            append_answer: bool,
+            merge_system_with_user: bool,
+        ) -> str:
+            return str(tmp_path / f"{subset_name}.jsonl")
+
+    fake_finetuner = _FakeFinetuner()
+    config = types.SimpleNamespace(
+        openai_finetuner_config=types.SimpleNamespace(
+            params=types.SimpleNamespace(base_model="base"),
+            instantiate=lambda client: fake_finetuner,
+        ),
+        datamodule_config=types.SimpleNamespace(
+            train_subset_names=["train"],
+            valid_subset_names=["valid"],
+        ),
+        needs_answers_in_train_dataset=lambda: True,
+        supports_system_prompt=lambda: False,
+        use_wandb_logging=False,
+    )
+    client = types.SimpleNamespace()
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune,
+        "_compute_estimated_train_token_count",
+        lambda *_args, **_kwargs: 123,
+    )
+    model_name = pyine.apps.trainers.openai_finetune.train(
+        client=client,
+        datamodule=_FakeDataModule(),
+        config=config,
+        runtime=None,
+    )
+    assert model_name == "ft-model-1"
+    assert fake_finetuner.uploaded == [str(tmp_path / "train.jsonl"), str(tmp_path / "valid.jsonl")]
+    assert train_calls == ["job-1"]
+
+
+@pytest.mark.asyncio
+async def test_main_skip_fine_tuning_updates_wandb(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluate_calls: list[dict[str, object]] = []
+    provider_calls: list[dict[str, object]] = []
+    wandb_updates: list[dict[str, object]] = []
+
+    async def fake_evaluate_model(**kwargs):
+        evaluate_calls.append(kwargs)
+
+    def fake_prepare_datamodule(config, runtime):
+        dm_cfg = types.SimpleNamespace(get_prompt_chain=lambda model: model)
+        return types.SimpleNamespace(config=dm_cfg)
+
+    def fake_entrypoint_setup(**_kwargs):
+        return None
+
+    def fake_get_model_from_provider(**kwargs):
+        provider_calls.append(kwargs)
+        return "provider-model"
+
+    class _FakeRun:
+        def __init__(self) -> None:
+            self.summary = types.SimpleNamespace(update=lambda data: wandb_updates.append(data))
+            self._is_finished = True
+
+    class _FakeApi:
+        def run(self, run_id: str):
+            assert run_id == "run-1"
+            return _FakeRun()
+
+    config = types.SimpleNamespace(
+        openai_client_config=types.SimpleNamespace(
+            instantiate=lambda: types.SimpleNamespace(chat=types.SimpleNamespace(completions="client"))
+        ),
+        openai_finetuner_config=types.SimpleNamespace(params=types.SimpleNamespace(base_model="base-model")),
+        needs_answers_in_train_dataset=lambda: False,
+        supports_system_prompt=lambda: True,
+        use_wandb_logging=True,
+    )
+    runtime = types.SimpleNamespace(
+        wandb_run=_FakeRun(),
+        wandb_run_id="run-1",
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.utils.reprod,
+        "entrypoint_setup",
+        fake_entrypoint_setup,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.apps.trainers.common,
+        "prepare_datamodule",
+        fake_prepare_datamodule,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.apps.trainers.common,
+        "evaluate_model",
+        fake_evaluate_model,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.pyine.utils.llm_providers,
+        "get_model_from_provider",
+        fake_get_model_from_provider,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.openai_finetune.wandb,
+        "Api",
+        _FakeApi,
+    )
+    await pyine.apps.trainers.openai_finetune.main(
+        config=config,
+        runtime=runtime,
+        skip_fine_tuning=True,
+    )
+    assert provider_calls[0]["model"] == "base-model"
+    assert evaluate_calls and evaluate_calls[0]["model"] == "provider-model"
+    assert wandb_updates[-1] == {"model_name": "base-model"}
 
 
 @pytest.mark.slow
