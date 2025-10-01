@@ -13,7 +13,6 @@ dependencies = [
     # last review/update of versions: 2025-08-23
     "accelerate>=1.10.0,<2.0.0",
     "backoff>=2.2.1,<3.0.0",
-    "black>=25.1.0,<26.0.0",
     "blobfile>=3.0.0,<4.0.0",
     "datasets>=4.0.0,<5.0.0",
     "deepdiff>=8.6.0,<9.0.0",
@@ -54,8 +53,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "coverage[toml]>=7.10.0",
-    "flake8>=7.3.0",
-    "isort>=6.0.1",
     "ipython>=8.0.0,<9.0.0",
     "ipywidgets>=8.1.0,<9.0.0",
     "notebook>=7.3.0,<8.0.0",
@@ -67,6 +64,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "seaborn>=0.13.2",
     "wordcloud>=1.9.4",
+    "pyright>=1.1.0",
 ]
 
 [build-system]
@@ -82,6 +80,7 @@ packages = ["pyine"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow to run due to data/compute (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
 ]
 filterwarnings = [
     # until hydra-zen fixes their deprecation warnings, we need this (currently using 0.15.0)
@@ -114,22 +113,67 @@ directory = "logs/coverage/html"
 [tool.coverage.xml]
 output = "logs/coverage/coverage.xml"
 
+# Legacy tool configs kept for nbqa compatibility
 [tool.isort]
 profile = "black"
 line_length = 120
 src_paths = ["pyine", "tests"]
 known_first_party = ["pyine", "tests"]
 
-[tool.black]
-line-length = 120
-target-version = ["py312"]
-
 [tool.nbqa]
 files = "^notebooks/"
 [tool.nbqa.addopts]
-black = ["--line-length=120"]
-isort = ["--profile=black"]
-flake8 = [
-  "--extend-ignore=E203,E402,E501,F401,F841,RST2,RST301",
-  "--exclude=logs/*,data/*,build/*,docs/*",
+ruff = ["--line-length=120"]
+ruff-format = ["--line-length=120"]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    # Core linting
+    "E",   # pycodestyle errors (spacing, indentation, etc.)
+    "F",   # pyflakes (unused imports, variables, etc.)
+    "W",   # pycodestyle warnings
+
+    # Code quality
+    "I",   # isort (import sorting and organization)
+    "B",   # flake8-bugbear (common bugs and design problems)
+    "C4",  # flake8-comprehensions (better list/dict comprehensions)
+    "UP",  # pyupgrade (modern Python syntax)
+
+    # Type annotations
+    "ANN", # flake8-annotations (enforce type hints)
+    "TC",  # flake8-type-checking (type-checking imports)
+
+    # Security and best practices
+    "S",   # bandit (security issues)
+    "N",   # pep8-naming (naming conventions)
+    "RET", # flake8-return (return statement issues)
+    "SIM", # flake8-simplify (code simplification)
 ]
+ignore = [
+    # Type annotation exceptions
+    "ANN401", # Dynamically typed expressions (Any) are disallowed
+
+    # Security exceptions for common patterns
+    "S101",   # Use of assert (common in tests)
+    "S603",   # subprocess calls
+]
+
+[tool.ruff.format]
+# Formatting style - matching Black formatting
+indent-style = "space"
+quote-style = "preserve"  # Don't enforce single vs double quotes
+docstring-code-format = true  # Format code blocks in docstrings
+skip-magic-trailing-comma = false  # Keep Black's trailing comma behavior
+line-ending = "auto"  # Use system default line endings
+
+[tool.pyright]
+typeCheckingMode = "strict"
+include = ["pyine", "tests"]
+# Overrides from strict defaults for data science workflows
+reportMissingTypeStubs = false        # Ignore missing third-party type stubs
+reportOptionalMemberAccess = false    # Allow optional member access (e.g., df.column)
+reportOptionalSubscript = false       # Allow optional subscript access without None checks

@@ -27,17 +27,13 @@ repos:
       - id: check-yaml
         args: [ "--unsafe" ]  # needed since we use tags in YAML files w/ custom safe loading
 
-  # python code formatting
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
+  # python code formatting and linting with ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.2
     hooks:
-      - id: black
-
-  # python import sorting
-  - repo: https://github.com/PyCQA/isort
-    rev: 6.0.1
-    hooks:
-      - id: isort
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
 
   # python upgrading syntax to newer version
   - repo: https://github.com/asottile/pyupgrade
@@ -61,17 +57,6 @@ repos:
   #            "--black",
   #          ]
 
-  # python check (PEP8), programming errors and code complexity
-  - repo: https://github.com/PyCQA/flake8
-    rev: 7.3.0
-    hooks:
-      - id: flake8
-        args:
-          [
-            "--extend-ignore=E203,E402,E501,F401,F841,RST2,RST301",
-            "--exclude=logs/*,data/*,build/*,docs/*",
-         ]
-
   # md formatting
   - repo: https://github.com/executablebooks/mdformat
     rev: 0.7.22
@@ -91,10 +76,10 @@ repos:
     hooks:
       - id: nbstripout
 
-  # jupyter notebook linting
+  # jupyter notebook linting with ruff
   - repo: https://github.com/nbQA-dev/nbQA
     rev: 1.9.1
     hooks:
-      - id: nbqa-black
-      - id: nbqa-isort
-      - id: nbqa-flake8
+      - id: nbqa-ruff
+        args: [--fix]
+      - id: nbqa-ruff-format
