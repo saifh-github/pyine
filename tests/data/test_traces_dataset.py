@@ -1,6 +1,7 @@
 import pathlib
 import typing
 
+import orjson
 import pytest
 
 import pyine.data.traces.dataset_reader as dataset_reader
@@ -163,3 +164,93 @@ def test_write_dataset_from_taco_forwards_force_flag(
         force_overwrite=True,
     )
     assert captured["force_overwrite"] is True
+
+
+def _write_target_problem(
+    root_dir,
+    idx: int,
+    subset: str,
+    question: str = "dummy question",
+) -> None:
+    analysis_output = {
+        "is_deterministic": True,
+        "imports_nonstandard_packages": False,
+        "invalid_syntax": False,
+        "blocks_execution": False,
+        "unnecessary_lines": False,
+        "filesystem_access": False,
+        "system_commands": False,
+        "network_access": False,
+        "code_type": "simple",
+        "input_type": "stdin",
+        "output_type": "stdout",
+    }
+    problem_payload = {
+        "subset": subset,
+        "question": question,
+        "source": "source",
+        "difficulty": "easy",
+        "raw_tags": [],
+        "tags": [],
+        "skill_types": [],
+        "input_output": {
+            "inputs": [[idx]],
+            "outputs": [idx],
+        },
+        "solutions": [
+            {
+                "code": "def solve(x):\n    return x\n",
+                "analysis_outputs": [analysis_output],
+                "validation_errors": [],
+            }
+        ],
+    }
+    path = root_dir / f"{idx:06d}.json"
+    path.write_bytes(orjson.dumps(problem_payload))
+
+
+def test_iterator_filters_problem_ids_without_subset(tmp_path):
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    _write_target_problem(root_dir, 2, "train")
+    iterator = dataset_utils.CodingProblemIterator(
+        dataset_name="TACO",
+        root_data_path=root_dir,
+        target_problem_ids=["p000001"],
+    )
+    assert len(iterator.problems_metadata) == 1
+    problems = list(iterator)
+    assert len(problems) == 1
+    problem, solutions = problems[0]
+    assert problem.problem_id.problem_idx == 1
+    assert problem.problem_id.subset == "train"
+    assert solutions
+
+
+def test_iterator_accepts_subset_qualified_ids(tmp_path):
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    _write_target_problem(root_dir, 2, "valid")
+    iterator = dataset_utils.CodingProblemIterator(
+        dataset_name="TACO",
+        root_data_path=root_dir,
+        target_problem_ids=["TACO/train/p000001"],
+    )
+    assert len(iterator.problems_metadata) == 1
+    problems = list(iterator)
+    assert len(problems) == 1
+    problem, _ = problems[0]
+    assert problem.problem_id.problem_idx == 1
+    assert problem.problem_id.subset == "train"
+
+
+def test_subset_collision_requires_explicit_identifier():
+    iterator = object.__new__(dataset_utils.CodingProblemIterator)
+    spec = dataset_utils.CodingProblemIterator._TargetProblemSpec(problem_idx=1, subset=None)
+    iterator._target_problem_specs = {spec}
+    iterator._target_problem_spec_matches = {}
+    assert iterator._matches_target_problem(problem_idx=1, subset="train")
+    with pytest.raises(ValueError):
+        iterator._matches_target_problem(problem_idx=1, subset="valid")

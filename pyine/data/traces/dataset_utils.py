@@ -563,6 +563,26 @@ class CodingProblemIterator:
     >>>     # ...
     """
 
+    @dataclasses.dataclass(frozen=True)
+    class _TargetProblemSpec:
+        """Specification describing which problem indices to keep when filtering."""
+
+        problem_idx: int
+        """Problem index to keep; may be dataset-unique (in which case subset is not needed)."""
+        subset: str | None = None
+        """Name of the subset the problem belongs to; if the problem idx is not unique, MUST be used."""
+
+        def matches_identifier(
+            self,
+            identifier: CodingProblemIdentifier,
+        ) -> bool:
+            """Returns whether this spec matches the provided problem identifier."""
+            if self.problem_idx != identifier.problem_idx:
+                return False
+            if self.subset is None:
+                return True
+            return self.subset == identifier.subset
+
     def __init__(
         self,
         dataset_name: str,
@@ -606,7 +626,8 @@ class CodingProblemIterator:
         self.dataset_name = dataset_name
         self.root_data_path = root_data_path
         self._target_pattern = target_problem_pattern
-        self._target_problem_ids = self._validate_target_problem_ids(target_problem_ids)
+        self._target_problem_specs = self._validate_target_problem_ids(target_problem_ids)
+        self._target_problem_spec_matches: dict[CodingProblemIterator._TargetProblemSpec, str] = {}
         self.reformat_code_strings = reformat_code_strings
         self.validate_code_strings = validate_code_strings
         if allow_banned_samples:
@@ -630,8 +651,9 @@ class CodingProblemIterator:
         self._prefetch_sentinel: object = object()
 
     def _validate_target_problem_ids(
-        self, target_problem_ids: str | pathlib.Path | list[str] | list[int] | None
-    ) -> list[CodingProblemIdentifier]:
+        self,
+        target_problem_ids: str | pathlib.Path | list[str] | list[int] | None,
+    ) -> set["CodingProblemIterator._TargetProblemSpec"]:
         """Validates and resolves the target problem IDs, if needed."""
         if isinstance(target_problem_ids, (str, pathlib.Path)):
             target_problem_ids_path = pathlib.Path(target_problem_ids)
@@ -647,28 +669,74 @@ class CodingProblemIterator:
                 with target_problem_ids_path.open("r") as fd:
                     target_problem_ids = fd.read().splitlines()
         elif target_problem_ids is None:
-            target_problem_ids: list[str] = []
+            target_problem_ids = []
         if not isinstance(target_problem_ids, list):
             raise ValueError(f"target problem IDs must be list, str, or path; got {type(target_problem_ids)}")
-        output_problem_ids: list[CodingProblemIdentifier] = []
-        for prob_idx, prob_id in enumerate(target_problem_ids):
-            if not isinstance(prob_id, (str, int)):
-                raise ValueError(f"target problem IDs must be string or int; got {type(prob_id)}")
-            if isinstance(prob_id, str):
-                if "/" in prob_id:  # these are full problem identifiers; replace them
-                    prob_id = CodingProblemIdentifier.from_string(prob_id)
-                    assert prob_id.dataset == self.dataset_name, f"unexpected dataset: {prob_id.dataset}"
-                    output_problem_ids.append(prob_id)
+        specs: set[CodingProblemIterator._TargetProblemSpec] = set()
+        for raw_idx, raw_identifier in enumerate(target_problem_ids):
+            if isinstance(raw_identifier, str):
+                identifier_str = raw_identifier.strip()
+                if not identifier_str:
+                    raise ValueError("target problem identifiers cannot be empty strings")
+                if "/" in identifier_str:
+                    problem_identifier = CodingProblemIdentifier.from_string(identifier_str)
+                    if problem_identifier.dataset != self.dataset_name:
+                        raise ValueError(
+                            f"unexpected dataset for target id '{identifier_str}': {problem_identifier.dataset}"
+                        )
+                    specs.add(
+                        CodingProblemIterator._TargetProblemSpec(
+                            problem_idx=problem_identifier.problem_idx,
+                            subset=problem_identifier.subset,
+                        )
+                    )
                     continue
-            # coerce the identifier to an integer
-            output_problem_ids.append(
-                CodingProblemIdentifier(
-                    self.dataset_name,
-                    subset="UNKNOWN",  # we will have to hope that the problem idx is unique across subsets
-                    problem_idx=int(prob_id),  # if this fails, we might need to revisit the problem idx type
-                )
-            )
-        return output_problem_ids
+                identifier_candidate = identifier_str
+                if identifier_candidate.startswith("p") and identifier_candidate[1:].isdigit():
+                    identifier_candidate = identifier_candidate[1:]
+                try:
+                    problem_idx = int(identifier_candidate)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"invalid target problem identifier at position {raw_idx}: '{raw_identifier}'"
+                    ) from exc
+                specs.add(CodingProblemIterator._TargetProblemSpec(problem_idx=problem_idx, subset=None))
+            elif isinstance(raw_identifier, int):
+                specs.add(CodingProblemIterator._TargetProblemSpec(problem_idx=int(raw_identifier), subset=None))
+            else:
+                raise ValueError(f"target problem IDs must be string or int; got {type(raw_identifier)}")
+        return specs
+
+    def _matches_target_problem(
+        self,
+        *,
+        problem_idx: int,
+        subset: str | None,
+    ) -> bool:
+        """Returns whether the provided problem metadata matches any registered target spec."""
+        if not self._target_problem_specs:
+            return True
+        subset_key = (subset or "").strip()
+        for spec in self._target_problem_specs:
+            if spec.problem_idx != problem_idx:
+                continue
+            if spec.subset is not None and spec.subset != subset:
+                continue
+            if spec.subset is None:
+                recorded_subset = self._target_problem_spec_matches.get(spec)
+                if recorded_subset is None:
+                    self._target_problem_spec_matches[spec] = subset_key
+                elif recorded_subset != subset_key:
+                    prev = recorded_subset or "<unspecified>"
+                    curr = subset_key or "<unspecified>"
+                    raise ValueError(
+                        f"target problem id {spec.problem_idx} matched multiple subsets ({prev!r} vs {curr!r}); "
+                        "provide subset-qualified identifiers to disambiguate"
+                    )
+            else:
+                self._target_problem_spec_matches.setdefault(spec, spec.subset)
+            return True
+        return False
 
     def _start_prefetch(self) -> None:
         """Start the background prefetch worker if enabled."""
@@ -750,11 +818,6 @@ class CodingProblemIterator:
                         json_file_path.name, self._target_pattern.pattern
                     ):
                         continue
-                # optionally filter by target problem idx list
-                if self._target_problem_ids:
-                    # (assumes the problem idxs in the target problem ids are unique across subsets)
-                    if not any([problem_idx == pid.problem_idx for pid in self._target_problem_ids]):
-                        continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     try:
                         json_data = orjson.loads(fd.read())
@@ -765,6 +828,11 @@ class CodingProblemIterator:
                 if len(json_data) == 1 and "error" in json_data:
                     logger.debug(f"skipping empty JSON file: {json_file_path}")
                     continue  # skip this file (useless; prior repackaging failed)
+                if self._target_problem_specs and not self._matches_target_problem(
+                    problem_idx=problem_idx,
+                    subset=json_data.get("subset"),
+                ):
+                    continue
                 output_paths.append(json_file_path)
             if not output_paths:
                 raise ValueError("no valid JSON files left after filtering")
