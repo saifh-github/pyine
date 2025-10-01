@@ -198,8 +198,8 @@ def main() -> None:
     type=str,
     default=None,
     help=(
-        "List of comma-separated problem IDs to target, or path to a file containing such IDs. "
-        "If None, no filtering, i.e. all problems are targeted."
+        "List of comma-separated problem IDs to target (whitespace trimmed), or path to a file "
+        "containing IDs. If None, no filtering, i.e. all problems are targeted."
     ),
 )
 @click.option(
@@ -296,7 +296,7 @@ def traces(
     )
     default_failed_test_log_dir = pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"
     if target_problem_ids is not None and "," in target_problem_ids:
-        target_problem_ids = target_problem_ids.split(",")
+        target_problem_ids = [identifier.strip() for identifier in target_problem_ids.split(",") if identifier.strip()]
     config = trace_writer.TraceDatasetWriterConfig(
         source_dataset_name=dataset_name,
         max_output_traces=max_output_traces,
