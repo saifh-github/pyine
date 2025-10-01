@@ -97,52 +97,62 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
 
     def get_tokenizer(self) -> transformers.PreTrainedTokenizer:
         """Returns the tokenizer to use that is linked to the targeted base model."""
-        logger.info(f"setting up tokenizer for: {self.base_model}")
-        logger.debug(f"auto tokenizer config: {self.auto_tokenizer_config}")
-        tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
-            pretrained_model_name_or_path=self.base_model,
-            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
-            **self.auto_tokenizer_config,
-        )
-        logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
-        logger.debug(f"tokenizer is_fast: {getattr(tokenizer, "is_fast", False)}")
-        logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
-        return tokenizer
+        return instantiate_tokenizer(self)
 
     def get_model(self) -> transformers.PreTrainedModel:
         """Returns a pretrained model to use for experiments."""
-        logger.info(f"setting up model: {self.base_model}")
-        dtype, device_map = self.target_dtype, self.device_map
-        model_kwargs = dict(torch_dtype=dtype, device_map=device_map, **self.auto_model_config)
-        if self.quantization_mode == "qlora":
-            logger.info("  (setting up model using QLoRA 4-bit quantization)")
-            quant_config = transformers.BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=dtype,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-            )
-            model_kwargs["quantization_config"] = quant_config
-        elif self.quantization_mode == "none":
-            logger.info("  (setting up model using no quantization)")
-        else:
-            raise ValueError(f"unsupported quantization_mode: {self.quantization_mode}")
-        logger.debug(f"auto model config: {model_kwargs}")
-        model = transformers.AutoModelForCausalLM.from_pretrained(self.base_model, **model_kwargs)
-        if self.lora_config is not None:
-            logger.info("  (setting up LoRA adapters)")
-            logger.debug(f"lora_config: {self.lora_config}")
-            model = peft.get_peft_model(model, self.lora_config)
-        logger.info(f"model successfully created:\n{model}")
-        logger.debug(f"model config: {model.config.to_json_string()}")
-        if hasattr(model, "peft_config"):
-            logger.debug(f"model peft_config: {model.peft_config}")
-        if hasattr(model, "get_nb_trainable_parameters") and callable(model.get_nb_trainable_parameters):
-            trainable_param_count, total_param_count = model.get_nb_trainable_parameters()
-            logger.info(f"trainable param count: {trainable_param_count:,d}")
-            logger.info(f"total param count: {total_param_count:,d}")
-            logger.info(f"trainable param %: {100 * trainable_param_count / total_param_count:.3f}")
-        return model
+        return instantiate_model(self)
+
+
+def instantiate_tokenizer(config: HFTrainerAppMainConfig) -> transformers.PreTrainedTokenizer:
+    """Instantiates and returns the tokenizer tied to the config's targeted base model."""
+    logger.info(f"setting up tokenizer for: {config.base_model}")
+    logger.debug(f"auto tokenizer config: {config.auto_tokenizer_config}")
+    tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
+        pretrained_model_name_or_path=config.base_model,
+        set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
+        **config.auto_tokenizer_config,
+    )
+    logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
+    logger.debug(f"tokenizer is_fast: {getattr(tokenizer, "is_fast", False)}")
+    logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
+    return tokenizer
+
+
+def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrainedModel:
+    """Instantiates and returns the pretrained model specified in the config."""
+    logger.info(f"setting up model: {config.base_model}")
+    dtype, device_map = config.target_dtype, config.device_map
+    model_kwargs = dict(torch_dtype=dtype, device_map=device_map, **config.auto_model_config)
+    if config.quantization_mode == "qlora":
+        logger.info("  (setting up model using QLoRA 4-bit quantization)")
+        quant_config = transformers.BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        model_kwargs["quantization_config"] = quant_config
+    elif config.quantization_mode == "none":
+        logger.info("  (setting up model using no quantization)")
+    else:
+        raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
+    logger.debug(f"auto model config: {model_kwargs}")
+    model = transformers.AutoModelForCausalLM.from_pretrained(config.base_model, **model_kwargs)
+    if config.lora_config is not None:
+        logger.info("  (setting up LoRA adapters)")
+        logger.debug(f"lora_config: {config.lora_config}")
+        model = peft.get_peft_model(model, config.lora_config)
+    logger.info(f"model successfully created:\n{model}")
+    logger.debug(f"model config: {model.config.to_json_string()}")
+    if hasattr(model, "peft_config"):
+        logger.debug(f"model peft_config: {model.peft_config}")
+    if hasattr(model, "get_nb_trainable_parameters") and callable(model.get_nb_trainable_parameters):
+        trainable_param_count, total_param_count = model.get_nb_trainable_parameters()
+        logger.info(f"trainable param count: {trainable_param_count:,d}")
+        logger.info(f"total param count: {total_param_count:,d}")
+        logger.info(f"trainable param %: {100 * trainable_param_count / total_param_count:.3f}")
+    return model
 
 
 @functools.wraps(pyine.apps.trainers.hf_trainer.main)
