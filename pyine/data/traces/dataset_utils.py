@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import dataclasses
 import datetime
 import fnmatch
@@ -21,6 +22,8 @@ import tqdm
 import yaml
 
 import pyine.data.common
+import pyine.data.utils.lmdb_io
+import pyine.prompts.configs.code_analysis
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
 import pyine.utils.code.validation
@@ -619,6 +622,7 @@ class CodingProblemIterator:
         root_data_path: pathlib.Path | str,
         target_problem_pattern: ProblemIdPattern | None = None,
         target_problem_ids: str | pathlib.Path | list[str] | list[int] | None = None,
+        input_output_overrides_path: pathlib.Path | str | None = None,
         reformat_code_strings: bool = False,
         validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
@@ -634,6 +638,9 @@ class CodingProblemIterator:
             root_data_path: Path to the root directory containing the source dataset files.
             target_problem_pattern: Optional pattern to filter problems by their metadata file names.
             target_problem_ids: Optional list or file containing problem IDs to target.
+            input_output_overrides_path: Optional path to a JSON file containing enriched `input_output`
+                blocks keyed by problem identifier (e.g. "TACO/train/p004961"). When provided, these
+                overrides are merged into each problem's metadata as it is loaded.
             reformat_code_strings: Whether to apply code formatting to parsed solution code strings.
             validate_code_strings: Whether to validate solution code strings before using them.
             allow_banned_samples: Whether to allow loading of banned problems/solutions. Banned
@@ -660,6 +667,13 @@ class CodingProblemIterator:
         self._target_problem_spec_matches: dict[CodingProblemIterator._TargetProblemSpec, str] = {}
         self.reformat_code_strings = reformat_code_strings
         self.validate_code_strings = validate_code_strings
+        self._input_output_overrides: dict[str, dict[str, typing.Any]] = {}
+        if input_output_overrides_path is not None:
+            overrides_path = pathlib.Path(input_output_overrides_path).expanduser()
+            if overrides_path.is_file():
+                self._input_output_overrides = self._load_input_output_overrides(overrides_path)
+            else:
+                logger.debug(f"input_output overrides file not found: {overrides_path}")
         if allow_banned_samples:
             logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
             self.banned = _BannedData()  # will be initialized w/ empty maps
@@ -836,6 +850,9 @@ class CodingProblemIterator:
             for json_file_path in json_file_paths:
                 if json_file_path.stat().st_size < 128:
                     continue  # skip tiny files that are likely empty/errored
+                if not json_file_path.stem.isdigit():
+                    logger.debug(f"skipping non-numeric problem file: {json_file_path.name}")
+                    continue
                 problem_idx = int(json_file_path.stem)  # for TACO, should be a unique problem number
                 if self.banned.metadata and problem_idx in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
@@ -896,6 +913,29 @@ class CodingProblemIterator:
             solutions=target_banned_solutions,
         )
 
+    def _load_input_output_overrides(
+        self,
+        overrides_path: pathlib.Path,
+    ) -> dict[str, dict[str, typing.Any]]:
+        """Load enriched input/output blocks keyed by problem identifier."""
+
+        try:
+            data = orjson.loads(overrides_path.read_bytes())
+        except orjson.JSONDecodeError as exc:
+            logger.warning(f"failed to parse input_output overrides from {overrides_path}: {exc}")
+            return {}
+        if isinstance(data, dict):
+            sanitized: dict[str, dict[str, typing.Any]] = {}
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    sanitized[str(key)] = value
+            return sanitized
+        logger.warning(
+            "input_output overrides should be a mapping from problem identifier to block; got %s",
+            type(data),
+        )
+        return {}
+
     def _load_problem_data(self, problem_metadata: typing.Any) -> dict[str, typing.Any]:
         """Loads 'raw' data from the source dataset for a specific coding problem."""
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
@@ -906,7 +946,23 @@ class CodingProblemIterator:
                 data = orjson.loads(fd.read())
             data["__root_path__"] = str(json_file)
             data["__root_hash__"] = pyine.utils.reprod.compute_hash(json_file)
-            data["__problem_idx__"] = int(json_file.stem)  # for TACO, should be a unique problem number
+            stem = json_file.stem
+            problem_idx_value = int(stem)
+            data["__problem_idx__"] = problem_idx_value  # for TACO, should be a unique problem number unless enriched
+            subset_name = str(data.get("subset", "UNKNOWN"))
+            override_key = repr(
+                CodingProblemIdentifier(
+                    dataset=self.dataset_name,
+                    subset=subset_name,
+                    problem_idx=problem_idx_value,
+                )
+            )
+            override_block = self._input_output_overrides.get(override_key)
+            if override_block is None:
+                override_block = self._input_output_overrides.get(json_file.name)
+            if override_block is not None:
+                data["input_output"] = copy.deepcopy(override_block)
+                data["__input_output_override_applied__"] = True
             return data
         raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
 

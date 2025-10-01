@@ -20,9 +20,9 @@ Trace annotation:
 
 - Prompt-chain annotator: [`pyine/apps/annotate/trace_annot_generator.py`](./annotate/trace_annot_generator.py)
 
-Trace failure analysis:
+Trace repair:
 
-- Trace debugger: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+- IO rewrite pipeline: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
 
 Training/evaluation (Hydra-based apps):
 
@@ -174,32 +174,31 @@ python -m pyine.apps.annotate.trace_annot_generator \
 
 ______________________________________________________________________
 
-### Trace failure analysis (code snippet tracing audit)
+### Trace input/output rewrite (LLM-assisted repair)
 
 **Script:** [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
 
-**Main use:** iterates over coding problems/solutions from a source dataset, runs
-`pyine.data.traces.dataset_writer.trace_code_snippet`, and records detailed metadata for every
-execution or output-comparison failure under `logs/traced-test-failures/`.
+**Main use:** iterates over coding problems in a dataset, invokes the
+`input_output_rewrite` prompt, validates the generated samples against bundled solutions, and stores
+successful repairs in a cache-backed JSON file (defaults to
+`<PYINE_DATA_CACHE>/taco_input_output_overrides.json`).
 
 **Example:**
 
 ```bash
-# audit first 25 problems from the latest repackaged TACO dataset
+# rewrite every malformed problem under the repackaged dataset root
 python -m pyine.apps.traces.trace_failure_analyzer \
-    --max-problems 25 \
-    --max-solutions 5 \
-    --max-tests 3 \
-    --timeout 15 \
-    --max-runtime-seconds 900 \
-    --max-failures-per-solution 2
+    --problem-dir data/TACO/repackaged/2025-03-31-v01
+
+# target a handful of individual problems
+python -m pyine.apps.traces.trace_failure_analyzer \
+    --problem-dir data/TACO/repackaged/2025-03-31-v01 \
+    --problem 014084.json \
+    --problem 017304.json
 ```
 
-Artifacts default to `<PYINE_LOGS_ROOT>/traced-test-failures/analysis-<TIMESTAMP>/` unless you pass
-`--output-dir`. Each run produces `run_config.json`, `summary.json`, and a newline-delimited
-`failures.jsonl` with reproducible inputs/outputs and trace metadata. Use `--max-runtime-seconds`
-to keep exploratory runs bounded in wall-clock time and `--max-failures-per-solution` to stop
-gathering redundant failures from the same solution.
+Repairs append immediately to the cache file (or the custom path supplied via `--override-log`),
+making the run resilient to interruptions.
 
 ______________________________________________________________________
 

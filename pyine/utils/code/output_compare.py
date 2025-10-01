@@ -168,12 +168,18 @@ def _compare_strings_or_literals(
         a_lit = _try_literal_eval(a)
         if a_lit.success:
             return _compare_objects(a_lit.value, b, opt, path="")
+        structured_res = _compare_objects(a, b, opt, path="")
+        if structured_res.equal:
+            return structured_res
         # if not a literal, compare string to repr of b as text
         return _compare_text(a, repr(b), opt)
     if b_is_str and not a_is_str:
         b_lit = _try_literal_eval(b)
         if b_lit.success:
             return _compare_objects(a, b_lit.value, opt, path="")
+        structured_res = _compare_objects(a, b, opt, path="")
+        if structured_res.equal:
+            return structured_res
         return _compare_text(repr(a), b, opt)
     # fallback (should not reach)
     raise NotImplementedError("unexpected string/literals comparison case")
@@ -302,6 +308,11 @@ def _compare_objects(
     if isinstance(a, str) and isinstance(b, str):
         res = _compare_text(a, b, opt)
         return res if res.equal else res.with_path(path or "str")
+    if isinstance(a, (list, tuple)) and len(a) == 1 and not isinstance(b, (list, tuple)):
+        # unwrap singleton sequences so [value] can match value
+        return _compare_objects(a[0], b, opt, path=f"{path}[0]" if path else "[0]")
+    if isinstance(b, (list, tuple)) and len(b) == 1 and not isinstance(a, (list, tuple)):
+        return _compare_objects(a, b[0], opt, path=f"{path}[0]" if path else "[0]")
     if isinstance(a, bool) and isinstance(b, bool):
         return _ok() if a is b else _fail_path(path, f"Bool differs: {a} != {b}")
     if a is None or b is None:
@@ -382,6 +393,11 @@ def _compare_sequences(
     a_list = list(a)
     b_list = list(b)
     if len(a_list) != len(b_list):
+        # allow a single level of wrapping/unwrapping, e.g. [a, b] vs [[a, b]]
+        if len(a_list) == 1 and isinstance(a_list[0], (list, tuple)):
+            return _compare_sequences(a_list[0], b_list, opt, path, order_matters)
+        if len(b_list) == 1 and isinstance(b_list[0], (list, tuple)):
+            return _compare_sequences(a_list, b_list[0], opt, path, order_matters)
         return _fail_path(path, f"Length differs: {len(a_list)} != {len(b_list)}")
     if order_matters:
         for i, (ai, bi) in enumerate(zip(a_list, b_list, strict=False)):

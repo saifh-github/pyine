@@ -48,17 +48,33 @@ def get_prompt_template(
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
     partial_vars: dict[str, typing.Any] | None = None,
+    role_variables: dict[str, typing.Any] | None = None,
+    context_variables: dict[str, typing.Any] | None = None,
+    examples_block_variables: dict[str, typing.Any] | None = None,
 ) -> "langchain_core.prompts.BasePromptTemplate":
+    """Return the prompt template configured for minimal problem metadata.
+
+    The associated Jinja template now expects only four input variables:
+    `question`, `starter_code`, `first_solution`, and `input_output`.
+    Consumers should provide pre-trimmed strings for the text fields and a
+    JSON-encoded mapping for the `input_output` payload.
+    """
     import pyine.prompts.manager
 
     prompt_config = pyine.prompts.manager.get_prompt_config("input_output_rewrite", version=version)
+    base_context_variables = {
+        "expected_output_format": get_output_parser(version).get_format_instructions(),
+    }
+    if context_variables:
+        base_context_variables.update(context_variables)
+
     template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
-        role_variables=None,
-        context_variables=dict(expected_output_format=get_output_parser(version).get_format_instructions()),
-        examples_block_variables=None,
+        role_variables=role_variables,
+        context_variables=base_context_variables,
+        examples_block_variables=examples_block_variables,
     )
     if partial_vars:
         template = template.partial(**partial_vars)

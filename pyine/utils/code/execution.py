@@ -3,6 +3,7 @@ import collections.abc
 import contextlib
 import dataclasses
 import enum
+import inspect
 import logging
 import multiprocessing
 import os
@@ -343,6 +344,53 @@ def trace_context(
         yield
     finally:
         sys.settrace(old_trace)
+
+
+_MISSING = object()
+
+
+def _resolve_entrypoint_from_namespace(
+    namespace: dict[str, typing.Any],
+    entrypoint_name: str,
+) -> typing.Any:
+    """Resolve dotted entrypoint names against an execution namespace."""
+
+    if not entrypoint_name:
+        return None
+
+    segments = entrypoint_name.split(".")
+    current: typing.Any = namespace
+    parent: typing.Any = None
+
+    for idx, segment in enumerate(segments):
+        parent = current
+        candidate = current.get(segment, _MISSING) if isinstance(current, dict) else getattr(current, segment, _MISSING)
+        if candidate is _MISSING:
+            return None
+        current = candidate
+        if inspect.isclass(current) and idx < len(segments) - 1:
+            try:
+                current = current()
+            except Exception:
+                logging.debug(
+                    "failed to instantiate %s while resolving entrypoint %s",
+                    candidate,
+                    entrypoint_name,
+                    exc_info=True,
+                )
+    if inspect.isfunction(current) and isinstance(parent, type):
+        try:
+            instance = parent()
+            return getattr(instance, segments[-1])
+        except Exception:
+            logging.debug(
+                "failed to bind method %s on %s while resolving entrypoint %s",
+                segments[-1],
+                parent,
+                entrypoint_name,
+                exc_info=True,
+            )
+    return current
 
 
 def _execute_in_subprocess(
@@ -712,6 +760,34 @@ def _unsafe_execute_and_trace_code(
                     exec(compiled_code, exec_namespace)  # noqa: S102
             _capture_buffers()
     except (TimeoutError, TracingCapError):
+        with (
+            pyine.utils.timers.TimeLimit(timeout_seconds),
+            contextlib.redirect_stdout(stdout_capture),
+            contextlib.redirect_stderr(stderr_capture),
+        ):  # noqa
+            if entrypoint_name is not None:
+                with trace_context(_trace_callback):
+                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
+                entrypoint = _resolve_entrypoint_from_namespace(exec_namespace, entrypoint_name)
+                if callable(entrypoint):
+                    entrypoint_step_idx = last_trace_step_idx
+                    entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
+                        entrypoint, inputs
+                    )
+                    with trace_context(_trace_callback):
+                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
+                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
+                else:
+                    logging.debug("Entry point %s resolved to non-callable %r", entrypoint_name, entrypoint)
+            else:
+                mock_inputs = "" if inputs is None else inputs
+                with (
+                    pyine.utils.code.input_mock.MockInputContext(mock_inputs),
+                    trace_context(_trace_callback),
+                ):
+                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
+            _capture_buffers()
+    except (TimeoutError, TracingCapError):  # noqa: B025 - re-raise after fallback attempt
         # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise
     except DONT_CATCH_EXCEPTIONS:
