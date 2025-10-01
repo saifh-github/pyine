@@ -45,7 +45,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     the various methods below that perform task-specific evaluations.
     """
 
-    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    model_config = pydantic.ConfigDict(frozen=True, extra="allow")
     """Pydantic model configuration (freezes the dataclass)."""
 
     eval_type: EvalType | None = None

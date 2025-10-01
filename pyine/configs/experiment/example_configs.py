@@ -5,39 +5,22 @@ import pyine.configs.schemas
 import pyine.evals.common
 
 
-def register_hydra_configs(
-    app_name: str,  # name of the app that we are looking to register configs for
-    eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
-    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
-    app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
-) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
-    """Register example configs for a specific app.
-
-    In this demo, we create configs that allow us to train a language model on a mps chipset, i.e.
-    using a much smaller model than the default, and using some resource-efficient settings.
-
-    Args:
-        app_name: The name of the app for which to generate configs.
-        entrypoint_config: The entrypoint config for the app.
-        app_configs: The list of all configs that have already been registered for the app.
-
-    Returns:
-        The list of newly generated app configs to be registered in the framework.
-    """
-    # the YAML example that is also provided targets the openai_finetune app, so this one will not
-    if app_name != "hf_trainer" or eval_type != pyine.evals.common.EvalType.CODE_EXEC:
-        return []
-    # define a new app config for a new experiment which targets a much smaller model
-    qwen25c05B_m3pro_config = pyine.configs.schemas.ConfigDescription(
-        name="qwen25c05B_m3pro",  # name used to refer to this config in defaults/overrides
-        group="config",  # name of the group this config should belong to (from framework)
-        config=hydra_zen.builds(  # we use 'builds' here instead of a config because we target a dataclass (not a func)
+def _register_qwen25c05b_configs(
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,
+    app_configs: list[pyine.configs.schemas.ConfigDescription],
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Internal helper function for registering example configs related to Qwen2.5-Coder-0.5B-Instruct."""
+    # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
+    qwen25c05B_app_config = pyine.configs.schemas.ConfigDescription(
+        name="qwen25c05B",  # name used to refer to this config in defaults lists (in `config` group)
+        group="config",  # name of the group this config should belong to (shared for all apps)
+        config=hydra_zen.builds(  # we use 'builds' here instead of a config because we target a dataclass
             pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
-            base_model="Qwen/Qwen2.5-Coder-0.5B-Instruct",  # super-tiny model for MPS-based runs
-            quantization_mode="none",  # mps does not support quantization? (to be confirmed)
+            base_model="Qwen/Qwen2.5-Coder-0.5B-Instruct",  # small model that might run on low-end GPUs
+            quantization_mode="none",
             # training_args_config=dict(
             #     # gradient_checkpointing=True,  # maybe needed
-            #     # gradient_checkpointing_kwargs=dict(...),  # for the above, if needed
+            #     # gradient_checkpointing_kwargs=dict(...),  # maybe needed
             #     # gradient_accumulation_steps=5,  # maybe needed
             # ),
             # -------------
@@ -52,33 +35,139 @@ def register_hydra_configs(
             ],
             zen_meta={
                 "__description__": (
-                    "Override of the main settings for the HF trainer app which specifies "
-                    "the Qwen/Qwen2.5-Coder-0.5B-Instruct model for MPS-based runs on M3 Pro chips."
+                    "Override of the main settings for the HF trainer app which specifies settings "
+                    "targeting the Qwen/Qwen2.5-Coder-0.5B-Instruct chat model for low-end GPUs."
                 ),
             },
         ),
     )
-    # create a new experiment config that relies on the above for the app config
-    qwen25c05B_m3pro_exp_config = pyine.configs.schemas.ConfigDescription(
-        name="qwen25c05B_m3pro",
-        group="experiment",
-        package="_global_",
-        config=hydra_zen.make_config(
-            runtime=dict(exp_name="qwen25c05B_m3pro"),  # mandatory setting that must be provided (for logging)
+    # for the above app config, create the associated experiment config
+    qwen25c05B_exp_config = pyine.configs.schemas.ConfigDescription(
+        name="qwen25c05B",  # unique name to refer to this particular experiment config
+        group="experiment",  # all experiment configs should belong to this `experiment` group
+        package="_global_",  # by convention, they should all also be defined in the global package
+        config=hydra_zen.make_config(  # since we define experiment configs on top of all others together
+            runtime=dict(exp_name="qwen25c05B"),  # mandatory setting that must be provided (for logging)
             # -------------
             hydra_defaults=[
                 "_self_",
-                {"override /config": "qwen25c05B_m3pro"},  # name of the config we defined above in the config group
-                # {"override /config/training_args_config": "train_default"},  # base default from framework configs
-                # {"override /config/datamodule_config": "TACO_latest"},  # arbitrary default from framework configs
+                {"override /config": "qwen25c05B"},  # name of the app config we defined above
             ],
-            bases=(entrypoint_config.config,),
+            bases=(entrypoint_config.config,),  # all experiment configs need to target the entrypoint
+            zen_meta={
+                "__description__": ("Combines the 'TACO_latest' datamodule settings with the qwen25c05B app config."),
+            },
+        ),
+    )
+    return [qwen25c05B_app_config, qwen25c05B_exp_config]
+
+
+def _register_smollm360M_configs(
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,
+    app_configs: list[pyine.configs.schemas.ConfigDescription],
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Internal helper function for registering example configs related to SmolLM-360M."""
+    # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
+    # (this time, defining settings related to an even smaller model that should be runnable on cpu)
+    smollm360M_config = pyine.configs.schemas.ConfigDescription(
+        name="smollm360M",  # name used to refer to this config in defaults lists (in `config` group)
+        group="config",  # name of the group this config should belong to (shared for all apps)
+        config=hydra_zen.builds(  # we use 'builds' here instead of a config because we target a dataclass
+            pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+            base_model="HuggingFaceTB/SmolLM-360M-Instruct",  # super-tiny model that should be OK on CPU
+            quantization_mode="none",
+            # training_args_config=dict(
+            #     # gradient_checkpointing=True,  # maybe needed
+            #     # gradient_checkpointing_kwargs=dict(...),  # maybe needed
+            #     # gradient_accumulation_steps=5,  # maybe needed
+            # ),
+            auto_model_config=dict(low_cpu_mem_usage=True),
+            # -------------
+            populate_full_signature=True,
+            hydra_convert="object",
+            hydra_defaults=[
+                "_self_",
+                {"datamodule_config": "TACO_latest"},  # arbitrary default from framework configs
+                {"training_args_config": "train_default"},  # inherit training settings from framework
+                {"lora_config": "default"},  # update to more aggressive LoRA config if needed
+                {"evals_config": "base_with_bs8"},  # since CPU memory probably allows it, bump to bs8
+            ],
             zen_meta={
                 "__description__": (
-                    "Experiment config that combines the 'TACO_latest' datamodule settings with "
-                    "a new custom app config for MPS-based runs on M3 Pro chips."
+                    "Override of the main settings for the HF trainer app which specifies settings "
+                    "targeting the HuggingFaceTB/SmolLM-360M-Instruct chat model for CPU-friendly runs."
                 ),
             },
         ),
     )
-    return [qwen25c05B_m3pro_config, qwen25c05B_m3pro_exp_config]
+    # note: in the above app config, the `{"evals_config": "base_with_bs8"}` default refers to a new
+    #       config that we now have to specify (it does not exist in the list of configs in the fw)
+    evals_base_config = next(  # go get the most relevant base config from the fw configs to derive from
+        (cfg for cfg in app_configs if cfg.group == "config/evals_config" and cfg.name == "base"),
+        None,
+    )
+    assert evals_base_config is not None, "evals_base_config must be defined in the app configs"
+    # now, build the new evals config off the above base config with the extra setting (batch size)
+    evals_base_with_bs8_config = pyine.configs.schemas.ConfigDescription(
+        name="base_with_bs8",
+        group=evals_base_config.group,
+        # config=hydra_zen.builds(
+        # hydra_zen.get_target(evals_base_config.config),
+        config=hydra_zen.make_config(
+            eval_batch_size=8,
+            # -------------
+            # builds_bases=(evals_base_config.config,),
+            bases=(evals_base_config.config,),
+            zen_meta={
+                "__description__": "Evals base config override with CPU batch size of 8.",
+            },
+        ),
+    )
+    # finally, for the above app configs, create the associated experiment config
+    smollm360M_exp_config = pyine.configs.schemas.ConfigDescription(
+        name="smollm360M",  # unique name to refer to this particular experiment config
+        group="experiment",  # all experiment configs should belong to this `experiment` group
+        package="_global_",  # by convention, they should all also be defined in the global package
+        config=hydra_zen.make_config(  # since we define experiment configs on top of all others together
+            runtime=dict(exp_name="smollm360M"),  # mandatory setting that must be provided (for logging)
+            hydra_defaults=[
+                "_self_",
+                {"override /config": "smollm360M"},  # name of the app config we defined above
+            ],
+            bases=(entrypoint_config.config,),  # all experiment configs need to target the entrypoint
+            zen_meta={
+                "__description__": ("CPU-focused experiment settings that keeps most defaults with a tiny model."),
+            },
+        ),
+    )
+    return [smollm360M_config, evals_base_with_bs8_config, smollm360M_exp_config]
+
+
+def register_hydra_configs(
+    app_name: str,  # name of the app that we are looking to register configs for
+    eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
+    app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
+) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
+    """Register example configs for a specific app.
+
+    In this demo, we create configs that allow us to train a language model on a mps chipset, i.e.
+    using a much smaller model than the default, and using some resource-efficient settings.
+
+    Args:
+        app_name: The name of the app for which to generate configs.
+        eval_type: The type of evaluation for which to generate configs.
+        entrypoint_config: The entrypoint config for the app.
+        app_configs: The list of all configs that have already been registered for the app.
+
+    Returns:
+        The list of newly generated app configs to be registered in the framework.
+    """
+    # the YAML example that is also provided targets the openai_finetune app, so this one will not
+    if app_name != "hf_trainer" or eval_type != pyine.evals.common.EvalType.CODE_EXEC:
+        return []
+    # define new app configs for new experiments which target much smaller models
+    return [
+        *_register_qwen25c05b_configs(entrypoint_config, app_configs),
+        *_register_smollm360M_configs(entrypoint_config, app_configs),
+    ]
