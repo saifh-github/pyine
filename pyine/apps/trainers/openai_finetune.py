@@ -95,7 +95,7 @@ def train(
             openai_client=client,
             project="pyine",
             wait_for_job_success=True,
-            reinit="return_previous",  # noqa; reuse already-existing run
+            reinit="return_previous",  # reuse already-existing run
         )
     else:
         try:

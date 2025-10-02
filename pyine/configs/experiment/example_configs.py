@@ -11,8 +11,8 @@ def _register_qwen25c05b_configs(
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Internal helper function for registering example configs related to Qwen2.5-Coder-0.5B-Instruct."""
     # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
-    qwen25c05B_app_config = pyine.configs.schemas.ConfigDescription(
-        name="qwen25c05B",  # name used to refer to this config in defaults lists (in `config` group)
+    qwen25c05b_app_config = pyine.configs.schemas.ConfigDescription(
+        name="qwen25c05b",  # name used to refer to this config in defaults lists (in `config` group)
         group="config",  # name of the group this config should belong to (shared for all apps)
         config=hydra_zen.builds(  # we use 'builds' here instead of a config because we target a dataclass
             pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
@@ -42,35 +42,35 @@ def _register_qwen25c05b_configs(
         ),
     )
     # for the above app config, create the associated experiment config
-    qwen25c05B_exp_config = pyine.configs.schemas.ConfigDescription(
-        name="qwen25c05B",  # unique name to refer to this particular experiment config
+    qwen25c05b_exp_config = pyine.configs.schemas.ConfigDescription(
+        name="qwen25c05b",  # unique name to refer to this particular experiment config
         group="experiment",  # all experiment configs should belong to this `experiment` group
         package="_global_",  # by convention, they should all also be defined in the global package
         config=hydra_zen.make_config(  # since we define experiment configs on top of all others together
-            runtime=dict(exp_name="qwen25c05B"),  # mandatory setting that must be provided (for logging)
+            runtime={"exp_name": "qwen25c05b"},  # mandatory setting that must be provided (for logging)
             # -------------
             hydra_defaults=[
                 "_self_",
-                {"override /config": "qwen25c05B"},  # name of the app config we defined above
+                {"override /config": "qwen25c05b"},  # name of the app config we defined above
             ],
             bases=(entrypoint_config.config,),  # all experiment configs need to target the entrypoint
             zen_meta={
-                "__description__": ("Combines the 'TACO_latest' datamodule settings with the qwen25c05B app config."),
+                "__description__": ("Combines the 'TACO_latest' datamodule settings with the qwen25c05b app config."),
             },
         ),
     )
-    return [qwen25c05B_app_config, qwen25c05B_exp_config]
+    return [qwen25c05b_app_config, qwen25c05b_exp_config]
 
 
-def _register_smollm360M_configs(
+def _register_smollm360m_configs(
     entrypoint_config: pyine.configs.schemas.ConfigDescription,
     app_configs: list[pyine.configs.schemas.ConfigDescription],
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Internal helper function for registering example configs related to SmolLM-360M."""
     # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
     # (this time, defining settings related to an even smaller model that should be runnable on cpu)
-    smollm360M_config = pyine.configs.schemas.ConfigDescription(
-        name="smollm360M",  # name used to refer to this config in defaults lists (in `config` group)
+    smollm360m_config = pyine.configs.schemas.ConfigDescription(
+        name="smollm360m",  # name used to refer to this config in defaults lists (in `config` group)
         group="config",  # name of the group this config should belong to (shared for all apps)
         config=hydra_zen.builds(  # we use 'builds' here instead of a config because we target a dataclass
             pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
@@ -81,7 +81,7 @@ def _register_smollm360M_configs(
             #     # gradient_checkpointing_kwargs=dict(...),  # maybe needed
             #     # gradient_accumulation_steps=5,  # maybe needed
             # ),
-            auto_model_config=dict(low_cpu_mem_usage=True),
+            auto_model_config={"low_cpu_mem_usage": True},
             # -------------
             populate_full_signature=True,
             hydra_convert="object",
@@ -124,15 +124,15 @@ def _register_smollm360M_configs(
         ),
     )
     # finally, for the above app configs, create the associated experiment config
-    smollm360M_exp_config = pyine.configs.schemas.ConfigDescription(
-        name="smollm360M",  # unique name to refer to this particular experiment config
+    smollm360m_exp_config = pyine.configs.schemas.ConfigDescription(
+        name="smollm360m",  # unique name to refer to this particular experiment config
         group="experiment",  # all experiment configs should belong to this `experiment` group
         package="_global_",  # by convention, they should all also be defined in the global package
         config=hydra_zen.make_config(  # since we define experiment configs on top of all others together
-            runtime=dict(exp_name="smollm360M"),  # mandatory setting that must be provided (for logging)
+            runtime={"exp_name": "smollm360m"},  # mandatory setting that must be provided (for logging)
             hydra_defaults=[
                 "_self_",
-                {"override /config": "smollm360M"},  # name of the app config we defined above
+                {"override /config": "smollm360m"},  # name of the app config we defined above
             ],
             bases=(entrypoint_config.config,),  # all experiment configs need to target the entrypoint
             zen_meta={
@@ -140,7 +140,7 @@ def _register_smollm360M_configs(
             },
         ),
     )
-    return [smollm360M_config, evals_base_with_bs8_config, smollm360M_exp_config]
+    return [smollm360m_config, evals_base_with_bs8_config, smollm360m_exp_config]
 
 
 def register_hydra_configs(
@@ -169,5 +169,5 @@ def register_hydra_configs(
     # define new app configs for new experiments which target much smaller models
     return [
         *_register_qwen25c05b_configs(entrypoint_config, app_configs),
-        *_register_smollm360M_configs(entrypoint_config, app_configs),
+        *_register_smollm360m_configs(entrypoint_config, app_configs),
     ]

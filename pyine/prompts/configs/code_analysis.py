@@ -76,22 +76,33 @@ class CodeAnalysisResponse(pydantic.BaseModel):
         description="Specifies whether the code imports nonstandard packages",
     )
     invalid_syntax: bool = pydantic.Field(
-        description="Specifies whether the code contains invalid Python 3 syntax that would prevent execution",
+        description=("Specifies whether the code contains invalid Python 3 syntax that would prevent execution"),
     )
     blocks_execution: bool = pydantic.Field(
-        description="Specifies whether the code contains logic that blocks execution, e.g. infinite loops or queries for user input",
+        description=(
+            "Specifies whether the code contains logic that blocks execution, e.g. infinite loops"
+            " or queries for user input"
+        ),
     )
     unnecessary_lines: bool = pydantic.Field(
-        description="Specifies whether the code contains unnecessary statements that do not contribute to its outputs, e.g. debugging prints or unit tests",
+        description=(
+            "Specifies whether the code contains unnecessary statements that do not contribute to its"
+            " outputs, e.g. debugging prints or unit tests"
+        ),
     )
     filesystem_access: bool = pydantic.Field(
-        description="Specifies whether the code attempts to interact (read, write, or execute) anything on the filesystem",
+        description=(
+            "Specifies whether the code attempts to interact (read, write, or execute) anything on the filesystem"
+        ),
     )
     system_commands: bool = pydantic.Field(
         description="Specifies whether the code attempts to run system commands, e.g. `os.system`, `eval`, etc.",
     )
     network_access: bool = pydantic.Field(
-        description="Specifies whether the code attempts to open network connections, exchange data, use external APIs, or use networked services in any way",
+        description=(
+            "Specifies whether the code attempts to open network connections, exchange data, use"
+            " external APIs, or use networked services in any way"
+        ),
     )
     code_type: CodeTypeOptions = pydantic.Field(
         description="Specifies the type of implementation used to execute the algorithm",

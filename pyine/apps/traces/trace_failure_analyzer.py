@@ -115,7 +115,10 @@ def _build_trace_request(
     )
 
 
-def _write_json_line(handle, payload: dict[str, typing.Any]) -> None:
+def _write_json_line(
+    handle: typing.TextIO,
+    payload: dict[str, typing.Any],
+) -> None:
     """Write a JSON-serializable dictionary to a file handle as a single line."""
     handle.write(json.dumps(payload, ensure_ascii=False, default=_json_default))
     handle.write("\n")

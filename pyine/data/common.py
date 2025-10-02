@@ -54,8 +54,8 @@ def resolve_latest_dataset_path(
     if filter_rule:
         try:
             regex = re.compile(filter_rule)
-        except re.error as e:
-            raise ValueError(f"invalid regex for filter_rule: {filter_rule!r} ({e})")
+        except re.error as exc:
+            raise ValueError(f"invalid regex for filter_rule: {filter_rule!r} ({exc})") from exc
         dataset_paths = [p for p in dataset_paths if regex.search(p.name)]
         if not dataset_paths:
             raise FileNotFoundError(
@@ -136,8 +136,8 @@ def resolve_matching_dataset_paths(
     if pattern_is_regex:
         try:
             regex = re.compile(normalized_pattern)
-        except re.error as e:
-            raise ValueError(f"invalid regex pattern: {pattern!r} ({e})")
+        except re.error as exc:
+            raise ValueError(f"invalid regex pattern: {pattern!r} ({exc})") from exc
         matched = [p for p in all_dirs if regex.search(rel(p))]
     else:
         # if the pattern includes a path separator, match against the relative path; else match basename.

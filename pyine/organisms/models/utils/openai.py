@@ -64,9 +64,9 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
         else:
             assert self._resolved_pred_grader_prompt_messages is not None
             prompt_messages = self._resolved_pred_grader_prompt_messages
-        return dict(
-            type="reinforcement",
-            reinforcement=openai.types.fine_tuning.reinforcement_method_param.ReinforcementMethodParam(
+        return {
+            "type": "reinforcement",
+            "reinforcement": openai.types.fine_tuning.reinforcement_method_param.ReinforcementMethodParam(
                 grader=openai.types.graders.score_model_grader_param.ScoreModelGraderParam(
                     input=prompt_messages,  # noqa
                     model=self.grader_model,
@@ -88,7 +88,7 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
                     reasoning_effort=self.reasoning_effort,
                 ),
             ),
-        )
+        }
 
     _resolved_pred_grader_prompt_messages: list[dict[str, pydantic.JsonValue]] | None = pydantic.PrivateAttr(
         default=None,

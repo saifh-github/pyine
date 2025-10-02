@@ -161,12 +161,18 @@ class OutcomeEvaluator:
         if self.use_async_llm_grader:
             return asyncio.create_task(
                 self._llm_grader_chain.ainvoke(
-                    dict(expected_output=expected, predicted_output=predicted),
+                    {
+                        "expected_output": expected,
+                        "predicted_output": predicted,
+                    },
                     config=config,
                 ),
             )
         response = self._llm_grader_chain.invoke(
-            dict(expected_output=expected, predicted_output=predicted),
+            {
+                "expected_output": expected,
+                "predicted_output": predicted,
+            },
             config=config,
         )
         return self._decode_response(response)
@@ -197,10 +203,7 @@ class OutcomeEvaluator:
             predicted: Model prediction string that we hope is the same as the expected result.
             tags: Arbitrary metadata (tags, difficulty, etc.).
         """
-        if self.strip_hard_checks:
-            hard_match = expected.strip() == predicted.strip()
-        else:
-            hard_match = expected == predicted
+        hard_match = expected.strip() == predicted.strip() if self.strip_hard_checks else expected == predicted
         soft_match = pyine.utils.code.output_compare.compare(expected, predicted, self.soft_checks_config)
         llm_score: float | asyncio.Task | None = None
         if self.is_llm_grader_available():
@@ -333,9 +336,7 @@ class OutcomeEvaluator:
         if not self.is_llm_grader_available():
             raise ValueError("LLM grader not configured, scores are unavailable")
         total, correct = 0, 0
-        selected_items = {
-            item_idx: item for item_idx, item in enumerate(self._iter_where(identifier_selector, tags_filter_rule))
-        }
+        selected_items = dict(enumerate(self._iter_where(identifier_selector, tags_filter_rule)))
         await self._gather_grader_results(selected_items)
         scores = [item.llm_score for item in selected_items.values()]
         for score in scores:
@@ -402,9 +403,7 @@ class OutcomeEvaluator:
             raise ValueError("LLM grader not configured, agreements are unavailable")
         counts: dict[str, int] = collections.defaultdict(int)
         total_overlap = 0
-        selected_items = {
-            item_idx: item for item_idx, item in enumerate(self._iter_where(identifier_selector, tags_filter_rule))
-        }
+        selected_items = dict(enumerate(self._iter_where(identifier_selector, tags_filter_rule)))
         await self._gather_grader_results(selected_items)
         for item in selected_items.values():
             assert item.llm_score is not None, "LLM score is None?"

@@ -86,7 +86,7 @@ def create_sample_transform(
     hf_messages_key: str = "messages",
     orig_sample_key: str | None = None,
     merge_system_with_user: bool = False,
-    **prompt_kwargs,  # forwarded to the prompt manager template getter
+    **prompt_kwargs: typing.Any,  # forwarded to the prompt manager template getter
 ) -> SampleTransformType:
     """Create a transform function applying a prompt template to a code execution data sample.
 
@@ -152,7 +152,7 @@ def _batch_apply_model_template_to_messages(
     if append_eos_token:
         for idx in range(len(text)):
             text[idx] += tokenizer.eos_token
-    output = batch.copy() if keep_original_data else dict()
+    output = batch.copy() if keep_original_data else {}
     output[output_key] = text
     return output
 
@@ -179,10 +179,9 @@ def apply_model_template_to_messages(
         keep_original_data=keep_original_data,
         apply_chat_template_kwargs=apply_chat_template_kwargs,
     )
-    output_dataset = hf_messages_dataset.map(
+    return hf_messages_dataset.map(
         function=transform_batch,
         batched=True,
         desc="applying tokenizer chat template",
         keep_in_memory=keep_in_memory,
     )
-    return output_dataset

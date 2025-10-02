@@ -85,11 +85,10 @@ def _get_resolved_dataset_path(
             source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
         else:
             raise NotImplementedError
-    source_dataset_path = pathlib.Path(source_dataset_path)
-    return source_dataset_path
+    return pathlib.Path(source_dataset_path)
 
 
-@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """Dataset splitter CLI (split, partition)."""
     pass

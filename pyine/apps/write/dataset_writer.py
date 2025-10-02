@@ -52,7 +52,7 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
-@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """Dataset writer CLI (traces, deltas)."""
     pass
@@ -286,13 +286,13 @@ def traces(
             raise click.BadParameter(f"invalid prompt name: {prompt_name}")
         try:
             _ = int(fetch_count)
-        except ValueError:
-            raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}")
+        except ValueError as exc:
+            raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}") from exc
         fetch_augmented_solutions_dict[prompt_name] = int(fetch_count)
-    default_serialization_config = dict(
-        method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
-        compression_kwargs=dict(level=3),
-    )
+    default_serialization_config = {
+        "method": pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+        "compression_kwargs": {"level": 3},
+    }
     default_failed_test_log_dir = pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"
     if target_problem_ids is not None and "," in target_problem_ids:
         target_problem_ids = [identifier.strip() for identifier in target_problem_ids.split(",") if identifier.strip()]

@@ -63,16 +63,16 @@ def write_dataset(
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path, force=force_overwrite)
     writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
-        dict(
-            parent_dataset=dict(
-                dataset_name=trace_reader.parent_dataset_name,
-                dataset_path=str(traces_dataset_name_or_path),
-                dataset_hash=trace_reader.hash,
-                dataset_metadata=trace_reader.metadata,
-                trace_count=len(trace_reader),
-            ),
-            delta_generator=delta_generator.value,
-        )
+        {
+            "parent_dataset": {
+                "dataset_name": trace_reader.parent_dataset_name,
+                "dataset_path": str(traces_dataset_name_or_path),
+                "dataset_hash": trace_reader.hash,
+                "dataset_metadata": trace_reader.metadata,
+                "trace_count": len(trace_reader),
+            },
+            "delta_generator": delta_generator.value,
+        }
     )
     delta_counts = []
     seen_problem_ids, seen_trace_ids = set(), set()

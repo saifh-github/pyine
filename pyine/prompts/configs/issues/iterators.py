@@ -9,7 +9,7 @@ if typing.TYPE_CHECKING:
 # @@@@ TODO: detect+fix "soft refusals": some models (e.g. o3) always want to put spoiling comments in...
 # @@@@ TODO: for response structure, add regular pydantic model + a response wrapper w/ invalid flag opt
 
-invalid_code_token = "INVALID_CODE"
+invalid_code_token = "INVALID_CODE"  # noqa: S105 - harmless sentinel token
 """Token produced by models if they encounter invalid/unusable python code."""
 
 
@@ -30,9 +30,9 @@ def get_prompt_template(
     import pyine.prompts.manager
 
     prompt_config = pyine.prompts.manager.get_prompt_config("issues/iterators", version=version)
-    merged_context = dict(context_variables) if context_variables else {}
+    merged_context = context_variables.copy() if context_variables else {}
     merged_context.setdefault("invalid_code_token", invalid_code_token)
-    merged_examples_block = dict(examples_block_variables) if examples_block_variables else {}
+    merged_examples_block = examples_block_variables.copy() if examples_block_variables else {}
     merged_examples_block.setdefault("invalid_code_token", invalid_code_token)
     template = prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,

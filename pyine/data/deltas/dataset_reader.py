@@ -71,9 +71,7 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
         else:  # pragma: no cover
             raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
         internal_deltas_idx = self._deltas_indices[index_or_key]
-        deltas = self.reader.get(internal_deltas_idx)
-        deltas = pyine.data.deltas.dataset_utils.TraceDeltaList.model_validate(deltas)
-        return deltas
+        return pyine.data.deltas.dataset_utils.TraceDeltaList.model_validate(self.reader.get(internal_deltas_idx))
 
     def get_trace_data(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.CodingProblem:
         """Fetches an individual trace data object from the LMDB database by external index or key.

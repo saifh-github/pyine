@@ -80,7 +80,7 @@ class InputVariablesBuilderType(typing.Protocol):
         trace: pyine.utils.code.execution.TraceResult,
         problem: pyine.data.traces.dataset_utils.CodingProblem,
         config: "AnnotationOptions",
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> dict[str, typing.Any] | None: ...
 
 
@@ -114,7 +114,7 @@ class MetadataBuilderType(typing.Protocol):
         trace: pyine.utils.code.execution.TraceResult,
         problem: pyine.data.traces.dataset_utils.CodingProblem,
         config: "AnnotationOptions",
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> dict[str, pydantic.JsonValue]: ...
 
 
@@ -130,20 +130,19 @@ class CreationMetaBuilderType(typing.Protocol):
         trace: pyine.utils.code.execution.TraceResult,
         problem: pyine.data.traces.dataset_utils.CodingProblem,
         config: "AnnotationOptions",
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> pyine.prompts.result_db.CreationMeta: ...
 
 
-PromptNameOrNameAndVerTuple = typing.Union[
-    pyine.prompts.PromptNameType,
-    tuple[pyine.prompts.PromptNameType, pyine.prompts.PromptVersionType],
-]
+PromptNameOrNameAndVerTuple = (
+    pyine.prompts.PromptNameType | tuple[pyine.prompts.PromptNameType, pyine.prompts.PromptVersionType]
+)
 """Type used to represent a prompt name or a tuple of prompt name and version."""
 
 ProbabilityType = typing.Annotated[pydantic.StrictFloat, pydantic.Field(ge=0, le=1)]
 """Type used to describe probabilities of applying some augmentation operations."""
 
-AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]  # noqa
+type AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]
 """Type used to describe prompt augmentation probability maps."""
 
 
@@ -167,7 +166,7 @@ class AugmentedAnnotationOptions(pydantic.BaseModel):
     # -------- settings for 'bugged_hinted' and 'bugged_misleading' code generation --------
 
     buggy_code_before_hinting_prob_map: AugmProbMapType = pydantic.Field(
-        default=dict(),  # empty map = turned off by default
+        default_factory=dict,  # empty map = turned off by default
         description=(
             "Probability map specifying whether to fetch a buggy version of a code string before "
             "applying a hint generation prompt (misleading or not). The key of the map can be an "
@@ -185,13 +184,13 @@ class AugmentedAnnotationOptions(pydantic.BaseModel):
 
     # -------- settings for 'misleading' and 'bugged_misleading' code generation --------
 
-    misleading_augment_prob: ProbabilityType = 0.0  # noqa; turned off by default
+    misleading_augment_prob: ProbabilityType = 0.0  # turned off by default
     """Probability of selecting a misleading (i.e. alternative) test case output when prompting for issues."""
     max_misleading_test_length_delta: int | None = None
     """Maximum allowed difference in length (chars/items) when matching candidates; None disables the filter."""
     misleading_test_match_signatures: bool = True
     """Whether to match signatures of the test case (if any) to the candidates (if any)."""
-    misleading_test_top_k_candidates: pydantic.PositiveInt = 5  # noqa
+    misleading_test_top_k_candidates: pydantic.PositiveInt = 5
     """Number of top-matching candidates to consider when sampling a misleading output."""
 
     @property
@@ -416,11 +415,11 @@ def _default_group_resolver(
     raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default resolver")
 
 
-_INTERNAL_BUGGED_HINTED_TOKEN = "__orig_bugless_code__"
+_INTERNAL_BUGGED_HINTED_TOKEN = "__orig_bugless_code__"  # noqa: S105 - benign sentinel token
 """Token used in prompt variable dicts when prompting on of buggy code (specified the orig code)."""
-_INTERNAL_MISLEADING_TOKEN = "__orig_expected_output__"
+_INTERNAL_MISLEADING_TOKEN = "__orig_expected_output__"  # noqa: S105 - benign sentinel token
 """Token used in prompt variable dicts when using misleading hints (specifies the orig output)."""
-CODE_SUMMARY_TOKEN = "description"
+CODE_SUMMARY_TOKEN = "description"  # noqa: S105 - benign constant token name
 """Token used in prompt variable dicts when using code summaries (shared definition across many prompt templates)."""
 
 
@@ -428,7 +427,7 @@ def _default_input_variables_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
-    **base_kwargs,
+    **base_kwargs: typing.Any,
 ) -> dict[str, typing.Any] | None:
     """Builds input variables for the target prompt.
 
@@ -436,7 +435,7 @@ def _default_input_variables_builder(
     an exception.
     """
     # initialize the vars dict with stuff that is generic/useful for all prompts
-    output = dict(code=trace.code_string)
+    output = {"code": trace.code_string}
     output.update(base_kwargs)  # update w/ whatever the caller may have provided
     if config.prompt_config.prompt_name == "code_summary":
         # this is the simplest case: nothing more to do here
@@ -445,7 +444,7 @@ def _default_input_variables_builder(
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
-    if not is_hint_prompting and not is_issue_prompting:
+    if not (is_hint_prompting or is_issue_prompting):
         raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
@@ -484,12 +483,12 @@ def _default_input_variables_builder(
 
     # -------- special case: generate misleading hint by picking an alternative test case --------
 
-    should_apply_misleading = False
-    if is_mislead_prompting:
-        should_apply_misleading = True
-    elif is_hint_prompting and not is_stub_prompting and config.augment_config.is_misleading_enabled:
-        if np.random.random() < config.augment_config.misleading_augment_prob:
-            should_apply_misleading = True
+    should_apply_misleading = is_mislead_prompting or (
+        is_hint_prompting
+        and not is_stub_prompting
+        and config.augment_config.is_misleading_enabled
+        and np.random.random() < config.augment_config.misleading_augment_prob
+    )
 
     if should_apply_misleading:
         assert config._test_data_cache is not None, "missing test data cache for misleading generation"
@@ -516,22 +515,25 @@ def _default_input_variables_builder(
     ):
         # try to fetch a buggy version of the code string for the hint generation prompt
         for (
-            bug_prompt_info,
+            bug_prompt_spec,
             augment_prob,
         ) in config.augment_config.buggy_code_before_hinting_prob_map.items():
             if np.random.random() > augment_prob:
                 continue  # failed random draw for this bug type
-            if isinstance(bug_prompt_info, tuple):
-                bug_prompt_info = dict(prompt_name=bug_prompt_info[0], prompt_version=bug_prompt_info[1])
+            if isinstance(bug_prompt_spec, tuple):
+                bug_prompt_info = {
+                    "prompt_name": bug_prompt_spec[0],
+                    "prompt_version": bug_prompt_spec[1],
+                }
             else:
-                bug_prompt_info = dict(prompt_name=bug_prompt_info)
+                bug_prompt_info = {"prompt_name": bug_prompt_spec}
             buggy_code_records = config._prompt_result_db.get_by_identifier(
                 identifier=str(trace_id.get_parent_identifier()),
                 **bug_prompt_info,
             )
             if buggy_code_records:
                 # always pick a random choice (default documented strategy)
-                output["code"] = random.choice(buggy_code_records).result
+                output["code"] = random.choice(buggy_code_records).result  # noqa: S311 - non-cryptographic randomness
                 output[_INTERNAL_BUGGED_HINTED_TOKEN] = trace.code_string
                 break
 
@@ -561,7 +563,7 @@ def _default_tags_builder(
     output_tags.append(f"llm_provider:{config.llm_provider_config.provider}")
     if config.llm_provider_config.model_kwargs.get("model", None) is not None:
         output_tags.append(f"llm_provider_model:{config.llm_provider_config.model_kwargs['model']}")
-    assert not any([t.startswith("augment:") for t in output_tags]), "should not be any of these yet"
+    assert not any(t.startswith("augment:") for t in output_tags), "should not be any of these yet"
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
     if trace_id.is_augmented:
@@ -643,7 +645,7 @@ def _default_meta_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> dict[str, pydantic.JsonValue]:
     """Builds metadata dictionaries for the target prompt.
 
@@ -654,7 +656,7 @@ def _default_meta_builder(
     metadata dictionary contains the content of the `config.shared_meta` dictionary.
     """
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
-    out_metadata: dict[str, pydantic.JsonValue] = dict(reprod=reprod_metadata)
+    out_metadata: dict[str, pydantic.JsonValue] = {"reprod": reprod_metadata}
     out_metadata["llm_provider_config"] = config.llm_provider_config.model_dump()
     out_metadata["prompt_config"] = config.prompt_config.model_dump()
     out_metadata["augment_config"] = config.augment_config.model_dump()
@@ -669,7 +671,7 @@ def _default_creation_meta_builder(
     trace: pyine.utils.code.execution.TraceResult,
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: AnnotationOptions,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> pyine.prompts.result_db.CreationMeta:
     """Builds creation metadata for the target prompt.
 
@@ -739,12 +741,10 @@ def _default_output_validator(
             return output_is_different  # we want a different output for bugged code
         assert is_hint_prompting or is_mislead_prompting, "branching logic mistake somewhere"
         if any(
-            [
-                bug_tag in tags
-                for bug_tag in [
-                    "augment:bugged_hinted",
-                    "augment:bugged_misleading",
-                ]
+            bug_tag in tags
+            for bug_tag in [
+                "augment:bugged_hinted",
+                "augment:bugged_misleading",
             ]
         ):
             assert _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
@@ -889,7 +889,7 @@ async def annotate_trace_dataset(
     creation_meta_getter = config.creation_meta_builder or _default_creation_meta_builder
     data_indices = list(config.target_indices or range(len(dataset)))
     if shuffle_indices:
-        random.shuffle(data_indices)
+        random.shuffle(data_indices)  # noqa: S311 - non-cryptographic randomness
     wrapped_data_indices = tqdm.tqdm(
         data_indices,
         disable=not show_progress,

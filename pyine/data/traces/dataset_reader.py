@@ -6,6 +6,7 @@ dataset format. See also the demo notebook (in the project's root `notebooks` di
 for an example of how to use this dataset reader.
 """
 
+import collections
 import fnmatch
 import functools
 import logging
@@ -50,6 +51,11 @@ class DatasetReader(torch.utils.data.Dataset):
         super().__init__()
         self.path = lmdb_path
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        self._problem_data_cache: collections.OrderedDict[
+            int,
+            pyine.data.traces.dataset_utils.CodingProblem,
+        ] = collections.OrderedDict()
+        self._problem_cache_max_size = 512
         self._init_trace_metadata()
 
     def _is_metadata_prepared(self) -> bool:
@@ -58,22 +64,22 @@ class DatasetReader(torch.utils.data.Dataset):
 
     def _save_prepared_metadata(self) -> None:
         """Saves the prepared trace maps and metadata to the lmdb directory."""
-        trace_maps_and_metadata = dict(
-            problem_indices=self._problem_indices,
-            problem_keys=self.problem_keys,
-            trace_indices=self._trace_indices,
-            trace_keys=self.trace_keys,
-            trace_idx_to_problem_idx=self._trace_idx_to_problem_idx,
-            trace_key_to_problem_key=self.trace_key_to_problem_key,
-            augment_idx_to_parent_trace_idx=self._augment_idx_to_parent_trace_idx,
-            augment_key_to_parent_trace_key=self.augment_key_to_parent_trace_key,
-            trace_metadata=self.trace_metadata,
-        )
+        trace_maps_and_metadata = {
+            "problem_indices": self._problem_indices,
+            "problem_keys": self.problem_keys,
+            "trace_indices": self._trace_indices,
+            "trace_keys": self.trace_keys,
+            "trace_idx_to_problem_idx": self._trace_idx_to_problem_idx,
+            "trace_key_to_problem_key": self.trace_key_to_problem_key,
+            "augment_idx_to_parent_trace_idx": self._augment_idx_to_parent_trace_idx,
+            "augment_key_to_parent_trace_key": self.augment_key_to_parent_trace_key,
+            "trace_metadata": self.trace_metadata,
+        }
         encoded_data = msgspec.msgpack.encode(trace_maps_and_metadata)
         with open(self._get_prepared_metadata_path(), "wb") as fd:
             fd.write(encoded_data)
 
-    def _load_prepared_metadata(self):
+    def _load_prepared_metadata(self) -> None:
         """Loads the prepared trace maps and metadata from the lmdb directory."""
         with open(self._get_prepared_metadata_path(), "rb") as fd:
             encoded_data = msgspec.msgpack.decode(fd.read())
@@ -251,12 +257,12 @@ class DatasetReader(torch.utils.data.Dataset):
         """
         trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
         internal_trace_idx = self._trace_indices[trace_idx]
-        trace_data = self.reader.get(internal_trace_idx)
-        trace_data = pyine.utils.code.execution.TraceResult.model_validate(trace_data)
-        return trace_data
+        return pyine.utils.code.execution.TraceResult.model_validate(self.reader.get(internal_trace_idx))
 
-    @functools.lru_cache(maxsize=512)
-    def get_problem_data(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.CodingProblem:
+    def get_problem_data(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.traces.dataset_utils.CodingProblem:
         """Fetches the problem data associated with a trace by external index or key.
 
         Args:
@@ -267,9 +273,15 @@ class DatasetReader(torch.utils.data.Dataset):
         """
         trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
         internal_trace_idx = self._trace_indices[trace_idx]
+        cached = self._problem_data_cache.get(internal_trace_idx)
+        if cached is not None:
+            self._problem_data_cache.move_to_end(internal_trace_idx)
+            return cached
         problem_idx = self._trace_idx_to_problem_idx[internal_trace_idx]
-        problem_data = self.reader.get(problem_idx)
-        problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
+        problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(self.reader.get(problem_idx))
+        self._problem_data_cache[internal_trace_idx] = problem_data
+        if len(self._problem_data_cache) > self._problem_cache_max_size:
+            self._problem_data_cache.popitem(last=False)
         return problem_data
 
     def get_trace_metadata(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.TraceMetadata:
@@ -280,15 +292,14 @@ class DatasetReader(torch.utils.data.Dataset):
     def get_tags(self, index_or_key: int | str) -> list[str]:
         """Returns a list of tags for a given trace so that we can decide whether to filter it."""
         trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
-        output_tags = self.trace_metadata[trace_idx].tags.copy()
-        return output_tags
+        return self.trace_metadata[trace_idx].tags.copy()
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a string representation of the dataset reader (for debugging purposes)."""
         return f"{self.__class__.__name__}({self.path}) with {len(self)} instances"
 
 
-DatasetOrDatasetPath: typing.TypeAlias = pathlib.Path | typing.AnyStr | DatasetReader
+DatasetOrDatasetPath = pathlib.Path | typing.AnyStr | DatasetReader
 
 
 def get_traces_metadata(

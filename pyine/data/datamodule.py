@@ -146,7 +146,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     subset_names: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
-            default=tuple(["train", "valid", "test"]),
+            default=("train", "valid", "test"),
             min_length=1,
             description="Data subset names that the data module supports.",
         ),
@@ -154,7 +154,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     train_subset_names: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
-            default=tuple(["train"]),
+            default=("train",),
             min_length=1,
             description="Subset names that are meant for model training.",
         ),
@@ -162,7 +162,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     valid_subset_names: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
-            default=tuple(["valid"]),
+            default=("valid",),
             min_length=1,
             description="Subset names that are meant for model validation.",
         ),
@@ -170,7 +170,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     eval_subset_names: typing.Annotated[
         tuple[SubsetNameType, ...],
         pydantic.Field(
-            default=tuple(["valid"]),
+            default=("valid",),
             min_length=1,
             description="Subset names that are meant for model evaluations.",
             # Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
@@ -189,7 +189,12 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
-    def instantiate_parser(self, subset_name: SubsetNameType, *args, **extra_kwargs) -> BaseDataParserType:
+    def instantiate_parser(
+        self,
+        subset_name: SubsetNameType,
+        *args: typing.Any,
+        **extra_kwargs: typing.Any,
+    ) -> BaseDataParserType:
         """Instantiates a data parser object for the given subset name."""
         parser_config = self._resolved_dataparser_configs[subset_name]
         parser = parser_config.instantiate(*args, **extra_kwargs)
@@ -197,7 +202,12 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser)}")
         return parser
 
-    def instantiate_dataloader(self, loader_name: LoaderNameType, *args, **extra_kwargs) -> BaseDataLoaderType:
+    def instantiate_dataloader(
+        self,
+        loader_name: LoaderNameType,
+        *args: typing.Any,
+        **extra_kwargs: typing.Any,
+    ) -> BaseDataLoaderType:
         """Instantiates a data loader object for the given loader name."""
         loader_config = self._resolved_dataloader_configs[loader_name]
         loader = loader_config.instantiate(*args, **extra_kwargs)
@@ -205,7 +215,11 @@ class BaseDataModuleConfig(pydantic.BaseModel):
             raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader)}")
         return loader
 
-    def instantiate_datamodule(self, *args, **extra_kwargs) -> "BaseDataModule":
+    def instantiate_datamodule(
+        self,
+        *args: typing.Any,
+        **extra_kwargs: typing.Any,
+    ) -> "BaseDataModule":
         """Instantiates a data module object based on the configured target class path."""
         dm = self._resolved_datamodule_class(*args, config=self, **extra_kwargs)
         if not isinstance(dm, BaseDataModule):
@@ -263,11 +277,11 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if not issubclass(resolved_class, BaseDataModule):
             raise TypeError(f'"{self.datamodule_class_path}" is not a subclass of BaseDataModule')
         self._resolved_datamodule_class = resolved_class
-        if any([name not in self.subset_names for name in self.train_subset_names]):
+        if any(name not in self.subset_names for name in self.train_subset_names):
             raise ValueError(f"some subset name(s) are invalid; got {self.train_subset_names!r}")
-        if any([name not in self.subset_names for name in self.valid_subset_names]):
+        if any(name not in self.subset_names for name in self.valid_subset_names):
             raise ValueError(f"some subset name(s) are invalid; got {self.valid_subset_names!r}")
-        if any([name not in self.subset_names for name in self.eval_subset_names]):
+        if any(name not in self.subset_names for name in self.eval_subset_names):
             raise ValueError(f"some subset name(s) are invalid; got {self.eval_subset_names!r}")
         return self
 
@@ -288,7 +302,7 @@ class BaseDataModule(pl.LightningDataModule):
     def __init__(
         self,
         config: BaseDataModuleConfig,
-    ):
+    ) -> None:
         """Initializes the base interface using the expected configs of parsers/loaders.
 
         Args:
@@ -423,7 +437,7 @@ class BaseDataModule(pl.LightningDataModule):
 
     def get_stats(self, target_subsets: list[SubsetNameType] | None = None) -> dict[str, int | float | str]:
         """Returns a dictionary of useful-to-log statistics."""
-        return dict()  # nothing to log here by default
+        return {}
 
     def get_dataloader(
         self,
@@ -443,8 +457,7 @@ class BaseDataModule(pl.LightningDataModule):
         getter = getattr(self, expected_getter_name)
         if not callable(getter):
             raise ValueError(f"invalid {loader_name} getter type: {type(getter)}, expected callable")
-        dataloader = getter()
-        return dataloader
+        return getter()
 
     def get_parser(
         self,
@@ -499,24 +512,28 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Defines whether generated message datasets should be kept in memory."""
     message_generator_num_workers: int = 6
     """Defines the number of workers to use when generating message datasets."""
-    apply_chat_template_train_config: dict[str, typing.Any] = dict(
-        tokenize=False,
-        add_generation_prompt=False,
+    apply_chat_template_train_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: {
+            "tokenize": False,
+            "add_generation_prompt": False,
+        },
     )
     """Configuration to use when applying a tokenizer's chat template onto a messages dataset for SFT training."""
-    apply_chat_template_eval_config: dict[str, typing.Any] = dict(
-        tokenize=False,
-        add_generation_prompt=True,
+    apply_chat_template_eval_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        },
     )
     """Configuration to use when applying a tokenizer's chat template onto a messages dataset for evaluations."""
-    apply_chat_template_batching_map_config: dict[str, typing.Any] = dict()
+    apply_chat_template_batching_map_config: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Configuration to use for the batched map operation when applying a tokenizer's chat template."""
     use_local_dataset_cache: bool = True
     """Whether to always try to save/load datasets from the local cache or not."""
 
     def get_prompt_template(
         self,
-        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+        **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
     ) -> langchain_core.prompts.BasePromptTemplate:
         """Returns the prompt template used for preparing training/evaluation conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
@@ -527,7 +544,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         self,
         model: langchain_core.language_models.BaseLanguageModel,
         runnable_name: str | None = None,
-        **kwargs,  # forwarded to prompt manager / constructor, overrides internal options if needed
+        **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
     ) -> langchain_core.runnables.Runnable | None:  # noqa
         """Returns the runnable prompt chain used to infer assistant messages in conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
@@ -535,7 +552,11 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         return pyine.prompts.manager.get_prompt_chain(model=model, **prompt_kwargs, runnable_name=runnable_name)
 
     @typing.override
-    def instantiate_datamodule(self, *args, **extra_kwargs) -> "ConversationDataModule":
+    def instantiate_datamodule(
+        self,
+        *args: typing.Any,
+        **extra_kwargs: typing.Any,
+    ) -> "ConversationDataModule":
         """Instantiates a data module object based on the configured target class path."""
         dm = super().instantiate_datamodule(*args, **extra_kwargs)
         if not isinstance(dm, ConversationDataModule):
@@ -703,7 +724,7 @@ class ConversationDataModule(BaseDataModule):
     def __init__(
         self,
         config: ConversationDataModuleConfig,
-    ):
+    ) -> None:
         """Initializes the base interface using the expected configs of parsers/loaders.
 
         Args:

@@ -27,6 +27,12 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
+class _HasOpenAIConfig(typing.Protocol):
+    """Protocol for objects exposing an OpenAI configuration extractor."""
+
+    def get_openai_config(self) -> dict[str, typing.Any]: ...
+
+
 class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     """Configuration for the OpenAI fine-tuner app's main function.
 
@@ -47,14 +53,18 @@ class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         """Returns whether the model to be fine-tuned supports the use of system prompts."""
         models_without_system_prompts = ["o1", "o3", "o4"]
         return not any(
-            [self.openai_finetuner_config.params.base_model.startswith(m) for m in models_without_system_prompts]
+            self.openai_finetuner_config.params.base_model.startswith(model_prefix)
+            for model_prefix in models_without_system_prompts
         )
 
 
 @functools.wraps(pyine.apps.trainers.openai_finetune.main)
-def _async_main_wrapper(*args, **kwargs):
+def _async_main_wrapper(
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> None:
     """Wrapper for async main function."""
-    return asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
+    asyncio.run(pyine.apps.trainers.openai_finetune.main(*args, **kwargs))
 
 
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
@@ -69,23 +79,31 @@ def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
 
 
 def _openai_finetuner_method_config_getter(
-    wrapped_fn: typing.Callable,
-) -> typing.Callable:
+    wrapped_fn: typing.Callable[..., _HasOpenAIConfig],
+) -> typing.Callable[..., dict[str, typing.Any]]:
     """Wrapper for OpenAI fine-tuning method configs to return the OpenAI config object."""
 
-    def _wrapper(*args, **kwargs):
-        return wrapped_fn(*args, **kwargs).get_openai_config()
+    def _wrapper(
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> dict[str, typing.Any]:
+        method_config = wrapped_fn(*args, **kwargs)
+        return method_config.get_openai_config()
 
     return _wrapper
 
 
 def _openai_finetuner_method_params_config_wrapper(
-    wrapped_fn: typing.Callable,
-) -> typing.Callable:
+    wrapped_fn: typing.Callable[..., pyine.utils.openai.OpenAIFineTunerParamsConfig],
+) -> typing.Callable[..., pyine.utils.openai.OpenAIFineTunerConfig]:
     """Wrapper for OpenAI fine-tuning method params configs to return a parent object."""
 
-    def _wrapper(*args, **kwargs):
-        return pyine.utils.openai.OpenAIFineTunerConfig(params=wrapped_fn(*args, **kwargs))
+    def _wrapper(
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> pyine.utils.openai.OpenAIFineTunerConfig:
+        params_config = wrapped_fn(*args, **kwargs)
+        return pyine.utils.openai.OpenAIFineTunerConfig(params=params_config)
 
     return _wrapper
 
@@ -101,7 +119,7 @@ def _get_ft_params_configs(
         config=hydra_zen.builds(
             pyine.utils.openai.OpenAIFineTunerParamsConfig,
             base_model="gpt-4.1-mini-2025-04-14",
-            method=dict(type="supervised"),
+            method={"type": "supervised"},
             seed="${runtime.seed}",
             suffix="default-sft",
             metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
@@ -242,7 +260,7 @@ def _get_experiment_configs(
                 group=group,
                 package=package,
                 config=hydra_zen.make_config(
-                    runtime=dict(exp_name=exp_name),
+                    runtime={"exp_name": exp_name},
                     skip_fine_tuning=(config_type_str == "_eval_only"),
                     # -------------
                     hydra_defaults=[

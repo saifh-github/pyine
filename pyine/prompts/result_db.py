@@ -64,7 +64,7 @@ class CreationMeta(pydantic.BaseModel):
         """Return the created_at datetime in the local timezone."""
         return self.created_at.astimezone()
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a string representation of the creation metadata (for debugging purposes)."""
         return f"Created at {self.created_at_localtz.isoformat()} by {self.created_by}"
 
@@ -104,15 +104,12 @@ class PromptResultDB:
     def __init__(
         self,
         db_path: str | pathlib.Path | None = None,
-    ):
+    ) -> None:
         """Initializes (or connects to) the database."""
-        if db_path is None:
-            db_path = get_framework_db_path()
-        else:
-            db_path = pathlib.Path(db_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"setting up prompt result database at: {db_path}")
-        self._path = db_path
+        resolved_db_path = get_framework_db_path() if db_path is None else pathlib.Path(db_path)
+        resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"setting up prompt result database at: {resolved_db_path}")
+        self._path = resolved_db_path
         self._lock = threading.RLock()
         self._init_db()
 
@@ -559,8 +556,8 @@ class PromptResultDB:
             creation_meta=CreationMeta(**cmeta_dict),
             prompt=row["prompt"],
             result=row["result"],
-            meta=orjson.loads(meta_raw) if meta_raw else dict(),
-            tags=orjson.loads(tags_raw) if tags_raw else list(),
+            meta=orjson.loads(meta_raw) if meta_raw else {},
+            tags=orjson.loads(tags_raw) if tags_raw else [],
         )
 
 
@@ -697,7 +694,7 @@ def fetch_or_generate_prompt_results(
                 callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
                 output = chain.invoke(input_variables, config=callback_config)
                 cm = creation_meta if creation_meta is not None else CreationMeta()
-                cm.llm_output = dict()
+                cm.llm_output = {}
                 latest_llm_event = llm_event_logger.get_latest_event("llm_end")
                 if latest_llm_event is not None and latest_llm_event.response.llm_output:
                     cm.llm_output.update(latest_llm_event.response.llm_output)
@@ -725,9 +722,9 @@ def fetch_or_generate_prompt_results(
                 if is_ok:
                     # prepare tags for storage without mutating the caller's list across attempts
                     tags_to_store = list(tags) if tags is not None else []
-                    if not any([t.startswith("created_by") for t in tags_to_store]):
+                    if not any(tag.startswith("created_by") for tag in tags_to_store):
                         tags_to_store.append(f"created_by:{cm.created_by}")
-                    if not any([t.startswith("created_at") for t in tags_to_store]):
+                    if not any(tag.startswith("created_at") for tag in tags_to_store):
                         # don't use full iso format for tags (clashes w/ column-based formatting)
                         tags_to_store.append(f"created_at:{cm.created_at.strftime('%Y%m%d-%H%M%S')}")
                     if log_new_results:
@@ -764,12 +761,11 @@ def fetch_or_generate_prompt_results(
                     )
                 retry_count += 1
                 continue
-    combined_records = _dedupe_records(existing_records + new_records)
-    return combined_records
+    return _dedupe_records(existing_records + new_records)
 
 
 @dataclasses.dataclass(frozen=True)
-class TypedPromptResult(typing.Generic[T]):
+class TypedPromptResult[T]:
     """A typed wrapper containing a DB record and its decoded result."""
 
     record: PromptResultRecord
@@ -778,7 +774,7 @@ class TypedPromptResult(typing.Generic[T]):
     """The decoded version of the record's result string."""
 
 
-class TypedPromptResultFetcher(typing.Generic[T]):
+class TypedPromptResultFetcher[T]:
     """Wraps fetch_or_generate_prompt_results and decodes string results into a target type.
 
     Provide either:
@@ -832,7 +828,11 @@ class TypedPromptResultFetcher(typing.Generic[T]):
         return TypedPromptResult(record=record, result=self._decode(record.result))
 
     @functools.wraps(fetch_or_generate_prompt_results)
-    def fetch_or_generate(self, *args, **kwargs) -> list[TypedPromptResult[T]]:
+    def fetch_or_generate(
+        self,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> list[TypedPromptResult[T]]:
         """Fetch/generate records then decode each into the target type."""
         records = fetch_or_generate_prompt_results(*args, **kwargs)
         return [self.decode_record(r) for r in records]

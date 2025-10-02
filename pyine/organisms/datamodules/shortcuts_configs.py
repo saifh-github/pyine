@@ -1,5 +1,6 @@
 """Hydra-zen config builder for shortcuts data modules."""
 
+import contextlib
 import itertools
 import pathlib
 import typing
@@ -58,22 +59,22 @@ def _get_default_sampler_builder_config(
 
     This configuration will be hierarchically overridden by subset-specific settings (see below).
     """
-    config_params = dict(
-        filtering_config=dict(),  # pyine.organisms.datamodules.utils.samples.SampleFilteringConfig
-        selection_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleSelectionConfig
-            seed=seed,
-            allow_db_lookups=True,
-            choice_strategy="latest",
-            input_type_prob_map=pyine.organisms.datamodules.utils.samples.get_default_code_input_type_prob_map(),
-            fallback_to_orig=False,
-        ),
-        transform_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleTransformConfig
-            seed=seed,
-            transform_strategy="never",
-        ),
-    )
+    config_params = {
+        "filtering_config": {},  # SampleFilteringConfig
+        "selection_config": {  # SampleSelectionConfig
+            "seed": seed,
+            "allow_db_lookups": True,
+            "choice_strategy": "latest",
+            "input_type_prob_map": pyine.organisms.datamodules.utils.samples.get_default_code_input_type_prob_map(),
+            "fallback_to_orig": False,
+        },
+        "transform_config": {  # SampleTransformConfig
+            "seed": seed,
+            "transform_strategy": "never",
+        },
+    }
     if as_pydantic:
-        return pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate(dict(params=config_params))
+        return pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate({"params": config_params})
     return config_params
 
 
@@ -87,25 +88,25 @@ def _get_default_sample_builder_overrides_for_subset(
     will be returned.
     """
     if subset_name == "train":
-        return dict(
-            filtering_config=dict(),  # pyine.organisms.datamodules.utils.samples.SampleFilteringConfig
-            selection_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleSelectionConfig
-                choice_strategy="random",
-                input_type_prob_map=dict(
-                    original=0.5,
-                    hinted=0.25,
-                    stubbed=0.1,
-                    obfuscated_hinted=0.1,
-                    obfuscated=0.05,
-                ),
-                fallback_to_orig=True,
-            ),
-            transform_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleTransformConfig
-                transform_strategy="never",  # @@@@@@ TODO consider switching to 'if_too_long'?
-            ),
-        )
+        return {
+            "filtering_config": {},  # SampleFilteringConfig
+            "selection_config": {  # SampleSelectionConfig
+                "choice_strategy": "random",
+                "input_type_prob_map": {
+                    "original": 0.5,
+                    "hinted": 0.25,
+                    "stubbed": 0.1,
+                    "obfuscated_hinted": 0.1,
+                    "obfuscated": 0.05,
+                },
+                "fallback_to_orig": True,
+            },
+            "transform_config": {  # SampleTransformConfig
+                "transform_strategy": "never",  # @@@@@@ TODO consider switching to 'if_too_long'?
+            },
+        }
     # no specific overrides for this subset
-    return dict()
+    return {}
 
 
 class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleConfig):
@@ -269,20 +270,16 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         )
         if not self.split_file_path.is_file():
             raise ValueError(f"dataset split file does not exist at path: {self.split_file_path}")
-        for subset_name in self.dataparser_config_overrides.keys():
-            if self.dataparser_config_overrides[subset_name] and any(
-                [
-                    subset_name.endswith(f"_{suffix}")
-                    for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
-                ]
+        for subset_name, overrides in self.dataparser_config_overrides.items():
+            if overrides and any(
+                subset_name.endswith(f"_{suffix}")
+                for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
             ):
                 raise ValueError(f"invalid subset name: {subset_name}, cannot override special parsers")
-        for loader_name in self.dataloader_config_overrides.keys():
-            if self.dataparser_config_overrides[loader_name] and any(
-                [
-                    loader_name.endswith(f"_{suffix}")
-                    for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
-                ]
+        for loader_name, overrides in self.dataloader_config_overrides.items():
+            if overrides and any(
+                loader_name.endswith(f"_{suffix}")
+                for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
             ):
                 raise ValueError(f"invalid loader name: {loader_name}, cannot override special loaders")
         return self
@@ -295,23 +292,23 @@ def get_datamodule_config(
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
-    config_kwargs = dict(
-        lmdb_paths=lmdb_paths,
-        split_file_path=split_file_path,
-        split_seed=seed,
-        default_dataparser_config=dict(  # pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
-            params=_get_default_sampler_builder_config(seed=seed),
-        ),
-        dataparser_config_overrides={
+    config_kwargs = {
+        "lmdb_paths": lmdb_paths,
+        "split_file_path": split_file_path,
+        "split_seed": seed,
+        "default_dataparser_config": {
+            "params": _get_default_sampler_builder_config(seed=seed),
+        },
+        "dataparser_config_overrides": {
             subset: _get_default_sample_builder_overrides_for_subset(subset)
             for subset in _get_default_top_level_subsets()
         },
-        dataloader_config_overrides=dict(
-            train=dict(
-                shuffle=True,
-            ),
-        ),
-    )
+        "dataloader_config_overrides": {
+            "train": {
+                "shuffle": True,
+            },
+        },
+    }
     if as_pydantic:
         return ShortcutBiasDataModuleConfig.model_validate(config_kwargs)
     return config_kwargs
@@ -323,15 +320,11 @@ def _get_taco_configs(
     """Returns datamodule configs and their descriptions for the TACO dataset."""
     # first, get TACO dataset paths in a fail-safe manner
     taco_latest_path = None
-    try:
+    with contextlib.suppress(FileNotFoundError):
         taco_latest_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
-    except FileNotFoundError:
-        pass
     taco_split_path = None
-    try:
+    with contextlib.suppress(FileNotFoundError):
         taco_split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
-    except FileNotFoundError:
-        pass
     taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
         source_dataset_name="TACO",
         pattern="v1.3/10s10t.*of000026.*.lmdb",
@@ -342,19 +335,22 @@ def _get_taco_configs(
         warnings.warn(
             "no TACO base dataset found, skipping TACO configs; "
             "if you intended to use TACO dataset demos/tests, please ensure that a dataset is present "
-            "in the expected location (see the top-level README for more details)"
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
         )
     if taco_split_path is None:
         warnings.warn(
             "no TACO split file found, skipping TACO configs; "
             "if you intended to use TACO data modules, please ensure that the split file is present "
-            "in the expected location (see the top-level README for more details)"
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
         )
     if not taco_10s10t_v1_paths:
         warnings.warn(
             "the TACO 10s10t v1 dataset is missing, skipping related configs; "
             "if you intended to conduct TACO-related experiments, please ensure that a dataset is present "
-            "in the expected location (see the top-level README for more details)"
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
         )
 
     # build the actual config objects + descriptions

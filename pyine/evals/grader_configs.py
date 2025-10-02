@@ -20,7 +20,7 @@ def get_provider_configs(group: str) -> list[pyine.configs.schemas.ConfigDescrip
         name="openai_gpt5mini",
         group=group,
         config=hydra_zen.make_config(
-            model_kwargs=dict(model="gpt-5-mini"),
+            model_kwargs={"model": "gpt-5-mini"},
             # -------------
             bases=(openai_llm_provider_config,),
             zen_meta={
@@ -32,7 +32,7 @@ def get_provider_configs(group: str) -> list[pyine.configs.schemas.ConfigDescrip
         name="openai_gpt5nano",
         group=group,
         config=hydra_zen.make_config(
-            model_kwargs=dict(model="gpt-5-nano"),
+            model_kwargs={"model": "gpt-5-nano"},
             # -------------
             bases=(openai_llm_provider_config,),
             zen_meta={

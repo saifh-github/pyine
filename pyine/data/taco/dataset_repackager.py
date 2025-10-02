@@ -5,6 +5,7 @@ This module contains the TACO dataset repackaging logic.
 import asyncio
 import json
 import pathlib
+import typing
 
 import tiktoken
 
@@ -119,25 +120,34 @@ async def reprocess_code_samples(
             tasks = []
             for input_data in chunk_inputs:
 
-                async def process_with_retry(input_data, max_retries=5, backoff=2):
+                async def process_with_retry(
+                    input_data: dict[str, typing.Any],
+                    max_retries: int = 5,
+                    backoff: float = 2,
+                ) -> typing.Any:
                     retries = 0
                     while retries < max_retries:
                         try:
-                            return await code_analysis_chain.ainvoke(input_data, config={"max_concurrency": 512})
-                        except Exception as e:
+                            return await code_analysis_chain.ainvoke(
+                                input_data,
+                                config={"max_concurrency": 512},
+                            )
+                        except Exception as exc:
                             full_stop_exceptions = [
                                 "insufficient balance",
                                 "stopping processing at ",
                             ]
-                            if any([s in str(e).lower() for s in full_stop_exceptions]):
-                                raise e
+                            error_text = str(exc)
+                            if any(stop in error_text.lower() for stop in full_stop_exceptions):
+                                raise exc
                             retries += 1
                             if retries >= max_retries:
-                                print(f"Failed after {max_retries} retries: {str(e)}")
-                                return {"error": str(e)}
+                                print(f"Failed after {max_retries} retries: {error_text}")
+                                return {"error": error_text}
                             wait_time = backoff**retries
-                            print(f"Retry {retries} after {wait_time}s due to: {str(e)}")
+                            print(f"Retry {retries} after {wait_time}s due to: {error_text}")
                             await asyncio.sleep(wait_time)
+                    return {"error": "retry attempts exhausted without result"}
 
                 tasks.append(process_with_retry(input_data))
             # Wait for all tasks in this chunk to complete

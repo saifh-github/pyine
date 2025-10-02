@@ -104,10 +104,7 @@ def build_filter_from_rule(
             else:
                 forbid_regexes.append(group)
         else:
-            if body.startswith("{") and body.endswith("}"):
-                group_globs = _split_alternatives(body[1:-1])
-            else:
-                group_globs = [body]
+            group_globs = _split_alternatives(body[1:-1]) if body.startswith("{") and body.endswith("}") else [body]
             group_globs = [g if case_sensitive else g.lower() for g in group_globs]
             if sign == "+":
                 require_globs.append(group_globs)
@@ -133,22 +130,12 @@ def build_filter_from_rule(
         tags = [_norm(t) for t in tags_iter]
 
         # require (AND of OR-groups) – ban if any group fails
-        for group in require_globs:
-            if not _any_glob_match(group, tags):
-                return True  # missing a required pattern
-        for group in require_regexes:
-            if not _any_regex_match(group, tags):
-                return True
-
-        # forbid (OR within group, AND across groups) – ban if any group matches
-        for group in forbid_globs:
-            if _any_glob_match(group, tags):
-                return True
-        for group in forbid_regexes:
-            if _any_regex_match(group, tags):
-                return True
-
-        return False
+        return (
+            any(not _any_glob_match(group, tags) for group in require_globs)
+            or any(not _any_regex_match(group, tags) for group in require_regexes)
+            or any(_any_glob_match(group, tags) for group in forbid_globs)
+            or any(_any_regex_match(group, tags) for group in forbid_regexes)
+        )
 
     return predicate
 

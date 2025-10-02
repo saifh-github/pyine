@@ -36,7 +36,7 @@ class PromptManager:
         self,
         package_name: str = "pyine.prompts",
         prompts_subdir: str = "templates",
-    ):
+    ) -> None:
         """Initialize the prompt manager.
 
         Args:
@@ -74,7 +74,7 @@ class PromptManager:
     def _get_prompt_module(
         self,
         prompt_name: PromptNameType,
-    ):
+    ) -> typing.Any:
         """Get the module containing specific prompt template defines by name."""
         prompt_module_path = str(prompt_name).replace("/", ".")
         return importlib.import_module(f"{self.package_name}.configs.{prompt_module_path}")
@@ -158,8 +158,7 @@ class PromptManager:
         prompt_file = package_files.joinpath(*prompt_path.parts)
         if not prompt_file.is_file():
             raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-        versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
-        return versioned_config
+        return prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)
 
     def list_prompts(self) -> list[PromptNameType]:
         """Returns a list of all available prompts in the package (as names without extension)."""

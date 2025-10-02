@@ -56,7 +56,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._subset_parsers: dict[
             pyine.data.datamodule.SubsetNameType,
             pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
-        ] = dict()
+        ] = {}
 
     @typing.override
     def prepare_data(self) -> None:
@@ -78,7 +78,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         # load coding problem split data and keep relevant assignments
         split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
         split_data = pyine.data.utils.splits.SplitResult.from_file(self.config.split_file_path)
-        if any([subset not in self.config.subset_names for subset in split_data.config.subset_names]):
+        if any(subset not in self.config.subset_names for subset in split_data.config.subset_names):
             raise ValueError("mismatch between split data subsets and configured subsets")
         subset_traces_meta: dict[
             pyine.data.datamodule.SubsetNameType,
@@ -183,7 +183,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._subset_parsers: dict[
             pyine.data.datamodule.SubsetNameType,
             pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
-        ] = dict()
+        ] = {}
         for subset_name in self.config.subset_names:
             if self.config.instantiate_parsers_at_setup:
                 self._subset_parsers[subset_name] = self._instantiate_parser_if_needed(subset_name)
@@ -241,11 +241,11 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         """Returns a dictionary of useful-to-log statistics."""
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
-        stats = dict()
+        stats: dict[str, int | float | str] = {}
         for subset_name in target_subsets or list(self._subset_parsers.keys()):
             parser = self._instantiate_parser_if_needed(subset_name)
-            for stat_key, stat_vaL in parser.get_stats().items():
-                stats[f"{subset_name}/{stat_key}"] = stat_vaL
+            for stat_key, stat_val in parser.get_stats().items():
+                stats[f"{subset_name}/{stat_key}"] = stat_val
         return stats
 
     @typing.override
@@ -286,10 +286,10 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             append_answer=append_answer,
             merge_system_with_user=merge_system_with_user,
             keep_original_data=keep_original_data,
-            parser_kwargs=dict(
-                source_data=self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
-                traces=subset_traces,
-            ),
+            parser_kwargs={
+                "source_data": self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
+                "traces": subset_traces,
+            },
         )
         if tokenizer is not None:
             if apply_chat_template_eval_config:
@@ -321,10 +321,10 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
             subset_name=subset_name,
             append_answer=append_answer,
             merge_system_with_user=merge_system_with_user,
-            parser_kwargs=dict(
-                source_data=self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
-                traces=subset_traces,
-            ),
+            parser_kwargs={
+                "source_data": self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
+                "traces": subset_traces,
+            },
         )
 
     def make_dataloader(
@@ -367,5 +367,5 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
         self._subset_parsers: dict[
             pyine.data.datamodule.SubsetNameType,
             pyine.organisms.datamodules.utils.samples.SampleBuilder,
-        ] = dict()
+        ] = {}
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []

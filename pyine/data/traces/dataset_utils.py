@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import datetime
 import fnmatch
@@ -63,9 +64,12 @@ BANNED_DATA_YAML_PATH = pkg_resources.files("pyine.data.traces") / "banned_data.
 logger = logging.getLogger(__name__)
 
 
-def is_float(s):
+def is_float(
+    candidate: str,
+) -> bool:
+    """Return True if the provided string can be parsed as a float."""
     try:
-        _ = float(s)
+        float(candidate)
         return True
     except ValueError:
         return False
@@ -91,7 +95,7 @@ class CodingProblemIdentifier:
     problem_idx: int
     """The index of the problem within the source subset that it belongs to."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a string representation of this identifier."""
         return f"{self.dataset}/{self.subset}/p{self.problem_idx:06d}"
 
@@ -114,7 +118,7 @@ class SolutionIdentifier(CodingProblemIdentifier):
     solution_idx: int
     """Index identifying a specific solution for a coding problem (within the source dataset)."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a string representation of this identifier."""
         return f"{CodingProblemIdentifier.__repr__(self)}/s{self.solution_idx:04d}"
 
@@ -179,7 +183,7 @@ class TraceIdentifier(SolutionIdentifier):
             assert self.augment_category is not None and self.augment_idx is not None, (
                 "if augmentation is present, both augment category and index must be present"
             )
-            assert not any([c in self.augment_category for c in ["/", ",", " ", ":"]]), (
+            assert not any(c in self.augment_category for c in ("/", ",", " ", ":")), (
                 f"augm category should have been cleaned up: {self.augment_category}"
             )
             return True
@@ -291,21 +295,21 @@ class CodingProblem(pydantic.BaseModel):
     is_banned: bool
     """Whether this problem is banned from being traced (due to a data/processing issue)."""
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a string representation of the coding problem based on its identifier."""
         return str(self.problem_id)
 
     @property
-    def solution_count(self):
+    def solution_count(self) -> int:
         """Returns the number of solutions (i.e., code strings) that might be used for tracing."""
         return len(self.potential_solution_ids)
 
     @property
-    def test_count(self):
+    def test_count(self) -> int:
         """Returns the number of tests (input/output pairs) that might be used for tracing."""
         return len(self.test_inout_pairs)
 
-    def should_discard(self):
+    def should_discard(self) -> bool:
         """Returns whether this problem should be discarded due to banishment or parsing errors."""
         return self.is_banned or (self.parsing_errors is not None and len(self.parsing_errors) > 0)
 
@@ -333,17 +337,17 @@ class Solution(pydantic.BaseModel):
     is_banned: bool
     """Whether this solution is banned from being traced (due to a data/processing issue)."""
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a string representation of the solution based on its identifier."""
         return str(self.solution_id)
 
     @property
-    def code_line_count(self):
+    def code_line_count(self) -> int:
         """Returns the number of lines in this solution's code."""
         return len(self.code.splitlines())
 
     @property
-    def is_fishy(self):
+    def is_fishy(self) -> bool:
         """Returns whether this solution is 'fishy' (i.e., contains potentially insecure code)."""
         return (
             self.analysis_results.imports_nonstandard_packages
@@ -354,20 +358,20 @@ class Solution(pydantic.BaseModel):
         )
 
     @property
-    def is_deterministic(self):
+    def is_deterministic(self) -> bool:
         """Returns whether this solution is deterministic (i.e., does not contain randomness)."""
         return self.analysis_results.is_deterministic
 
     @property
-    def has_standard_io(self):
+    def has_standard_io(self) -> bool:
         """Returns whether this solution uses standard and easy-to-use input/output."""
-        return self.analysis_results.input_type in [
+        return self.analysis_results.input_type in (
             "stdin",
             "no-input",
             "callable",
-        ] and self.analysis_results.output_type in ["stdout", "no-output", "callable"]
+        ) and self.analysis_results.output_type in ("stdout", "no-output", "callable")
 
-    def should_discard(self):
+    def should_discard(self) -> bool:
         """Returns whether this problem should be discarded due to issues or complexity."""
         return (
             self.is_banned
@@ -521,7 +525,7 @@ class TraceDatasetMetadata(pydantic.BaseModel):
                 if augm_type not in self.augment_types:
                     raise ValueError(f"unexpected trace augment type: {augm_type}")
                 assert trace_meta.is_augmented and trace_meta.augment_tags
-                assert any([t == f"augment:{augm_type}" for t in trace_meta.augment_tags]), (
+                assert any(t == f"augment:{augm_type}" for t in trace_meta.augment_tags), (
                     "augment type is not in the trace tags; this should not happen?"
                 )
             else:
@@ -595,7 +599,7 @@ class CodingProblemIterator:
         show_progress: bool = False,
         enable_async_prefetch: bool = False,
         prefetch_cache_size: int = 8,
-    ):
+    ) -> None:
         """Initialize the iterator, validating source dataset name/path.
 
         Args:
@@ -783,12 +787,10 @@ class CodingProblemIterator:
             # signal completion or error to the consumer
             self._prefetch_queue.put((self._prefetch_sentinel, exc))
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Best-effort cleanup of background resources."""
-        try:
+        with contextlib.suppress(Exception):
             self._stop_prefetching()
-        except Exception:
-            pass
 
     def _prepare_problem_metadata(self) -> list:
         """Prepares problem metadata for the iterator, loading high-level source data."""
@@ -808,14 +810,17 @@ class CodingProblemIterator:
                 if self.banned.metadata and problem_idx in self.banned.metadata:
                     continue  # skip banned samples (likely due to code analysis failure)
                 # optionally filter by a target pattern
-                if self._target_pattern is not None:
-                    if (
+                if self._target_pattern is not None and (
+                    (
                         self._target_pattern.is_regex
                         and not re.fullmatch(self._target_pattern.pattern, json_file_path.name)
-                        or not self._target_pattern.is_regex
+                    )
+                    or (
+                        not self._target_pattern.is_regex
                         and not fnmatch.fnmatch(json_file_path.name, self._target_pattern.pattern)
-                    ):
-                        continue
+                    )
+                ):
+                    continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     try:
                         json_data = orjson.loads(fd.read())
@@ -895,8 +900,10 @@ class CodingProblemIterator:
             test_inout_pairs = [(inputs, outputs) for inputs, outputs in zip(inputs_array, outputs_array, strict=False)]
             entrypoint_name = problem_data["input_output"].get("fn_name", None)
 
-            def _tag_cleaner(x):
-                return x.replace(" ", "")
+            def _tag_cleaner(x: str | None) -> str:
+                if x is None:
+                    return ""
+                return str(x).replace(" ", "")
 
             tags = [
                 f"source:{_tag_cleaner(problem_data['source'])}",
@@ -905,14 +912,17 @@ class CodingProblemIterator:
             if self.add_orig_subset_as_tag:
                 tags.append(f"subset:{_tag_cleaner(problem_data['subset'])}")
             for tag_group in ["raw_tags", "tags", "skill_types"]:
-                tags.extend([f"{tag_group}:{_tag_cleaner(tag)}" for tag in problem_data.get(tag_group, [])])
+                tags.extend(f"{tag_group}:{_tag_cleaner(tag)}" for tag in problem_data.get(tag_group, []))
             solutions, solution_ids = [], []
             if "solutions" not in problem_data or not problem_data["solutions"]:
                 parsing_errors.append("no solutions found")
             else:
                 rpkgd_solutions = problem_data["solutions"]
-                banned_solution_idxs = self.banned.solutions.get(problem_id.subset, {}).get(problem_id.problem_idx, {})
-                assert all([isinstance(s, dict) and "code" in s for s in rpkgd_solutions]), "missing repackaged code?"
+                banned_solution_idxs = self.banned.solutions.get(problem_id.subset, {}).get(
+                    problem_id.problem_idx,
+                    [],
+                )
+                assert all(isinstance(s, dict) and "code" in s for s in rpkgd_solutions), "missing repackaged code?"
                 for solution_idx, solution in enumerate(rpkgd_solutions):
                     solution_id = SolutionIdentifier(
                         dataset=self.dataset_name,
@@ -966,11 +976,11 @@ class CodingProblemIterator:
             raise NotImplementedError(f"unsupported source dataset: {self.dataset_name}")
         return coding_problem, solutions
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Returns the number of coding problems in the source dataset."""
         return len(self.problems_metadata)
 
-    def __iter__(self):
+    def __iter__(self) -> typing.Iterator[tuple[CodingProblem, list[Solution]]]:
         """Returns the iterator over all coding problems in the source dataset."""
         self._current_idx = 0
         if self._show_progress:

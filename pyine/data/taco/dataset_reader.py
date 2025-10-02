@@ -3,6 +3,7 @@ This module contains the TACO dataset reader class and related utilities.
 """
 
 import ast
+import contextlib
 import typing
 
 import datasets as hf_datasets
@@ -23,7 +24,7 @@ class DatasetReader:
     only reads the original dataset.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the TACO dataset reader (for both train/test splits)."""
         self.train_dataset = hf_datasets.load_dataset("BAAI/TACO", split="train")
         self.test_dataset = hf_datasets.load_dataset("BAAI/TACO", split="test")
@@ -67,10 +68,10 @@ class DatasetReader:
             try:
                 solutions_str = sample["solutions"]
                 sample["solutions"] = orjson.loads(solutions_str)
-            except orjson.JSONDecodeError:
+            except orjson.JSONDecodeError as exc:
                 error = f"cannot parse solutions JSON for sample at index {idx}"
                 self._broken_samples_cache[idx] = error
-                raise ValueError(error)
+                raise ValueError(error) from exc
             if not isinstance(sample["solutions"], list) or not sample["solutions"]:
                 error = f"no solution found for sample at index {idx}"
                 self._broken_samples_cache[idx] = error
@@ -80,10 +81,10 @@ class DatasetReader:
                 input_output_str = sample["input_output"]
                 input_output = orjson.loads(input_output_str)
                 sample["input_output"] = input_output
-            except orjson.JSONDecodeError:
+            except orjson.JSONDecodeError as exc:
                 error = f"cannot parse input_output JSON for sample at index {idx}"
                 self._broken_samples_cache[idx] = error
-                raise ValueError(error)
+                raise ValueError(error) from exc
 
             valid_inputs = "inputs" in input_output and len(input_output["inputs"]) > 0
             valid_outputs = "outputs" in input_output and len(input_output["outputs"]) > 0
@@ -99,26 +100,27 @@ class DatasetReader:
                 self._broken_samples_cache[idx] = error
                 raise ValueError(error)
 
-            if "fn_name" in input_output:
-                if not isinstance(input_output["fn_name"], str) or not input_output["fn_name"]:
-                    error = f"invalid fn_name in input_output for sample at index {idx}"
-                    self._broken_samples_cache[idx] = error
-                    raise ValueError(error)
+            if "fn_name" in input_output and (
+                not isinstance(input_output["fn_name"], str) or not input_output["fn_name"]
+            ):
+                error = f"invalid fn_name in input_output for sample at index {idx}"
+                self._broken_samples_cache[idx] = error
+                raise ValueError(error)
 
             for field in ["raw_tags", "tags", "skill_types"]:
                 try:
                     sample[field] = ast.literal_eval(sample[field])
-                except (SyntaxError, ValueError, TypeError):
+                except (SyntaxError, ValueError, TypeError) as exc:
                     error = f"cannot parse {field} for sample at index {idx}"
                     self._broken_samples_cache[idx] = error
-                    raise ValueError(error)
+                    raise ValueError(error) from exc
 
             return sample
 
-        except Exception as e:
+        except Exception as exc:
             if idx not in self._broken_samples_cache:
-                self._broken_samples_cache[idx] = str(e)
-            raise ValueError(f"error processing sample at index {idx}: {str(e)}")
+                self._broken_samples_cache[idx] = str(exc)
+            raise ValueError(f"error processing sample at index {idx}: {exc}") from exc
 
     def _validate_types(self, values: list[typing.Any]) -> bool:
         """
@@ -130,10 +132,7 @@ class DatasetReader:
         Returns:
             Boolean indicating if all values have valid types.
         """
-        for val in values:
-            if not self._is_valid_type(val):
-                return False
-        return True
+        return all(self._is_valid_type(val) for val in values)
 
     def _is_valid_type(self, val: typing.Any) -> bool:
         """
@@ -147,11 +146,10 @@ class DatasetReader:
         """
         if isinstance(val, (list, set, dict)):
             if isinstance(val, dict):
-                all_valid_keys = all([isinstance(k, (str, int, float)) for k in val.keys()])
-                all_valid_subtypes = all([self._is_valid_type(subval) for subval in val.values()])
+                all_valid_keys = all(isinstance(key, (str, int, float)) for key in val)
+                all_valid_subtypes = all(self._is_valid_type(subval) for subval in val.values())
                 return all_valid_keys and all_valid_subtypes
-            all_valid_subtypes = all([self._is_valid_type(subval) for subval in val])
-            return all_valid_subtypes
+            return all(self._is_valid_type(subval) for subval in val)
         return isinstance(val, (str, int, float)) or val is None
 
     def get_broken_indices(self) -> list[int]:
@@ -162,13 +160,14 @@ class DatasetReader:
             List of indices of broken samples.
         """
         for i in range(len(self)):
-            try:
+            with contextlib.suppress(ValueError):
                 _ = self[i]
-            except ValueError:
-                pass
         return list(self._broken_samples_cache.keys())
 
-    def get_statistics(self, validate=False) -> dict[str, typing.Any]:
+    def get_statistics(
+        self,
+        validate: bool = False,
+    ) -> dict[str, typing.Any]:
         """
         Calculate dataset statistics similar to those in the notebook.
 
@@ -185,20 +184,19 @@ class DatasetReader:
         skill_types_counts = {}
         valid_sample_idxs = []
         for sample_idx in tqdm.tqdm(list(range(len(self)))):
-            try:
+            sample: dict[str, typing.Any] | None = None
+            with contextlib.suppress(ValueError):
                 sample = self[sample_idx]
-            except Exception:
+            if sample is None:
                 continue
             valid_sample_idxs.append(sample_idx)
             solutions = sample["solutions"]
             if validate:
                 validated_solutions = []
                 for solution in solutions:
-                    try:
+                    with contextlib.suppress(Exception):
                         pyine.utils.code.validation.validate_code(solution)
                         validated_solutions.append(solution)
-                    except Exception:
-                        continue
                 if not validated_solutions:
                     continue  # this sample is not valid anymore
                 solutions = validated_solutions

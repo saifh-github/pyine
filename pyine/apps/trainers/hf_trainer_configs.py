@@ -30,6 +30,11 @@ import pyine.utils.transformers
 logger = logging.getLogger(__name__)
 
 
+def _default_auto_tokenizer_config() -> dict[str, typing.Any]:
+    """Return default tokenizer configuration options."""
+    return {"use_fast": True}
+
+
 class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     """Configuration for HuggingFace-Transformers model fine-tuning."""
 
@@ -62,7 +67,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     # --------------- tokenizer settings ---------------
 
     auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
-        default=dict(use_fast=True),
+        default_factory=_default_auto_tokenizer_config,
         description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
     )
     tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
@@ -125,7 +130,11 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     """Instantiates and returns the pretrained model specified in the config."""
     logger.info(f"setting up model: {config.base_model}")
     dtype, device_map = config.target_dtype, config.device_map
-    model_kwargs = dict(torch_dtype=dtype, device_map=device_map, **config.auto_model_config)
+    model_kwargs = {
+        "torch_dtype": dtype,
+        "device_map": device_map,
+        **config.auto_model_config,
+    }
     if config.quantization_mode == "qlora":
         logger.info("  (setting up model using QLoRA 4-bit quantization)")
         quant_config = transformers.BitsAndBytesConfig(
@@ -158,9 +167,12 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
 
 
 @functools.wraps(pyine.apps.trainers.hf_trainer.main)
-def _async_main_wrapper(*args, **kwargs):
+def _async_main_wrapper(
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> None:
     """Wrapper for async main function."""
-    return asyncio.run(pyine.apps.trainers.hf_trainer.main(*args, **kwargs))
+    asyncio.run(pyine.apps.trainers.hf_trainer.main(*args, **kwargs))
 
 
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
@@ -395,7 +407,7 @@ def _get_experiment_configs(
                 group=group,
                 package=package,
                 config=hydra_zen.make_config(
-                    runtime=dict(exp_name=exp_name),
+                    runtime={"exp_name": exp_name},
                     # -------------
                     hydra_defaults=[
                         "_self_",

@@ -50,7 +50,7 @@ class SplitConfig(pydantic.BaseModel):
     This field is optional, as providing no hard assignment rule means that all samples will be
     randomly assigned using `subset_assign_prob_map` directly.
     """
-    subset_assign_prob_map: dict[SubsetNameType, ProbabilityType]  # noqa; MANDATORY!
+    subset_assign_prob_map: dict[SubsetNameType, ProbabilityType]  # MANDATORY!
     """Dictionary mapping subset names to assignment probabilities.
 
     Applied to samples that were NOT already assigned to a subset using `subset_assign_rules_map`,
@@ -101,7 +101,7 @@ class SplitConfig(pydantic.BaseModel):
         for unassigned_idx in unassigned_indices:
             indices_per_group[group_idxs[unassigned_idx]].append(unassigned_idx)
         # do assignments for each group independently
-        for group, group_sidxs in enumerate(indices_per_group):
+        for group_sidxs in indices_per_group:
             if not group_sidxs:
                 continue
             curr_subset_assigns = rng.choice(self.subset_names, size=len(group_sidxs), p=probs, replace=True)
@@ -185,7 +185,7 @@ class SplitConfig(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def _post_validator(self) -> "SplitConfig":
         """Confirms that inter-setting configuration is valid and resolves filter rules."""
-        if any([not isinstance(name, str) or name == "" for name in self.subset_names]):
+        if any(not isinstance(name, str) or name == "" for name in self.subset_names):
             raise ValueError("subset names must be non-empty")
         unknown_names = [name for name in self.subset_assign_rules_map if name not in self.subset_names]
         if unknown_names:
@@ -361,7 +361,7 @@ def get_split_data_from_coding_problem_dataset(
         if problem.parsing_errors:
             continue
         problem_tags = problem.problem_tags.copy()
-        assert all([isinstance(t, str) and len(t) > 0 for t in problem_tags]), "unexpected tag format"
+        assert all(isinstance(t, str) and len(t) > 0 for t in problem_tags), "unexpected tag format"
         # drop any subset tags if there already are any (we are recreating the split entirely)
         problem_tags = [t for t in problem_tags if not t.startswith("subset:")]
         # append custom tags as needed

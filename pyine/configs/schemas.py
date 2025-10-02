@@ -66,7 +66,10 @@ class RuntimeConfig(pydantic.BaseModel):
             return None
         return self.wandb_run.id
 
-    def init_wandb(self, **extra_kwargs) -> str:
+    def init_wandb(
+        self,
+        **extra_kwargs: typing.Any,
+    ) -> str:
         """Initializes W&B logging for this run and returns the run ID.
 
         Note: for distributed setups, you might want to only initialize wandb once (on the 'rank 0'
@@ -74,14 +77,14 @@ class RuntimeConfig(pydantic.BaseModel):
         """
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
-        default_kwargs = dict(
-            name=f"{self.exp_name}-{self.run_name}",
-            notes=self.notes,
-            tags=tuple(sorted(set(self.tags))) if self.tags else None,
-            group=self.run_group,
-            job_type=self.app_name,
+        default_kwargs = {
+            "name": f"{self.exp_name}-{self.run_name}",
+            "notes": self.notes,
+            "tags": tuple(sorted(set(self.tags))) if self.tags else None,
+            "group": self.run_group,
+            "job_type": self.app_name,
             # TODO: could set run id based on e.g. slurm id here if needed
-        )
+        }
         default_kwargs.update(extra_kwargs)
         self.wandb_run = wandb.init(**default_kwargs)
         assert self.wandb_run.id == self.wandb_run_id

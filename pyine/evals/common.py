@@ -89,7 +89,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
             The evaluation results as a dictionary of metrics.
         """
         if self.eval_type is None:
-            return dict()
+            return {}
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     async def evaluate_hf_model(
@@ -113,7 +113,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
             The evaluation results as a dictionary of metrics.
         """
         if self.eval_type is None:
-            return dict()
+            return {}
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     def define_metrics_for_wandb(

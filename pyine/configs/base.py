@@ -69,7 +69,7 @@ def get_openai_client_configs(
         group=group,
         config=hydra_zen.builds(
             pyine.utils.openai.OpenAIClientConfig,
-            params=dict(timeout=None),  # override the default unserializable 'NOT_GIVEN' field
+            params={"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
             # -------------
             populate_full_signature=True,
             hydra_convert="object",
@@ -83,7 +83,7 @@ def get_openai_client_configs(
         group=group,
         config=hydra_zen.builds(
             pyine.utils.openai.OpenAIClientConfig,
-            params=dict(timeout=300),
+            params={"timeout": 300},
             # -------------
             builds_bases=(default_openai_client_config.config,),
             zen_meta={

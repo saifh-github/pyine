@@ -2,7 +2,7 @@ import collections
 import dataclasses
 import typing
 
-MetricsDictType: typing.TypeAlias = dict[str, float | int | str]
+type MetricsDictType = dict[str, float | int | str]
 """Type used to represent dictionaries of evaluation metrics."""
 
 

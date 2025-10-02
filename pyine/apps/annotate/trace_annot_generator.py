@@ -162,10 +162,15 @@ def _build_dataset_reader(
         raise click.ClickException(f"Failed to instantiate dataset reader; original error: {exc}") from exc
 
 
-def _async_main_wrapper(fn):
+def _async_main_wrapper(
+    fn: typing.Callable[..., typing.Awaitable[None]],
+) -> typing.Callable[..., None]:
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        return asyncio.run(fn(*args, **kwargs))
+    def wrapper(
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
+        asyncio.run(fn(*args, **kwargs))
 
     return wrapper
 

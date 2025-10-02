@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class EventRelationship(enum.StrEnum):
     """Relationships between consecutive trace events defining what happened during execution."""
 
-    # @@@@ TODO: add control block relationships as well? (or as a STEP_INTO interpretation option when identifying relationships?)
+    # TODO: consider adding control block relationships or STEP_INTO interpretation options.
 
     ENTRYPOINT = enum.auto()
     """Entrypoint to the traced code string, i.e. the first call to the traced function/method."""
@@ -72,7 +72,7 @@ class TraceDelta:
     event_relationship: EventRelationship
     """The relationship between the start/end trace events."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a string representation of the trace delta."""
         if self.curr_trace_key.file == pyine.utils.code.execution.EXEC_TRACE_FILE_NAME:
             curr_trace_file_prefix = ""
@@ -82,15 +82,16 @@ class TraceDelta:
             next_trace_file_prefix = ""
         else:
             next_trace_file_prefix = f"{self.next_trace_key.file}:"
-        delta_str = dict(**self.variables)
+        delta_payload = dict(self.variables)
         if self.stdout is not None:
-            delta_str["__stdout__"] = self.stdout
+            delta_payload["__stdout__"] = self.stdout
         if self.stderr is not None:
-            delta_str["__stderr__"] = self.stderr
-        return (
-            f"{curr_trace_file_prefix}L{self.curr_trace_key.line:04d} -> {next_trace_file_prefix}L{self.next_trace_key.line:04d} "
-            f"({self.event_relationship}) @ step#{self.trace_step_idx} = {delta_str}"
+            delta_payload["__stderr__"] = self.stderr
+        location_summary = (
+            f"{curr_trace_file_prefix}L{self.curr_trace_key.line:04d} -> "
+            f"{next_trace_file_prefix}L{self.next_trace_key.line:04d}"
         )
+        return f"{location_summary} ({self.event_relationship}) @ step#{self.trace_step_idx} = {delta_payload}"
 
 
 class DeltaGeneratorType(enum.StrEnum):
@@ -138,7 +139,10 @@ class TraceDeltaList(pydantic.BaseModel):
         """Returns an iterator over the deltas in the list."""
         return iter(self.deltas)
 
-    def __getitem__(self, index) -> TraceDelta:
+    def __getitem__(
+        self,
+        index: int,
+    ) -> TraceDelta:
         """Returns the delta at the given index."""
         return self.deltas[index]
 
@@ -151,15 +155,9 @@ def _wrapped_delta_generator(
 ) -> dict[str, str]:
     """Extracts relevant variables from trace events (if needed) and forwards them to a delta generator."""
     if isinstance(curr, pyine.utils.code.execution.TraceEvent):
-        if include_global_vars:
-            curr = {**curr.global_variables, **curr.local_variables}
-        else:
-            curr = curr.local_variables
+        curr = {**curr.global_variables, **curr.local_variables} if include_global_vars else curr.local_variables
     if isinstance(next, pyine.utils.code.execution.TraceEvent):
-        if include_global_vars:
-            next = {**next.global_variables, **next.local_variables}
-        else:
-            next = next.local_variables
+        next = {**next.global_variables, **next.local_variables} if include_global_vars else next.local_variables
     return delta_generator_fn(curr, next)
 
 
@@ -250,7 +248,7 @@ class _EventPairIterator:
     def __init__(
         self,
         trace_res: pyine.utils.code.execution.TraceResult,
-    ):
+    ) -> None:
         """Initializes the event iterator."""
         self.trace_res = trace_res
         self.relevant_step_idxs = self._filter_relevant_source_trace_step_idxs()
@@ -373,10 +371,7 @@ def get_deltas_from_trace_steps(
     assert trace_res.identifier is not None, "need identifier when generating deltas"
     log = logger.info if verbose else logger.debug
     assert delta_generator in DeltaGeneratorType
-    if delta_generator == DeltaGeneratorType.SIMPLE:
-        delta_generator_fn = simple_delta_generator
-    else:
-        delta_generator_fn = deepdiff.DeepDiff
+    delta_generator_fn = simple_delta_generator if delta_generator == DeltaGeneratorType.SIMPLE else deepdiff.DeepDiff
     delta_generator_fn = functools.partial(
         _wrapped_delta_generator,
         delta_generator_fn=delta_generator_fn,
@@ -405,10 +400,10 @@ def get_deltas_from_trace_steps(
                     next_trace_key=next_step.trace_key,
                     trace_step_idx=curr_step.trace_step_idx,
                     exception=None,
-                    variables=dict(
-                        __call__=repr(curr_step.trace_key),
-                        __args__=repr(next_step.arguments),
-                    ),
+                    variables={
+                        "__call__": repr(curr_step.trace_key),
+                        "__args__": repr(next_step.arguments),
+                    },
                     stdout=next_step.stdout,
                     stderr=next_step.stderr,
                     event_relationship=EventRelationship.ENTRYPOINT,
@@ -418,7 +413,7 @@ def get_deltas_from_trace_steps(
         if relationship == EventRelationship.RAISE:
             # an exception has been raised; we'll need to check whether it's caught or propagated to the parent
             assert raised_exception is not None, "how can we be raising nothing?"
-            delta = dict(__exception__=repr(raised_exception))
+            delta = {"__exception__": repr(raised_exception)}
             # we need to go fetch the 'next-next' step in order to figure out what to do
             next_next_step = event_iterator.get_next_event(increment=True)
             assert next_next_step.exception is None, "the next-next step can't possibly raise again"
@@ -452,10 +447,10 @@ def get_deltas_from_trace_steps(
             # might decompose this specific event into two deltas, to make sure we capture all info
             # ...but first we'll create a delta for the 'current line' which evaluates and returns/raises
             if raised_exception:
-                delta = dict(__exception__=repr(raised_exception))
+                delta = {"__exception__": repr(raised_exception)}
                 output_relationship = EventRelationship.RAISE
             else:
-                delta = dict(__return__=repr(next_step.return_value))
+                delta = {"__return__": repr(next_step.return_value)}
                 output_relationship = EventRelationship.STEP_OUT
             if caller_trace_key == _CallStack.orig_caller_trace_key:
                 delta.update(**delta_generator_fn(curr_step, next_step))
@@ -487,10 +482,10 @@ def get_deltas_from_trace_steps(
                     # ...manually create the STEP_INTO delta in order to have the correct caller stack
                     event_iterator.increment_iter_idx()  # do that now, we are consuming the event
                     call_stack._push_manually(caller_trace_key, caller_vars)  # put orig caller info back on stack
-                    next_call_delta = dict(
-                        __call__=repr(next_next_step.trace_key),
-                        __args__=repr(next_next_step.arguments),
-                    )
+                    next_call_delta = {
+                        "__call__": repr(next_next_step.trace_key),
+                        "__args__": repr(next_next_step.arguments),
+                    }
                     next_call_step = next_next_step.trace_step_idx
                     next_next_step = event_iterator.get_next_event(increment=True)  # fetch next event for its trace key
                     output_deltas.append(
@@ -542,10 +537,10 @@ def get_deltas_from_trace_steps(
         if relationship == EventRelationship.STEP_INTO:
             # calling a function: specify the target function + args, and stack the vars context
             assert raised_exception is None, "why step into a function if an exception is being raised?"
-            delta = dict(
-                __call__=repr(next_step.trace_key),
-                __args__=repr(next_step.arguments),
-            )
+            delta = {
+                "__call__": repr(next_step.trace_key),
+                "__args__": repr(next_step.arguments),
+            }
             call_stack.push(curr_step)
             next_next_step = event_iterator.get_next_event(increment=True)  # fetch next event for its trace key
             assert next_next_step.exception is None, "why step into a function if an exception is being raised?"

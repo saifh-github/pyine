@@ -1,3 +1,4 @@
+import contextlib
 import enum
 import fnmatch
 import pathlib
@@ -50,6 +51,16 @@ class SerializationConfig(pydantic.BaseModel):
     """Serialization method to use."""
     compression_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
     """Compression arguments to pass to the compression method (unused if not compressing)."""
+    allow_insecure_serialization: bool = False
+    """Allow potentially unsafe serialization formats (e.g., pickle)."""
+
+
+def _ensure_insecure_serialization_allowed(config: SerializationConfig) -> None:
+    """Raise if insecure serialization methods are used without explicit opt-in."""
+    if not config.allow_insecure_serialization:
+        raise ValueError(
+            "Insecure serialization method requested. Set allow_insecure_serialization=True to acknowledge the risk."
+        )
 
 
 SAMPLE_PREFIX = b"sample/"
@@ -79,7 +90,7 @@ def _decode_sample_key(key: bytes) -> int:
     return struct.unpack(">Q", key[len(SAMPLE_PREFIX) :])[0]
 
 
-def _get_database_size(path: pathlib.Path | typing.AnyStr) -> int:
+def _get_database_size(path: pathlib.Path | str) -> int:
     """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
     path = pathlib.Path(path)
     if not path.is_dir():
@@ -133,11 +144,11 @@ class LMDBWriter:
 
     def __init__(
         self,
-        path: pathlib.Path | typing.AnyStr,
+        path: pathlib.Path | str,
         map_size: int = 1 * (1024**4),  # 1TB default size; good for large datasets (what we want)
         max_readers: int = 126,  # typical default max readers for LMDB
         max_allowed_value_length: int = 2 * (1024**3),  # 2GB by default
-        serialization_config: SerializationConfig = SerializationConfig(),
+        serialization_config: SerializationConfig | None = None,
     ) -> None:
         """Initialize the LMDB database.
 
@@ -152,13 +163,13 @@ class LMDBWriter:
         self.map_size: int = map_size
         self.max_readers: int = max_readers
         self.path.mkdir(parents=True, exist_ok=True)
+        self.serialization = serialization_config or SerializationConfig()
         self.env: lmdb.Environment = lmdb.open(
             path=str(self.path),
             map_size=self.map_size,
             max_readers=self.max_readers,
             readonly=False,
         )
-        self.serialization = serialization_config
         self._next_internal_key = 0
         self.key_map: dict[str, bytes] = {}  # external-to-internal key map
         self.max_encoded_value_length: int = 0  # in bytes; will be tracked as we write the dataset
@@ -190,11 +201,8 @@ class LMDBWriter:
         Note: avoid performing I/O (metadata writes) here as interpreter shutdown
         order is undefined. As a safety net, we try to close the environment only.
         """
-        try:
+        with contextlib.suppress(Exception):
             self.close(write_metadata=False)
-        except Exception:
-            # swallow all exceptions during GC; best-effort resource release only.
-            pass
 
     def close(self, write_metadata: bool = True) -> None:
         """Close the LMDB environment.
@@ -218,8 +226,10 @@ class LMDBWriter:
     ) -> bytes:
         """Serialize an object to bytes."""
         if self.serialization.method == SerializationMethod.PICKLE:
+            _ensure_insecure_serialization_allowed(self.serialization)
             return pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
         if self.serialization.method == SerializationMethod.PICKLE_LZ4:
+            _ensure_insecure_serialization_allowed(self.serialization)
             pickled_data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
             return lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)
         if self.serialization.method == SerializationMethod.MSGSPEC:
@@ -256,7 +266,7 @@ class LMDBWriter:
                 output_keys[key] = key_bytes
         return output_keys
 
-    def _write_internal_metadata(self):
+    def _write_internal_metadata(self) -> None:
         """Writes fixed metadata fields as well as reproducibility tags to the database."""
         with self.env.begin(write=True) as txn:
             # store the next internal key for continuity (if needed)
@@ -273,7 +283,12 @@ class LMDBWriter:
             for key, val in self._reprod_metadata.items():
                 self._write_metadata_value(txn, key, val)
 
-    def _write_metadata_value(self, txn: lmdb.Transaction, field_name: str, value: typing.Any):
+    def _write_metadata_value(
+        self,
+        txn: lmdb.Transaction,
+        field_name: str,
+        value: typing.Any,
+    ) -> None:
         """Writes a single metadata value to the database."""
         # note: for metadata, we always write data using msgspec only
         key_bytes = _create_metadata_key(field_name)
@@ -441,7 +456,7 @@ class LMDBReader:
     def __init__(
         self,
         path: pathlib.Path | typing.AnyStr,
-    ):
+    ) -> None:
         """
         Initialize the optimized LMDB reader.
 
@@ -461,10 +476,12 @@ class LMDBReader:
     def _deserialize(self, data: bytes) -> typing.Any:
         """Deserialize bytes into an object."""
         if self.serialization.method == SerializationMethod.PICKLE:
-            return pickle.loads(data)
+            _ensure_insecure_serialization_allowed(self.serialization)
+            return pickle.loads(data)  # noqa: S301 - gated by allow_insecure_serialization
         if self.serialization.method == SerializationMethod.PICKLE_LZ4:
+            _ensure_insecure_serialization_allowed(self.serialization)
             decompressed_data = lz4.frame.decompress(data)
-            return pickle.loads(decompressed_data)
+            return pickle.loads(decompressed_data)  # noqa: S301 - gated by allow_insecure_serialization
         if self.serialization.method == SerializationMethod.MSGSPEC:
             return msgspec.msgpack.decode(data)
         if self.serialization.method == SerializationMethod.JSON:
@@ -479,7 +496,7 @@ class LMDBReader:
         # noinspection PyUnreachableCode
         raise NotImplementedError
 
-    def _load_metadata(self):
+    def _load_metadata(self) -> None:
         """Load metadata from the database."""
         # note: for metadata, we always store stuff with msgspec
         with self.env.begin() as txn:
@@ -499,22 +516,27 @@ class LMDBReader:
             if len(self.key_map) != self.sample_count:
                 raise RuntimeError("key_map length does not match sample_count")
 
-    def __enter__(self):
+    def __enter__(self) -> "LMDBReader":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type | None,
+        exc_val: Exception | None,
+        exc_tb: typing.Any | None,
+    ) -> None:
         self.close()
 
     def __del__(self) -> None:
         self.close()
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.key_map)
 
-    def __iter__(self):
+    def __iter__(self) -> typing.Iterator[typing.Any]:
         return self.iter_from()
 
-    def close(self):
+    def close(self) -> None:
         """Close the database."""
         if hasattr(self, "env") and self.env is not None:
             self.env.close()

@@ -68,7 +68,7 @@ def _is_multi_augmented(tags: list[str]) -> bool:
         "bugged_hinted",
         "bugged_misleading",
     ]
-    return any([t in tags for t in multi_augm_categories])
+    return any(tag in tags for tag in multi_augm_categories)
 
 
 SampleOutputType = typing.Literal[  # note: literal makes this type compatible with default collate
@@ -100,11 +100,16 @@ SampleInputType = typing.Literal[  # note: literal makes this type compatible wi
 """Possible input types for trace execution samples:
 - 'original': default sample type with the original code from the source dataset and no augmentations;
 - 'obfuscated': augmented sample with obfuscated code (taken from the source dataset) but otherwise normal behavior;
-- 'obfuscated_hinted': augmented sample with obfuscated code (taken from the source dataset) and execution output hints;
-- 'obfuscated_misleading': augmented sample with obfuscated code (taken from the source dataset) and MISLEADING execution output hints;
-- 'stubbed': augmented sample where part of the code is stubbed/hidden by an LLM to force models to infer execution steps;
-- 'hinted': augmented sample where code contains one or more execution output hints produced by an LLM;
-- 'misleading': augmented sample where code contains one or more MISLEADING execution output hints produced by an LLM;
+- 'obfuscated_hinted': augmented sample with obfuscated code (taken from the source dataset)
+  and execution output hints;
+- 'obfuscated_misleading': augmented sample with obfuscated code (taken from the source dataset)
+  and MISLEADING execution output hints;
+- 'stubbed': augmented sample where part of the code is stubbed/hidden by an LLM
+  to force models to infer execution steps;
+- 'hinted': augmented sample where code contains one or more execution output hints
+  produced by an LLM;
+- 'misleading': augmented sample where code contains one or more MISLEADING execution
+  output hints produced by an LLM;
 - 'bugged': augmented sample where code contains one or more bugs that should affect execution outcomes;
 - 'bugged_hinted': augmented sample where code contains both execution output hints and bugs;
 - 'bugged_misleading': augmented sample where code contains both MISLEADING hints and bugs.
@@ -272,7 +277,7 @@ class SampleTransformConfig(pydantic.BaseModel):
         """Validates the content of the config beyond basic validation."""
         if self.transform_strategy != "never" and not self.output_type_prob_map:
             raise ValueError("output type prob map must be provided when using partial samples generation")
-        prob_map_total = sum([v for v in self.output_type_prob_map.values()])
+        prob_map_total = sum(self.output_type_prob_map.values())
         if prob_map_total < 0 or prob_map_total > 1:  # doesn't have to be 1, as fallback = program_output
             raise ValueError(f"total probability map values must be in the range [0, 1]; got {prob_map_total}")
         return self
@@ -323,7 +328,7 @@ class SampleSelectionConfig(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "SampleSelectionConfig":
         """Validates the content of the config beyond basic validation."""
-        prob_map_total = sum([v for v in self.input_type_prob_map.values()])
+        prob_map_total = sum(self.input_type_prob_map.values())
         if not np.isclose(prob_map_total, 1.0):
             raise ValueError(f"total probability map values must be 1.0; got: {prob_map_total}")
         return self
@@ -469,7 +474,7 @@ class SampleBuilder(SampleDataParserType):
         if not isinstance(source_data, (list, tuple)):
             source_data = [source_data]
         source_data = list(source_data)
-        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join([str(s) for s in source_data])}")
+        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join(str(source) for source in source_data)}")
         for src_idx, src in enumerate(source_data):
             if isinstance(src, (str, pathlib.Path)):
                 source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
@@ -481,8 +486,8 @@ class SampleBuilder(SampleDataParserType):
         else:
             logger.debug(f"(targeting {len(traces)} traces)")
         assert isinstance(traces, list)
-        assert all([t.parent_dataset_hash in readers_map for t in traces])
-        assert all([0 <= t.index < len(readers_map[t.parent_dataset_hash]) for t in traces])
+        assert all(t.parent_dataset_hash in readers_map for t in traces)
+        assert all(0 <= trace_meta.index < len(readers_map[trace_meta.parent_dataset_hash]) for trace_meta in traces)
         return readers_map, traces
 
     def _filter_traces(
@@ -498,10 +503,12 @@ class SampleBuilder(SampleDataParserType):
         filtered_by_step_count = 0
         filtered_by_var_length = 0
         for trace_meta in traces:
-            if filtering_config.max_trace_steps is not None:
-                if trace_meta.step_count > filtering_config.max_trace_steps:
-                    filtered_by_step_count += 1
-                    continue
+            if (
+                filtering_config.max_trace_steps is not None
+                and trace_meta.step_count > filtering_config.max_trace_steps
+            ):
+                filtered_by_step_count += 1
+                continue
             if filtering_config.max_args_length is not None:
                 inputs_str = str(trace_meta.inputs)
                 expected_output_str = str(trace_meta.expected_output)
@@ -531,7 +538,7 @@ class SampleBuilder(SampleDataParserType):
         """Selects samples to generate from traces according to the specified strategy/options."""
         # first, scan all available traces and identify which augment group they belong to
         TraceIdType = pyine.data.traces.dataset_utils.TraceIdentifier  # noqa
-        trace_lut: dict[TraceIdType, pyine.data.traces.dataset_utils.TraceMetadata] = dict()
+        trace_lut: dict[TraceIdType, pyine.data.traces.dataset_utils.TraceMetadata] = {}
         cousin_traces: dict[TraceIdType, dict[SampleInputType, list[TraceIdType]]] = {}
         for trace in traces:
             assert trace.trace_id not in trace_lut, "trace id already exists in trace lut?"
@@ -591,7 +598,7 @@ class SampleBuilder(SampleDataParserType):
             else:
                 raise NotImplementedError(f"unexpected augment category: {augm_category}")
         assert len(cousin_traces) <= len(traces)
-        assert sum([len(c) for t, dicts in cousin_traces.items() for c in dicts.values()]) == len(traces)
+        assert sum(len(cluster) for dicts in cousin_traces.values() for cluster in dicts.values()) == len(traces)
         # all 'cousin clusters' will be used to produce ONE trace sample each; pick which one according to strategy
         rng = np.random.default_rng(selection_config.seed)
         output_selections: list[_TraceSampleSelectionResult] = []
@@ -719,7 +726,10 @@ class SampleBuilder(SampleDataParserType):
         prompt_result_db: pyine.prompts.PromptResultDB,
     ) -> dict[pyine.data.traces.dataset_utils.SolutionIdentifier, str]:  # sid to code description map
         """Builds a lookup table of code summaries for each trace."""
-        code_summaries_lut: dict[pyine.data.traces.dataset_utils.SolutionIdentifier, str] = dict()
+        code_summaries_lut: dict[
+            pyine.data.traces.dataset_utils.SolutionIdentifier,
+            str,
+        ] = {}
         for trace_meta in traces:
             if trace_meta.solution_id not in code_summaries_lut:
                 records = prompt_result_db.get_by_identifier(
@@ -837,17 +847,15 @@ class SampleBuilder(SampleDataParserType):
 
     def _satisfies_str_caps(self, inp: str, out: str) -> bool:
         """Returns whether inputs/output strings satisfy caps or not."""
-        if (
+        exceeds_input_cap = (
             self.transform_config.max_inputs_str_length is not None
             and len(inp) > self.transform_config.max_inputs_str_length
-        ):
-            return False
-        if (
+        )
+        exceeds_output_cap = (
             self.transform_config.max_output_str_length is not None
             and len(out) > self.transform_config.max_output_str_length
-        ):
-            return False
-        return True
+        )
+        return not (exceeds_input_cap or exceeds_output_cap)
 
     def _pick_output_type(
         self,
@@ -898,9 +906,10 @@ class SampleBuilder(SampleDataParserType):
             # if we still have not managed to decide to make a partial sample, return to full trace now
             return default_fallback
         # otherwise, decide what kind of output type to generate for the partial sample
-        output_type = _draw_type(self.transform_config.output_type_prob_map, rng, default_fallback)
-        output_type = typing.cast("SampleOutputType", output_type)
-        return output_type
+        return typing.cast(
+            "SampleOutputType",
+            _draw_type(self.transform_config.output_type_prob_map, rng, default_fallback),
+        )
 
     def _get_function_call_sample(
         self,
@@ -915,10 +924,11 @@ class SampleBuilder(SampleDataParserType):
         for step_idx, step in enumerate(trace_data.traced_steps):
             if step is None:
                 continue
-            if step.event_type == TraceEventType.CALL:
-                # skip initial call for the trace exec
-                if step.trace_key.object != pyine.utils.code.execution.EXEC_MODULE_OBJ_NAME:
-                    candidate_events.append((step_idx, step))
+            if (
+                step.event_type == TraceEventType.CALL
+                and step.trace_key.object != pyine.utils.code.execution.EXEC_MODULE_OBJ_NAME
+            ):
+                candidate_events.append((step_idx, step))
         # iterate through all candidates until a good one is found
         while candidate_events:
             curr_candidate_idx = int(rng.integers(0, len(candidate_events)))
@@ -939,26 +949,27 @@ class SampleBuilder(SampleDataParserType):
                 ):
                     # increase recursion depth (we need to find as many return calls)
                     target_func_return_depth += 1
-                elif trace_data.traced_steps[step_idx].event_type == TraceEventType.RETURN:
+                elif (
+                    trace_data.traced_steps[step_idx].event_type == TraceEventType.RETURN
+                    and trace_data.traced_steps[step_idx].trace_key.object == target_func_name
+                ):
                     # we assume that even when an exception is raised, we always get a 'return' event
-                    if trace_data.traced_steps[step_idx].trace_key.object == target_func_name:
-                        # decrease recursion depth (we found a matching return)
-                        target_func_return_depth -= 1
-                        if target_func_return_depth == 0:
-                            # we've found enough matching calls, stepping out
-                            return_event = trace_data.traced_steps[step_idx]
-                            return_event_idx = step_idx
-                            if return_event.exception is not None:
-                                # if we are raising an exception, the expected output should be that exception
-                                function_output_str = repr(return_event.exception)
-                            else:
-                                # otherwise, it's the returned value itself
-                                function_output_str = repr(return_event.return_value)
-                            break  # we found our matching return event, nothing else to do
+                    target_func_return_depth -= 1
+                    if target_func_return_depth == 0:
+                        # we've found enough matching calls, stepping out
+                        return_event = trace_data.traced_steps[step_idx]
+                        return_event_idx = step_idx
+                        if return_event.exception is not None:
+                            # if we are raising an exception, the expected output should be that exception
+                            function_output_str = repr(return_event.exception)
+                        else:
+                            # otherwise, it's the returned value itself
+                            function_output_str = repr(return_event.return_value)
+                        break  # we found our matching return event, nothing else to do
             if return_event is None:
                 continue  # could not locate the matching return event; go find another candidate
             # determine step count, i.e. the number of valid events between function call and return
-            call_step_count = sum([s is not None for s in trace_data.traced_steps[call_event_idx:return_event_idx]])
+            call_step_count = sum(step is not None for step in trace_data.traced_steps[call_event_idx:return_event_idx])
             if (
                 self.transform_config.max_partial_trace_steps
                 and call_step_count > self.transform_config.max_partial_trace_steps
@@ -1136,11 +1147,11 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
 
     class_path: str = pyine.utils.portability.get_fully_qualified_name(SampleBuilder)
     """Fully qualified class path for the trace parser."""
-    params: dict[str, typing.Any] = dict(
-        filtering_config=SampleFilteringConfig(),
-        selection_config=SampleSelectionConfig(),
-        transform_config=SampleTransformConfig(),
-    )
+    params: dict[str, typing.Any] = {
+        "filtering_config": SampleFilteringConfig(),
+        "selection_config": SampleSelectionConfig(),
+        "transform_config": SampleTransformConfig(),
+    }
     """Default parameters for the dataset trace parser."""
 
     @staticmethod
@@ -1149,7 +1160,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         sample_idxs: list[int] | None = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
-    ):
+    ) -> typing.Iterator[dict[str, typing.Any]]:
         """Yields dict samples from a SampleBuilder instance.
 
         Kept static/top-level-friendly for to keep pickling happy in `get_hf_messages_dataset`.
@@ -1177,26 +1188,26 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         """Generates and returns a huggingface messages dataset using a SampleBuilder instance."""
         dataset = hf_datasets.Dataset.from_generator(
             generator=SampleBuilderConfig._sample_builder_iter,
-            gen_kwargs=dict(
-                sample_builder_config=self,
-                instantiate_kwargs=instantiate_kwargs,
-            ),
+            gen_kwargs={
+                "sample_builder_config": self,
+                "instantiate_kwargs": instantiate_kwargs,
+            },
             split=named_split,
             keep_in_memory=keep_in_memory,
         )
         num_proc = num_workers
-        if num_proc is not None and num_proc > 0:
-            if not pyine.utils.concurrency.ensure_spawn_start_method():
-                logger.warning(
-                    "Falling back to single-process HF dataset mapping because the 'spawn' start method"
-                    " could not be configured."
-                )
-                num_proc = None
-        dataset = dataset.map(
-            function=raw_transform_fn,
-            keep_in_memory=keep_in_memory,
-            num_proc=num_proc,
-        )
+        if num_proc is not None and num_proc > 0 and not pyine.utils.concurrency.ensure_spawn_start_method():
+            logger.warning(
+                "Falling back to single-process HF dataset mapping because the 'spawn' start method"
+                " could not be configured."
+            )
+            num_proc = None
+        if raw_transform_fn is not None:
+            dataset = dataset.map(
+                function=raw_transform_fn,
+                keep_in_memory=keep_in_memory,
+                num_proc=num_proc,
+            )
         return dataset
 
     @staticmethod
@@ -1204,17 +1215,20 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         subset_name: pyine.data.datamodule.SubsetNameType,
     ) -> dict[str, typing.Any]:
         """Returns special subset parameter overrides (if any) for the given subset name."""
-        special_subset_overrides: dict[str, typing.Any] = dict()
+        special_subset_overrides: dict[str, typing.Any] = {}
         for suffix in typing.get_args(SampleInputType):
             if suffix != "original" and subset_name.endswith(f"_{suffix}"):
-                special_subset_overrides = dict(
-                    selection_config=SampleSelectionConfig(
+                special_subset_overrides = {
+                    "selection_config": SampleSelectionConfig(
                         seed=0,
                         allow_db_lookups=True,
                         choice_strategy="latest",
-                        input_type_prob_map={t: 1.0 if t == suffix else 0.0 for t in typing.get_args(SampleInputType)},
+                        input_type_prob_map={
+                            sample_type: 1.0 if sample_type == suffix else 0.0
+                            for sample_type in typing.get_args(SampleInputType)
+                        },
                         fallback_to_orig=False,
                     )
-                )
+                }
                 break
         return special_subset_overrides

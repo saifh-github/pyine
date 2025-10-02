@@ -31,8 +31,8 @@ if typing.TYPE_CHECKING:
 
 def _compute_metrics(
     eval_pred: transformers.trainer_utils.EvalPrediction,
-    inputs,
-    loss,
+    inputs: dict[str, typing.Any] | None,
+    loss: float | None,
 ) -> dict[str, float]:
     # @@@@@@@ TODO do something here? (training metrics)
     # rely on eval loss for model selection; no extra metrics computed

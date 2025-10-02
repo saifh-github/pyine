@@ -74,7 +74,7 @@ class CodingProblemTestDataCache:
         self._cache: dict[
             pyine.data.traces.dataset_utils.CodingProblemIdentifier,
             list[CachedTestData],
-        ] = dict()
+        ] = {}
         if use_cache_storage and self._stored_cache_available:
             self._load_stored_cache()
         else:
@@ -101,7 +101,7 @@ class CodingProblemTestDataCache:
         cache: dict[
             pyine.data.traces.dataset_utils.CodingProblemIdentifier,
             list[CachedTestData],
-        ] = dict()
+        ] = {}
         for problem, _solutions in iterator:
             assert problem.problem_id not in cache, "bug in iterator or non-unique problem ids?"
             cache[problem.problem_id] = []
