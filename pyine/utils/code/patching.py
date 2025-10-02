@@ -25,8 +25,7 @@ def compute_patch(
         tofile="modified",
         n=context_lines,
     )
-    output = "\n".join([d.rstrip("\r\n") for d in diff]) + "\n"
-    return output
+    return "\n".join(d.rstrip("\r\n") for d in diff) + "\n"
 
 
 def apply_patch(

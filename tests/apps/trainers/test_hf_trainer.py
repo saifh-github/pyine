@@ -11,7 +11,10 @@ class _FakePreparedDataset(list):
     pass
 
 
-def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_train_configures_trainer_and_saves_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     raw_datasets: list[str] = []
     prepared_calls: list[dict[str, int]] = []
 
@@ -60,13 +63,13 @@ def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.Monkey
         def __init__(
             self,
             *,
-            model,
-            args,
-            train_dataset,
-            eval_dataset,
-            data_collator,
-            tokenizer,
-            compute_metrics,
+            model: _FakeModel,
+            args: typing.Any,
+            train_dataset: _FakePreparedDataset,
+            eval_dataset: _FakePreparedDataset,
+            data_collator: typing.Any,
+            tokenizer: _FakeTokenizer,
+            compute_metrics: typing.Callable[..., dict[str, typing.Any]],
         ) -> None:
             self.model = model
             self.args = args
@@ -78,7 +81,7 @@ def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.Monkey
             self.saved_to: str | None = None
             self.trained = False
 
-        def train(self):
+        def train(self) -> str:
             self.trained = True
             return "done"
 
@@ -89,10 +92,10 @@ def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.Monkey
             self.saved_to = output_dir
 
     def fake_prepare_examples_from_conversations(
-        convo_ds,
-        tokenizer,
-        max_seq_len,
-        num_proc,
+        convo_ds: _RawDataset,
+        tokenizer: _FakeTokenizer,
+        max_seq_len: int,
+        num_proc: int,
     ) -> _FakePreparedDataset:
         prepared_calls.append(
             {
@@ -105,7 +108,7 @@ def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.Monkey
 
     captured_args: dict[str, dict[str, object]] = {}
 
-    def fake_training_arguments(**kwargs):
+    def fake_training_arguments(**kwargs: typing.Any) -> types.SimpleNamespace:
         captured_args["kwargs"] = kwargs
         return types.SimpleNamespace(**kwargs)
 
@@ -119,7 +122,7 @@ def test_train_configures_trainer_and_saves_artifacts(monkeypatch: pytest.Monkey
         compute_metrics=lambda *_args, **_kwargs: {},
     )
 
-    def fake_trainer_factory(**kwargs):
+    def fake_trainer_factory(**kwargs: typing.Any) -> _FakeTrainer:
         fake_trainer_instance.model = kwargs["model"]
         fake_trainer_instance.args = kwargs["args"]
         fake_trainer_instance.train_dataset = kwargs["train_dataset"]

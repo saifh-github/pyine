@@ -142,7 +142,7 @@ def map_inputs_to_callable(
                 raise ValueError(
                     "cannot map scalar input to callable without a single "
                     "positional parameter or *args; refusing to discard input"
-                )
+                ) from None
     # next, for mappings, relocate positional-only to args in correct order
     if kwargs:
         # move positional-only parameters from kwargs into args by order
@@ -152,7 +152,7 @@ def map_inputs_to_callable(
         # enforce no-discard: if extra kwargs present and no **kwargs, raise
         if not has_var_kw:
             allowed = set(pos_or_kw) | set(kw_only)
-            extras = {k for k in kwargs.keys() if k not in allowed}
+            extras = {key for key in kwargs if key not in allowed}
             if extras:
                 raise ValueError(
                     f"cannot pass unknown keyword arguments {sorted(extras)} to "
@@ -235,15 +235,15 @@ def _parse_args_string(
         text = text[1:-1].strip()
     # try JSON first for robustness with quoted strings and nested structures
     if text and text[0] in "[{":
+        parsed: typing.Any | None = None
         try:
             parsed = orjson.loads(text)
-            if isinstance(parsed, collections.abc.Mapping):
-                return [], dict(parsed)
-            if isinstance(parsed, collections.abc.Sequence):
-                return list(parsed), {}
-        except Exception:
-            # fall back to manual parsing below
-            pass
+        except (orjson.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, collections.abc.Mapping):
+            return [], dict(parsed)
+        if isinstance(parsed, collections.abc.Sequence):
+            return list(parsed), {}
     tokens = _split_top_level(text, delimiters={","})
     pos_args: list[typing.Any] = []
     kwargs: dict[str, typing.Any] = {}
@@ -324,15 +324,10 @@ def _parse_value(text: str) -> typing.Any:
         return None
     if low in {"true", "false"}:
         return low == "true"
-    # try literal_eval for numbers, strings, lists, dicts, tuples, etc.
     try:
         return ast.literal_eval(text)
-    except Exception:
-        pass
-    # try JSON for unquoted strings like {a:1} won't work; but keep fast-fail
-    try:
-        return orjson.loads(text)
-    except Exception:
-        pass
-    # if nothing else works, return str directly
-    return text
+    except (ValueError, SyntaxError, TypeError):
+        try:
+            return orjson.loads(text)
+        except (orjson.JSONDecodeError, TypeError):
+            return text

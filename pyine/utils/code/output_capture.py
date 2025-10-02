@@ -1,4 +1,4 @@
-# yes, this is real: no need for imports (!!!!)
+import typing
 
 
 class StdStreamCapture:
@@ -18,7 +18,7 @@ class StdStreamCapture:
         encoding: str = "utf-8",
         errors: str = "replace",
         fileno_value: int | None = None,
-    ):
+    ) -> None:
         self.stream_name = stream_name
         self.encoding = encoding
         self.errors = errors
@@ -28,12 +28,12 @@ class StdStreamCapture:
         self.buffer = self._BytesBuffer(self)
 
     class _BytesBuffer:
-        def __init__(self, parent: "StdStreamCapture"):
+        def __init__(self, parent: "StdStreamCapture") -> None:
             self._parent = parent
             self._buf = bytearray()
             self._closed = False
 
-        def write(self, b) -> int:
+        def write(self, b: typing.Any) -> int:
             if isinstance(b, (bytes, bytearray, memoryview)):
                 data = bytes(b)
             else:
@@ -41,7 +41,7 @@ class StdStreamCapture:
             self._buf.extend(data)
             return len(data)
 
-        def writelines(self, lines) -> int:
+        def writelines(self, lines: typing.Iterable[typing.Any]) -> int:
             total = 0
             for line in lines:
                 total += self.write(line)
@@ -50,11 +50,11 @@ class StdStreamCapture:
         def getvalue(self) -> bytes:
             return bytes(self._buf)
 
-        def flush(self):
+        def flush(self) -> None:
             # no-op for in-memory buffer
             return None
 
-        def close(self):
+        def close(self) -> None:
             self._closed = True
 
         @property
@@ -81,12 +81,8 @@ class StdStreamCapture:
         def seekable(self) -> bool:
             return False
 
-    def write(self, s) -> int:
-        if isinstance(s, str):
-            text = s
-        else:
-            # be tolerant: coerce to str rather than raising, for robustness
-            text = str(s)
+    def write(self, s: typing.Any) -> int:
+        text = s if isinstance(s, str) else str(s)
         # mirror to the bytes buffer
         try:
             data = text.encode(self.encoding, errors=self.errors)
@@ -95,13 +91,13 @@ class StdStreamCapture:
         self.buffer._buf.extend(data)  # noqa
         return len(text)
 
-    def writelines(self, lines) -> int:
+    def writelines(self, lines: typing.Iterable[typing.Any]) -> int:
         total = 0
         for line in lines:
             total += self.write(line)
         return total
 
-    def flush(self):
+    def flush(self) -> None:
         # no-op for in-memory capture
         return None
 
@@ -138,7 +134,7 @@ class StdStreamCapture:
     def fileno(self) -> int:
         return self._fileno
 
-    def close(self):
+    def close(self) -> None:
         self._closed = True
 
     @property

@@ -45,7 +45,7 @@ class PromptTemplate(pydantic.BaseModel):
 
     def get_partially_rendered_prompt(
         self,
-        **kwargs,  # extra partial variables (if any are needed)
+        **kwargs: typing.Any,  # extra partial variables (if any are needed)
     ) -> langchain_core.prompts.PromptTemplate:
         """Return a LangChain prompt template with partial variables filled in."""
         return langchain_core.prompts.PromptTemplate.from_template(
@@ -54,7 +54,7 @@ class PromptTemplate(pydantic.BaseModel):
             partial_variables=dict(**(self.partial_variables or {}), **kwargs),
         )
 
-    def render_prompt(self, **kwargs) -> str:
+    def render_prompt(self, **kwargs: typing.Any) -> str:
         """Render the prompt template with the provided + internal (partial) variables."""
         return self.get_partially_rendered_prompt().format(**kwargs)
 
@@ -228,10 +228,7 @@ class PromptConfig(pydantic.BaseModel):
             context_prompt = self.context.render_prompt(**(context_variables or {}))
             rendered_template_parts.append(context_prompt)
         if include_examples and self.examples:
-            if self.examples_block_template:
-                examples_block_template = self.examples_block_template
-            else:
-                examples_block_template = DefaultExamplesBlockTemplate
+            examples_block_template = self.examples_block_template or DefaultExamplesBlockTemplate
             examples_block_template = examples_block_template.get_partially_rendered_prompt()
             assert "examples_str" in examples_block_template.input_variables, (
                 "examples block template must include 'examples_str' variable"
@@ -334,7 +331,7 @@ class PromptConfig(pydantic.BaseModel):
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
         examples_block_variables: dict[str, typing.Any] | None = None,
-        **question_variables,
+        **question_variables: typing.Any,
     ) -> str:
         """Render a prompt template with the provided variables.
 

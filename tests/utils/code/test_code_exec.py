@@ -14,7 +14,7 @@ from pyine.utils.code.execution import (
     TraceKey,
     TraceResult,
     TraceTagType,
-    TracingCapException,
+    TracingCapError,
     _safe_execute_and_trace_code,
     _unsafe_execute_and_trace_code,
     execute_and_trace_code,
@@ -307,13 +307,13 @@ print(f"Final i={i}")
     )
     assert result_no_caps.valid_step_count > 1000
     assert result_no_caps.stdout == "Final i=1000\n"
-    with pytest.raises(TracingCapException):
+    with pytest.raises(TracingCapError):
         _ = _unsafe_execute_and_trace_code(
             code_string=code,
             trace_only_inside_code_string=True,
             max_events_per_line=10,
         )
-    with pytest.raises(TracingCapException):
+    with pytest.raises(TracingCapError):
         _ = _unsafe_execute_and_trace_code(
             code_string=code,
             trace_only_inside_code_string=True,
@@ -339,7 +339,7 @@ print(f"{len(something)=}")
         trace_only_inside_code_string=True,
     )
     assert result_no_caps.stdout == "len(something)=1000\n"
-    with pytest.raises(TracingCapException):
+    with pytest.raises(TracingCapError):
         _ = _unsafe_execute_and_trace_code(
             code_string=code,
             trace_only_inside_code_string=True,

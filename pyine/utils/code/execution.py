@@ -76,13 +76,13 @@ INTERNAL_EVENT_KEY_PREFIXES = (
 """Prefixes for event keys that should not be reported as they relate to the tracing scaffolding."""
 
 
-class TracingCapException(Exception):
+class TracingCapError(Exception):
     """Exception signaling that some traced attribute exceeded a predefined cap."""
 
     pass
 
 
-class CodeAnalysisFailure(ValueError):
+class CodeAnalysisError(ValueError):
     """Exception signaling that some analysis of the code string failed."""
 
     pass
@@ -177,7 +177,7 @@ class TraceException(typing.NamedTuple):
     traceback: str | None
     """Formatted traceback string, if available."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a string representation of the trace exception."""
         # note: when we expect an exception to be produced in a traced run, this is what gets compared
         return f"{self.type}({self.message})"
@@ -231,11 +231,11 @@ class TraceEvent:
     trace_key: TraceKey
     """The trace key associated with this event, for convenience."""
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         """Returns a hash value for the event, considering only relevant unique attributes."""
         return hash((self.trace_step_idx, self.trace_key))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Returns a (partial) string representation of the trace event."""
         return f"step#{self.trace_step_idx:06d}:{self.event_type}@{self.trace_key}"
 
@@ -293,7 +293,7 @@ class TraceResult(pydantic.BaseModel):
     tags: list[str]
     """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a string representation of the trace result based on its identifier."""
         if self.identifier is not None:
             return str(self.identifier)
@@ -341,11 +341,11 @@ def trace_context(
 
 
 def _execute_in_subprocess(
-    *args,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
+    *args: typing.Any,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
     result_queue: multiprocessing.Queue,
     identifier: str | None = None,
     timeout_seconds: float = 60,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> None:
     """Execute 'unsafe' tracing in a separate process (where unsafe means it could crash the main process)."""
     # note: this could not be a local define because it gets pickled for multiprocessing
@@ -363,12 +363,12 @@ def _execute_in_subprocess(
 
 
 def _safe_execute_and_trace_code(
-    *args,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
+    *args: typing.Any,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
     identifier: str | None = None,
     timeout_seconds: float = 60,
     timeout_external_buffer_seconds: float = 5,
     sleep_duration_seconds: float = 0.1,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> "TraceResult":
     """
     Wrapper around `_unsafe_execute_and_trace_code` that handles OS-level crashes.
@@ -477,11 +477,11 @@ def _unsafe_execute_and_trace_code(
         blacklisted_objects: A list of object names to exclude from tracing.
         trace_only_inside_code_string: If True, only trace code inside the provided code_string.
         max_valid_events: The maximum number of valid (in-scope) events to allow. If this cap is exceeded,
-            a `TracingCapException` will be raised.
+            a `TracingCapError` will be raised.
         max_events_per_line: The maximum number of events allowed per line. If this cap is exceeded,
-            a `TracingCapException` will be raised.
+            a `TracingCapError` will be raised.
         max_var_repr_length: The maximum length (in chars) allowed for the representation of a
-            variable. Above this cap, a `TracingCapException` will be raised.
+            variable. Above this cap, a `TracingCapError` will be raised.
         timeout_seconds: The maximum number of seconds to allow for code execution.
         seed: The seed to use for random number generation. Defaults to 42.
 
@@ -500,7 +500,7 @@ def _unsafe_execute_and_trace_code(
         }
         compiled_code = compile(code_string, EXEC_TRACE_FILE_NAME, "exec")
     except Exception as e:
-        raise CodeAnalysisFailure(f"error while analyzing and compiling code: {e}") from e
+        raise CodeAnalysisError(f"error while analyzing and compiling code: {e}") from e
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
@@ -553,7 +553,7 @@ def _unsafe_execute_and_trace_code(
         )
         if is_blacklisted and TraceTagType.HAS_EVENT_BLACKLISTED not in trace_tags:
             trace_tags.append(TraceTagType.HAS_EVENT_BLACKLISTED)
-        is_internal = any([str(trace_key).startswith(prefix) for prefix in INTERNAL_EVENT_KEY_PREFIXES])
+        is_internal = any(str(trace_key).startswith(prefix) for prefix in INTERNAL_EVENT_KEY_PREFIXES)
         is_inside_code_string = trace_key.file == EXEC_TRACE_FILE_NAME
         must_skip = is_blacklisted or is_internal or (not is_inside_code_string and trace_only_inside_code_string)
         if event == "call" and must_skip:
@@ -563,7 +563,7 @@ def _unsafe_execute_and_trace_code(
             traced_steps_map[trace_key_repr] = []
         max_event_capped = max_events_per_line and len(traced_steps_map[trace_key_repr]) >= max_events_per_line
         if max_event_capped:
-            raise TracingCapException(
+            raise TracingCapError(
                 f"max events per line ({max_events_per_line}) exceeded for trace at key {trace_key_repr}"
             )
         if must_skip:
@@ -593,9 +593,9 @@ def _unsafe_execute_and_trace_code(
                 if not name.startswith("__") and name not in banned_local_var_names
             }
             if max_var_repr_length is not None and local_vars:
-                max_locals_var_repr_len = max([len(v) for v in local_vars.values()])
+                max_locals_var_repr_len = max(len(value) for value in local_vars.values())
                 if max_locals_var_repr_len > max_var_repr_length:
-                    raise TracingCapException(
+                    raise TracingCapError(
                         f"max locals repr len exceeded for trace at key {trace_key_repr} "
                         f"(found max len: {max_locals_var_repr_len}, cap: {max_var_repr_length})"
                     )
@@ -605,9 +605,9 @@ def _unsafe_execute_and_trace_code(
                 if not name.startswith("__")
             }
             if max_var_repr_length is not None and global_vars:
-                max_globals_var_repr_len = max([len(v) for v in global_vars.values()])
+                max_globals_var_repr_len = max(len(value) for value in global_vars.values())
                 if max_globals_var_repr_len > max_var_repr_length:
-                    raise TracingCapException(
+                    raise TracingCapError(
                         f"max globals repr len exceeded for trace at key {trace_key_repr} "
                         f"(found max len: {max_globals_var_repr_len}, cap: {max_var_repr_length})"
                     )
@@ -621,14 +621,14 @@ def _unsafe_execute_and_trace_code(
                 if max_var_repr_length is not None and arguments:
                     max_args_var_repr_len = max([len(v) for v in arguments.values()])
                     if max_args_var_repr_len > max_var_repr_length:
-                        raise TracingCapException(
+                        raise TracingCapError(
                             f"max args repr len exceeded for trace at key {trace_key_repr}"
                             f"(found max len: {max_args_var_repr_len}, cap: {max_var_repr_length})"
                         )
             elif event == "return":
                 exec_return_value = pyine.utils.portability.get_portable_representation(arg)
                 if max_var_repr_length is not None and len(exec_return_value) > max_var_repr_length:
-                    raise TracingCapException(
+                    raise TracingCapError(
                         f"max return val repr len exceeded for trace at key {trace_key_repr}"
                         f"(found len: {len(exec_return_value)}, cap: {max_var_repr_length})"
                     )
@@ -654,7 +654,7 @@ def _unsafe_execute_and_trace_code(
         traced_steps_map[trace_key_repr].append(last_trace_step_idx)
         last_trace_step_idx += 1  # will reflect the total number of calls to this callback, no matter what
         if max_valid_events is not None and last_trace_step_idx >= max_valid_events:
-            raise TracingCapException(
+            raise TracingCapError(
                 f"max valid events exceeded for trace at key {trace_key_repr} "
                 f"(reached the cap of {last_trace_step_idx} in-scope events)"
             )
@@ -674,7 +674,7 @@ def _unsafe_execute_and_trace_code(
         ):  # noqa
             if entrypoint_name is not None:
                 with trace_context(_trace_callback):
-                    exec(compiled_code, exec_namespace)
+                    exec(compiled_code, exec_namespace)  # noqa: S102
                 if entrypoint_name and entrypoint_name in exec_namespace:
                     # note for later: if this is buggy/annoying, could add call inside code string itself
                     entrypoint_step_idx = last_trace_step_idx
@@ -686,11 +686,10 @@ def _unsafe_execute_and_trace_code(
                         return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
                     trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
             else:
-                with pyine.utils.code.input_mock.MockInputContext(str(inputs)):
-                    with trace_context(_trace_callback):
-                        exec(compiled_code, exec_namespace)
+                with pyine.utils.code.input_mock.MockInputContext(str(inputs)), trace_context(_trace_callback):
+                    exec(compiled_code, exec_namespace)  # noqa: S102
             _capture_buffers()
-    except (TimeoutError, TracingCapException):
+    except (TimeoutError, TracingCapError):
         # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise
     except DONT_CATCH_EXCEPTIONS:
@@ -725,8 +724,6 @@ def _unsafe_execute_and_trace_code(
     trace_tags.extend(TraceTagType.get_step_count_tags(traced_steps))
     if inputs is not None and not pyine.utils.pydantic.is_jsonvalue(inputs):
         inputs = repr(inputs)
-    else:
-        inputs = inputs
     if expected_output is not None and not pyine.utils.pydantic.is_jsonvalue(expected_output):
         expected_output = repr(expected_output)
     else:
@@ -767,9 +764,9 @@ def _unsafe_execute_and_trace_code(
 
 
 def execute_and_trace_code(
-    *args,
+    *args: typing.Any,
     use_safe_execution: bool = True,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> "TraceResult":
     """Convenience function that chooses between safe and unsafe execution and tracing functions.
 

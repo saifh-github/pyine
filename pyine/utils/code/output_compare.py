@@ -61,7 +61,10 @@ class CompareOptions(pydantic.BaseModel):
     tuple_order_matters: bool = True
     """Whether tuple element order matters."""
     array_type_matters: bool = True
-    """Whether list vs tuple type must match. If False, lists and tuples are compared as sequences regardless of type."""
+    """Whether list/tuple types must match.
+
+    If False, lists and tuples are compared as sequences regardless of the container type.
+    """
     # note: dict and set are order-insensitive by definition; nested lists/tuples obey above flags
     nan_equal: bool = True
     """If True, NaN is considered equal to NaN."""
@@ -388,7 +391,7 @@ def _compare_sets(a: set, b: set, opt: CompareOptions, path: str) -> CompareResu
         return _fail_path(path, f"Set size differs: {len(a)} != {len(b)}")
     # convert to lists and do order-insensitive matching using deep compare
     b_remaining = list(b)
-    for i, av in enumerate(a):
+    for _, av in enumerate(a):
         found = False
         for j, bv in enumerate(b_remaining):
             res = _compare_objects(av, bv, opt, path="")
@@ -414,7 +417,7 @@ def _compare_dicts(
     if set(a.keys()) != set(b.keys()):
         return _fail_path(path, f"Dict keys differ: {set(a.keys()) ^ set(b.keys())}")
     # Compare values
-    for k in a.keys():
+    for k in a:
         res = _compare_objects(a[k], b[k], opt, path=f"{path}[{k!r}]" if path else f"[{k!r}]")
         if not res.equal:
             return res
@@ -481,11 +484,10 @@ def compare_exec_output_with_llm(
     if options is None:
         options = get_options_for_llm_grading()
     chain = options.get_chain(llm, runnable_name)
-    result = chain.invoke(
-        dict(
-            expected_output=expected,
-            predicted_output=predicted,
-            execution_type=execution_type,
-        )
+    return chain.invoke(
+        {
+            "expected_output": expected,
+            "predicted_output": predicted,
+            "execution_type": execution_type,
+        }
     )
-    return result

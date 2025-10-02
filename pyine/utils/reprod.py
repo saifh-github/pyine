@@ -236,25 +236,25 @@ def get_reprod_metadata(
     import pyine.utils.filesystem
 
     curr_time_since_epoch = time.time()
-    reprod_metadata = dict(
-        python_version=get_python_version(),
-        created_by=pyine.utils.filesystem.get_username(),
-        platform=get_platform_name(),
-        framework_version=get_framework_version(),
-        git_revision_hash=get_git_revision_hash(),
-        git_repo_clean=str(is_git_repo_clean()),
-        project_root=str(pyine.utils.filesystem.get_project_root_path()),
-        data_root=str(pyine.utils.filesystem.get_data_root_path()),
-        logs_root=str(pyine.utils.filesystem.get_logs_root_path()),
-        tmp_dir=str(pyine.utils.filesystem.get_tmp_dir()),
-        work_dir=str(os.getcwd()),
-        dotenv_path=str(pyine.utils.filesystem.find_dotenv_file()),
-        time_since_epoch=str(curr_time_since_epoch),
-        local_timestamp=get_timestamp(curr_time_since_epoch),
-        runtime_hash=hashlib.sha1(str(curr_time_since_epoch).encode(), usedforsecurity=False).hexdigest(),
-        sys_executable=str(sys.executable),
-        sys_argv=str(sys.argv),
-    )
+    reprod_metadata = {
+        "python_version": get_python_version(),
+        "created_by": pyine.utils.filesystem.get_username(),
+        "platform": get_platform_name(),
+        "framework_version": get_framework_version(),
+        "git_revision_hash": get_git_revision_hash(),
+        "git_repo_clean": str(is_git_repo_clean()),
+        "project_root": str(pyine.utils.filesystem.get_project_root_path()),
+        "data_root": str(pyine.utils.filesystem.get_data_root_path()),
+        "logs_root": str(pyine.utils.filesystem.get_logs_root_path()),
+        "tmp_dir": str(pyine.utils.filesystem.get_tmp_dir()),
+        "work_dir": str(os.getcwd()),
+        "dotenv_path": str(pyine.utils.filesystem.find_dotenv_file()),
+        "time_since_epoch": str(curr_time_since_epoch),
+        "local_timestamp": get_timestamp(curr_time_since_epoch),
+        "runtime_hash": hashlib.sha1(str(curr_time_since_epoch).encode(), usedforsecurity=False).hexdigest(),
+        "sys_executable": str(sys.executable),
+        "sys_argv": str(sys.argv),
+    }
     if include_installed_packages:
         reprod_metadata["installed_packages"] = "\n".join(get_installed_packages())
     if with_gpu_info:
@@ -286,7 +286,7 @@ def entrypoint_setup(
     runtime_config: "pyine.configs.schemas.RuntimeConfig | None" = None,
     disable_http_logging_info_msgs: bool = True,
     use_wandb_logging: bool = False,
-    **extra_configs,
+    **extra_configs: typing.Any,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments.
 
@@ -374,7 +374,7 @@ def entrypoint_setup(
 
 
 @functools.wraps(dotenv.load_dotenv)
-def load_dotenv(**kwargs) -> bool:
+def load_dotenv(**kwargs: typing.Any) -> bool:
     """Parses the closest `.env` file and load all the variables found as environment variables."""
     from pyine.utils.filesystem import find_dotenv_file
 
@@ -474,6 +474,6 @@ def load_logged_app_config(
     assert experiment_log_dir.is_dir(), f"invalid experiment log dir: {experiment_log_dir}"
     potential_config_paths = sorted(experiment_log_dir.glob("config.*.rank*.json"))
     if not potential_config_paths:
-        return dict()
+        return {}
     config_path = potential_config_paths[0]
     return json.loads(config_path.read_text())

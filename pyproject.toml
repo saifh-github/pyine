@@ -136,17 +136,14 @@ select = [
     "E",   # pycodestyle errors (spacing, indentation, etc.)
     "F",   # pyflakes (unused imports, variables, etc.)
     "W",   # pycodestyle warnings
-
     # Code quality
     "I",   # isort (import sorting and organization)
     "B",   # flake8-bugbear (common bugs and design problems)
     "C4",  # flake8-comprehensions (better list/dict comprehensions)
     "UP",  # pyupgrade (modern Python syntax)
-
     # Type annotations
     "ANN", # flake8-annotations (enforce type hints)
     "TC",  # flake8-type-checking (type-checking imports)
-
     # Security and best practices
     "S",   # bandit (security issues)
     "N",   # pep8-naming (naming conventions)
@@ -156,7 +153,6 @@ select = [
 ignore = [
     # Type annotation exceptions
     "ANN401", # Dynamically typed expressions (Any) are disallowed
-
     # Security exceptions for common patterns
     "S101",   # Use of assert (common in tests)
     "S603",   # subprocess calls

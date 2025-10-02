@@ -1,6 +1,7 @@
 import contextlib
 import functools
 import sys
+import types
 import typing
 
 _orig_stdin = sys.stdin
@@ -12,7 +13,7 @@ class MockInput:
     class _BufferView:
         """A minimal bytes-oriented buffer view over MockInput that mirrors sys.stdin.buffer."""
 
-        def __init__(self, parent: "MockInput", encoding: str = "utf-8"):
+        def __init__(self, parent: "MockInput", encoding: str = "utf-8") -> None:
             self._parent = parent
             self.encoding = encoding
 
@@ -32,17 +33,17 @@ class MockInput:
             """Read all remaining input lines as a list of bytes."""
             return [f"{line}\n".encode(self.encoding) for line in self._parent._input_iter]
 
-        def __iter__(self):
+        def __iter__(self) -> "MockInput._BufferView":
             return self
 
-        def __next__(self):
+        def __next__(self) -> bytes:
             line = self.readline()
             if line == b"":
                 raise StopIteration
             return line
 
     # noinspection PyUnreachableCode
-    def __init__(self, inputs: str = "", encoding: str = "utf-8"):
+    def __init__(self, inputs: str = "", encoding: str = "utf-8") -> None:
         """Initialize the MockInput instance with an input string to be read from.
 
         If the input string contains newlines, each line will be read separately. If it does not
@@ -51,10 +52,7 @@ class MockInput:
         self._orig_inputs = inputs
         self._encoding = encoding
         if not isinstance(inputs, str):
-            if isinstance(inputs, list):
-                inputs = "\n".join(inputs)
-            else:
-                inputs = str(inputs)
+            inputs = "\n".join(inputs) if isinstance(inputs, list) else str(inputs)
         if inputs and not inputs.endswith("\n"):
             inputs += "\n"
         self._input_iter = iter(inputs.splitlines())
@@ -71,13 +69,11 @@ class MockInput:
 
     def read(self) -> str:
         """Read all remaining inputs into a single string."""
-        result = "".join(f"{line}\n" for line in self._input_iter)
-        return result
+        return "".join(f"{line}\n" for line in self._input_iter)
 
     def readlines(self) -> list[str]:
         """Read all remaining inputs into a list of strings."""
-        result = [f"{line}\n" for line in self._input_iter]
-        return result
+        return [f"{line}\n" for line in self._input_iter]
 
     def __getattr__(self, name: str) -> typing.Any:
         """Forward attribute access to sys.stdin for any attributes not found in MockInput.
@@ -89,7 +85,7 @@ class MockInput:
             stdin_attr = getattr(_orig_stdin, name)
             if callable(stdin_attr):
 
-                def wrapper(*args, **kwargs):
+                def wrapper(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
                     method = getattr(sys.stdin, name)
                     return method(*args, **kwargs)
 
@@ -101,16 +97,15 @@ class MockInput:
     def mock_input(self, _: str = "") -> str:
         """Read the next input from the iterator of inputs."""
         try:
-            next_input = next(self._input_iter)
-            return next_input
+            return next(self._input_iter)
         except StopIteration as e:
             raise EOFError("not enough input lines provided") from e
 
-    def __iter__(self):
+    def __iter__(self) -> "MockInput":
         """Returns the iterator over all inputs."""
         return self
 
-    def __next__(self):
+    def __next__(self) -> str:
         """Returns the next input line."""
         line = self.readline()
         if line == "":
@@ -121,7 +116,7 @@ class MockInput:
 class MockInputContext(contextlib.AbstractContextManager):
     """Context manager for replacing sys.stdin.readline() and input() with MockInput."""
 
-    def __init__(self, inputs: str = ""):
+    def __init__(self, inputs: str = "") -> None:
         """Initialize the MockInput instance with an input string to be read from.
 
         If the input string contains newlines, each line will be read separately. If it does not
@@ -129,7 +124,7 @@ class MockInputContext(contextlib.AbstractContextManager):
         """
         self.mocker = MockInput(inputs)
 
-    def __enter__(self, inputs: str = ""):
+    def __enter__(self, inputs: str = "") -> None:
         """Replaces sys.stdin.readline() and input() with MockInput."""
         self.original_stdin = sys.stdin
         if isinstance(__builtins__, dict):
@@ -140,7 +135,12 @@ class MockInputContext(contextlib.AbstractContextManager):
             __builtins__.input = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
         sys.stdin = self.mocker  # type: ignore
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         """Restores sys.stdin.readline() and input() to their original values."""
         sys.stdin = self.original_stdin
         if isinstance(__builtins__, dict):

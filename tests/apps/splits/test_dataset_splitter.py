@@ -65,7 +65,7 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
     ]
     res = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, cli_args)  # noqa
     assert res.exit_code == 0, res
-    part_files = sorted(list(tmp_path.glob("*.yaml")))
+    part_files = sorted(tmp_path.glob("*.yaml"))
     assert len(part_files) > 0
     expected_ids = pyine.data.utils.splits.SplitResult.from_file(taco_dataset_split_path).identifiers
     found_ids = []
@@ -107,7 +107,7 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
     ]
     res = cli_runner.invoke(pyine.apps.splits.dataset_splitter.main, cli_args)  # noqa
     assert res.exit_code == 0, res
-    part_files = sorted(list(out_parts_path.glob("*.yaml")))
+    part_files = sorted(out_parts_path.glob("*.yaml"))
     assert len(part_files) > 3
     # keep only the first three part files, and re-write them to contain one problem ID each
     part_files = part_files[:3]
@@ -143,7 +143,7 @@ def test_main_partition_integration_with_writer(tmp_path: pathlib.Path) -> None:
         assert set(expected_pids) == set(found_pids)
         trace_ids = r.trace_keys
         for tid in trace_ids:
-            assert any([tid.startswith(pid) for pid in expected_pids])
+            assert any(tid.startswith(pid) for pid in expected_pids)
 
 
 def test_partition_force_flag_protects_existing_outputs(tmp_path: pathlib.Path) -> None:

@@ -8,7 +8,7 @@ def get_hf_tokenizer(
     pretrained_model_name_or_path: str,
     set_padding_to_eos_if_needed: bool = False,
     override_padding_to_right_side: bool = False,
-    **kwargs,
+    **kwargs: typing.Any,
 ) -> transformers.PreTrainedTokenizer:
     """Get a hf tokenizer from a pretrained model name or path and additional kwargs.
 

@@ -513,7 +513,7 @@ def _get_traces_to_write(
             log_fn(f"{code_to_trace.trace_id}: failed to execute: {full_error_msg}")
             if not isinstance(
                 run_error,
-                (pyine.utils.code.execution.TracingCapException, TimeoutError),
+                (pyine.utils.code.execution.TracingCapError, TimeoutError),
             ):
                 # don't log cap or timeout errors (those are config-adjustable and shouldn't really matter)
                 _log_failed_test_to_disk(

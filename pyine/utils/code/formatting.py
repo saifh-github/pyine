@@ -158,10 +158,7 @@ def _build_ruff_cli_command(
     line_length: int,
 ) -> list[str]:
     ruff_executable = shutil.which("ruff")
-    if ruff_executable:
-        base_cmd = [ruff_executable, "format"]
-    else:
-        base_cmd = [sys.executable, "-m", "ruff", "format"]
+    base_cmd = [ruff_executable, "format"] if ruff_executable else [sys.executable, "-m", "ruff", "format"]
     base_cmd += ["--line-length", str(line_length), "--quiet"]
     return base_cmd
 
@@ -172,10 +169,7 @@ def _build_black_cli_command(
     string_normalization: bool,
 ) -> list[str]:
     black_executable = shutil.which("black")
-    if black_executable:
-        base_cmd = [black_executable]
-    else:
-        base_cmd = [sys.executable, "-m", "black"]
+    base_cmd = [black_executable] if black_executable else [sys.executable, "-m", "black"]
     base_cmd += ["--line-length", str(line_length)]
     if is_pyi:
         base_cmd.append("--pyi")

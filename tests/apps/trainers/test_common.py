@@ -7,7 +7,7 @@ import pyine.apps.trainers.common as trainer_common
 
 
 class DummyDatamodule:
-    def __init__(self, stats: dict[str, int] | None = None):
+    def __init__(self, stats: dict[str, int] | None = None) -> None:
         self.prepared = False
         self.setup_called = 0
         self.instantiate_verbose: list[bool] = []
@@ -19,12 +19,19 @@ class DummyDatamodule:
     def setup(self) -> None:
         self.setup_called += 1
 
-    def get_stats(self, target_subsets=None) -> dict[str, int | float | str]:
+    def get_stats(
+        self,
+        target_subsets: typing.Any | None = None,
+    ) -> dict[str, int | float | str]:
         return self._stats
 
 
 class DummyDatamoduleConfig:
-    def __init__(self, datamodule: DummyDatamodule, eval_subset_names: list[str] | None = None):
+    def __init__(
+        self,
+        datamodule: DummyDatamodule,
+        eval_subset_names: list[str] | None = None,
+    ) -> None:
         self.datamodule = datamodule
         self.calls: list[bool] = []
         self.train_subset_names = ["train"]
@@ -38,13 +45,13 @@ class DummyDatamoduleConfig:
 
 
 class FakeEvaluationResult:
-    def __init__(self, metrics: dict[str, float], artifacts: list[str]):
+    def __init__(self, metrics: dict[str, float], artifacts: list[str]) -> None:
         self.metrics = metrics
         self.artifacts = artifacts
 
 
 class DummyEvalsConfig:
-    def __init__(self, eval_type: typing.Any):
+    def __init__(self, eval_type: typing.Any) -> None:
         self.eval_type = eval_type
         self.eval_runnable_model_calls: list[dict] = []
         self.eval_hf_model_calls: list[dict] = []
@@ -52,21 +59,21 @@ class DummyEvalsConfig:
         self.log_metrics_calls: list[dict] = []
         self.log_predictions_calls: list[dict] = []
 
-    async def evaluate_runnable_model(self, **kwargs) -> dict:
+    async def evaluate_runnable_model(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
         self.eval_runnable_model_calls.append(kwargs)
-        return dict()
+        return {}
 
-    async def evaluate_hf_model(self, **kwargs) -> dict:
+    async def evaluate_hf_model(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
         self.eval_hf_model_calls.append(kwargs)
-        return dict()
+        return {}
 
-    def define_metrics_for_wandb(self, **kwargs):
+    def define_metrics_for_wandb(self, **kwargs: typing.Any) -> None:
         self.define_metrics_calls.append(kwargs)
 
-    def log_metrics(self, **kwargs):
+    def log_metrics(self, **kwargs: typing.Any) -> None:
         self.log_metrics_calls.append(kwargs)
 
-    def log_predictions(self, **kwargs):
+    def log_predictions(self, **kwargs: typing.Any) -> None:
         self.log_predictions_calls.append(kwargs)
 
 
@@ -85,7 +92,7 @@ def _build_app_config(
     )
 
 
-def test_prepare_datamodule_basic():
+def test_prepare_datamodule_basic() -> None:
     datamodule = DummyDatamodule()
     config = _build_app_config(DummyDatamoduleConfig(datamodule))
     result = trainer_common.prepare_datamodule(config, runtime=None)
@@ -95,7 +102,7 @@ def test_prepare_datamodule_basic():
     assert datamodule.instantiate_verbose == [True]
 
 
-def test_prepare_datamodule_with_wandb_logging():
+def test_prepare_datamodule_with_wandb_logging() -> None:
     datamodule = DummyDatamodule(stats={"rows": 42})
     evals_config = DummyEvalsConfig("something")
     config = _build_app_config(
@@ -117,20 +124,25 @@ def test_prepare_datamodule_with_wandb_logging():
 
 
 @pytest.mark.asyncio
-async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch):
+async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) -> None:
     metrics_logged: list[tuple[dict[str, float], str]] = []
 
-    def fake_print_metrics(metrics, subset, printer):
+    def fake_print_metrics(metrics: dict[str, float], subset: str, printer: typing.Any) -> None:
         metrics_logged.append((metrics, subset))
 
     monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", fake_print_metrics)
     synchronous_result = FakeEvaluationResult({"acc": 0.9}, ["art1"])
     asynchronous_result = FakeEvaluationResult({"acc": 0.95}, ["art2"])
 
-    async def _async_wrapper():
+    async def _async_wrapper() -> FakeEvaluationResult:
         return asynchronous_result
 
-    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
+    async def fake_evaluate_runnable_model(
+        chain: typing.Any,
+        datamodule: DummyDatamodule,
+        eval_subset_name: str,
+        verbose: bool,
+    ) -> FakeEvaluationResult:
         if eval_subset_name == "sync":
             return synchronous_result
         return await _async_wrapper()
@@ -157,18 +169,23 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_evaluate_model_wandb_logging_reopens_run(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", lambda *args, **kwargs: None)
     replacement_run = types.SimpleNamespace(summary={}, logged=[])  # new run returned by wandb.init
 
-    def fake_wandb_init(**kwargs):
+    def fake_wandb_init(**kwargs: typing.Any) -> types.SimpleNamespace:
         replacement_run.log = lambda payload: replacement_run.logged.append(payload)
         return replacement_run
 
     monkeypatch.setattr(trainer_common.wandb, "init", fake_wandb_init)
     result = FakeEvaluationResult(metrics={"acc": 0.77}, artifacts=["sample"])
 
-    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
+    async def fake_evaluate_runnable_model(
+        chain: typing.Any,
+        datamodule: DummyDatamodule,
+        eval_subset_name: str,
+        verbose: bool,
+    ) -> FakeEvaluationResult:
         return result
 
     evals_config = DummyEvalsConfig("something")
@@ -197,10 +214,15 @@ async def test_evaluate_model_wandb_logging_reopens_run(
 
 
 @pytest.mark.asyncio
-async def test_evaluate_model_requires_wandb_run_id():
+async def test_evaluate_model_requires_wandb_run_id() -> None:
     result = FakeEvaluationResult(metrics={"acc": 0.5}, artifacts=[])
 
-    async def fake_evaluate_runnable_model(chain, datamodule, eval_subset_name, verbose):
+    async def fake_evaluate_runnable_model(
+        chain: typing.Any,
+        datamodule: DummyDatamodule,
+        eval_subset_name: str,
+        verbose: bool,
+    ) -> FakeEvaluationResult:
         return result
 
     evals_config = DummyEvalsConfig("something")

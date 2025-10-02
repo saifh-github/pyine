@@ -728,7 +728,7 @@ def _default_output_validator(
                     timeout_seconds=config.validation_timeout_seconds,
                     use_safe_execution=True,  # parent runs in a thread, so isolate the child
                 )
-            except pyine.utils.code.execution.CodeAnalysisFailure:
+            except pyine.utils.code.execution.CodeAnalysisError:
                 # there's a problem with the code string itself, reject the proposal
                 return False
         output_is_different = (

@@ -14,16 +14,16 @@ TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
     fn=transformers.TrainingArguments,
     name="TrainingArgsConfig",
     model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides=dict(
+    default_overrides={
         # we use some updated defaults (low-impact, QoL stuff)
-        load_best_model_at_end=True,  # easy to forget, but important! (also force-saves best ckpt)
-        logging_first_step=True,  # good for plotting/sanity
-        log_level="info",  # enable info-level logging for models by default
-        report_to="none",  # disable by default, and enable at runtime if needed
+        "load_best_model_at_end": True,  # easy to forget, but important! (also force-saves best ckpt)
+        "logging_first_step": True,  # good for plotting/sanity
+        "log_level": "info",  # enable info-level logging for models by default
+        "report_to": "none",  # disable by default, and enable at runtime if needed
         # we also need to replace some defaults that CANNOT be serialized (factories)
-        lr_scheduler_kwargs=dict(),  # same behavior as original default
-        include_for_metrics=list(),  # same behavior as original default
-    ),
+        "lr_scheduler_kwargs": {},  # same behavior as original default
+        "include_for_metrics": [],  # same behavior as original default
+    },
 )
 """Configuration parameters for the HuggingFace Trainer."""
 
@@ -31,9 +31,9 @@ GenerationConfig = pyine.utils.pydantic.model_from_callable(
     fn=transformers.GenerationConfig,
     name="GenerationConfig",
     model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides=dict(
-        max_new_tokens=128,
-    ),
+    default_overrides={
+        "max_new_tokens": 128,
+    },
 )
 """Configuration parameters for the HuggingFace text generation pipeline."""
 
@@ -153,7 +153,7 @@ def prepare_examples_from_conversations(
             out_input_ids.append(result["input_ids"])
             out_prompt_len.append(len(result["prompt_ids"]))
         # only return columns needed for training; others are discarded via remove_columns below
-        return dict(input_ids=out_input_ids, prompt_len=out_prompt_len)
+        return {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
 
     # TODO: if this map becomes a bottleneck, add batching w/ fast tokenizer, tune num_proc, use cache
     # (worse case scenario, we can switch to a streaming/iterable dataset?)
@@ -168,8 +168,7 @@ def prepare_examples_from_conversations(
     # mapping with list outputs creates nested rows tied to original row; flatten to simple rows
     dataset = dataset.flatten_indices()
     # keep only rows that actually contain tokenized inputs
-    dataset = dataset.filter(lambda row: isinstance(row["input_ids"], list) and len(row["input_ids"]) > 0)
-    return dataset
+    return dataset.filter(lambda row: isinstance(row["input_ids"], list) and len(row["input_ids"]) > 0)
 
 
 class FixedSizePaddingCollatorWithPromptMask:
@@ -238,14 +237,13 @@ class FixedSizePaddingCollatorWithPromptMask:
             attention_masks.append(attention_mask)
             prompt_lengths.append(prompt_len)
             input_lengths.append(input_len)
-        batch = ExampleBatchTensors(
+        return ExampleBatchTensors(
             input_ids=torch.tensor(input_ids_list, dtype=torch.long),
             attention_mask=torch.tensor(attention_masks, dtype=torch.long),
             labels=torch.tensor(labels_list, dtype=torch.long),
             prompt_len=prompt_lengths,
             input_len=input_lengths,
         )
-        return batch
 
 
 class BatchwisePaddingCollator:
@@ -274,7 +272,7 @@ class BatchwisePaddingCollator:
         max_allowed_length: int | None = None,
         keep_extra_fields: list[str] | bool | None = None,
         ignore_index: int = default_ignore_index,
-    ):
+    ) -> None:
         """Initializes the collator."""
         self.max_allowed_length = max_allowed_length
         self.keep_extra_fields = keep_extra_fields or []
@@ -342,7 +340,7 @@ class BatchwisePaddingCollator:
             keep_extra_fields = self.keep_extra_fields
             if not isinstance(keep_extra_fields, list):
                 assert keep_extra_fields is True
-                keep_extra_fields = {k for data in to_batch for k in data.keys()}
+                keep_extra_fields = {key for data in to_batch for key in data}
             metadata = {k: [data[k] for data in to_batch] for k in keep_extra_fields if k not in expected_field_names}
             output.update(metadata)
         return output
@@ -488,7 +486,7 @@ def run_text_generation(
     generated_text_key: str = "prediction",
     generated_tokens_key: str = "generated_tokens",
     verbose: bool = False,
-):
+) -> list[dict[str, typing.Any]]:
     """Generates continuations for each sample in a dataloader and returns decoded texts.
 
     Iterates over dict batches containing ``input_ids``, ``attention_mask``, and ``input_len``,
@@ -559,7 +557,7 @@ def run_text_generation(
                 curr_target_keys = forward_batch_keys
                 if not isinstance(curr_target_keys, list):
                     assert curr_target_keys is True
-                    curr_target_keys = [key for key in batch]  # forward all preexisting fields
+                    curr_target_keys = list(batch)  # forward all preexisting fields
                 assert generated_tokens_key not in curr_target_keys
                 assert generated_text_key not in curr_target_keys
                 metadata = {k: batch[k][sample_idx] for k in curr_target_keys}
