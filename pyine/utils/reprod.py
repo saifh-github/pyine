@@ -431,10 +431,7 @@ def log_configs(
     Returns the list of paths to the saved files.
     """
     assert runtime_config is not None, "missing runtime config"
-    output_dir = pathlib.Path(runtime_config.output_dir).expanduser()
-    output_dir.mkdir(parents=True, exist_ok=True)
     log_extension = get_log_extension_slug(runtime_config, extension_suffix=".json")
-
     reprod_metadata = get_reprod_metadata(  # get a new metadata dict will ALL fields
         include_installed_packages=True,
         with_gpu_info=True,
@@ -444,17 +441,17 @@ def log_configs(
 
     print("reprod metadata:")
     rich.print_json(data=reprod_metadata, indent=2)
-    output_metadata_path = output_dir / f"reprod_metadata{log_extension}"
+    output_metadata_path = runtime_config.output_dir_path / f"reprod_metadata{log_extension}"
     output_metadata_path.write_text(json.dumps(reprod_metadata, indent=2))
     logger.info(f"reprod metadata saved to: {output_metadata_path}")
 
     print("runtime info:")
     rich.print_json(data=runtime_config.model_dump(mode="json"), indent=2)
-    output_runtime_path = output_dir / f"runtime{log_extension}"
+    output_runtime_path = runtime_config.output_dir_path / f"runtime{log_extension}"
     output_runtime_path.write_text(runtime_config.model_dump_json(indent=2))
     logger.info(f"runtime info saved to: {output_runtime_path}")
 
-    output_app_config_path = output_dir / f"config{log_extension}"
+    output_app_config_path = runtime_config.output_dir_path / f"config{log_extension}"
     output_app_config_path.write_text(json.dumps(app_config_dict, indent=2))
     logger.info(f"app config saved to: {output_app_config_path}")
 

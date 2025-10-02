@@ -8,7 +8,7 @@ This app wires together:
 """
 
 import logging
-import pathlib
+import time
 import typing
 
 import datasets
@@ -18,9 +18,8 @@ import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
-import pyine.organisms.datamodules.utils.samples
-import pyine.utils.llm_providers
 import pyine.utils.reprod
+import pyine.utils.timers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
@@ -28,21 +27,55 @@ logger = logging.getLogger(__name__)
 if typing.TYPE_CHECKING:
     import pyine.apps.trainers.hf_trainer_configs
 
-
-def _compute_metrics(
-    eval_pred: transformers.trainer_utils.EvalPrediction,
-    inputs: dict[str, typing.Any] | None,
-    loss: float | None,
-) -> dict[str, float]:
-    # @@@@@@@ TODO do something here? (training metrics)
-    # rely on eval loss for model selection; no extra metrics computed
-    return {}
+#
+# def compute_metrics(eval_pred: transformers.trainer_utils.EvalPrediction) -> Dict[str, float]:
+#     """Compute metrics for evaluation.
+#
+#     Args:
+#         eval_pred: EvalPrediction object containing predictions and labels
+#
+#     Returns:
+#         Dictionary of computed metrics.
+#     """
+#     # @@@@@@@ TODO do something here? (training metrics)
+#     predictions, labels = eval_pred
+#
+#     # For causal language modeling, we typically just use perplexity (based on loss)
+#     # But here's an example of how you might compute other metrics
+#
+#     # Shift predictions and labels for next-token prediction
+#     shift_predictions = predictions[..., :-1, :].contiguous()
+#     shift_labels = labels[..., 1:].contiguous()
+#
+#     # Get predicted token IDs
+#     predicted_ids = np.argmax(shift_predictions, axis=-1)
+#
+#     # Flatten for metric computation (ignore -100 labels)
+#     flat_predictions = predicted_ids.flatten()
+#     flat_labels = shift_labels.flatten()
+#
+#     # Only compute metrics on non-masked tokens
+#     mask = flat_labels != -100
+#     flat_predictions = flat_predictions[mask]
+#     flat_labels = flat_labels[mask]
+#
+#     if len(flat_labels) > 0:
+#         accuracy = accuracy_score(flat_labels, flat_predictions)
+#         f1 = f1_score(flat_labels, flat_predictions, average='macro', zero_division=0)
+#     else:
+#         accuracy = 0.0
+#         f1 = 0.0
+#
+#     return {
+#         "accuracy": accuracy,
+#         "f1": f1,
+#     }
 
 
 def train(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.BaseDataModule,
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> transformers.Trainer:
@@ -59,7 +92,8 @@ def train(
         The instantiated trainer object that can be used for predictions.
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
-
+    if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
+        raise NotImplementedError(f"unsupported datamodule type: {type(datamodule)}")
     train_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -68,7 +102,6 @@ def train(
         for subset_name in config.datamodule_config.train_subset_names
     ]
     train_ds = train_ds[0] if len(train_ds) == 1 else datasets.concatenate_datasets(train_ds)
-
     valid_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -79,7 +112,7 @@ def train(
     valid_ds = valid_ds[0] if len(valid_ds) == 1 else datasets.concatenate_datasets(valid_ds)
 
     # use some of the dataloader workers for dataset.map to parallelize tokenization
-    num_proc = max(1, config.dataloader_num_workers // 2)
+    num_proc = max(1, config.training_args_config.dataloader_num_workers // 2)
     # convert conversation-style rows into flat, tokenized examples for training/valid
     model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
     logger.info(f"effective max_seq_len={model_max_seq_len}")
@@ -98,12 +131,6 @@ def train(
     # the collator pads to fixed length and masks labels for prompt tokens
     collator = pyine.utils.transformers.FixedSizePaddingCollatorWithPromptMask(tokenizer, max_length=model_max_seq_len)
 
-    # disable KV cache during training (unnecessary overhead, + helps avoid compat issues w/ checkpointing)
-    model.config.use_cache = False
-    if config.gradient_checkpointing:
-        logger.info("enabling gradient checkpointing")
-        model.gradient_checkpointing_enable()
-
     training_args_dict = config.training_args_config.model_dump()
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None, "wandb should have been initialized"
@@ -116,19 +143,21 @@ def train(
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=valid_ds,
+        processing_class=tokenizer,
         data_collator=collator,
-        tokenizer=tokenizer,
-        compute_metrics=_compute_metrics,
+        # compute_metrics=_compute_metrics,  # @@@@ TODO: update w/ proper callback
+        # callbacks=[EarlyStoppingCallback()],  # @@@@@  TODO: update w/ proper callback
     )
 
     logger.info("starting training")
-    train_out = trainer.train()
-    logger.info("training finished: %s", train_out)
-    logger.info("saving adapter and tokenizer to %s", config.output_dir)
-    pathlib.Path(config.output_dir).mkdir(parents=True, exist_ok=True)
-    trainer.save_model(config.output_dir)
-    tokenizer.save_pretrained(config.output_dir)
-
+    start_time = time.time()
+    trainer.train(  # type: ignore[reportUnknownMemberType]
+        # resume_from_checkpoint=...,  # @@@@@ TODO: add here if needed?
+    )
+    end_time = time.time()
+    time_delta_seconds = end_time - start_time
+    time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
+    logger.info(f"training finished in {time_delta_str}")
     return trainer
 
 

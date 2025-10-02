@@ -52,11 +52,18 @@ class RuntimeConfig(pydantic.BaseModel):
 
     @pydantic.computed_field
     @property
-    def console_log_path(self) -> str:
+    def output_dir_path(self) -> pathlib.Path:
+        """Path to the run's output directory."""
+        output_dir_path = pathlib.Path(self.output_dir).expanduser()
+        assert output_dir_path.is_dir(), "output run directory should have been auto-created?"
+        return output_dir_path
+
+    @pydantic.computed_field
+    @property
+    def console_log_path(self) -> pathlib.Path:
         """Path to the console log file, located inside the output directory."""
         log_extension = pyine.utils.reprod.get_log_extension_slug(self)
-        output_log_path = pathlib.Path(self.output_dir) / f"console{log_extension}"
-        return str(output_log_path)
+        return self.output_dir_path / f"console{log_extension}"
 
     @pydantic.computed_field
     @property

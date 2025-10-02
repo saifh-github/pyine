@@ -10,7 +10,6 @@ import logging
 import typing
 
 import hydra_zen
-import hydra_zen.typing
 import peft
 import pydantic
 import torch
@@ -83,7 +82,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     ) -> typing.Any:
         """Ensures the lora field is a LoraConfig instance when provided as a dict."""
         if isinstance(data, dict):
-            lora_config = data.get("lora_config")
+            lora_config: typing.Any = data.get("lora_config")
             if isinstance(lora_config, dict) and not isinstance(lora_config, peft.LoraConfig):
                 data["lora_config"] = peft.LoraConfig(**lora_config)
         return data

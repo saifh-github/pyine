@@ -240,6 +240,8 @@ For the development of new experiment configurations, refer to [this README](../
 
 **Run outputs:**
 
+TODO: UPDATE THIS (LIKELY OUTDATED) @@@@@@@@@@@@@
+
 - Hydra snapshots every run under `<PYINE_LOGS_ROOT>/runs/<app>/<exp_name>/<run_name>/`. Expect
   `hydra-config.yaml`, `hydra-overrides.yaml`, `output.log`, and `console.<ts>.<rank>.log` together
   with JSON dumps of the runtime, reproducibility metadata, and resolved configs.

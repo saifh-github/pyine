@@ -10,22 +10,29 @@ import transformers
 
 import pyine.utils.pydantic
 
-TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
-    fn=transformers.TrainingArguments,
-    name="TrainingArgsConfig",
-    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides={
-        # we use some updated defaults (low-impact, QoL stuff)
-        "load_best_model_at_end": True,  # easy to forget, but important! (also force-saves best ckpt)
-        "logging_first_step": True,  # good for plotting/sanity
-        "log_level": "info",  # enable info-level logging for models by default
-        "report_to": "none",  # disable by default, and enable at runtime if needed
-        # we also need to replace some defaults that CANNOT be serialized (factories)
-        "lr_scheduler_kwargs": {},  # same behavior as original default
-        "include_for_metrics": [],  # same behavior as original default
-    },
-)
-"""Configuration parameters for the HuggingFace Trainer."""
+if typing.TYPE_CHECKING:
+
+    class TrainingArgsConfig(pydantic.BaseModel):
+        """Stubbed interface for the HuggingFace Trainer Arguments config class defined below."""
+
+        def __getattr__(self, name: str) -> typing.Any: ...
+else:
+    TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
+        fn=transformers.TrainingArguments,
+        name="TrainingArgsConfig",
+        model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        default_overrides={
+            # we use some updated defaults (low-impact, QoL stuff)
+            "load_best_model_at_end": True,  # easy to forget, but important! (also force-saves best ckpt)
+            "logging_first_step": True,  # good for plotting/sanity
+            "log_level": "info",  # enable info-level logging for models by default
+            "report_to": "none",  # disable by default, and enable at runtime if needed
+            # we also need to replace some defaults that CANNOT be serialized (factories)
+            "lr_scheduler_kwargs": {},  # same behavior as original default
+            "include_for_metrics": [],  # same behavior as original default
+        },
+    )
+    """Configuration parameters for the HuggingFace Trainer."""
 
 GenerationConfig = pyine.utils.pydantic.model_from_callable(
     fn=transformers.GenerationConfig,

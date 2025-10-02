@@ -59,7 +59,7 @@ def prepare_datamodule(
         ]
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
-        wandb_summary.update(summary_stats)  # noqa
+        runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             config.evals_config.define_metrics_for_wandb(
                 wandb_run=runtime.wandb_run,
