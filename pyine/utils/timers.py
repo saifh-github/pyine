@@ -8,33 +8,34 @@ import time
 import types
 import typing
 
-T = typing.TypeVar("T")
+FuncP = typing.ParamSpec("FuncP")
+FuncR = typing.TypeVar("FuncR")
 
 
-@typing.overload
-def timeit(
-    _func: T,
+@typing.overload  # noqa: UP047
+def timeit(  # noqa: UP047
+    _func: typing.Callable[FuncP, FuncR],  # noqa: UP047
     *,
     name: str | None = None,
     logger: logging.Logger | None = None,
-) -> T: ...
+) -> typing.Callable[FuncP, FuncR]: ...
 
 
-@typing.overload
-def timeit(
+@typing.overload  # noqa: UP047
+def timeit(  # noqa: UP047
     _func: None = None,
     *,
     name: str | None = None,
     logger: logging.Logger | None = None,
-) -> typing.Callable[[T], T]: ...
+) -> typing.ContextManager[None]: ...
 
 
-def timeit(
-    _func: T | None = None,
+def timeit(  # noqa: UP047
+    _func: typing.Callable[FuncP, FuncR] | None = None,  # noqa: UP047
     *,
     name: str | None = None,
     logger: logging.Logger | None = None,
-) -> T | typing.Callable[[T], T] | typing.Iterator[None]:
+) -> typing.Callable[FuncP, FuncR] | typing.ContextManager[None]:
     """Measures execution time of a function (via decoration) or block (via context-manager).
 
     For blocks, use as a context manager:
@@ -67,21 +68,19 @@ def timeit(
             else:
                 print(msg)
 
-    def _decorate(fn: T) -> T:
+    def _decorate(fn: typing.Callable[FuncP, FuncR]) -> typing.Callable[FuncP, FuncR]:
         lbl = name or fn.__name__
 
         @functools.wraps(fn)
-        def _wrapped(*args, **kwargs):
+        def _wrapped(*args: FuncP.args, **kwargs: FuncP.kwargs) -> FuncR:
             with _ctx(lbl):
                 return fn(*args, **kwargs)
 
-        return _wrapped  # type: ignore
+        return _wrapped
 
-    # if used as @timeit with no args:
     if callable(_func):
         return _decorate(_func)
 
-    # otherwise, return decorator or context-manager factory
     if _func is None:
         return _ctx(name or "block")
 
@@ -115,7 +114,7 @@ class TimeLimit:
         seconds: float,
         timeout_message: str | None = None,
         on_timeout: typing.Callable[[], typing.Any] | None = None,
-    ):
+    ) -> None:
         """
         Initializes the TimeLimit context manager.
 

@@ -16,8 +16,8 @@ def get_default_log_file_path() -> pathlib.Path:
 def setup_logging(
     level: int | str = logging.INFO,
     log_to_file: bool = False,
-    log_path: (pathlib.Path | str | None) = None,  # `None` = auto-decide, if log_to_file = True
-):
+    log_path: pathlib.Path | str | None = None,  # `None` = auto-decide, if log_to_file = True
+) -> None:
     """Configures logging for the entire framework.
 
     This function should be called ONCE at the very beginning of your application's entry point

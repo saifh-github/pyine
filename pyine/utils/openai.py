@@ -58,7 +58,7 @@ def write_dataset_to_jsonl(
             msgs = convert_messages_to_openai(sample["messages"])  # drop every other field except messages
         else:
             msgs = convert_messages_to_openai(sample)
-        assert all([isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs])
+        assert all(isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs)
         samples_str.append(orjson.dumps({"messages": msgs}).decode("utf-8"))
     if enforce_openai_min_dataset_size and len(samples_str) < 10:
         raise ValueError(f"dataset must have at least 10 samples, got {len(samples_str)}")
@@ -705,7 +705,7 @@ class OpenAIFineTuner:
         model_id: str,
         system_prompt: str | None,
         user_prompt: str,
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> str:
         """Send a simple chat completion request and return the assistant reply.
 

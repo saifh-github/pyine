@@ -10,6 +10,7 @@ numeric-aware text comparison for printed outputs.
 """
 
 import ast
+import contextlib
 import dataclasses
 import math
 import re
@@ -335,7 +336,7 @@ def _compare_numbers(a: int | float, b: int | float, opt: CompareOptions) -> Com
         if math.isinf(a) or math.isinf(b):
             return _ok() if (a == b) else _fail("Infinity differs")
     abs_tol, rel_tol = opt.abs_tol, opt.rel_tol
-    try:
+    with contextlib.suppress(Exception):
         if abs_tol == "auto" or rel_tol == "auto":
             a_rtol, a_atol = pyine.utils.portability.estimate_tolerance(str(a))
             b_rtol, b_atol = pyine.utils.portability.estimate_tolerance(str(b))
@@ -345,8 +346,6 @@ def _compare_numbers(a: int | float, b: int | float, opt: CompareOptions) -> Com
                 rel_tol = max(a_rtol, b_rtol)
         if math.isclose(float(a), float(b), rel_tol=rel_tol, abs_tol=abs_tol):
             return _ok()
-    except Exception:
-        pass
     return _fail(f"Numbers differ: {a} != {b} (rel_tol={rel_tol}, abs_tol={abs_tol})")
 
 

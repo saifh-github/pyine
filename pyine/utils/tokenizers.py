@@ -1,4 +1,5 @@
 import functools
+import typing
 
 import tiktoken
 import transformers

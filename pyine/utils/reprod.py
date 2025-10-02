@@ -130,7 +130,7 @@ def get_installed_packages() -> list[str]:
     return sorted(pkgs, key=str.casefold)  # noqa
 
 
-def get_params_hash(*args, **kwargs) -> str:
+def get_params_hash(*args: typing.Any, **kwargs: typing.Any) -> str:
     """Computes and returns the hash (md5 checksum) of a given set of parameters.
 
     Args:
@@ -145,7 +145,7 @@ def get_params_hash(*args, **kwargs) -> str:
 
 
 def compute_hash(
-    obj: pathlib.Path | typing.AnyStr | bytes,
+    obj: pathlib.Path | str | bytes,
     algorithm: str = "sha256",
     chunk_size: int = 8192,
     raise_on_error: bool = True,

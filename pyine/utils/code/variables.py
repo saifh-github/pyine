@@ -130,7 +130,7 @@ class _DefinitionCounter(ast.NodeVisitor):
         self._add_target(node.target)
         self.generic_visit(node)
 
-    visit_AsyncFor = visit_For
+    visit_AsyncFor = visit_For  # noqa: N815 (async variant mirrors visit_For)
 
     def visit_With(
         self,
@@ -141,7 +141,7 @@ class _DefinitionCounter(ast.NodeVisitor):
                 self._add_target(item.optional_vars)
         self.generic_visit(node)
 
-    visit_AsyncWith = visit_With
+    visit_AsyncWith = visit_With  # noqa: N815 (async variant mirrors visit_With)
 
     def visit_ExceptHandler(
         self,
@@ -207,7 +207,7 @@ class _DefinitionCounter(ast.NodeVisitor):
         self.generic_visit(node)
         self._nesting -= 1
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_AsyncFunctionDef = visit_FunctionDef  # noqa: N815 (async variant mirrors visit_FunctionDef)
 
     def visit_ClassDef(
         self,

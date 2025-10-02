@@ -1,3 +1,4 @@
+import contextlib
 import getpass
 import logging
 import os
@@ -94,10 +95,8 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     # create per-user subdir to avoid collisions on multi-user machines
     tmpdir = pathlib.Path(tmpdir_base) / f"pyine-{get_username()}"
     tmpdir.mkdir(mode=mode, exist_ok=True)
-    try:
+    with contextlib.suppress(PermissionError):
         tmpdir.chmod(mode)
-    except PermissionError:
-        pass  # ignore if filesystem/OS doesn't support chmod
     # final sanity check
     if not os.access(str(tmpdir), os.W_OK):
         raise PermissionError(f"temporary dir not writable: {tmpdir_base}")
@@ -116,8 +115,7 @@ def get_username() -> str:
 
     If the username cannot be determined, returns 'unknown'.
     """
-    username = getpass.getuser() or "unknown"
-    return username
+    return getpass.getuser() or "unknown"
 
 
 def find_dotenv_file(start: str | pathlib.Path | None = None) -> pathlib.Path | None:
@@ -165,8 +163,7 @@ def get_relative_path_to_root(
     if project_root_path is None:
         project_root_path = get_project_root_path()
     project_root_path = pathlib.Path(project_root_path).resolve()
-    relative_path = str(module_path.relative_to(project_root_path))
-    return relative_path
+    return str(module_path.relative_to(project_root_path))
 
 
 def get_path_size(path: str | pathlib.Path) -> int:
@@ -229,5 +226,4 @@ def slugify(text: str) -> str:
     """Convert text to a filesystem‐safe slug (lowercase, alnum, hyphens)."""
     text = text.lower()
     text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_-]+", "-", text).strip("-")
-    return text
+    return re.sub(r"[\s_-]+", "-", text).strip("-")

@@ -26,7 +26,6 @@ __all__ = [
 T = typing.TypeVar("T")
 P = typing.ParamSpec("P")
 MaybeAsyncCallable = typing.Callable[P, typing.Awaitable[T]] | typing.Callable[P, T]
-
 # module-level shared executors (lazy-initialized)
 _shared_proc_pool: concurrent.futures.ProcessPoolExecutor | None = None
 _shared_thread_pool: concurrent.futures.ThreadPoolExecutor | None = None
@@ -120,12 +119,12 @@ def get_shared_executor(
 
 
 def run_in_parallel(
-    callables: list[typing.Callable[[], T]],
+    callables: list[typing.Callable[[], typing.Any]],
     use_processes: bool = True,
     max_workers: int | None = None,
     executor: concurrent.futures.Executor | None = None,
     use_shared_pool: bool = False,
-) -> tuple[list[T | None], list[BaseException | None]]:
+) -> tuple[list[typing.Any | None], list[BaseException | None]]:
     """Execute a list of zero-arg callables in parallel using a thread/worker pool and collect results.
 
     This helper can:
@@ -153,7 +152,7 @@ def run_in_parallel(
         - If you need arguments, wrap your function with a lambda/partial that binds them.
         - With process pools, tasks must be picklable and defined at module top-level.
     """
-    results: list[T | None] = [None] * len(callables)
+    results: list[typing.Any | None] = [None] * len(callables)
     errors: list[BaseException | None] = [None] * len(callables)
 
     # pick an executor according to options
@@ -163,16 +162,12 @@ def run_in_parallel(
     elif use_shared_pool:
         exec_inst = get_shared_executor(use_processes=use_processes)
     else:
-        exec_cls: type[concurrent.futures.Executor]
-        if use_processes:
-            exec_cls = concurrent.futures.ProcessPoolExecutor
-        else:
-            exec_cls = concurrent.futures.ThreadPoolExecutor
+        exec_cls = concurrent.futures.ProcessPoolExecutor if use_processes else concurrent.futures.ThreadPoolExecutor
         local_executor = exec_cls(max_workers=max_workers)
         exec_inst = local_executor
 
     try:
-        future_to_idx: dict[concurrent.futures.Future[T], int] = {}
+        future_to_idx: dict[concurrent.futures.Future[typing.Any], int] = {}
         for idx, fn in enumerate(callables):
             future = exec_inst.submit(fn)
             future_to_idx[future] = idx
@@ -222,12 +217,12 @@ class Job:
 
 
 @dataclasses.dataclass(frozen=True)
-class JobResult(typing.Generic[T]):
+class JobResult:
     """Per-job outcome (aligned with the input order)."""
 
     index: int
     ok: bool
-    value: T | None = None
+    value: typing.Any | None = None
     error: BaseException | None = None
     job_id: typing.Any | None = None
 
@@ -237,7 +232,7 @@ async def run_independent(
     *,
     max_inflight: int = 32,
     timeout: float | None = 60.0,
-) -> list[JobResult[T]]:
+) -> list[JobResult]:
     """Execute many independent runnables concurrently (compatible with langchain).
 
     - Uses an asyncio.Semaphore to cap total in-flight requests (across all chains/models).
@@ -263,9 +258,7 @@ async def run_independent(
           underlying HTTP request is aborted promptly depends on the client.
     """
     sem = asyncio.Semaphore(max_inflight)
-    results: list[JobResult[T]] = [
-        JobResult(index=job_idx, ok=False, job_id=job.id) for job_idx, job in enumerate(jobs)
-    ]
+    results: list[JobResult] = [JobResult(index=job_idx, ok=False, job_id=job.id) for job_idx, job in enumerate(jobs)]
 
     async def run_one(i: int, job: Job) -> None:
         async with sem:
@@ -335,7 +328,7 @@ async def run_with_sliding_window(
         max_workers: Maximum number of workers in the thread pool executor. IF None, uses the number of CPUs.
         max_in_flight_jobs: Maximum number of in-flight jobs.
     """
-    in_flight: dict[concurrent.futures.Future, InputItemType] = dict()
+    in_flight: dict[concurrent.futures.Future, InputItemType] = {}
     completed: list[InputItemType] = []
     iter_items = iter(input_items)
     progress_callback = progress_callback or (lambda x, y: None)

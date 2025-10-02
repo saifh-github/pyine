@@ -40,7 +40,12 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
         """Initialize the handler."""
         self.events: list[CapturedEvent] = []
 
-    def on_llm_start(self, serialized: dict, prompts: list[str], **kwargs) -> None:
+    def on_llm_start(
+        self,
+        serialized: dict,
+        prompts: list[str],
+        **kwargs: typing.Any,
+    ) -> None:
         """Called before the LLM starts."""
         self.events.append(
             CapturedEvent(
@@ -51,7 +56,11 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
-    def on_llm_end(self, response: langchain_core.outputs.LLMResult, **kwargs) -> None:
+    def on_llm_end(
+        self,
+        response: langchain_core.outputs.LLMResult,
+        **kwargs: typing.Any,
+    ) -> None:
         """Called after the LLM returns."""
         self.events.append(
             CapturedEvent(
@@ -61,7 +70,11 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
-    def on_llm_error(self, error: BaseException, **kwargs) -> None:
+    def on_llm_error(
+        self,
+        error: BaseException,
+        **kwargs: typing.Any,
+    ) -> None:
         """Called when the LLM raises an error."""
         self.events.append(
             CapturedEvent(
@@ -81,10 +94,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
 
 def is_invocable_chain(obj: typing.Any) -> bool:
     """Returns whether the given object is an invocable chain, i.e. it supports 'invoke'."""
-    if (
+    return bool(
         isinstance(obj, langchain_core.runnables.Runnable)
-        or hasattr(obj, "invoke")
-        and callable(getattr(obj, "invoke", None))
-    ):
-        return True
-    return False
+        or (hasattr(obj, "invoke") and callable(getattr(obj, "invoke", None)))
+    )

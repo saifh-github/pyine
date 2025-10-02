@@ -61,9 +61,8 @@ def get_portable_representation(
         return s[: max_length - 3] + "..."
 
     def _clean_lingering_addresses_and_paths(s: str) -> str:
-        s = re.sub(r" at 0x[0-9a-f]+", "", s)  # remove pointers
-        s = re.sub(r" from '.*?'", "", s)  # remove file paths
-        return s
+        cleaned = re.sub(r" at 0x[0-9a-f]+", "", s)  # remove pointers
+        return re.sub(r" from '.*?'", "", cleaned)  # remove file paths
 
     base_types = (int, float, bool, str, bytes, list, tuple, set, dict, BaseException)
     if isinstance(obj, base_types) or obj is None:
@@ -240,7 +239,7 @@ def get_portable_filename(filename: str) -> str:
 def get_portable_function_name(callabl: typing.Callable) -> str:
     """Return a stable, address-free string for a callable."""
 
-    def _qual(module, qualname):
+    def _qual(module: str | None, qualname: str) -> str:
         if module and module != "builtins":
             return f"{module}.{qualname}"
         return qualname
@@ -355,10 +354,7 @@ def estimate_tolerance(value_str: str) -> tuple[float, float]:
             decimal_places = 0
     float_val = float(value_str)
     magnitude = abs(float_val)
-    if decimal_places == 0:
-        atol = 0.0
-    else:
-        atol = 0.5 * (10 ** (-decimal_places))
+    atol = 0.0 if decimal_places == 0 else 0.5 * (10 ** (-decimal_places))
     if magnitude < 1e-10:
         rtol = 1e-9
     elif magnitude < 1e-6:
@@ -407,10 +403,7 @@ def get_fully_qualified_name(
     """Get the fully qualified name of a type, module, or callable."""
     if isinstance(obj, types.ModuleType):
         spec = getattr(obj, "__spec__", None)
-        if spec and getattr(spec, "name", None):
-            mod_name = spec.name
-        else:
-            mod_name = getattr(obj, "__name__", None)
+        mod_name = spec.name if spec and getattr(spec, "name", None) else getattr(obj, "__name__", None)
         if mod_name is None:
             mod_name = "<module>"
         return mod_name
@@ -504,7 +497,7 @@ def parse_indices_spec(
     return sorted(indices)
 
 
-def _path_representer(dumper, data: pathlib.Path):
+def _path_representer(dumper: yaml.Dumper, data: pathlib.Path) -> yaml.Node:
     """Helper function for yaml.SafeDumper and yaml.Dumper to represent pathlib.Path objects."""
     return dumper.represent_scalar("tag:yaml.org,2002:str", data.as_posix())  # keeps OS-agnostic output
 
@@ -548,7 +541,7 @@ def render_config(
     table.box = rich.box.SIMPLE_HEAD
     table.pad_edge = False
     table.padding = (0, 1)
-    wrap_opts = dict(no_wrap=True)  # we handle wrapping w/ a custom class when creating rows
+    wrap_opts = {"no_wrap": True}  # we handle wrapping w/ a custom class when creating rows
     if show_field_descriptions:
         table.add_column("FIELD", style="bold", ratio=10, min_width=10, **wrap_opts)
         table.add_column("TYPE", ratio=20, min_width=10, **wrap_opts)
@@ -561,7 +554,7 @@ def render_config(
 
     # --------------- helper functions ---------------
 
-    def _table_add_row(*args) -> None:
+    def _table_add_row(*args: typing.Any) -> None:
         args = [_RichFoldIndicator(arg) for arg in args]
         table.add_row(*args)
 

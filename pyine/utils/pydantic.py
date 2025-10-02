@@ -205,7 +205,7 @@ def load_yaml_with_pydantic_support(
         raise FileNotFoundError(f"YAML file not found: {file_path}")
     try:
         with open(file_path, encoding="utf-8") as file:
-            return yaml.load(file, Loader=PydanticYAMLLoader)
+            return yaml.load(file, Loader=PydanticYAMLLoader)  # noqa: S506 (custom loader required)
     except yaml.YAMLError as error:
         raise yaml.YAMLError(f"failed to parse YAML file '{file_path}': {error}") from error
 
@@ -243,7 +243,7 @@ def dump_yaml_with_pydantic_support(
 
 
 def merge_configs(
-    *configs,
+    *configs: typing.Any,
 ) -> dict[str, typing.Any]:
     """Merges multiple config dictionaries hierarchically, ordered as base to override(s)."""
 
@@ -266,14 +266,7 @@ def merge_configs(
     return omegaconf.OmegaConf.to_container(output_config, resolve=False)
 
 
-BaseT = typing.TypeVar("BaseT")
-"""Base type for classes that can be resolved and instantiated from pydantic configs."""
-
-
-class ClassImportSpec(
-    pydantic.BaseModel,
-    typing.Generic[BaseT],
-):
+class ClassImportSpec(pydantic.BaseModel):
     """Generic configuration to import a class by path and instantiate it."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
@@ -307,7 +300,11 @@ class ClassImportSpec(
         ),
     ] = None
 
-    def instantiate(self, *args, **extra_kwargs) -> BaseT:
+    def instantiate(
+        self,
+        *args: typing.Any,
+        **extra_kwargs: typing.Any,
+    ) -> typing.Any:
         """Instantiates the resolved class with the parameters held inside the config."""
         assert self._resolved_class is not None, "model must be validated before use"
         constr_params = self.get_params_dict()
@@ -324,7 +321,10 @@ class ClassImportSpec(
         """Returns the other non-params fields inside the config as a dictionary."""
         return {k: v for k, v in self.model_dump().items() if k != "params"}
 
-    def get_updated_spec(self, **extra_params) -> "ClassImportSpec[BaseT]":
+    def get_updated_spec(
+        self,
+        **extra_params: typing.Any,
+    ) -> "ClassImportSpec":
         """Returns a new spec with the given extra params kwargs merged in.
 
         NOTE: the merge is done using OmegaConf to hierarchically merge the two dicts.
@@ -347,7 +347,7 @@ class ClassImportSpec(
         return None
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "ClassImportSpec[BaseT]":
+    def _validate_and_resolve(self) -> "ClassImportSpec":
         """Validates and resolves the class and base class paths."""
         resolved_class = pyine.utils.portability.import_from_dotted_path(self.class_path)
         if not isinstance(resolved_class, type) or not callable(resolved_class):
@@ -371,10 +371,7 @@ class ClassImportSpec(
 
     def _validate_params_against_constructor(self, cls: type) -> None:
         """Validates that the provided params match the constructor signature of the class."""
-        if self.params_key is None:
-            params = self.get_params_dict()
-        else:
-            params = {self.params_key: self.get_params_dict()}
+        params = self.get_params_dict() if self.params_key is None else {self.params_key: self.get_params_dict()}
         # check that all provided params exist in the target constructor
         sig = inspect.signature(cls)
         invalid_params = set(params) - set(sig.parameters)

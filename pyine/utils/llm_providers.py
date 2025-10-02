@@ -49,7 +49,7 @@ def get_model_from_provider(
     provider: SupportedProviderType,
     rate_limiter_config: dict[str, typing.Any] | None = None,
     with_retry_config: dict[str, typing.Any] | None = None,
-    **model_kwargs,  # will be forwarded to the chat model constructor
+    **model_kwargs: typing.Any,  # will be forwarded to the chat model constructor
 ) -> langchain_core.language_models.BaseLanguageModel:
     """Get a LangChain language model instance from a provider following the OpenAI-style API.
 
