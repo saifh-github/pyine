@@ -1,4 +1,5 @@
 import json
+import typing
 
 import pytest
 
@@ -6,23 +7,29 @@ import pyine.data.taco.dataset_reader as taco_reader
 
 
 class FakeSubset:
-    def __init__(self, samples):
+    def __init__(
+        self,
+        samples: list[dict[str, str]],
+    ) -> None:
         self._samples = samples
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._samples)
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self,
+        idx: int,
+    ) -> dict[str, str]:
         return self._samples[idx]
 
 
 def make_valid_sample(
-    solutions=None,
-    input_output=None,
-    raw_tags=None,
-    tags=None,
-    skill_types=None,
-):
+    solutions: list[str] | None = None,
+    input_output: dict[str, typing.Any] | None = None,
+    raw_tags: list[str] | None = None,
+    tags: list[str] | None = None,
+    skill_types: list[str] | None = None,
+) -> dict[str, str]:
     if solutions is None:
         solutions = ["print('hi')", "x=1"]
     if input_output is None:
@@ -47,16 +54,26 @@ def make_valid_sample(
 
 
 @pytest.fixture(autouse=True)
-def patch_tokenizer(monkeypatch):
+def patch_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Tok:
-        def encode(self, s: str):
+        def encode(
+            self,
+            s: str,
+        ) -> list[str]:
             return list(s)  # token count == len(s)
 
     monkeypatch.setattr(taco_reader.tiktoken, "encoding_for_model", lambda name: _Tok())
 
 
-def patch_datasets(monkeypatch, train_samples, test_samples):
-    def _fake_load_dataset(name, split):
+def patch_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+    train_samples: list[dict[str, str]],
+    test_samples: list[dict[str, str]],
+) -> None:
+    def _fake_load_dataset(
+        name: str,
+        split: str,
+    ) -> FakeSubset:
         assert name == "BAAI/TACO"
         if split == "train":
             return FakeSubset(train_samples)
@@ -67,7 +84,9 @@ def patch_datasets(monkeypatch, train_samples, test_samples):
     monkeypatch.setattr(taco_reader.hf_datasets, "load_dataset", _fake_load_dataset)
 
 
-def test_len_and_getitem_happy_path(monkeypatch):
+def test_len_and_getitem_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     train = [make_valid_sample()]
     test = [make_valid_sample()]
     patch_datasets(monkeypatch, train, test)
@@ -80,7 +99,9 @@ def test_len_and_getitem_happy_path(monkeypatch):
     assert isinstance(s0["raw_tags"], list) and isinstance(s0["tags"], list) and isinstance(s0["skill_types"], list)
 
 
-def test_getitem_solutions_json_error(monkeypatch):
+def test_getitem_solutions_json_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample()
     bad["solutions"] = "[1,2"  # invalid JSON
     patch_datasets(monkeypatch, [bad], [])
@@ -94,7 +115,9 @@ def test_getitem_solutions_json_error(monkeypatch):
     assert "is broken" in str(ei2.value)
 
 
-def test_getitem_empty_solutions_error(monkeypatch):
+def test_getitem_empty_solutions_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample(solutions=[])
     patch_datasets(monkeypatch, [bad], [])
     reader = taco_reader.DatasetReader()
@@ -103,7 +126,9 @@ def test_getitem_empty_solutions_error(monkeypatch):
     assert "no solution" in str(ei.value)
 
 
-def test_getitem_input_output_json_error(monkeypatch):
+def test_getitem_input_output_json_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample()
     bad["input_output"] = "{"  # invalid JSON
     patch_datasets(monkeypatch, [bad], [])
@@ -113,7 +138,9 @@ def test_getitem_input_output_json_error(monkeypatch):
     assert "cannot parse input_output JSON" in str(ei.value)
 
 
-def test_getitem_invalid_structure(monkeypatch):
+def test_getitem_invalid_structure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample(
         input_output={"inputs": [1, 2], "outputs": [3]},
     )
@@ -124,7 +151,9 @@ def test_getitem_invalid_structure(monkeypatch):
     assert "invalid input_output structure" in str(ei.value)
 
 
-def test_getitem_invalid_types(monkeypatch):
+def test_getitem_invalid_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # force type validation failure
     monkeypatch.setattr(taco_reader.DatasetReader, "_validate_types", lambda self, v: False)
     bad = make_valid_sample()
@@ -135,7 +164,9 @@ def test_getitem_invalid_types(monkeypatch):
     assert "invalid types in input_output" in str(ei.value)
 
 
-def test_getitem_invalid_fn_name(monkeypatch):
+def test_getitem_invalid_fn_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample(input_output={"inputs": [1], "outputs": [1], "fn_name": ""})
     patch_datasets(monkeypatch, [bad], [])
     reader = taco_reader.DatasetReader()
@@ -144,7 +175,9 @@ def test_getitem_invalid_fn_name(monkeypatch):
     assert "invalid fn_name" in str(ei.value)
 
 
-def test_getitem_ast_parse_error(monkeypatch):
+def test_getitem_ast_parse_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = make_valid_sample()
     bad["raw_tags"] = "not a list"  # literal_eval will fail
     patch_datasets(monkeypatch, [bad], [])
@@ -154,7 +187,9 @@ def test_getitem_ast_parse_error(monkeypatch):
     assert "cannot parse raw_tags" in str(ei.value)
 
 
-def test_get_broken_indices(monkeypatch):
+def test_get_broken_indices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     good = make_valid_sample()
     broken = make_valid_sample()
     broken["solutions"] = "[1,2"  # invalid JSON
@@ -165,7 +200,9 @@ def test_get_broken_indices(monkeypatch):
     assert 1 in broken_idxs
 
 
-def test_get_statistics_with_validation(monkeypatch):
+def test_get_statistics_with_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # two samples; one will have a solution filtered out by validation
     s1 = make_valid_sample(solutions=["aa", "bbb"], raw_tags=["a", "b"], tags=["x"], skill_types=["s1"])
     s2 = make_valid_sample(solutions=["cccc"], raw_tags=["a"], tags=["y"], skill_types=["s2"])
@@ -173,7 +210,7 @@ def test_get_statistics_with_validation(monkeypatch):
     reader = taco_reader.DatasetReader()
 
     # mock validate_code: reject strings length 3, accept others
-    def _mock_validate_code(code):
+    def _mock_validate_code(code: str) -> None:
         if len(code) == 3:
             raise AssertionError("bad code")
 

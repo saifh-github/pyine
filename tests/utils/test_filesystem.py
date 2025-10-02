@@ -7,7 +7,10 @@ import pytest
 import pyine.utils.filesystem as fs
 
 
-def test_get_project_root_path_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+def test_get_project_root_path_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     monkeypatch.setenv(fs.PROJECT_ROOT_ENV_VAR, str(tmp_path))
     assert fs.get_project_root_path() == tmp_path.resolve()
 
@@ -25,7 +28,10 @@ def test_get_project_root_path_defaults_to_package_parent(
     assert fs.get_project_root_path() == expected_root
 
 
-def test_get_data_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+def test_get_data_root_path_env_and_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     # env override
     custom = tmp_path / "data_root"
     monkeypatch.setenv(fs.DATA_ROOT_ENV_VAR, str(custom))
@@ -37,7 +43,10 @@ def test_get_data_root_path_env_and_default(monkeypatch: pytest.MonkeyPatch, tmp
     assert fs.get_data_root_path() == tmp_path / "data"
 
 
-def test_get_tmp_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+def test_get_tmp_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     # 1) TMP_DIR takes precedence
     d1 = tmp_path / "tmp_dir_precedence"
     d1.mkdir()
@@ -100,7 +109,10 @@ def test_get_username(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fs.get_username() == "unknown"
 
 
-def test_find_dotenv_file(tmp_path, monkeypatch):
+def test_find_dotenv_file(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proj = tmp_path / "proj"
     sub = proj / "app" / "sub"
     sub.mkdir(parents=True)
@@ -120,7 +132,11 @@ def test_find_dotenv_file(tmp_path, monkeypatch):
     # 2) if python-dotenv is available and start == CWD, delegate to it
     dummy = types.ModuleType("dotenv")
 
-    def _fake_find_dotenv(filename=".env", usecwd=True, raise_error_if_not_found=False):
+    def _fake_find_dotenv(
+        filename: str = ".env",
+        usecwd: bool = True,
+        raise_error_if_not_found: bool = False,
+    ) -> str:
         p = pathlib.Path.cwd() / filename
         return str(p) if p.exists() else ""
 
@@ -141,14 +157,18 @@ def test_find_dotenv_file(tmp_path, monkeypatch):
     assert fs.find_dotenv_file(start=empty) is None
 
 
-def test_get_relative_path_to_root(tmp_path: pathlib.Path):
+def test_get_relative_path_to_root(
+    tmp_path: pathlib.Path,
+) -> None:
     proj = tmp_path
     module_path = proj / "src" / "pkg" / "mod.py"
     rel = fs.get_relative_path_to_root(module_path, proj)
     assert rel == str(pathlib.Path("src") / "pkg" / "mod.py")
 
 
-def test_get_path_size_file_and_dir(tmp_path: pathlib.Path):
+def test_get_path_size_file_and_dir(
+    tmp_path: pathlib.Path,
+) -> None:
     f1 = tmp_path / "a.txt"
     f1.write_text("hello", encoding="utf-8")  # 5 bytes
     sub = tmp_path / "sub"
@@ -161,14 +181,14 @@ def test_get_path_size_file_and_dir(tmp_path: pathlib.Path):
     assert total >= 15  # at least the two files' bytes
 
 
-def test_get_human_readable_size_high_units():
+def test_get_human_readable_size_high_units() -> None:
     # 1024**7 should fall through to 'Ei' per implementation
     s = fs.get_human_readable_size(1024**7)
     assert s.endswith("EiB")
     assert s.startswith("1024.0")
 
 
-def test_slugify():
+def test_slugify() -> None:
     assert fs.slugify("Hello World") == "hello-world"
     assert fs.slugify("Hello_World") == "hello-world"
     assert fs.slugify("Hello  World") == "hello-world"

@@ -20,7 +20,7 @@ import tests.env_checks
     tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
-def test_code_exec_experiment_config_TACO_latest_20s_eval_only(
+def test_code_exec_experiment_config_taco_latest_20s_eval_only(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

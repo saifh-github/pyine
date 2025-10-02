@@ -1,5 +1,7 @@
 import json
+import pathlib
 import types
+import typing
 
 import pytest
 
@@ -34,7 +36,7 @@ class _RetryChain:
 @pytest.mark.asyncio
 async def test_reprocess_code_samples_handles_retries_and_writes_outputs(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: pathlib.Path,
 ) -> None:
     output_root = tmp_path / "outputs"
     dataset_entries = [
@@ -59,14 +61,16 @@ async def test_reprocess_code_samples_handles_retries_and_writes_outputs(
     chain = _RetryChain()
     sleep_calls: list[float] = []
 
-    def fake_get_model_from_provider(**_kwargs):
+    def fake_get_model_from_provider(
+        **_kwargs: typing.Any,
+    ) -> object:
         return object()
 
     def fake_get_prompt_template(_name: str) -> str:
         return "{code}"
 
     def fake_get_prompt_chain(
-        _model,
+        _model: typing.Any,
         _name: str,
     ) -> _RetryChain:
         return chain
@@ -137,7 +141,7 @@ async def test_reprocess_code_samples_handles_retries_and_writes_outputs(
 @pytest.mark.asyncio
 async def test_reprocess_code_samples_enforces_token_cap(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: pathlib.Path,
 ) -> None:
     class _CountingTokenizer:
         def encode(
@@ -156,10 +160,16 @@ async def test_reprocess_code_samples_enforces_token_cap(
         ) -> dict:
             return {"solutions": ["raise ValueError"]}
 
-    async def _noop_invoke(*_args, **_kwargs):
+    async def _noop_invoke(
+        *_args: typing.Any,
+        **_kwargs: typing.Any,
+    ) -> None:
         return None
 
-    async def _async_noop(*_args, **_kwargs):
+    async def _async_noop(
+        *_args: typing.Any,
+        **_kwargs: typing.Any,
+    ) -> None:
         return None
 
     monkeypatch.setattr(

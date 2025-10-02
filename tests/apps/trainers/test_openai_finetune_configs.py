@@ -1,4 +1,5 @@
 import pathlib
+import typing
 
 import hydra_zen
 import pytest
@@ -20,10 +21,10 @@ import tests.env_checks as env_checks
     env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
-def test_code_exec_experiment_config_TACO_latest_20s_eval_only(
+def test_code_exec_experiment_config_taco_latest_20s_eval_only(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    clear_hydra_config_store,
+    clear_hydra_config_store: typing.Any,
 ) -> None:
     """End-to-end exercise of main() using the TACO dataset and a max sample count of 5."""
     monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
@@ -57,10 +58,10 @@ def test_code_exec_experiment_config_TACO_latest_20s_eval_only(
     env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check sample generation",
 )
-def test_code_exec_experiment_config_TACO_latest(
+def test_code_exec_experiment_config_taco_latest(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    clear_hydra_config_store,
+    clear_hydra_config_store: typing.Any,
 ) -> None:
     """End-to-end exercise of main() using the TACO dataset and a max sample count of 5."""
     monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)

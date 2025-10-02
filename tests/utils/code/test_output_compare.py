@@ -1,7 +1,13 @@
+import typing
+
 import pyine.utils.code.output_compare
 
 
-def eq(a, b, **opts):
+def eq(
+    a: typing.Any,
+    b: typing.Any,
+    **opts: typing.Any,
+) -> bool:
     return pyine.utils.code.output_compare.compare(
         a,
         b,
@@ -9,16 +15,20 @@ def eq(a, b, **opts):
     ).equal
 
 
-def neq(a, b, **opts):
-    r = pyine.utils.code.output_compare.compare(
+def neq(
+    a: typing.Any,
+    b: typing.Any,
+    **opts: typing.Any,
+) -> tuple[bool, pyine.utils.code.output_compare.CompareResult]:
+    result = pyine.utils.code.output_compare.compare(
         a,
         b,
         pyine.utils.code.output_compare.CompareOptions(**opts),
     )
-    return not r.equal, r
+    return not result.equal, result
 
 
-def test_get_default_options():
+def test_get_default_options() -> None:
     opts = pyine.utils.code.output_compare.get_options_for_code_exec_outputs()
     assert isinstance(opts, pyine.utils.code.output_compare.CompareOptions)
     assert eq("123", "123", **opts.model_dump())
@@ -27,27 +37,27 @@ def test_get_default_options():
 # ---------------- numbers ----------------
 
 
-def test_numbers_exact_int():
+def test_numbers_exact_int() -> None:
     assert eq(3, 3)
 
 
-def test_numbers_float_with_tol():
+def test_numbers_float_with_tol() -> None:
     assert eq(0.3, 0.1 + 0.2, rel_tol=1e-12, abs_tol=0.0)
 
 
-def test_numbers_float_not_close():
+def test_numbers_float_not_close() -> None:
     assert not eq(1.0, 1.01, rel_tol=1e-4, abs_tol=0.0)
 
 
-def test_nan_policy_equal():
+def test_nan_policy_equal() -> None:
     assert eq(float("nan"), float("nan"), nan_equal=True)
 
 
-def test_nan_policy_not_equal_when_disabled():
+def test_nan_policy_not_equal_when_disabled() -> None:
     assert not eq(float("nan"), float("nan"), nan_equal=False)
 
 
-def test_inf_equal():
+def test_inf_equal() -> None:
     assert eq(float("inf"), float("inf"))
     assert eq(float("-inf"), float("-inf"))
     assert not eq(float("inf"), float("-inf"))
@@ -56,30 +66,30 @@ def test_inf_equal():
 # ---------------- literal strings -> structures ----------------
 
 
-def test_literal_numbers_from_str():
+def test_literal_numbers_from_str() -> None:
     assert eq("3", 3)
     assert eq("3.14", 3.14, rel_tol=1e-3)
 
 
-def test_literal_list_equal():
+def test_literal_list_equal() -> None:
     assert eq("[1, 2, 3]", [1, 2, 3])
 
 
-def test_literal_tuple_vs_tuple():
+def test_literal_tuple_vs_tuple() -> None:
     assert eq("(1, 2)", (1, 2))
 
 
-def test_literal_set_order_irrelevant():
+def test_literal_set_order_irrelevant() -> None:
     assert eq("{1, 2, 3}", {3, 2, 1})
 
 
-def test_literal_dict_order_irrelevant():
+def test_literal_dict_order_irrelevant() -> None:
     a = "{'a': 1, 'b': 2}"
     b = "{'b': 2, 'a': 1}"
     assert eq(a, b)
 
 
-def test_literal_nested_structures_with_floats():
+def test_literal_nested_structures_with_floats() -> None:
     a = "{'a': [1.0, 2.0001], 'b': (3, 4)}"
     b = {"a": [1, 2.0001000001], "b": (3, 4)}
     assert eq(a, b, rel_tol=1e-6)
@@ -88,38 +98,38 @@ def test_literal_nested_structures_with_floats():
 # ---------------- text comparisons with numeric tokens ----------------
 
 
-def test_text_identical_after_ws_normalization():
+def test_text_identical_after_ws_normalization() -> None:
     a = "result:   success\nvalue:   42"
     b = "result: success \n value: 42"
     assert eq(a, b)
 
 
-def test_text_case_sensitive_default():
+def test_text_case_sensitive_default() -> None:
     a = "Status: OK"
     b = "status: ok"
     assert not eq(a, b)
     assert eq(a, b, case_sensitive=False)
 
 
-def test_text_numeric_tokens_approx_equal():
+def test_text_numeric_tokens_approx_equal() -> None:
     a = "pi ~= 3.14159"
     b = "pi ~= 3.1416"
     assert eq(a, b, rel_tol=1e-4, abs_tol=0.0)
 
 
-def test_text_numeric_tokens_with_exponents():
+def test_text_numeric_tokens_with_exponents() -> None:
     a = "val: 1.2e-3, other: -2E+5"
     b = "val: 0.0012, other: -200000"
     assert eq(a, b, rel_tol=1e-12)
 
 
-def test_text_numeric_tokens_nan_inf():
+def test_text_numeric_tokens_nan_inf() -> None:
     a = "got: NaN and +inf"
     b = "got: nan and inf"
     assert eq(a, b)
 
 
-def test_text_numeric_tokens_mismatch_reports():
+def test_text_numeric_tokens_mismatch_reports() -> None:
     a = "error rate: 0.12"
     b = "error rate: 0.10"
     ok, res = neq(a, b, rel_tol=1e-3)
@@ -130,36 +140,36 @@ def test_text_numeric_tokens_mismatch_reports():
 # ---------------- mixed types: string literal vs object ----------------
 
 
-def test_string_literal_vs_object_repr():
+def test_string_literal_vs_object_repr() -> None:
     # if string is not a literal and other is object, falls back to text compare with repr(other)
     class X:
-        def __repr__(self):
+        def __repr__(self) -> str:
             return "<X value=3.14>"
 
     x = X()
     assert eq("<X value=3.14>", x)
 
 
-def test_string_literal_vs_list_object():
+def test_string_literal_vs_list_object() -> None:
     assert eq("[1, 2, 3]", [1, 2, 3])
 
 
 # ---------------- sequences: list/tuple order options ----------------
 
 
-def test_lists_order_matters_default():
+def test_lists_order_matters_default() -> None:
     assert not eq([1, 2, 3], [3, 2, 1])
 
 
-def test_lists_order_not_matter_when_configured():
+def test_lists_order_not_matter_when_configured() -> None:
     assert eq([1, 2, 3], [3, 2, 1], list_order_matters=False)
 
 
-def test_tuples_order_matters_default():
+def test_tuples_order_matters_default() -> None:
     assert not eq((1, 2), (2, 1))
 
 
-def test_nested_sequences_with_order_option():
+def test_nested_sequences_with_order_option() -> None:
     a = [[1, 2], [3, 4]]
     b = [[3, 4], [1, 2]]
     # only top-level list is order-insensitive; inner lists compared with order
@@ -169,13 +179,13 @@ def test_nested_sequences_with_order_option():
 # ---------------- dicts and sets deep compare ----------------
 
 
-def test_dict_values_with_float_tolerance():
+def test_dict_values_with_float_tolerance() -> None:
     a = {"a": 1.0, "b": [2.0, 3.00001]}
     b = {"b": [2, 3.00002], "a": 1}
     assert eq(a, b, rel_tol=1e-5)
 
 
-def test_set_of_tuples_unordered():
+def test_set_of_tuples_unordered() -> None:
     a = {(1, 2), (3, 4)}
     b = {(3, 4), (1, 2)}
     assert eq(a, b)
@@ -184,31 +194,31 @@ def test_set_of_tuples_unordered():
 # ---------------- edge cases ----------------
 
 
-def test_string_vs_literal_none_and_bool():
+def test_string_vs_literal_none_and_bool() -> None:
     assert eq("None", None)
     assert eq("True", True)
     assert not eq("False", True)
 
 
-def test_type_mismatch_reports():
+def test_type_mismatch_reports() -> None:
     r = pyine.utils.code.output_compare.compare([1, 2], (1, 2))
     assert not r.equal
     assert "Type differs" in r.reason
 
 
-def test_length_mismatch_in_sequences():
+def test_length_mismatch_in_sequences() -> None:
     r = pyine.utils.code.output_compare.compare([1, 2, 3], [1, 2])
     assert not r.equal
     assert "Length differs" in r.reason
 
 
-def test_dict_key_difference():
+def test_dict_key_difference() -> None:
     r = pyine.utils.code.output_compare.compare({"a": 1}, {"b": 1})
     assert not r.equal
     assert "Dict keys differ" in r.reason
 
 
-def test_text_token_structure_diff():
+def test_text_token_structure_diff() -> None:
     a = "result: 1 2"
     b = "result:"
     r = pyine.utils.code.output_compare.compare(a, b)
@@ -219,17 +229,17 @@ def test_text_token_structure_diff():
 # ---------------- list/tuple type agnostic option ----------------
 
 
-def test_list_tuple_type_agnostic_equality():
+def test_list_tuple_type_agnostic_equality() -> None:
     assert eq([1, 2, 3], (1, 2, 3), array_type_matters=False)
 
 
-def test_list_tuple_type_agnostic_nested():
+def test_list_tuple_type_agnostic_nested() -> None:
     a = [1, (2, 3), [4, 5]]
     b = (1, [2, 3], (4, 5))
     assert eq(a, b, array_type_matters=False)
 
 
-def test_list_tuple_type_agnostic_length_mismatch():
+def test_list_tuple_type_agnostic_length_mismatch() -> None:
     r = pyine.utils.code.output_compare.compare(
         [1, 2, 3],
         (1, 2),

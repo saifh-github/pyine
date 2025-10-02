@@ -2,6 +2,7 @@ import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
 import pytest
+import pytest_mock
 
 import pyine.prompts.configs.pred_grader as pred_grader
 import pyine.prompts.manager
@@ -11,7 +12,7 @@ import pyine.utils.llm_providers
 import tests.env_checks
 
 
-def test_get_score_only_config_and_template():
+def test_get_score_only_config_and_template() -> None:
     prompt_version = "score_only"
     config = pyine.prompts.manager.get_prompt_config("pred_grader", prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
@@ -43,7 +44,7 @@ def test_get_score_only_config_and_template():
     assert "EXPECTED OUTPUT" in rendered and "PREDICTED OUTPUT" in rendered
 
 
-def test_get_with_reasoning_config_and_template():
+def test_get_with_reasoning_config_and_template() -> None:
     prompt_version = "with_reasoning"
     config = pyine.prompts.manager.get_prompt_config("pred_grader", prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
@@ -67,7 +68,9 @@ def test_get_with_reasoning_config_and_template():
     assert "Execution type" in rendered
 
 
-def test_get_chain_attaches_parser(mocker):
+def test_get_chain_attaches_parser(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
     model = mocker.MagicMock()
     # default chain should be score only
     score_only_chain = pyine.prompts.manager.get_prompt_chain(model, "pred_grader")
@@ -88,7 +91,7 @@ def test_get_chain_attaches_parser(mocker):
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available",
 )
-def test_pred_grader_infer_score_only():
+def test_pred_grader_infer_score_only() -> None:
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model="gpt-4o-mini",
@@ -109,7 +112,7 @@ def test_pred_grader_infer_score_only():
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available",
 )
-def test_pred_grader_infer_with_reasoning():
+def test_pred_grader_infer_with_reasoning() -> None:
     model = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model="gpt-4o-mini",

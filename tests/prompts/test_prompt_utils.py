@@ -1,5 +1,6 @@
 import pathlib
 import tempfile
+import typing
 
 import pytest
 
@@ -8,7 +9,9 @@ import pyine.prompts.utils as prompt_utils
 
 class TestPromptConfig:
     @pytest.fixture
-    def sample_metadata(self):
+    def sample_metadata(
+        self,
+    ) -> prompt_utils.PromptMetadata:
         return prompt_utils.PromptMetadata(
             name="Sample Prompt",
             description="A sample prompt for testing",
@@ -16,22 +19,30 @@ class TestPromptConfig:
         )
 
     @pytest.fixture
-    def question_template(self):
+    def question_template(
+        self,
+    ) -> prompt_utils.PromptTemplate:
         return prompt_utils.PromptTemplate(
             template="Now, answer this question: {question}",
             format="f-string",
         )
 
     @pytest.fixture
-    def role_template(self):
+    def role_template(
+        self,
+    ) -> prompt_utils.PromptTemplate:
         return prompt_utils.PromptTemplate(template="You are a helpful assistant.")
 
     @pytest.fixture
-    def context_template(self):
+    def context_template(
+        self,
+    ) -> prompt_utils.PromptTemplate:
         return prompt_utils.PromptTemplate(template="You answer silly questions with true truth.")
 
     @pytest.fixture
-    def sample_examples(self):
+    def sample_examples(
+        self,
+    ) -> list[prompt_utils.PromptExample]:
         return [
             prompt_utils.PromptExample(
                 input_variables={"question": "What are potatoes?"},
@@ -45,7 +56,9 @@ class TestPromptConfig:
         ]
 
     @pytest.fixture
-    def example_template_fstring(self):
+    def example_template_fstring(
+        self,
+    ) -> prompt_utils.PromptTemplate:
         return prompt_utils.PromptTemplate(
             template="""\
 Example {example_idx}/{example_count}:
@@ -56,7 +69,9 @@ Expected output: {output}
         )
 
     @pytest.fixture
-    def example_template_jinja2(self):
+    def example_template_jinja2(
+        self,
+    ) -> prompt_utils.PromptTemplate:
         return prompt_utils.PromptTemplate(
             template="""\
 Example question: {{question}}
@@ -72,7 +87,7 @@ Note: {{description}}
         self,
         sample_metadata: prompt_utils.PromptMetadata,
         question_template: prompt_utils.PromptTemplate,
-    ):
+    ) -> None:
         config = prompt_utils.PromptConfig(
             metadata=sample_metadata,
             question=question_template,
@@ -90,7 +105,7 @@ Note: {{description}}
         sample_examples: list[prompt_utils.PromptExample],
         question_template: prompt_utils.PromptTemplate,
         example_template_fstring: prompt_utils.PromptTemplate,
-    ):
+    ) -> None:
         config = prompt_utils.PromptConfig(
             metadata=sample_metadata,
             question=question_template,
@@ -118,7 +133,7 @@ Expected output: based on necessity and sufficiency
         context_template: prompt_utils.PromptTemplate,
         question_template: prompt_utils.PromptTemplate,
         example_template_jinja2: prompt_utils.PromptTemplate,
-    ):
+    ) -> None:
         config = prompt_utils.PromptConfig(
             metadata=sample_metadata,
             role=role_template,
@@ -155,7 +170,7 @@ Note: The Faithfulness Secret Sauce"""
         sample_examples: list[prompt_utils.PromptExample],
         question_template: prompt_utils.PromptTemplate,
         example_template_fstring: prompt_utils.PromptTemplate,
-    ):
+    ) -> None:
         config = prompt_utils.PromptConfig(
             metadata=sample_metadata,
             question=question_template,
@@ -172,7 +187,9 @@ Note: The Faithfulness Secret Sauce"""
 
 class TestVersionedPromptConfig:
     @pytest.fixture
-    def sample_yaml_content_w_default(self):
+    def sample_yaml_content_w_default(
+        self,
+    ) -> str:
         return """\
 v1.0.0:
   metadata:
@@ -200,7 +217,10 @@ __default__: "v1.0.0"
 """
 
     @pytest.fixture
-    def temp_yaml_file_w_default(self, sample_yaml_content_w_default: str):
+    def temp_yaml_file_w_default(
+        self,
+        sample_yaml_content_w_default: str,
+    ) -> typing.Iterator[pathlib.Path]:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(sample_yaml_content_w_default)
             temp_path = pathlib.Path(f.name)
@@ -208,7 +228,10 @@ __default__: "v1.0.0"
         temp_path.unlink()
 
     @pytest.fixture
-    def temp_yaml_file_wo_default(self, sample_yaml_content_w_default: str):
+    def temp_yaml_file_wo_default(
+        self,
+        sample_yaml_content_w_default: str,
+    ) -> typing.Iterator[pathlib.Path]:
         sample_yaml_content_wo_default = "\n".join(sample_yaml_content_w_default.splitlines()[:-1])
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(sample_yaml_content_wo_default)
@@ -216,7 +239,10 @@ __default__: "v1.0.0"
         yield temp_path
         temp_path.unlink()
 
-    def test_from_yaml_with_default_key(self, temp_yaml_file_w_default: pathlib.Path):
+    def test_from_yaml_with_default_key(
+        self,
+        temp_yaml_file_w_default: pathlib.Path,
+    ) -> None:
         config = prompt_utils.VersionedPromptConfig.from_yaml(temp_yaml_file_w_default)
         assert config.version_count == 2
         assert "v1.0.0" in config.versions
@@ -225,7 +251,10 @@ __default__: "v1.0.0"
         default_config = config.get_default()
         assert default_config.question.template == "Hello {name}!"
 
-    def test_from_yaml_without_default_key(self, temp_yaml_file_wo_default: pathlib.Path):
+    def test_from_yaml_without_default_key(
+        self,
+        temp_yaml_file_wo_default: pathlib.Path,
+    ) -> None:
         config = prompt_utils.VersionedPromptConfig.from_yaml(temp_yaml_file_wo_default)
         assert config.version_count == 2
         assert "v1.0.0" in config.versions
@@ -234,7 +263,7 @@ __default__: "v1.0.0"
         default_config = config.get_default()
         assert default_config.question.template == "Greetings {name}, how are you?"
 
-    def test_from_invalid_yaml(self):
+    def test_from_invalid_yaml(self) -> None:
         with pytest.raises(FileNotFoundError):
             prompt_utils.VersionedPromptConfig.from_yaml("nonexistent.yaml")
 

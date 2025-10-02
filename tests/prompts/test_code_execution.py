@@ -4,7 +4,7 @@ import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_no_pressure_config_and_template():
+def test_get_no_pressure_config_and_template() -> None:
     prompt_version = "no_pressure_demo"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
@@ -26,7 +26,7 @@ def test_get_no_pressure_config_and_template():
     assert "Enter name: " in rendered_str and "```\nBob\n```" in rendered_str
 
 
-def test_get_unstructured_with_3_output_types_config_and_template():
+def test_get_unstructured_with_3_output_types_config_and_template() -> None:
     prompt_version = "unstructured_with_3_output_types"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)

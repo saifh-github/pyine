@@ -1,4 +1,5 @@
 import tracemalloc
+import typing
 
 import pytest
 
@@ -6,7 +7,7 @@ import pyine.utils.profiling as profiling
 
 
 @pytest.fixture(autouse=True)
-def clean_tracemalloc():
+def clean_tracemalloc() -> typing.Iterator[None]:
     # ensure tracemalloc is stopped before and after each test
     if tracemalloc.is_tracing():
         tracemalloc.stop()

@@ -10,7 +10,7 @@ def _call_with_mapped(fn: typing.Callable[..., typing.Any], inputs: typing.Any) 
     return fn(*args, **kwargs)
 
 
-def test_simple_positional_and_kwargs_mapping():
+def test_simple_positional_and_kwargs_mapping() -> None:
     def fn(a: int, b: int) -> int:
         return a + b
 
@@ -58,7 +58,7 @@ def test_simple_positional_and_kwargs_mapping():
         _ = args_mapper.map_inputs_to_callable(fn, [1, 2, 3])
 
 
-def test_mapping_with_defaults():
+def test_mapping_with_defaults() -> None:
     def fn(a: int, b: int = 0) -> int:
         return a + b
 
@@ -76,7 +76,7 @@ def test_mapping_with_defaults():
         _ = args_mapper.map_inputs_to_callable(fn, None)
 
 
-def test_querystring_and_colon_syntax():
+def test_querystring_and_colon_syntax() -> None:
     def fn(a: int, b: int) -> int:
         return a * b
 
@@ -102,7 +102,7 @@ def test_querystring_and_colon_syntax():
         _ = args_mapper.map_inputs_to_callable(fn, "a:2,potato")
 
 
-def test_parenthesized_and_spaces():
+def test_parenthesized_and_spaces() -> None:
     def fn(a: int, b: int) -> int:
         return a - b
 
@@ -112,8 +112,14 @@ def test_parenthesized_and_spaces():
     assert fn(*args, **kwargs) == 7
 
 
-def test_positional_only_and_keyword_only():
-    def fn(a, /, b, *, c=0):  # a positional-only, c keyword-only
+def test_positional_only_and_keyword_only() -> None:
+    def fn(
+        a: int,
+        /,
+        b: int,
+        *,
+        c: int = 0,
+    ) -> int:  # a positional-only, c keyword-only
         return a + b + c
 
     # mapping provides a and b; a should be moved to args
@@ -129,8 +135,11 @@ def test_positional_only_and_keyword_only():
     assert fn(*args, **kwargs) == 8
 
 
-def test_varargs_and_varkwargs_passthrough():
-    def fn(*args, **kwargs):
+def test_varargs_and_varkwargs_passthrough() -> None:
+    def fn(
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> tuple[tuple[typing.Any, ...], dict[str, typing.Any]]:
         return args, kwargs
 
     # ensure mapping not filtered if **kwargs present
@@ -144,8 +153,8 @@ def test_varargs_and_varkwargs_passthrough():
     assert kwargs == {}
 
 
-def test_scalar_and_none_inputs():
-    def one(x):
+def test_scalar_and_none_inputs() -> None:
+    def one(x: typing.Any) -> typing.Any:
         return x
 
     # scalar maps to single positional
@@ -159,7 +168,10 @@ def test_scalar_and_none_inputs():
     assert kwargs == {}
 
     # none with defaults should do nothing
-    def with_defaults(a=1, b=2):
+    def with_defaults(
+        a: int = 1,
+        b: int = 2,
+    ) -> int:
         return a + b
 
     args, kwargs = args_mapper.map_inputs_to_callable(with_defaults, None)
@@ -168,14 +180,17 @@ def test_scalar_and_none_inputs():
     assert with_defaults(*args, **kwargs) == 3
 
 
-def test_object_attribute_mapping_and_filtering():
+def test_object_attribute_mapping_and_filtering() -> None:
     class Obj:
-        def __init__(self):
+        def __init__(self) -> None:
             self.a = 10
             self.b = 20
             self._private = 99
 
-    def fn(a, b):
+    def fn(
+        a: int,
+        b: int,
+    ) -> int:
         return a * b
 
     obj = Obj()
@@ -185,8 +200,11 @@ def test_object_attribute_mapping_and_filtering():
     assert fn(*args, **kwargs) == 200
 
 
-def test_nested_structures_in_string():
-    def fn(a, b):
+def test_nested_structures_in_string() -> None:
+    def fn(
+        a: list[int],
+        b: dict[str, int],
+    ) -> int:
         return a[0] + b["x"]
 
     s = "a=[1,2,3], b={'x': 5}"

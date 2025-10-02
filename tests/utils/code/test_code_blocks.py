@@ -4,7 +4,7 @@ import pyine.utils.code.blocks as code_blocks
 
 
 @pytest.fixture
-def complex_code_sample():
+def complex_code_sample() -> str:
     """A sample with various Python constructs."""
     return """\
 def outer_function(param1, param2=None):     # L1
@@ -49,10 +49,11 @@ print("    hello!    ")                      # L39
 """
 
 
-def test_identify_code_blocks_comprehensive(complex_code_sample):
+def test_identify_code_blocks_comprehensive(
+    complex_code_sample: str,
+) -> None:
     """Test block identification with various Python constructs."""
     blocks = code_blocks.identify_code_blocks(complex_code_sample)
-    print(complex_code_sample)
     assert len(blocks) == 14
     assert blocks[1] == code_blocks.CodeBlock(
         type=code_blocks.BlockType.FUNCTION,
@@ -120,7 +121,7 @@ def test_identify_code_blocks_comprehensive(complex_code_sample):
     )
 
 
-def test_identify_code_blocks_empty_and_simple():
+def test_identify_code_blocks_empty_and_simple() -> None:
     """Test with empty code and simple structures."""
     assert len(code_blocks.identify_code_blocks("")) == 0
     assert len(code_blocks.identify_code_blocks("x = 10")) == 0

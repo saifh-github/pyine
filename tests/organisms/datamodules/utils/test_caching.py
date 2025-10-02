@@ -44,7 +44,11 @@ class TestCachedTestData:
 
 
 class TestCacheStorage:
-    def test_save_load_and_clear_stored_cache_roundtrip(self, monkeypatch, tmp_path: pathlib.Path) -> None:
+    def test_save_load_and_clear_stored_cache_roundtrip(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
         # force deterministic tmp path and params hash so both instances hit the same file
         monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
         monkeypatch.setattr("pyine.utils.reprod.get_params_hash", lambda *_a, **_k: "ROUNDTRIP")
@@ -205,7 +209,11 @@ class TestSampling:
 
 
 class TestBuildFromDatasetReader:
-    def test_build_from_reader_validates_metadata_and_path(self, monkeypatch, tmp_path: pathlib.Path) -> None:
+    def test_build_from_reader_validates_metadata_and_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
         # prepare a fake reader that returns the expected metadata shape
         class _FakeReader:
             def __init__(self, dataset_name: str, dataset_path: pathlib.Path) -> None:

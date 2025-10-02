@@ -1,13 +1,14 @@
 import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
+import pytest_mock
 
 import pyine.prompts.configs.code_analysis as code_analysis
 import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_config_and_template():
+def test_get_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("code_analysis")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     first_example = config.examples[0]
@@ -30,7 +31,9 @@ def test_get_config_and_template():
     assert "Enter name: " in rendered_str
 
 
-def test_get_chain(mocker):
+def test_get_chain(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
     model = mocker.MagicMock()
     chain = pyine.prompts.manager.get_prompt_chain(model, "code_analysis")
     assert isinstance(chain, langchain_core.runnables.RunnableSequence)

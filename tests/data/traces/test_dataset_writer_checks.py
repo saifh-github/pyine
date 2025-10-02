@@ -1,9 +1,15 @@
+import pathlib
+import tempfile
+import typing
+
 import pyine.data.traces.dataset_utils
 import pyine.data.traces.dataset_writer
 import pyine.prompts.configs.code_analysis
 
 
-def _make_analysis_response(**overrides):
+def _make_analysis_response(
+    **overrides: typing.Any,
+) -> pyine.prompts.configs.code_analysis.CodeAnalysisResponse:
     defaults = {
         "is_deterministic": True,
         "imports_nonstandard_packages": False,
@@ -34,7 +40,7 @@ def _make_problem_and_solution(
     solution_id = pyine.data.traces.dataset_utils.SolutionIdentifier("ds", "subset", 0, 0)
     problem = pyine.data.traces.dataset_utils.CodingProblem(
         source_dataset_name="ds",
-        source_data_path="/tmp/problem.json",
+        source_data_path=str(pathlib.Path(tempfile.gettempdir()) / "problem.json"),
         source_data_hash="hash",
         problem_id=problem_id,
         problem_statement="do stuff",

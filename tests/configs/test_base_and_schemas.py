@@ -13,7 +13,10 @@ def test_register_searchpath_plugin_registers_once(
     registered = []
 
     class _FakePlugins:
-        def register(self, plugin):
+        def register(
+            self,
+            plugin: object,
+        ) -> None:
             registered.append(plugin)
 
     fake_plugins = _FakePlugins()
@@ -33,11 +36,16 @@ def test_print_experiment_configs_lists_expected_sections(
     calls = {"initialize": 0, "render": []}
 
     class _HydraContext:
-        def __enter__(self):
+        def __enter__(self) -> None:
             calls["initialize"] += 1
             return
 
-        def __exit__(self, exc_type, exc, tb):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: types.TracebackType | None,
+        ) -> bool:
             return False
 
     monkeypatch.setattr(
@@ -76,7 +84,9 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
             self.tags = ("tag",)
             self.notes = "note"
 
-    def fake_wandb_init(**kwargs):
+    def fake_wandb_init(
+        **kwargs: object,
+    ) -> _FakeRun:
         run_calls.append(kwargs)
         return _FakeRun()
 

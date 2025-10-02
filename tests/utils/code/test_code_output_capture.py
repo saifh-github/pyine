@@ -116,10 +116,10 @@ class TestStdStreamCapture:
     def test_multi_print_inside_exec(self) -> None:
         cap = StdStreamCapture(stream_name="stdout")
         with contextlib.redirect_stdout(cap):  # noqa
-            exec("print('test1')")
+            exec("print('test1')")  # noqa: S102
             assert cap.getvalue() == "test1\n"
             assert cap.buffer.getvalue() == b"test1\n"
-            exec("print('test2')")
+            exec("print('test2')")  # noqa: S102
             assert cap.getvalue() == "test1\ntest2\n"
             assert cap.buffer.getvalue() == b"test1\ntest2\n"
 

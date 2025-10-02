@@ -137,12 +137,12 @@ def test_mini_taco_easy_traces_dataset_with_obfuscated_augments(
     assert len(reader) >= wanted_trace_count
     # check written traces to make sure we do have some augments
     assert len(reader.augment_key_to_parent_trace_key) > 0
-    for augm_key, parent_trace_key in reader.augment_key_to_parent_trace_key.items():
+    for augm_key, _parent_trace_key in reader.augment_key_to_parent_trace_key.items():
         assert "obfuscated" in str(augm_key)
     # check that all written traces are EASY ones
     for trace_idx in range(len(reader)):
         problem_data = reader.get_problem_data(trace_idx)
-        assert any(["EASY" in t for t in problem_data.problem_tags])
+        assert any("EASY" in t for t in problem_data.problem_tags)
     traces_metadata = dataset_reader.get_traces_metadata(output_dataset_path)
     assert len(traces_metadata) == len(reader)
 
@@ -167,7 +167,7 @@ def test_write_dataset_from_taco_forwards_force_flag(
 
 
 def _write_target_problem(
-    root_dir,
+    root_dir: pathlib.Path,
     idx: int,
     subset: str,
     question: str = "dummy question",
@@ -209,7 +209,9 @@ def _write_target_problem(
     path.write_bytes(orjson.dumps(problem_payload))
 
 
-def test_iterator_filters_problem_ids_without_subset(tmp_path):
+def test_iterator_filters_problem_ids_without_subset(
+    tmp_path: pathlib.Path,
+) -> None:
     root_dir = tmp_path / "taco"
     root_dir.mkdir()
     _write_target_problem(root_dir, 1, "train")
@@ -228,7 +230,9 @@ def test_iterator_filters_problem_ids_without_subset(tmp_path):
     assert solutions
 
 
-def test_iterator_accepts_subset_qualified_ids(tmp_path):
+def test_iterator_accepts_subset_qualified_ids(
+    tmp_path: pathlib.Path,
+) -> None:
     root_dir = tmp_path / "taco"
     root_dir.mkdir()
     _write_target_problem(root_dir, 1, "train")
@@ -246,7 +250,7 @@ def test_iterator_accepts_subset_qualified_ids(tmp_path):
     assert problem.problem_id.subset == "train"
 
 
-def test_subset_collision_requires_explicit_identifier():
+def test_subset_collision_requires_explicit_identifier() -> None:
     iterator = object.__new__(dataset_utils.CodingProblemIterator)
     spec = dataset_utils.CodingProblemIterator._TargetProblemSpec(problem_idx=1, subset=None)
     iterator._target_problem_specs = {spec}

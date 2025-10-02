@@ -5,7 +5,7 @@ import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_full_output_config_and_template():
+def test_get_full_output_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("issues/iterators", version="full_output/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     for example in config.examples:
@@ -13,13 +13,13 @@ def test_get_full_output_config_and_template():
     assert config.examples[0].output is not None
     assert issues_iterators.invalid_code_token not in config.get_examples_as_text(
         target_examples=[0],
-        extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token),
+        extra_variables={"invalid_code_token": issues_iterators.invalid_code_token},
     )
     assert config.examples[1].output is None  # invalid input code
     assert (
         config.get_examples_as_text(
             target_examples=[1],
-            extra_variables=dict(invalid_code_token=issues_iterators.invalid_code_token),
+            extra_variables={"invalid_code_token": issues_iterators.invalid_code_token},
         )
         .rstrip("\n")
         .endswith(issues_iterators.invalid_code_token)

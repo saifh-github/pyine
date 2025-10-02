@@ -5,7 +5,7 @@ import pytest
 import pyine.utils.code.validation as val
 
 
-def test_validate_code_success_and_failures():
+def test_validate_code_success_and_failures() -> None:
     # success
     code_ok = "def f(x):\n    return x + 1\n"
     val.validate_code(code_ok)
@@ -49,10 +49,12 @@ def test_validate_code_success_and_failures():
     val.validate_code("while True:\n    break\n")
 
 
-def test_find_near_duplicate_code_and_clusters(monkeypatch: pytest.MonkeyPatch):
+def test_find_near_duplicate_code_and_clusters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # provide a simple Levenshtein.distance implementation
     def distance(a: str, b: str) -> int:
-        la, lb = len(a), len(b)
+        lb = len(b)
         dp = list(range(lb + 1))
         for i, ca in enumerate(a, start=1):
             prev = dp[0]
@@ -74,8 +76,8 @@ def test_find_near_duplicate_code_and_clusters(monkeypatch: pytest.MonkeyPatch):
 
     # absolute threshold: allow distance up to 2 after normalization on first two
     res_abs = val.find_near_duplicate_code(snippets, threshold=2, ignore_whitespace=True, ignore_comments=True)
-    d0 = {j: d for (j, d) in res_abs[0]}
-    d1 = {j: d for (j, d) in res_abs[1]}
+    d0 = dict(res_abs[0])
+    d1 = dict(res_abs[1])
     assert (1 in d0 and d0[1] <= 2) or (0 in d1 and d1[0] <= 2)
 
     # relative threshold: allow dissimilarity up to 0.7 (looser due to multiple spaces)

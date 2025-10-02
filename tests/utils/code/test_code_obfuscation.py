@@ -7,7 +7,7 @@ import pyine.utils.code.obfuscation as code_obf
 
 
 @pytest.fixture
-def sample_code():
+def sample_code() -> str:
     """Provides a sample Python code string for tests."""
     return """\
 import math
@@ -39,7 +39,9 @@ top_level_function(3, 4)
 """
 
 
-def test_default_obfuscation(sample_code):
+def test_default_obfuscation(
+    sample_code: str,
+) -> None:
     """Tests the default obfuscation settings."""
     obfuscated = code_obf.obfuscate_code(sample_code)
     assert "MyTestClass" not in obfuscated
@@ -52,7 +54,9 @@ def test_default_obfuscation(sample_code):
     assert "some nice comment" not in obfuscated
 
 
-def test_remove_docstrings_disabled(sample_code):
+def test_remove_docstrings_disabled(
+    sample_code: str,
+) -> None:
     """Tests that docstrings and literals are preserved when disabled."""
     obfuscated = code_obf.obfuscate_code(sample_code, remove_docstrings_and_literals=False)
     assert "A sample class for testing" in obfuscated
@@ -60,7 +64,9 @@ def test_remove_docstrings_disabled(sample_code):
     assert "Another literal string" in obfuscated
 
 
-def test_rename_local_variables_disabled(sample_code):
+def test_rename_local_variables_disabled(
+    sample_code: str,
+) -> None:
     """Tests that local variable names are preserved when disabled."""
     obfuscated = code_obf.obfuscate_code(sample_code, rename_local_variables=False)
     assert "local_var" in obfuscated
@@ -72,7 +78,9 @@ def test_rename_local_variables_disabled(sample_code):
     assert "result" not in obfuscated
 
 
-def test_rename_global_variables_disabled(sample_code):
+def test_rename_global_variables_disabled(
+    sample_code: str,
+) -> None:
     """Tests that global variable names are preserved when disabled."""
     obfuscated = code_obf.obfuscate_code(sample_code, rename_global_variables=False)
     assert "MyTestClass" in obfuscated
@@ -89,18 +97,20 @@ def test_rename_global_variables_disabled(sample_code):
     assert "top_level_function" not in obfuscated
 
 
-def test_obfuscated_code_executes_correctly(sample_code):
+def test_obfuscated_code_executes_correctly(
+    sample_code: str,
+) -> None:
     """Tests that the obfuscated code produces the same output as the original."""
     original_stdout = io.StringIO()
     sys.stdout = original_stdout
-    exec(sample_code, {})
+    exec(sample_code, {})  # noqa: S102
     sys.stdout = sys.__stdout__
     original_output = original_stdout.getvalue()
 
     obfuscated_code = code_obf.obfuscate_code(sample_code)
     obfuscated_stdout = io.StringIO()
     sys.stdout = obfuscated_stdout
-    exec(obfuscated_code, {})
+    exec(obfuscated_code, {})  # noqa: S102
     sys.stdout = sys.__stdout__
     obfuscated_output = obfuscated_stdout.getvalue()
 

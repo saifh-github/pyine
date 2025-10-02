@@ -4,6 +4,7 @@ import json
 import pathlib
 import threading
 import types
+import typing
 
 import orjson
 import pydantic
@@ -25,7 +26,7 @@ def db(tmp_path: pathlib.Path) -> PromptResultDB:
     return PromptResultDB(db_path=tmp_path / "prompt_results.sqlite")
 
 
-def test_store_and_fetch_by_identifier(db: PromptResultDB):
+def test_store_and_fetch_by_identifier(db: PromptResultDB) -> None:
     v1 = db.store(
         identifier="id1",
         group="g1",
@@ -72,7 +73,7 @@ def test_creation_meta_requires_timezone() -> None:
         CreationMeta(created_at=naive_now)
 
 
-def test_group_queries_and_tag_filter(db: PromptResultDB):
+def test_group_queries_and_tag_filter(db: PromptResultDB) -> None:
     # id1 two versions under group g1
     db.store(
         identifier="id1",
@@ -122,13 +123,15 @@ def test_group_queries_and_tag_filter(db: PromptResultDB):
     assert len(db.get_by_prompt_name("p", prompt_version="1")) == 2
 
 
-def test_thread_safety_on_versions(db: PromptResultDB):
+def test_thread_safety_on_versions(db: PromptResultDB) -> None:
     identifier = "id3"
     group = "g2"
     n = 10
     barrier = threading.Barrier(n)
 
-    def insert_one(i: int):
+    def insert_one(
+        i: int,
+    ) -> int:
         barrier.wait()
         return db.store(identifier=identifier, group=group, prompt=f"p{i}", result=f"r{i}")
 
@@ -150,7 +153,7 @@ def test_thread_safety_on_versions(db: PromptResultDB):
     assert [r.identifier for r in grp] == [identifier] * n
 
 
-def test_list_identifiers(db: PromptResultDB):
+def test_list_identifiers(db: PromptResultDB) -> None:
     db.store(identifier="b", prompt="p", result="r")
     db.store(identifier="a", prompt="p", result="r")
     db.store(identifier="c", prompt="p", result="r")
@@ -158,7 +161,7 @@ def test_list_identifiers(db: PromptResultDB):
     assert ids == ["a", "b", "c"]
 
 
-def test_get_by_identifier_max_age_and_tag_filter(db: PromptResultDB):
+def test_get_by_identifier_max_age_and_tag_filter(db: PromptResultDB) -> None:
     import datetime as _dt
 
     old_cm = CreationMeta(created_at=_dt.datetime.now(datetime.UTC) - _dt.timedelta(minutes=30))
@@ -176,7 +179,7 @@ def test_get_by_identifier_max_age_and_tag_filter(db: PromptResultDB):
     assert [r.result for r in tag_filtered] == ["new", "new"] or [r.result for r in tag_filtered] == ["new"]
 
 
-def test_row_to_record_falls_back_to_created_at_column(db: PromptResultDB):
+def test_row_to_record_falls_back_to_created_at_column(db: PromptResultDB) -> None:
     row_id = db.store(identifier="fallback", prompt="prompt", result="result")
     conn = db._connect()
     try:
@@ -202,15 +205,18 @@ def test_row_to_record_falls_back_to_created_at_column(db: PromptResultDB):
     assert fetched[0].creation_meta.created_at == expected_created_at
 
 
-def test_fetch_or_generate_deduplicates_existing(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
+def test_fetch_or_generate_deduplicates_existing(
+    db: PromptResultDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db.store(identifier="dup-id", prompt_name="pn", prompt="p", result="X")
     db.store(identifier="dup-id", prompt_name="pn", prompt="p", result="X")
 
     # use minimal fake prompt manager to avoid heavy deps during tests; not used since no generation needed
-    def _tpl(**kwargs):
+    def _tpl(**kwargs: typing.Any) -> str:
         return "{name}"
 
-    def _chain(**kwargs):
+    def _chain(**kwargs: typing.Any) -> types.SimpleNamespace:
         return types.SimpleNamespace(invoke=lambda _inputs: "ignored")
 
     monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", _tpl, raising=False)
@@ -228,7 +234,10 @@ def test_fetch_or_generate_deduplicates_existing(db: PromptResultDB, monkeypatch
 
 
 class ModelLike:
-    def __init__(self, data):
+    def __init__(
+        self,
+        data: typing.Any,
+    ) -> None:
         self._data = data
 
     def model_dump_json(self) -> str:
@@ -236,23 +245,36 @@ class ModelLike:
 
 
 class DummyChain:
-    def __init__(self, outputs):
+    def __init__(
+        self,
+        outputs: typing.Iterable[typing.Any],
+    ) -> None:
         self._iter = iter(outputs)
 
-    def invoke(self, _inputs, **kwargs):
+    def invoke(
+        self,
+        _inputs: typing.Any,
+        **kwargs: typing.Any,
+    ) -> ModelLike:
         try:
             return next(self._iter)
         except StopIteration:
             return ModelLike({"v": 999})
 
 
-def test_fetch_or_generate_generate_until_count_no_log(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
+def test_fetch_or_generate_generate_until_count_no_log(
+    db: PromptResultDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # here, we use a fake prompt manager producing model-like objects with .model_dump_json()
 
-    def get_prompt_template(**_kwargs):
+    def get_prompt_template(**_kwargs: typing.Any) -> str:
         return "Hello {name}"
 
-    def get_prompt_chain(model=None, **_kwargs):
+    def get_prompt_chain(
+        model: typing.Any | None = None,
+        **_kwargs: typing.Any,
+    ) -> DummyChain:
         return DummyChain([ModelLike({"v": 1}), ModelLike({"v": 2})])
 
     monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
@@ -272,7 +294,7 @@ def test_fetch_or_generate_generate_until_count_no_log(db: PromptResultDB, monke
     assert db.get_by_identifier("gen-no-log") == []
 
 
-def test_typed_prompt_result_fetcher_decode_record_dict():
+def test_typed_prompt_result_fetcher_decode_record_dict() -> None:
     rec = PromptResultRecord(
         identifier="t1",
         prompt="p",
@@ -287,15 +309,19 @@ def test_typed_prompt_result_fetcher_decode_record_dict():
 
 
 def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
-    db: PromptResultDB, monkeypatch: pytest.MonkeyPatch
-):
+    db: PromptResultDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Item(pydantic.BaseModel):
         v: int
 
-    def get_prompt_template(**_kwargs):
+    def get_prompt_template(**_kwargs: typing.Any) -> str:
         return "Value {x}"
 
-    def get_prompt_chain(model=None, **_kwargs):
+    def get_prompt_chain(
+        model: typing.Any | None = None,
+        **_kwargs: typing.Any,
+    ) -> DummyChain:
         return DummyChain([ModelLike({"v": 10})])
 
     monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
@@ -315,20 +341,30 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     assert items[0].record.prompt == "Value Z"
 
 
-def test_validator_with_retries(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch):
+def test_validator_with_retries(
+    db: PromptResultDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     validator_attempts = 0
 
-    def _validator(result: str, *args, **kwargs) -> bool:
+    def _validator(
+        result: str,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> bool:
         nonlocal validator_attempts
         if validator_attempts < 5:
             validator_attempts += 1
             return False
         return True
 
-    def get_prompt_template(**_kwargs):
+    def get_prompt_template(**_kwargs: typing.Any) -> str:
         return "thingy {thang}"
 
-    def get_prompt_chain(model=None, **_kwargs):
+    def get_prompt_chain(
+        model: typing.Any | None = None,
+        **_kwargs: typing.Any,
+    ) -> DummyChain:
         return DummyChain([ModelLike(f"t{idx}") for idx in range(10)])
 
     monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
@@ -359,7 +395,9 @@ def test_validator_with_retries(db: PromptResultDB, monkeypatch: pytest.MonkeyPa
     assert len(db.get_by_identifier("valid-test")) == 1
 
 
-def test_delete_records_by_identifier(db: PromptResultDB):
+def test_delete_records_by_identifier(
+    db: PromptResultDB,
+) -> None:
     # insert two for same identifier and one for another identifier
     db.store(identifier="del-id-1", group="g", prompt="p1", result="r1")
     db.store(identifier="del-id-1", group="g", prompt="p2", result="r2")
@@ -374,7 +412,9 @@ def test_delete_records_by_identifier(db: PromptResultDB):
         db.delete_records(prompt_version="v1")
 
 
-def test_delete_records_by_group_and_prompt_version(db: PromptResultDB):
+def test_delete_records_by_group_and_prompt_version(
+    db: PromptResultDB,
+) -> None:
     # two in target group (v1 and v2), one in another group
     db.store(
         identifier="x1",
@@ -408,7 +448,9 @@ def test_delete_records_by_group_and_prompt_version(db: PromptResultDB):
     assert {(r.identifier, r.prompt_version) for r in other_group} == {("x3", "v1")}
 
 
-def test_delete_records_older_than(db: PromptResultDB):
+def test_delete_records_older_than(
+    db: PromptResultDB,
+) -> None:
     old_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=2))
     new_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC))
     db.store(identifier="age-del", prompt="p", result="old", creation_meta=old_cm)
@@ -419,7 +461,9 @@ def test_delete_records_older_than(db: PromptResultDB):
     assert [r.result for r in remaining] == ["new"]
 
 
-def test_get_all_results_ordering_and_filters(db: PromptResultDB):
+def test_get_all_results_ordering_and_filters(
+    db: PromptResultDB,
+) -> None:
     now = datetime.datetime.now(datetime.UTC)
     cm_old = CreationMeta(created_at=now - datetime.timedelta(minutes=30))
     cm_mid = CreationMeta(created_at=now - datetime.timedelta(minutes=10))

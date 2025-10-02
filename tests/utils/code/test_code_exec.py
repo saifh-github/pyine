@@ -1,4 +1,5 @@
 import sys
+import typing
 
 import pytest
 
@@ -21,7 +22,7 @@ from pyine.utils.code.execution import (
 )
 
 
-def test_error_in_executed_code():
+def test_error_in_executed_code() -> None:
     """Test behavior when the executed code contains an error."""
     code = """\
 x = 10
@@ -32,7 +33,7 @@ result = x / y  # Division by zero error
     assert result.exception is not None and result.exception.type == "ZeroDivisionError"
 
 
-def test_empty_input():
+def test_empty_input() -> None:
     """Test with empty input strings."""
     code = """\
 response = input("Press Enter to continue...")
@@ -47,7 +48,7 @@ print("You pressed Enter")
     assert result.exception is None and "You pressed Enter" in result.stdout
 
 
-def test_code_exec_with_sys_exit():
+def test_code_exec_with_sys_exit() -> None:
     """Test that code execution with sys.exit() works as expected."""
     code = """\
 import sys
@@ -62,7 +63,7 @@ sys.exit(13)
     assert result.exception.message == "13"
 
 
-def test_code_exec_with_timeout():
+def test_code_exec_with_timeout() -> None:
     """Test that code execution with a timeout works as expected."""
     code = """\
 import time
@@ -90,7 +91,7 @@ time.sleep({sleep_time})
     assert results.exception is None
 
 
-def test_stdout_capture():
+def test_stdout_capture() -> None:
     """Test capturing of stdout at individual event level."""
     code = """\
 import os
@@ -117,7 +118,7 @@ print("one last note", file=sys.stderr)
     assert "one last note\n" in result.stderr  # might contain extra warnings from pydev/debugger
 
 
-def test_tracing_with_blacklist():
+def test_tracing_with_blacklist() -> None:
     code = """\
 
 import numpy as np
@@ -144,7 +145,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
         if trace_step is None:
             continue
         assert trace_step.trace_key.object not in blacklisted_objects
-        assert not any([trace_step.trace_key.file.startswith(m) for m in blacklisted_modules])
+        assert not any(trace_step.trace_key.file.startswith(m) for m in blacklisted_modules)
         if trace_step.event_type == "return":
             last_return = trace_step
         if trace_step.event_type == "line":
@@ -153,7 +154,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
     assert last_line.trace_key.line == 10
 
 
-def test_tracing_within_code_only():
+def test_tracing_within_code_only() -> None:
     code = """\
 
 import numpy as np
@@ -185,7 +186,7 @@ print(f"Final values: a={a}, b={b}, c={c}")  # L9
     assert last_line.trace_key.line == 10
 
 
-def test_entrypoint_with_specific_local_vars():
+def test_entrypoint_with_specific_local_vars() -> None:
     """Test that the entrypoint can be specified and that specific local variables are reported."""
     code = """\
 def some_magic_function(a: str) -> int:
@@ -214,7 +215,7 @@ def some_magic_function(a: str) -> int:
     assert trace_result.exception is None
     assert len(trace_result.metadata) > 0
     expected_tags = ["exec:has_entrypoint", "return:has_value", "return:has_stdout"]
-    assert len(trace_result.tags) > 0 and all([t in trace_result.tags for t in expected_tags])
+    assert len(trace_result.tags) > 0 and all(t in trace_result.tags for t in expected_tags)
     # assume very specific step mapping below, starting from defs, and then the entrypoint call
     valid_steps = [s for s in trace_result.traced_steps if s is not None]  # drop out-of-scope steps
     assert len(valid_steps) == 3 + 6  # should have 3 for defines, 6 for entrypoint call->return
@@ -243,7 +244,7 @@ def some_magic_function(a: str) -> int:
     # rest should be OK at this point
 
 
-def test_entrypoint_with_multiple_args():
+def test_entrypoint_with_multiple_args() -> None:
     """Test that the entrypoint can be specified and that multi-args unpacking goes well."""
     code = """\
 def some_magic_function(a: str, b: int, c: int = 1) -> int:
@@ -267,7 +268,7 @@ def some_magic_function(a: str, b: int, c: int = 1) -> int:
         assert trace_result.return_value == expected_output
 
 
-def test_entrypoint_with_single_arg():
+def test_entrypoint_with_single_arg() -> None:
     """Test that the entrypoint can be specified and that single-arg unpacking goes well."""
     code = """\
 def single_arg_fn(a):
@@ -292,7 +293,7 @@ def single_arg_fn(a):
         assert trace_result.return_value == expected_output
 
 
-def test_trace_event_cap():
+def test_trace_event_cap() -> None:
     """Test that trace caps work correctly."""
     code = """\
 i = 0
@@ -327,7 +328,7 @@ print(f"Final i={i}")
     assert result_with_caps.stdout == "Final i=1000\n"
 
 
-def test_trace_max_var_len_cap():
+def test_trace_max_var_len_cap() -> None:
     code = """\
 i = 1000
 something = ["potato"] * i
@@ -352,7 +353,7 @@ print(f"{len(something)=}")
     assert result_with_caps.stdout == "len(something)=1000\n"
 
 
-def test_safe_vs_unsafe_tracing():
+def test_safe_vs_unsafe_tracing() -> None:
     """Test that safe tracing provides the same results as unsafe tracing."""
     code = """\
 def func(b: str) -> int:
@@ -432,7 +433,7 @@ def _build_dummy_trace_result() -> tuple[TraceResult, TraceEvent, TraceKey]:
     return trace_result, event, trace_key
 
 
-def test_tracekey_roundtrip_and_tags_buckets():
+def test_tracekey_roundtrip_and_tags_buckets() -> None:
     key = TraceKey(file="foo.py", object="fn", line=12)
     repr_value = repr(key)
     assert repr_value == "foo.py:fn:L0012"
@@ -447,8 +448,8 @@ def test_tracekey_roundtrip_and_tags_buckets():
     assert tags_large[1] == "valid_steps:10_100"
 
 
-def test_trace_exception_from_exception_captures_origin():
-    def boom():
+def test_trace_exception_from_exception_captures_origin() -> None:
+    def boom() -> typing.NoReturn:
         raise ValueError("kaboom")
 
     try:
@@ -464,7 +465,7 @@ def test_trace_exception_from_exception_captures_origin():
     assert trace_exc.traceback is not None
 
 
-def test_trace_event_and_result_helpers():
+def test_trace_event_and_result_helpers() -> None:
     trace_result, event, trace_key = _build_dummy_trace_result()
     assert hash(event) == hash((0, trace_key))
     assert repr(event) == "step#000000:call@snippet.py:fn:L0001"
@@ -478,42 +479,48 @@ def test_trace_event_and_result_helpers():
     assert "Line 1" in formatted
 
 
-def test_safe_execute_returns_result(monkeypatch: pytest.MonkeyPatch):
+def test_safe_execute_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
     trace_result, _, _ = _build_dummy_trace_result()
 
     class DummyQueue:
-        def __init__(self):
+        def __init__(self) -> None:
             self._items: list[tuple[str, object]] = []
 
         def empty(self) -> bool:
             return not self._items
 
-        def get_nowait(self):
+        def get_nowait(self) -> tuple[str, object]:
             return self._items.pop(0)
 
-        def put(self, value):
+        def put(self, value: tuple[str, object]) -> None:
             self._items.append(value)
 
     events = [("started", 42), ("returned", trace_result)]
 
     class DummyProcess:
-        def __init__(self, target=None, args=(), kwargs=None, name=None):
+        def __init__(
+            self,
+            target: typing.Any = None,
+            args: tuple[typing.Any, ...] = (),
+            kwargs: dict[str, typing.Any] | None = None,
+            name: str | None = None,
+        ) -> None:
             self._kwargs = kwargs or {}
             self.queue = self._kwargs["result_queue"]
             self.exitcode = 0
             self._alive = False
 
-        def start(self):
+        def start(self) -> None:
             for event in events:
                 self.queue.put(event)
 
         def is_alive(self) -> bool:
             return self._alive
 
-        def kill(self):
+        def kill(self) -> None:
             self._alive = False
 
-        def join(self, timeout):
+        def join(self, timeout: float | None) -> None:
             return None
 
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
@@ -523,41 +530,47 @@ def test_safe_execute_returns_result(monkeypatch: pytest.MonkeyPatch):
     assert result == trace_result
 
 
-def test_safe_execute_raises_original_exception(monkeypatch: pytest.MonkeyPatch):
+def test_safe_execute_raises_original_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyQueue:
-        def __init__(self):
+        def __init__(self) -> None:
             self._items: list[tuple[str, object]] = []
 
         def empty(self) -> bool:
             return not self._items
 
-        def get_nowait(self):
+        def get_nowait(self) -> tuple[str, object]:
             return self._items.pop(0)
 
-        def put(self, value):
+        def put(self, value: tuple[str, object]) -> None:
             self._items.append(value)
 
     boom = RuntimeError("boom")
     events = [("started", 84), ("raised", boom)]
 
     class DummyProcess:
-        def __init__(self, target=None, args=(), kwargs=None, name=None):
+        def __init__(
+            self,
+            target: typing.Any = None,
+            args: tuple[typing.Any, ...] = (),
+            kwargs: dict[str, typing.Any] | None = None,
+            name: str | None = None,
+        ) -> None:
             self._kwargs = kwargs or {}
             self.queue = self._kwargs["result_queue"]
             self.exitcode = 1
             self._alive = False
 
-        def start(self):
+        def start(self) -> None:
             for event in events:
                 self.queue.put(event)
 
         def is_alive(self) -> bool:
             return self._alive
 
-        def kill(self):
+        def kill(self) -> None:
             self._alive = False
 
-        def join(self, timeout):
+        def join(self, timeout: float | None) -> None:
             return None
 
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
@@ -568,40 +581,48 @@ def test_safe_execute_raises_original_exception(monkeypatch: pytest.MonkeyPatch)
     assert exc_info.value is boom
 
 
-def test_safe_execute_times_out_and_kills_process(monkeypatch: pytest.MonkeyPatch):
+def test_safe_execute_times_out_and_kills_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class DummyQueue:
-        def __init__(self):
+        def __init__(self) -> None:
             self._items: list[tuple[str, object]] = []
 
         def empty(self) -> bool:
             return not self._items
 
-        def get_nowait(self):
+        def get_nowait(self) -> tuple[str, object]:
             return self._items.pop(0)
 
-        def put(self, value):
+        def put(self, value: tuple[str, object]) -> None:
             self._items.append(value)
 
     events = [("started", 21)]
 
     class DummyProcess:
-        def __init__(self, target=None, args=(), kwargs=None, name=None):
+        def __init__(
+            self,
+            target: typing.Any = None,
+            args: tuple[typing.Any, ...] = (),
+            kwargs: dict[str, typing.Any] | None = None,
+            name: str | None = None,
+        ) -> None:
             self._kwargs = kwargs or {}
             self.queue = self._kwargs["result_queue"]
             self.exitcode = -9
             self._alive = True
 
-        def start(self):
+        def start(self) -> None:
             for event in events:
                 self.queue.put(event)
 
         def is_alive(self) -> bool:
             return self._alive
 
-        def kill(self):
+        def kill(self) -> None:
             self._alive = False
 
-        def join(self, timeout):
+        def join(self, timeout: float | None) -> None:
             return None
 
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
@@ -609,7 +630,7 @@ def test_safe_execute_times_out_and_kills_process(monkeypatch: pytest.MonkeyPatc
 
     time_counter = {"value": 0.0}
 
-    def fake_time():
+    def fake_time() -> float:
         value = time_counter["value"]
         time_counter["value"] += 0.6
         return value

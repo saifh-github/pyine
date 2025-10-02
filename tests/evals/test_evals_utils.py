@@ -98,18 +98,18 @@ def test_token_usage_info_add_and_iadd_success() -> None:
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
 )
-def test_token_usage_with_real_openai_generation(tmp_path: pathlib.Path):
+def test_token_usage_with_real_openai_generation(tmp_path: pathlib.Path) -> None:
     model = pyine.utils.llm_providers.LLMProviderConfig(
         provider="openai",
-        model_kwargs=dict(
-            model="gpt-4o-mini",
-        ),
+        model_kwargs={
+            "model": "gpt-4o-mini",
+        },
     ).get_model()
     prompt_config = pyine.prompts.PromptBuildConfig(
         prompt_name="code_summary",
-        partial_vars=dict(
-            target_word_count=30,
-        ),
+        partial_vars={
+            "target_word_count": 30,
+        },
     )
     code_snippet = """\
 def f(x):

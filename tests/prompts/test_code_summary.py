@@ -5,7 +5,7 @@ import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_config_and_template():
+def test_get_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("code_summary")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "code_summary"

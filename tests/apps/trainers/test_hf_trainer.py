@@ -1,5 +1,6 @@
 import pathlib
 import types
+import typing
 
 import pytest
 
@@ -196,17 +197,26 @@ async def test_main_runs_train_and_evaluate(monkeypatch: pytest.MonkeyPatch) -> 
     train_calls: list[dict] = []
     eval_calls: list[dict] = []
 
-    async def fake_evaluate_model(**kwargs):
+    async def fake_evaluate_model(
+        **kwargs: object,
+    ) -> None:
         eval_calls.append(kwargs)
 
-    def fake_train(**kwargs):
+    def fake_train(
+        **kwargs: object,
+    ) -> str:
         train_calls.append(kwargs)
         return "trainer"
 
-    def fake_prepare_datamodule(config, runtime):
+    def fake_prepare_datamodule(
+        config: object,
+        runtime: object,
+    ) -> str:
         return "datamodule"
 
-    def fake_entrypoint_setup(**_kwargs):
+    def fake_entrypoint_setup(
+        **_kwargs: object,
+    ) -> None:
         return None
 
     config = types.SimpleNamespace(
@@ -250,10 +260,15 @@ async def test_main_runs_train_and_evaluate(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_main_exits_on_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_entrypoint_setup(**_kwargs):
+    def fake_entrypoint_setup(
+        **_kwargs: object,
+    ) -> typing.NoReturn:
         raise pyine.apps.trainers.hf_trainer.pyine.utils.reprod.DryRunExit()
 
-    def fail_prepare_datamodule(*_args, **_kwargs):
+    def fail_prepare_datamodule(
+        *_args: object,
+        **_kwargs: object,
+    ) -> typing.NoReturn:
         raise AssertionError("should not be called")
 
     config = types.SimpleNamespace(

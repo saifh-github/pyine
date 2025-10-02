@@ -16,7 +16,7 @@ import tests.env_checks
 
 def test_compute_estimated_train_token_count_handles_nested_messages(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: pathlib.Path,
 ) -> None:
     train_path = tmp_path / "train.jsonl"
     train_path.write_text(
@@ -52,10 +52,15 @@ def test_compute_estimated_train_token_count_handles_nested_messages(
         "get_openai_tokenizer",
         lambda **_kwargs: _FakeTokenizer(),
     )
+
+    def _read_dataset_from_jsonl(path: pathlib.Path) -> list[object]:
+        with open(path, encoding="utf-8") as file_obj:
+            return [json.loads(line) for line in file_obj.read().splitlines()]
+
     monkeypatch.setattr(
         pyine.apps.trainers.openai_finetune.pyine.utils.openai,
         "read_dataset_from_jsonl",
-        lambda path: [json.loads(line) for line in open(path, encoding="utf-8").read().splitlines()],
+        _read_dataset_from_jsonl,
     )
     config = _FakeConfig()
     config.datamodule_config = types.SimpleNamespace(train_subset_names=["train"])
@@ -64,7 +69,10 @@ def test_compute_estimated_train_token_count_handles_nested_messages(
     assert count == 4
 
 
-def test_train_streams_events_and_returns_model(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_train_streams_events_and_returns_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     train_calls: list[str] = []
 
     class _FakeFinetuner:
@@ -138,17 +146,26 @@ async def test_main_skip_fine_tuning_updates_wandb(
     provider_calls: list[dict[str, object]] = []
     wandb_updates: list[dict[str, object]] = []
 
-    async def fake_evaluate_model(**kwargs):
+    async def fake_evaluate_model(
+        **kwargs: object,
+    ) -> None:
         evaluate_calls.append(kwargs)
 
-    def fake_prepare_datamodule(config, runtime):
+    def fake_prepare_datamodule(
+        config: object,
+        runtime: object,
+    ) -> types.SimpleNamespace:
         dm_cfg = types.SimpleNamespace(get_prompt_chain=lambda model: model)
         return types.SimpleNamespace(config=dm_cfg)
 
-    def fake_entrypoint_setup(**_kwargs):
+    def fake_entrypoint_setup(
+        **_kwargs: object,
+    ) -> None:
         return None
 
-    def fake_get_model_from_provider(**kwargs):
+    def fake_get_model_from_provider(
+        **kwargs: object,
+    ) -> str:
         provider_calls.append(kwargs)
         return "provider-model"
 
@@ -158,7 +175,10 @@ async def test_main_skip_fine_tuning_updates_wandb(
             self._is_finished = True
 
     class _FakeApi:
-        def run(self, run_id: str):
+        def run(
+            self,
+            run_id: str,
+        ) -> _FakeRun:
             assert run_id == "run-1"
             return _FakeRun()
 

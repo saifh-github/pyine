@@ -11,9 +11,11 @@ import pyine.utils.reprod
 import tests.env_checks
 
 
-def _assert_non_leaking_assignments(metadata):
-    traces_to_subsets = dict()
-    problems_to_subsets = dict()
+def _assert_non_leaking_assignments(
+    metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata,
+) -> None:
+    traces_to_subsets: dict[str, str] = {}
+    problems_to_subsets: dict[str, str] = {}
     for subset_name, subset_traces in metadata.subset_traces.items():
         for trace in subset_traces:
             assert trace.identifier not in traces_to_subsets
@@ -30,9 +32,9 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
         lmdb_paths=[
             pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
         ],
-        dataparser_config_overrides=dict(
-            train=dict(
-                transform_config=pyine.organisms.datamodules.utils.samples.SampleTransformConfig(
+        dataparser_config_overrides={
+            "train": {
+                "transform_config": pyine.organisms.datamodules.utils.samples.SampleTransformConfig(
                     transform_strategy="hybrid",
                     output_type_prob_map={
                         "program_output": 0.5,
@@ -40,14 +42,14 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
                         "function_return": 0.4,
                     },
                 ),
-            ),  # other subsets will default to never producing partial samples
-        ),
-        dataloader_config_overrides=dict(
-            train=dict(
-                batch_size=16,
-                shuffle=True,
-            ),
-        ),
+            },  # other subsets will default to never producing partial samples
+        },
+        dataloader_config_overrides={
+            "train": {
+                "batch_size": 16,
+                "shuffle": True,
+            },
+        },
         max_solution_count=100,
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
     )
@@ -66,7 +68,9 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
     tests.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
-def test_shortcuts_datamodule_integration(shortcuts_dm_config):
+def test_shortcuts_datamodule_integration(
+    shortcuts_dm_config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
+) -> None:
     pyine.utils.reprod.load_dotenv()
     dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():
@@ -91,7 +95,7 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     )
     transformed_sample_msgs = sample_msgs_transf_fn(sample)
     assert isinstance(transformed_sample_msgs, list)
-    assert all([hasattr(m, "type") and hasattr(m, "content") for m in transformed_sample_msgs])
+    assert all(hasattr(m, "type") and hasattr(m, "content") for m in transformed_sample_msgs)
     print("sample transform works")
     hf_msgs_dataset = dm.get_hf_messages_dataset(subset_name="train")
     assert isinstance(hf_msgs_dataset, hf_datasets.Dataset)
@@ -105,10 +109,10 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     hf_batch_dataset = pyine.organisms.datamodules.utils.transforms.apply_model_template_to_messages(
         hf_messages_dataset=hf_msgs_dataset,
         tokenizer=tokenizer,
-        apply_chat_template_kwargs=dict(
-            tokenize=False,
-            add_generation_prompt=False,
-        ),
+        apply_chat_template_kwargs={
+            "tokenize": False,
+            "add_generation_prompt": False,
+        },
     )
     assert isinstance(hf_batch_dataset, hf_datasets.Dataset)
     assert len(hf_batch_dataset) == len(parser)  # noqa
@@ -132,7 +136,9 @@ def test_shortcuts_datamodule_integration(shortcuts_dm_config):
     tests.env_checks.HF_ACCESS_TOKEN_MISSING,
     reason="Hugging Face access token is missing, cannot check hf dataset loading",
 )
-def test_shortcuts_datamodule_predefined_split(shortcuts_dm_config):
+def test_shortcuts_datamodule_predefined_split(
+    shortcuts_dm_config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
+) -> None:
     pyine.utils.reprod.load_dotenv()
     dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
     if dm._is_metadata_prepared():

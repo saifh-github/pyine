@@ -15,21 +15,21 @@ import pyine.utils.portability as portability
 
 
 class TestEstimateTolerance:
-    def test_integer_values(self):
+    def test_integer_values(self) -> None:
         rtol, atol = portability.estimate_tolerance("123")
         assert atol == 0.0
         assert 1e-15 <= rtol <= 1e-5
         assert not np.isclose(122, 123, rtol, atol)
         assert np.isclose(122.9999, 123, rtol, atol)
 
-    def test_simple_decimal(self):
+    def test_simple_decimal(self) -> None:
         rtol, atol = portability.estimate_tolerance("1.0")
         assert atol == 0.0
         assert 1e-15 <= rtol <= 1e-5
         assert not np.isclose(1, 2, rtol, atol)
         assert np.isclose(0.99999, 1, rtol, atol)
 
-    def test_decimal_with_precision(self):
+    def test_decimal_with_precision(self) -> None:
         rtol, atol = portability.estimate_tolerance("3.14159")
         expected_atol = 0.5 * (10 ** (-5))  # 5 decimal places
         assert atol == expected_atol
@@ -37,7 +37,7 @@ class TestEstimateTolerance:
         assert not np.isclose(3.1415, 3.14159, rtol, atol)
         assert np.isclose(3.141592654, 3.14159, rtol, atol)
 
-    def test_small_decimal(self):
+    def test_small_decimal(self) -> None:
         rtol, atol = portability.estimate_tolerance("0.001")
         expected_atol = 0.5 * (10 ** (-3))  # 3 decimal places
         assert atol == expected_atol
@@ -45,7 +45,7 @@ class TestEstimateTolerance:
         assert not np.isclose(0.0001, 0.001, rtol, atol)
         assert np.isclose(0.0012, 0.001, rtol, atol)
 
-    def test_scientific_notation_small(self):
+    def test_scientific_notation_small(self) -> None:
         rtol, atol = portability.estimate_tolerance("1.23e-6")
         assert rtol == 1e-5  # magnitude < 1e-6
         expected_atol = 0.5 * (10 ** (-8))  # 3 sig digits, exp -6
@@ -53,46 +53,46 @@ class TestEstimateTolerance:
         assert not np.isclose(1.23e-7, 1.23e-6, rtol, atol)
         assert np.isclose(1.2345e-6, 1.23e-6, rtol, atol)
 
-    def test_scientific_notation_large(self):
+    def test_scientific_notation_large(self) -> None:
         rtol, atol = portability.estimate_tolerance("2.5e10")
         assert atol == 0.0
         assert rtol == 1e-5
         assert not np.isclose(2.5e9, 2.5e10, rtol, atol)
         assert np.isclose(2.49998e10, 2.5e10, rtol, atol)
 
-    def test_negative_values(self):
+    def test_negative_values(self) -> None:
         rtol, atol = portability.estimate_tolerance("-3.14")
         expected_atol = 0.5 * (10 ** (-2))
         assert atol == expected_atol
         assert 1e-15 <= rtol <= 1e-5
 
-    def test_zero_value(self):
+    def test_zero_value(self) -> None:
         rtol, atol = portability.estimate_tolerance("0")
         assert atol == 0.0
         assert rtol == 1e-9
 
-    def test_zero_with_decimal(self):
+    def test_zero_with_decimal(self) -> None:
         rtol, atol = portability.estimate_tolerance("0.0")
         assert atol == 0.0
         assert rtol == 1e-9
 
-    def test_whitespace_handling(self):
+    def test_whitespace_handling(self) -> None:
         rtol, atol = portability.estimate_tolerance("  3.14  ")
         expected_atol = 0.5 * (10 ** (-2))
         assert atol == expected_atol
         assert 1e-15 <= rtol <= 1e-5
 
-    def test_invalid_string_raises_error(self):
+    def test_invalid_string_raises_error(self) -> None:
         with pytest.raises(ValueError):
             portability.estimate_tolerance("not_a_number")
 
-    def test_tolerance_bounds_applied(self):
+    def test_tolerance_bounds_applied(self) -> None:
         rtol, atol = portability.estimate_tolerance("1.0000000000000001")
         assert rtol >= 1e-15
         assert rtol <= 1e-5
 
 
-def test_get_portable_representation_various_types():
+def test_get_portable_representation_various_types() -> None:
     assert portability.get_portable_representation(42) == "42"
     assert portability.get_portable_representation(3.14) == repr(3.14)
     assert portability.get_portable_representation(True) == "True"
@@ -126,7 +126,7 @@ def test_get_portable_representation_various_types():
     ex_repr = portability.get_portable_representation(exc)
     assert ex_repr == repr(exc)
 
-    def foo(x):
+    def foo(x: typing.Any) -> typing.Any:
         return x
 
     call_repr = portability.get_portable_representation(foo)
@@ -134,7 +134,7 @@ def test_get_portable_representation_various_types():
     assert call_repr.endswith("<locals>.foo'>")
 
     class CallableNoName:
-        def __call__(self):
+        def __call__(self) -> int:
             return 0
 
     c = CallableNoName()
@@ -154,14 +154,14 @@ def test_get_portable_representation_various_types():
     assert obj_repr == "<instance 'object'>"
 
 
-def test_get_portable_representation_truncation():
+def test_get_portable_representation_truncation() -> None:
     lst = list(range(200))
     s = portability.get_portable_representation(lst, max_length=20)
     assert s.endswith("...")
     assert len(s) == 20
 
 
-def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
+def test_format_object_changes_numpy_df_series_dict_list_tuple_instance() -> None:
     # numpy ndarray changes and shape mismatch
     a = np.array([[1, 2], [3, 4]])
     b = np.array([[1, 99], [3, 4]])
@@ -208,7 +208,11 @@ def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
 
     # objects with changed attributes
     class Obj:
-        def __init__(self, x, y):
+        def __init__(
+            self,
+            x: typing.Any,
+            y: typing.Any,
+        ) -> None:
             self.x = x
             self.y = y
 
@@ -220,7 +224,7 @@ def test_format_object_changes_numpy_df_series_dict_list_tuple_instance():
     assert portability.format_object_changes(1, "1") is None
 
 
-def test_get_portable_filename():
+def test_get_portable_filename() -> None:
     assert portability.get_portable_filename("<string>") == "<string>"
     assert portability.get_portable_filename("foo.py") == "foo.py"
     assert portability.get_portable_filename(np.__file__) == "numpy/__init__.py"
@@ -228,27 +232,34 @@ def test_get_portable_filename():
 
 
 class SomeDummyClass:
-    def __init__(self, x):
+    def __init__(
+        self,
+        x: typing.Any,
+    ) -> None:
         self.x = x
 
     @staticmethod
-    def some_static_fn():
+    def some_static_fn() -> None:
         pass
 
     @classmethod
-    def some_class_method(cls):
+    def some_class_method(
+        cls,
+    ) -> None:
         pass
 
-    def some_instance_method(self):
+    def some_instance_method(
+        self,
+    ) -> None:
         pass
 
 
-def test_portable_function_name():
+def test_portable_function_name() -> None:
     assert "lambda" in portability.get_portable_function_name(lambda x: x)
     curr_test_name = "tests.utils.test_portability.test_portable_function_name"
     assert portability.get_portable_function_name(test_portable_function_name) == curr_test_name
 
-    def _local_func():
+    def _local_func() -> None:
         pass
 
     assert portability.get_portable_function_name(_local_func) == curr_test_name + ".<locals>._local_func"
@@ -267,7 +278,9 @@ def test_portable_function_name():
     )
 
 
-def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
+def test_numbered_lines_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     code = "a = 1\nprint(a)"
     formatted = portability.get_code_with_numbered_lines(code, prefixed_tabs=2)
     lines = formatted.splitlines()
@@ -277,7 +290,10 @@ def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
     captured = []
 
     class Logger:
-        def info(self, m):
+        def info(
+            self,
+            m: str,
+        ) -> None:
             captured.append(m)
 
     portability.print_code_with_numbered_lines(code, prefixed_tabs=1, logger=Logger())
@@ -291,18 +307,18 @@ def test_numbered_lines_helpers(monkeypatch: pytest.MonkeyPatch):
 
 
 class TestGetFullyQualifiedName:
-    def test_local_function(self):
-        def foo():
+    def test_local_function(self) -> None:
+        def foo() -> None:
             pass
 
         name = portability.get_fully_qualified_name(foo)
         assert name.endswith("TestGetFullyQualifiedName.test_local_function.<locals>.foo")
 
-    def test_builtin_type(self):
+    def test_builtin_type(self) -> None:
         name = portability.get_fully_qualified_name(list)
         assert name == "list"
 
-    def test_3rd_party_class(self):
+    def test_3rd_party_class(self) -> None:
         import torch.utils.data as data_utils
 
         name = portability.get_fully_qualified_name(data_utils.DataLoader)
@@ -310,28 +326,28 @@ class TestGetFullyQualifiedName:
 
 
 class TestImportFromDottedPath:
-    def test_import_builtin_module(self):
+    def test_import_builtin_module(self) -> None:
         module = portability.import_from_dotted_path("math")
         assert module.__name__ == "math"
 
-    def test_import_custom_path(self):
+    def test_import_custom_path(self) -> None:
         module = portability.import_from_dotted_path("pyine.utils.portability")
         assert module.__name__ == "pyine.utils.portability"
 
-    def test_import_function_from_custom_module(self):
+    def test_import_function_from_custom_module(self) -> None:
         func = portability.import_from_dotted_path("pyine.utils.portability.get_portable_representation")
         assert func.__name__ == "get_portable_representation"
 
-    def test_import_nonexistent_module(self):
+    def test_import_nonexistent_module(self) -> None:
         with pytest.raises(ImportError):
             portability.import_from_dotted_path("nonexistent.module")
 
-    def test_import_invalid_path(self):
+    def test_import_invalid_path(self) -> None:
         with pytest.raises(ValueError):
             portability.import_from_dotted_path("")
 
 
-def test_parse_duration_to_timedelta():
+def test_parse_duration_to_timedelta() -> None:
     assert portability.parse_duration_to_timedelta("") is None
     assert portability.parse_duration_to_timedelta(None) is None
     assert portability.parse_duration_to_timedelta("0s") == datetime.timedelta(0)
@@ -347,7 +363,7 @@ def test_parse_duration_to_timedelta():
         portability.parse_duration_to_timedelta("1happy")
 
 
-def test_parse_indices_spec():
+def test_parse_indices_spec() -> None:
     assert portability.parse_indices_spec("") == []
     assert portability.parse_indices_spec("0") == [0]
     assert portability.parse_indices_spec("0,1") == [0, 1]
@@ -357,7 +373,7 @@ def test_parse_indices_spec():
     assert portability.parse_indices_spec("4-10,1-3") == [1, 2, 3, *range(4, 11)]
 
 
-def test_render_config_for_dataclass_and_pydantic():
+def test_render_config_for_dataclass_and_pydantic() -> None:
     @dataclasses.dataclass
     class DemoDataclass:
         foo: int = 1
@@ -394,7 +410,7 @@ def test_render_config_for_dataclass_and_pydantic():
     assert "qux" in model_output
 
 
-def test_rich_fold_indicator_wraps_lines():
+def test_rich_fold_indicator_wraps_lines() -> None:
     indicator = portability._RichFoldIndicator("line one\nline two that wraps", prefix="> ", suffix=" <")
     console = rich.console.Console(record=True, width=15)
     console.print(indicator)
@@ -403,7 +419,7 @@ def test_rich_fold_indicator_wraps_lines():
     assert " <" in rendered
 
 
-def test_render_config_unknown_type_and_doc_selection():
+def test_render_config_unknown_type_and_doc_selection() -> None:
     class UnknownConfig:
         __cfg_name__ = "name"
         __cfg_group__ = "group"
@@ -424,7 +440,9 @@ def test_render_config_unknown_type_and_doc_selection():
     assert "+group=name" in normalized
 
 
-def test_render_config_handles_unresolved_omegaconf(monkeypatch: pytest.MonkeyPatch):
+def test_render_config_handles_unresolved_omegaconf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     @dataclasses.dataclass
     class Config:
         foo: typing.Any = "default"

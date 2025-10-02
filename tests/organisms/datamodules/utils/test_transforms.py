@@ -2,6 +2,7 @@ import collections
 import importlib
 import sys
 import types
+import typing
 
 import pytest
 
@@ -9,14 +10,19 @@ import pyine.prompts.manager as pm
 
 
 @pytest.fixture()
-def transforms_with_fakes(monkeypatch):
+def transforms_with_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> types.ModuleType:
     # fake langchain_core.messages with minimal message classes
     lc_module = types.ModuleType("langchain_core")
     lc_messages = types.ModuleType("langchain_core.messages")
     lc_output_parsers = types.ModuleType("langchain_core.output_parsers")
 
     class BaseMessage:
-        def __init__(self, content):
+        def __init__(
+            self,
+            content: str,
+        ) -> None:
             self.content = content
 
     class SystemMessage(BaseMessage):
@@ -35,10 +41,14 @@ def transforms_with_fakes(monkeypatch):
 
     # minimal output parser class to satisfy imports
     class PydanticOutputParser:
-        def __init__(self, *args, **kwargs):
+        def __init__(
+            self,
+            *args: typing.Any,
+            **kwargs: typing.Any,
+        ) -> None:
             pass
 
-        def get_format_instructions(self):
+        def get_format_instructions(self) -> str:
             return ""
 
     lc_output_parsers.PydanticOutputParser = PydanticOutputParser
@@ -57,11 +67,20 @@ def transforms_with_fakes(monkeypatch):
     datasets_mod = types.ModuleType("datasets")
 
     class FakeDataset:
-        def __init__(self, data):
+        def __init__(
+            self,
+            data: dict[str, list[typing.Any]],
+        ) -> None:
             # data is a dict of lists, e.g., {"messages": [[...], [...]]}
             self.data = data
 
-        def map(self, function, batched, desc, **kwargs):
+        def map(
+            self,
+            function: typing.Callable[[dict[str, list[typing.Any]]], dict[str, list[typing.Any]]],
+            batched: bool,
+            desc: str | None,
+            **kwargs: typing.Any,
+        ) -> "FakeDataset":
             result = function(self.data)
             return FakeDataset({"text": result["text"]})
 
@@ -78,19 +97,24 @@ def transforms_with_fakes(monkeypatch):
     monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
     monkeypatch.setitem(sys.modules, "datasets", datasets_mod)
     sys.modules.pop("pyine.organisms.datamodules.utils.transforms", None)
-    transforms_mod = importlib.import_module("pyine.organisms.datamodules.utils.transforms")
-    return transforms_mod
+    return importlib.import_module("pyine.organisms.datamodules.utils.transforms")
 
 
 # add test for keep orig sample data
 
 
-def test_create_sample_transform_string_no_answer(monkeypatch, transforms_with_fakes):
+def test_create_sample_transform_string_no_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
     transforms = transforms_with_fakes
 
     # provide a dummy prompt template with .format()
     class DummyTemplate:
-        def format(self, **kwargs):
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
             return f"Q: {kwargs['question']}"
 
     # patch the prompt manager getter to return our dummy
@@ -106,11 +130,17 @@ def test_create_sample_transform_string_no_answer(monkeypatch, transforms_with_f
     assert result == "Q: What is this?"
 
 
-def test_create_sample_transform_string_with_answer(monkeypatch, transforms_with_fakes):
+def test_create_sample_transform_string_with_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
     transforms = transforms_with_fakes
 
     class DummyTemplate:
-        def format(self, **kwargs):
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
             return f"Q: {kwargs['question']}"
 
     monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
@@ -124,12 +154,18 @@ def test_create_sample_transform_string_with_answer(monkeypatch, transforms_with
     assert result == "Q: What is this?\nAn answer"
 
 
-def test_create_sample_transform_chat_to_hf_messages(monkeypatch, transforms_with_fakes):
+def test_create_sample_transform_chat_to_hf_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
     transforms = transforms_with_fakes
     lc_msgs = sys.modules["langchain_core.messages"]
 
     class DummyTemplate:
-        def format_messages(self, **kwargs):
+        def format_messages(
+            self,
+            **kwargs: typing.Any,
+        ) -> list[lc_msgs.HumanMessage]:
             # One human message; the transform will append an AI message
             return [lc_msgs.HumanMessage(kwargs["question"])]
 
@@ -150,15 +186,21 @@ def test_create_sample_transform_chat_to_hf_messages(monkeypatch, transforms_wit
     ]
 
 
-def test_apply_model_template_to_messages_basic(transforms_with_fakes):
+def test_apply_model_template_to_messages_basic(
+    transforms_with_fakes: typing.Any,
+) -> None:
     transforms = transforms_with_fakes
     datasets_mod = sys.modules["datasets"]
     transformers_mod = sys.modules["transformers"]
 
     class DummyTokenizer(transformers_mod.PreTrainedTokenizer):
-        eos_token = "<eos>"
+        eos_token = "<eos>"  # noqa: S105 - harmless dummy token for tests
 
-        def apply_chat_template(self, messages_batch, **kwargs):
+        def apply_chat_template(
+            self,
+            messages_batch: list[list[dict[str, str]]],
+            **kwargs: typing.Any,
+        ) -> list[str]:
             # messages_batch is a list of list-of-dicts
             out = []
             for msgs in messages_batch:

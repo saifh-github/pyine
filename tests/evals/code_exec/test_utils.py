@@ -19,8 +19,8 @@ class _DummyGraderChain:
     def invoke(
         self,
         data: dict[str, typing.Any],
-        *args,
-        **kwargs,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> float:
         expected = typing.cast("str", data["expected_output"])
         predicted = typing.cast("str", data["predicted_output"])
@@ -29,8 +29,8 @@ class _DummyGraderChain:
     async def ainvoke(
         self,
         data: dict[str, typing.Any],
-        *args,
-        **kwargs,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> float:
         return await asyncio.to_thread(self.invoke, data, *args, **kwargs)
 
@@ -133,9 +133,9 @@ async def test_real_llm_grade_scoring() -> None:
     evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(
         llm_provider_config=pyine.utils.llm_providers.LLMProviderConfig(
             provider="openai",
-            model_kwargs=dict(
-                model="gpt-4o-mini",
-            ),
+            model_kwargs={
+                "model": "gpt-4o-mini",
+            },
         ),
     )
     evaluator.add_sample(

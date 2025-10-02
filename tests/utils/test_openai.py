@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import itertools
 import pathlib
@@ -212,18 +213,18 @@ class TestOpenAIIntegration:
         suffix = f"{test_tag}-{int(time.time())}"
         config = openai_utils.OpenAIFineTunerParamsConfig(
             base_model=fine_tune_base_model,
-            method=dict(type="supervised"),
+            method={"type": "supervised"},
             suffix=suffix,
             timeout_override=10,
             hyperparams=openai_utils.OpenAIFineTunerHyperparamsConfig(
                 n_epochs=1,
             ),
-            file_upload_params=dict(
-                expires_after=dict(
-                    seconds=60 * 60 * 24 * 10,  # 10 days expiration for all uploaded files once created
-                    anchor="created_at",
-                ),
-            ),
+            file_upload_params={
+                "expires_after": {
+                    "seconds": 60 * 60 * 24 * 10,  # 10 days expiration for all uploaded files once created
+                    "anchor": "created_at",
+                },
+            },
         )
         return openai_utils.OpenAIFineTuner(client=client, config=config)
 
@@ -231,7 +232,7 @@ class TestOpenAIIntegration:
     def tiny_dataset_file(
         self,
         tmp_path: pathlib.Path,
-    ):
+    ) -> typing.Iterator[pathlib.Path]:
         # keep this tiny and valid for fine-tune file upload shape
         dataset: list[dict[str, typing.Any]] = [
             {
@@ -295,11 +296,8 @@ class TestOpenAIIntegration:
         finally:
             # cleanup remote file to avoid cluttering account storage
             if remote_id:
-                try:
+                with contextlib.suppress(Exception):
                     tuner.client.files.delete(remote_id)
-                except Exception:
-                    # best-effort cleanup; don't fail test teardown
-                    pass
 
     @pytest.mark.slow
     def test_finetune_nano_model_end_to_end(

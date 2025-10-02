@@ -1,6 +1,8 @@
 import pathlib
+import typing
 
 import pytest
+import pytest_mock
 
 import pyine.prompts.configs.hints.docs as hints_docs
 import pyine.prompts.configs.issues.docs as issues_docs
@@ -10,7 +12,10 @@ import pyine.prompts.utils as prompt_utils
 
 
 class TestPromptManager:
-    def test_fake_manager_init(self, mocker):
+    def test_fake_manager_init(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
         manager = prompt_manager.PromptManager(package_name="custom.package", prompts_subdir="custom_dir")
         assert manager.package_name == "custom.package"
         assert manager.prompts_subdir == "custom_dir"
@@ -33,7 +38,9 @@ class TestPromptManager:
         result = manager.list_prompt_versions("test_prompt")
         assert result == ["v1.0.0", "v2.0.0"]
 
-    def test_real_manager_init(self):
+    def test_real_manager_init(
+        self,
+    ) -> None:
         manager = prompt_manager.get_framework_prompt_manager()
         assert manager.package_name == "pyine.prompts"
         assert manager.prompts_subdir == "templates"
@@ -48,10 +55,15 @@ class TestPromptManager:
             prompt_config = manager.get_prompt_config(result)
             assert prompt_config.metadata.name == result
 
-    def test_prompt_build_config_forwards_block_variables_to_template(self, monkeypatch):
+    def test_prompt_build_config_forwards_block_variables_to_template(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         captured_kwargs: dict[str, dict[str, str] | None] = {}
 
-        def fake_get_prompt_template(**kwargs):
+        def fake_get_prompt_template(
+            **kwargs: typing.Any,
+        ) -> str:
             captured_kwargs.update(kwargs)
             return "template"
 
@@ -68,10 +80,15 @@ class TestPromptManager:
         assert captured_kwargs["context_variables"] == {"context": "value"}
         assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
 
-    def test_prompt_build_config_forwards_block_variables_to_chain(self, monkeypatch):
+    def test_prompt_build_config_forwards_block_variables_to_chain(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         captured_kwargs: dict[str, dict[str, str] | None] = {}
 
-        def fake_get_prompt_chain(**kwargs):
+        def fake_get_prompt_chain(
+            **kwargs: typing.Any,
+        ) -> str:
             captured_kwargs.update(kwargs)
             return "chain"
 
@@ -88,7 +105,9 @@ class TestPromptManager:
         assert captured_kwargs["context_variables"] == {"context": "value"}
         assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
 
-    def test_prompt_aliases_reuse_hints_docs(self):
+    def test_prompt_aliases_reuse_hints_docs(
+        self,
+    ) -> None:
         manager = prompt_manager.get_framework_prompt_manager()
         prompts = manager.list_prompts()
         assert "issues/docs" in prompts
@@ -100,11 +119,15 @@ class TestPromptManager:
         assert issues_config is not hints_config
 
 
-def test_issues_docs_delegates_to_hints(monkeypatch: pytest.MonkeyPatch):
+def test_issues_docs_delegates_to_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_kwargs: dict[str, object] = {}
     marker = object()
 
-    def fake_get_prompt_template(**kwargs):
+    def fake_get_prompt_template(
+        **kwargs: typing.Any,
+    ) -> object:
         captured_kwargs.update(kwargs)
         return marker
 

@@ -1,5 +1,6 @@
 import dataclasses
 import types
+import typing
 
 import langchain_core.messages
 import pytest
@@ -47,7 +48,10 @@ class _FakeSampleEval:
 
 
 class _FakeOutcomeEvaluator:
-    def __init__(self, llm_provider_config=None) -> None:
+    def __init__(
+        self,
+        llm_provider_config: typing.Any | None = None,
+    ) -> None:
         self.llm_provider_config = llm_provider_config
         self.results: list[_FakeSampleEval] = []
         self.added: list[tuple[str, str, str, list[str]]] = []
@@ -108,13 +112,19 @@ async def test_evaluate_runnable_model_sequential(
             chain_calls.append(payload)
             return _build_message(payload["identifier"])
 
-    async def fake_get_metrics(evaluator, token_usage):
+    async def fake_get_metrics(
+        evaluator: _FakeOutcomeEvaluator,
+        token_usage: typing.Any,
+    ) -> dict[str, typing.Any]:
         return {
             "accuracy": len(evaluator.results),
             "total_tokens": token_usage.total_tokens,
         }
 
-    def fake_tqdm(iterable, **_kwargs):
+    def fake_tqdm(
+        iterable: typing.Iterable[typing.Any],
+        **_kwargs: typing.Any,
+    ) -> typing.Iterable[typing.Any]:
         return iterable
 
     monkeypatch.setattr(
@@ -185,22 +195,29 @@ async def test_evaluate_runnable_model_parallel(
         ) -> langchain_core.messages.AIMessage:
             return _build_message(payload["identifier"])
 
-    async def fake_get_metrics(evaluator, token_usage):
+    async def fake_get_metrics(
+        evaluator: _FakeOutcomeEvaluator,
+        token_usage: typing.Any,
+    ) -> dict[str, typing.Any]:
         return {"accuracy": len(evaluator.results), "tokens": token_usage.total_tokens}
 
-    def fake_tqdm(iterable=None, total=None, **_kwargs):
+    def fake_tqdm(
+        iterable: typing.Iterable[typing.Any] | None = None,
+        total: int | None = None,
+        **_kwargs: typing.Any,
+    ) -> typing.Any:
         class _Prog:
-            def __init__(self, total):
+            def __init__(self, total: int | None) -> None:
                 self.total = total
                 self.history: list[int] = []
 
-            def update(self, value):
+            def update(self, value: int) -> None:
                 self.history.append(value)
 
-            def write(self, _msg):
+            def write(self, _msg: str) -> None:
                 return None
 
-            def close(self):
+            def close(self) -> None:
                 return None
 
         if iterable is None:
@@ -208,42 +225,54 @@ async def test_evaluate_runnable_model_parallel(
         return iterable
 
     class _FakeExecutor:
-        def submit(self, fn, payload):
+        def submit(
+            self,
+            fn: typing.Callable[[typing.Any], typing.Any],
+            payload: typing.Any,
+        ) -> "_FakeFuture":
             return _FakeFuture(fn(payload))
 
     async def fake_run_with_sliding_window(
         *,
-        input_items,
-        submit_one,
-        process_result,
-        progress_callback,
-        **_kwargs,
+        input_items: typing.Iterable[int],
+        submit_one: typing.Callable[..., typing.Any],
+        process_result: typing.Callable[[int, typing.Any], None],
+        progress_callback: typing.Callable[[list[typing.Any], list[int]], typing.Awaitable[None]],
+        **_kwargs: typing.Any,
     ) -> None:
         completed: list[int] = []
         executor = _FakeExecutor()
         for item in input_items:
             submitted.append(item)
             future_or_response = submit_one(item, executor=executor)
-            if hasattr(future_or_response, "result"):
-                response = future_or_response.result()
-            else:
-                response = future_or_response
+            response = (  # SIM108 guard to keep branch explicit for readability
+                future_or_response.result() if hasattr(future_or_response, "result") else future_or_response
+            )
             process_result(item, response)
             completed.append(item)
             await progress_callback([], completed)
 
     class _FakeFuture:
-        def __init__(self, result):
+        def __init__(
+            self,
+            result: typing.Any,
+        ) -> None:
             self._result = result
 
-        def result(self):
+        def result(self) -> typing.Any:
             return self._result
 
-    def fake_submit_one(sample_idx, executor):
+    def fake_submit_one(
+        sample_idx: int,
+        executor: typing.Any,
+    ) -> _FakeFuture:
         message = _build_message(f"p{sample_idx}")
         return _FakeFuture(message)
 
-    async def fake_progress_callback(_pending, completed):
+    async def fake_progress_callback(
+        _pending: list[typing.Any],
+        completed: list[int],
+    ) -> None:
         progress_reports.append(len(completed))
 
     monkeypatch.setattr(
@@ -333,11 +362,10 @@ async def test_evaluate_hf_model_generates_results(
     class _FakeDataset(list):
         def map(
             self,
-            fn,
+            fn: typing.Callable[[typing.Any], typing.Any],
             desc: str,
         ) -> "_FakeDataset":
-            mapped = _FakeDataset([fn(item) for item in self])
-            return mapped
+            return _FakeDataset([fn(item) for item in self])
 
         def sort(
             self,
@@ -352,7 +380,7 @@ async def test_evaluate_hf_model_generates_results(
             subset_name: str,
             append_answer: bool,
             keep_original_data: bool,
-            tokenizer,
+            tokenizer: typing.Any,
             apply_chat_template_eval_config: bool,
         ) -> _FakeDataset:
             return _FakeDataset(samples)
@@ -389,19 +417,26 @@ async def test_evaluate_hf_model_generates_results(
                 return []
             return self.comma_separated_tags.split(",")
 
-    def fake_is_hf_model(_model):
+    def fake_is_hf_model(_model: typing.Any) -> bool:
         return True
 
-    def fake_supports_text_generation(_model):
+    def fake_supports_text_generation(_model: typing.Any) -> bool:
         return True
 
-    def fake_infer_effective_max_seq_len(_model, _tokenizer):
+    def fake_infer_effective_max_seq_len(
+        _model: typing.Any,
+        _tokenizer: typing.Any,
+    ) -> int:
         return 16
 
-    def fake_batchwise_padding_collator(**_kwargs):
+    def fake_batchwise_padding_collator(
+        **_kwargs: typing.Any,
+    ) -> str:
         return "collator"
 
-    def fake_run_text_generation(**_kwargs):
+    def fake_run_text_generation(
+        **_kwargs: typing.Any,
+    ) -> list[dict[str, typing.Any]]:
         outputs = []
         for idx, batch in enumerate(_kwargs["dataloader"]):
             outputs.append(
@@ -413,13 +448,22 @@ async def test_evaluate_hf_model_generates_results(
             )
         return outputs
 
-    async def fake_get_metrics(evaluator, token_usage):
+    async def fake_get_metrics(
+        evaluator: _FakeOutcomeEvaluator,
+        token_usage: typing.Any,
+    ) -> dict[str, typing.Any]:
         return {"count": len(evaluator.results), "tokens": token_usage.total_tokens}
 
-    def fake_data_loader(dataset, **_kwargs):
+    def fake_data_loader(
+        dataset: typing.Iterable[typing.Any],
+        **_kwargs: typing.Any,
+    ) -> typing.Iterable[typing.Any]:
         return dataset
 
-    def fake_tqdm(iterable, **_kwargs):
+    def fake_tqdm(
+        iterable: typing.Iterable[typing.Any],
+        **_kwargs: typing.Any,
+    ) -> typing.Iterable[typing.Any]:
         return iterable
 
     monkeypatch.setattr(

@@ -46,10 +46,7 @@ class SimpleTokenizer:
         token_ids: typing.Iterable[int] | torch.Tensor,
         skip_special_tokens: bool = True,
     ) -> str:
-        if isinstance(token_ids, torch.Tensor):
-            values = token_ids.tolist()
-        else:
-            values = list(token_ids)
+        values = token_ids.tolist() if isinstance(token_ids, torch.Tensor) else list(token_ids)
         characters: list[str] = []
         for value in values:
             if skip_special_tokens and value == self.pad_token_id:

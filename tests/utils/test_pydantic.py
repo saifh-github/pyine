@@ -15,11 +15,15 @@ class MyModel(pydantic.BaseModel):
     b: str
 
 
-def setup_function(_fn):  # ensure registry clean before each test file function
+def setup_function(
+    _fn: typing.Callable[..., typing.Any],
+) -> None:  # ensure registry clean before each test file function
     pyd.PydanticYAMLLoader.clear_registry()
 
 
-def test_register_model_and_lookup(monkeypatch: pytest.MonkeyPatch):
+def test_register_model_and_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # invalid model type
     with pytest.raises(ValueError):
         pyd.PydanticYAMLLoader.register_model("bad", typing.cast("type", int))  # type: ignore[arg-type,assignment]
@@ -34,14 +38,16 @@ def test_register_model_and_lookup(monkeypatch: pytest.MonkeyPatch):
 
 def test_register_models_from_module_success_and_failure(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     # success on current module
     pyd.PydanticYAMLLoader.register_models_from_module(__name__)
     tag = f"{__name__}.MyModel"
     assert tag in pyd.PydanticYAMLLoader.get_registered_models()
 
     # failure path: import error -> ValueError
-    def boom(name):
+    def boom(
+        name: str,
+    ) -> typing.Any:
         raise ImportError("boom")
 
     monkeypatch.setattr(pyd.importlib, "import_module", boom, raising=True)
@@ -49,13 +55,15 @@ def test_register_models_from_module_success_and_failure(
         pyd.PydanticYAMLLoader.register_models_from_module("does.not.exist")
 
 
-def test_register_models_from_package_failure():
+def test_register_models_from_package_failure() -> None:
     # non existent package -> ValueError
     with pytest.raises(ValueError):
         pyd.PydanticYAMLLoader.register_models_from_package("does.not.exist.pkg")
 
 
-def test_yaml_dump_and_load_roundtrip(tmp_path: pathlib.Path):
+def test_yaml_dump_and_load_roundtrip(
+    tmp_path: pathlib.Path,
+) -> None:
     # register the fully-qualified tag for MyModel
     tag = f"{__name__}.MyModel"
     pyd.PydanticYAMLLoader.register_model(tag, MyModel)
@@ -69,7 +77,9 @@ def test_yaml_dump_and_load_roundtrip(tmp_path: pathlib.Path):
     assert isinstance(loaded, MyModel) and loaded == inst
 
 
-def test_yaml_unknown_tag_and_validation_error(tmp_path: pathlib.Path):
+def test_yaml_unknown_tag_and_validation_error(
+    tmp_path: pathlib.Path,
+) -> None:
     # unknown tag error path
     bad = tmp_path / "bad.yaml"
     bad.write_text("!unknown.tag\na: 1\n", encoding="utf-8")
@@ -85,7 +95,9 @@ def test_yaml_unknown_tag_and_validation_error(tmp_path: pathlib.Path):
         _ = pyd.load_yaml_with_pydantic_support(bad_val)
 
 
-def test_loader_file_errors(tmp_path: pathlib.Path):
+def test_loader_file_errors(
+    tmp_path: pathlib.Path,
+) -> None:
     # missing file
     with pytest.raises(FileNotFoundError):
         _ = pyd.load_yaml_with_pydantic_support(tmp_path / "missing.yaml")
@@ -121,7 +133,10 @@ class DummyUnrelated:
 
 
 class DummyWithConfig:
-    def __init__(self, cfg: dict):
+    def __init__(
+        self,
+        cfg: dict[str, typing.Any],
+    ) -> None:
         self.cfg = MyModel(**cfg)
 
 
@@ -415,7 +430,7 @@ class TestClassImportSpec:
         assert instance.cfg.b == "hello"
 
 
-def test_is_jsonvalue():
+def test_is_jsonvalue() -> None:
     assert pyd.is_jsonvalue(1) is True
     assert pyd.is_jsonvalue(1.0) is True
     assert pyd.is_jsonvalue("hello") is True
@@ -429,15 +444,30 @@ def test_is_jsonvalue():
     assert pyd.is_jsonvalue(int) is False
 
 
-def f_basic(a: int, b: str = "x", c=None, d: list[int] = []):  # noqa (intentional for tests)
-    return a, b, c, d
+def f_basic(
+    a: int,
+    b: str = "x",
+    c: typing.Any = None,
+    d: list[int] | None = None,
+) -> tuple[int, str, typing.Any, list[int]]:
+    resolved_d = d if d is not None else []
+    return a, b, c, resolved_d
 
 
-def f_var(*args, **kwargs):
+def f_var(
+    *args: typing.Any,
+    **kwargs: typing.Any,
+) -> tuple[tuple[typing.Any, ...], dict[str, typing.Any]]:
     return args, kwargs
 
 
-def f_mix(x: int, y: str, *, z: float = 1.0, **kw):
+def f_mix(
+    x: int,
+    y: str,
+    *,
+    z: float = 1.0,
+    **kw: typing.Any,
+) -> tuple[int, str, float, dict[str, typing.Any]]:
     return x, y, z, kw
 
 
@@ -447,64 +477,66 @@ class CtorExample:
         self.scale = scale
 
 
-def f_annot(p: typing.Annotated[str | None, "tag"] = None):
+def f_annot(
+    p: typing.Annotated[str | None, "tag"] = None,
+) -> str | None:
     return p
 
 
 class TestModelFromCallable:
-    def test_required_vs_optional_and_types(self):
-        Model = pyd.model_from_callable(f_basic)
-        assert Model.model_fields["a"].default is pydantic.fields.PydanticUndefined
-        assert Model.model_fields["b"].default == "x"
-        assert Model.model_fields["c"].default is None
-        assert Model.model_fields["c"].annotation is typing.Any
-        m = Model(a=3, b="ok", d=[1, 2])
-        assert m.a == 3 and m.b == "ok" and m.d == [1, 2]
+    def test_required_vs_optional_and_types(self) -> None:
+        model_cls = pyd.model_from_callable(f_basic)
+        assert model_cls.model_fields["a"].default is pydantic.fields.PydanticUndefined
+        assert model_cls.model_fields["b"].default == "x"
+        assert model_cls.model_fields["c"].default is None
+        assert model_cls.model_fields["c"].annotation is typing.Any
+        instance = model_cls(a=3, b="ok", d=[1, 2])
+        assert instance.a == 3 and instance.b == "ok" and instance.d == [1, 2]
         with pytest.raises(pydantic.ValidationError):
-            Model(a="not-an-int")
+            model_cls(a="not-an-int")
 
-    def test_model_name_override(self):
-        Model = pyd.model_from_callable(f_basic, name="Custom")
-        assert Model.__name__ == "Custom"
+    def test_model_name_override(self) -> None:
+        model_cls = pyd.model_from_callable(f_basic, name="Custom")
+        assert model_cls.__name__ == "Custom"
 
-    def test_var_positional_and_var_keyword_fields_present(self):
-        Model = pyd.model_from_callable(f_var)
-        args_field = Model.model_fields["args"]
-        kwargs_field = Model.model_fields["kwargs"]
+    def test_var_positional_and_var_keyword_fields_present(self) -> None:
+        model_cls = pyd.model_from_callable(f_var)
+        args_field = model_cls.model_fields["args"]
+        kwargs_field = model_cls.model_fields["kwargs"]
         assert typing.get_origin(args_field.annotation) is tuple
         assert typing.get_args(args_field.annotation) == (typing.Any, ...)
         assert typing.get_origin(kwargs_field.annotation) is dict
         assert typing.get_args(kwargs_field.annotation) == (str, typing.Any)
-        m = Model()  # defaults should apply
-        assert m.args == ()
-        assert m.kwargs == {}
+        model_instance = model_cls()  # defaults should apply
+        assert model_instance.args == ()
+        assert model_instance.kwargs == {}
 
-    def test_include_exclude_and_exclude_kwargs(self):
-        Model = pyd.model_from_callable(
+    def test_include_exclude_and_exclude_kwargs(self) -> None:
+        model_cls = pyd.model_from_callable(
             f_mix,
             include={"x", "z"},
             exclude={"z"},  # exclude wins
             include_kwargs=False,  # drop **kw
             name="FilteredArgs",
         )
-        assert set(Model.model_fields.keys()) == {"x", "y"} - {"y"} | set()  # only {"x"}
-        assert set(Model.model_fields.keys()) == {"x"}
+        assert set(model_cls.model_fields.keys()) == {"x", "y"} - {"y"} | set()  # only {"x"}
+        assert set(model_cls.model_fields.keys()) == {"x"}
 
-    def test_constructor_signature_is_used_for_classes(self):
-        Model = pyd.model_from_callable(CtorExample)
+    def test_constructor_signature_is_used_for_classes(self) -> None:
+        model_cls = pyd.model_from_callable(CtorExample)
         # fields mirror __init__(n: int, scale: float = 1.0)
-        assert set(Model.model_fields.keys()) == {"n", "scale"}
-        assert Model.model_fields["n"].default is pydantic.fields.PydanticUndefined
-        assert Model.model_fields["scale"].default == 1.0
+        assert set(model_cls.model_fields.keys()) == {"n", "scale"}
+        assert model_cls.model_fields["n"].default is pydantic.fields.PydanticUndefined
+        assert model_cls.model_fields["scale"].default == 1.0
         # use validated args to build the instance
-        cfg = Model(n=5, scale=2.5)
+        cfg = model_cls(n=5, scale=2.5)
         obj = CtorExample(**cfg.model_dump(exclude_none=True))
         assert isinstance(obj, CtorExample)
         assert obj.n == 5 and obj.scale == 2.5
 
-    def test_annotated_and_optional_are_preserved(self):
-        Model = pyd.model_from_callable(f_annot)
-        f = Model.model_fields["p"]
+    def test_annotated_and_optional_are_preserved(self) -> None:
+        model_cls = pyd.model_from_callable(f_annot)
+        f = model_cls.model_fields["p"]
         # underlying type is Optional[str] (Union[str, NoneType])
         origin = typing.get_origin(f.annotation)
         assert origin in (typing.Union, types.UnionType)
@@ -513,46 +545,46 @@ class TestModelFromCallable:
         assert "tag" in getattr(f, "metadata", ())
         assert f.default is None
 
-    def test_any_for_unannotated_param_is_accepted(self):
-        Model = pyd.model_from_callable(f_basic)
+    def test_any_for_unannotated_param_is_accepted(self) -> None:
+        model_cls = pyd.model_from_callable(f_basic)
         # c has annotation Any, so any type accepted
-        m = Model(a=1, c={"anything": object()})
-        assert isinstance(m.c, dict)
+        instance = model_cls(a=1, c={"anything": object()})
+        assert isinstance(instance.c, dict)
 
-    def test_validation_error_messages_are_informative(self):
-        Model = pyd.model_from_callable(f_basic)
+    def test_validation_error_messages_are_informative(self) -> None:
+        model_cls = pyd.model_from_callable(f_basic)
         with pytest.raises(pydantic.ValidationError) as ei:
-            Model()  # missing required 'a'
+            model_cls()  # missing required 'a'
         msg = str(ei.value)
         assert "a" in msg and "Field required" in msg
 
-    def test_kwargs_included_by_default(self):
-        Model = pyd.model_from_callable(f_mix, name="MixArgs")  # include_kwargs defaults to True
-        assert "kw" in Model.model_fields
-        m = Model(x=1, y="y", kw={"extra": 1})
-        assert m.kw == {"extra": 1}
+    def test_kwargs_included_by_default(self) -> None:
+        model_cls = pyd.model_from_callable(f_mix, name="MixArgs")  # include_kwargs defaults to True
+        assert "kw" in model_cls.model_fields
+        instance = model_cls(x=1, y="y", kw={"extra": 1})
+        assert instance.kw == {"extra": 1}
 
-    def test_custom_model_configs(self):
-        Model = pyd.model_from_callable(
+    def test_custom_model_configs(self) -> None:
+        mutable_model_cls = pyd.model_from_callable(
             f_basic,
             model_config=pydantic.ConfigDict(frozen=True, extra="allow"),
         )
-        m = Model(a=13, z="hello")
-        assert m.a == 13 and m.z == "hello"
+        instance = mutable_model_cls(a=13, z="hello")
+        assert instance.a == 13 and instance.z == "hello"
         with pytest.raises(pydantic.ValidationError):
-            m.a = 15
-        Model2 = pyd.model_from_callable(
+            instance.a = 15
+        strict_model_cls = pyd.model_from_callable(
             f_basic,
             model_config=pydantic.ConfigDict(extra="forbid"),
         )
-        m = Model2(a=13)
-        assert m.a == 13
-        m.a = 15
-        assert m.a == 15
+        strict_instance = strict_model_cls(a=13)
+        assert strict_instance.a == 13
+        strict_instance.a = 15
+        assert strict_instance.a == 15
         with pytest.raises(pydantic.ValidationError):
-            _ = Model2(a=13, z="hello")
+            _ = strict_model_cls(a=13, z="hello")
 
-    def test_openai_wrapper(self):
+    def test_openai_wrapper(self) -> None:
         import openai
 
         _ = pyd.model_from_callable(openai.OpenAI)

@@ -1,3 +1,4 @@
+import pydantic
 import pytest
 
 import pyine.data.utils.splits as splits
@@ -75,12 +76,12 @@ def test_validation_unknown_subset_names() -> None:
 
 
 def test_validation_subset_names_constraints() -> None:
-    with pytest.raises(Exception):  # pydantic validation error or value error
+    with pytest.raises((ValueError, pydantic.ValidationError)):
         _ = splits.SplitConfig(
             subset_names=["", "valid"],
             subset_assign_prob_map={"": 0.5, "valid": 0.5},
         )
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, pydantic.ValidationError)):
         _ = splits.SplitConfig(
             subset_names=["only"],
             subset_assign_prob_map={"only": 1.0},
@@ -269,7 +270,7 @@ def test_build_subset_to_identifiers_map(
     assert sorted(flat) == sorted(sample_ids)
 
 
-def test_get_dataset_split_file():
+def test_get_dataset_split_file() -> None:
     split_file_path = splits.get_dataset_split_file_path("fooOOO", must_exist=False)
     assert "fooOOO" in split_file_path.name
     assert split_file_path.parent.exists()

@@ -1,9 +1,11 @@
+import typing
+
 import hydra.core.global_hydra
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def clear_hydra_config_store():
+def clear_hydra_config_store() -> typing.Iterator[None]:
     """Clear the Hydra config store before and after each test."""
     hydra.core.global_hydra.GlobalHydra.instance().clear()
     yield

@@ -39,7 +39,7 @@ def build_default_config() -> datamodule.BaseDataModuleConfig:
         class_path="torch.utils.data.DataLoader",
         params=datamodule.BaseDataLoaderParamsConfig(),
     )
-    cfg = datamodule.BaseDataModuleConfig(
+    return datamodule.BaseDataModuleConfig(
         datamodule_class_path=port.get_fully_qualified_name(DummyDataModule),
         default_dataparser_config=parser_cfg,
         dataparser_config_overrides={
@@ -56,7 +56,6 @@ def build_default_config() -> datamodule.BaseDataModuleConfig:
             },
         },
     )
-    return cfg
 
 
 class TestBaseDataModuleConfig:
@@ -91,7 +90,7 @@ class TestBaseDataModuleConfig:
 
     def test_subset_names_customization(self) -> None:
         cfg = build_default_config().model_copy(
-            update={"subset_names": tuple(["train", "valid"])},
+            update={"subset_names": ("train", "valid")},
         )
         # validator should have populated only requested subsets
         # attempting to resolve a non-declared subset should fail
@@ -156,10 +155,10 @@ class TestBaseDataModule:
             ) -> str:
                 return "VAL"
 
-            def train_dataloader(self):  # type: ignore[no-untyped-def]
+            def train_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
-            def test_dataloader(self):  # type: ignore[no-untyped-def]
+            def test_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
         dm = OnlyVal(build_default_config())
@@ -180,10 +179,10 @@ class TestBaseDataModule:
             ) -> typing.Any:
                 return self._payload
 
-            def test_dataloader(self):  # type: ignore[no-untyped-def]
+            def test_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
-            def val_dataloader(self):  # type: ignore[no-untyped-def]
+            def val_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
         base_cfg = build_default_config()
@@ -196,7 +195,7 @@ class TestBaseDataModule:
         assert "invalid loader name" in str(exc_info.value)
 
         # declared subset but missing corresponding method -> specific error
-        cfg_missing = base_cfg.model_copy(update={"subset_names": tuple(["train", "foo"])})
+        cfg_missing = base_cfg.model_copy(update={"subset_names": ("train", "foo")})
         dm_missing = WithTrain(cfg_missing, payload=None)
         with pytest.raises(ValueError) as exc_info:
             _ = dm_missing.get_dataloader("foo")
@@ -212,16 +211,16 @@ class TestBaseDataModule:
                 # create an attribute that shadows the expected method name
                 self.bar_dataloader = "not-callable"  # type: ignore[attr-defined]
 
-            def train_dataloader(self):  # type: ignore[no-untyped-def]
+            def train_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
-            def test_dataloader(self):  # type: ignore[no-untyped-def]
+            def test_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
-            def val_dataloader(self):  # type: ignore[no-untyped-def]
+            def val_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
 
-        cfg_bad = base_cfg.model_copy(update={"subset_names": tuple(["train", "bar"])})
+        cfg_bad = base_cfg.model_copy(update={"subset_names": ("train", "bar")})
         dm_bad = WithBadAttr(cfg_bad)
         with pytest.raises(ValueError) as exc_info:
             _ = dm_bad.get_dataloader("bar")

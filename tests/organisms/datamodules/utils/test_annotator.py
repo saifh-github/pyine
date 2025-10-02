@@ -1,5 +1,6 @@
 import dataclasses
 import pathlib
+import tempfile
 import types
 import typing
 
@@ -27,7 +28,11 @@ class _FakeTrace:
 
 
 class _FakeDatasetReader:
-    def __init__(self, traces: list[_FakeTrace], problems: list[du.CodingProblem]):
+    def __init__(
+        self,
+        traces: list[_FakeTrace],
+        problems: list[du.CodingProblem],
+    ) -> None:
         assert len(traces) == len(problems)
         self._traces = traces
         self._problems = problems
@@ -77,7 +82,7 @@ def _make_ids() -> tuple[str, str, str]:
 def _make_problem(pid: str) -> du.CodingProblem:
     return du.CodingProblem(
         source_dataset_name="POTATO",
-        source_data_path="/tmp/dataset",
+        source_data_path=str(pathlib.Path(tempfile.gettempdir()) / "dataset"),
         source_data_hash="something",
         problem_id=du.CodingProblemIdentifier.from_string(pid),
         problem_statement="Add two numbers.",
@@ -132,7 +137,7 @@ async def _run_prompt_case(
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> list[result_db.PromptResultRecord]:
         captured.update(
             {
@@ -233,7 +238,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> list[result_db.PromptResultRecord]:
         captured.update(
             {
@@ -277,7 +282,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         trace: exec_utils.TraceResult,
         problem: du.CodingProblem,
         __: annotator.AnnotationOptions,
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> dict[str, typing.Any]:
         return {
             "code": trace.code_string,
@@ -330,7 +335,7 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> list[result_db.PromptResultRecord]:
         # creation_meta is intentionally different
         different_meta = result_db.CreationMeta(provider="other")
@@ -413,7 +418,7 @@ async def test_bad_id_handling_increments_skips(
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> list[result_db.PromptResultRecord]:
         return [
             result_db.PromptResultRecord(
@@ -600,16 +605,16 @@ async def test_bugged_hint_prompt_uses_buggy_code(
         tmp_path=tmp_path,
         augment_config=augment_cfg,
         prepopulate_db_records=[
-            dict(
-                identifier=str(solution_id),
-                prompt="buggy",
-                result=buggy_code,
-                meta={},
-                tags=[],
-                group=str(problem.problem_id),
-                prompt_name="issues/iterators",
-                prompt_version=None,
-            )
+            {
+                "identifier": str(solution_id),
+                "prompt": "buggy",
+                "result": buggy_code,
+                "meta": {},
+                "tags": [],
+                "group": str(problem.problem_id),
+                "prompt_name": "issues/iterators",
+                "prompt_version": None,
+            }
         ],
     )
 
@@ -685,16 +690,16 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
         identifier_resolver=_identifier_resolver,
         group_resolver=_group_resolver,
         prepopulate_db_records=[
-            dict(
-                identifier=str(solution_id),
-                prompt="buggy",
-                result=buggy_code,
-                meta={},
-                tags=[],
-                group=str(problem.problem_id),
-                prompt_name="issues/iterators",
-                prompt_version=None,
-            )
+            {
+                "identifier": str(solution_id),
+                "prompt": "buggy",
+                "result": buggy_code,
+                "meta": {},
+                "tags": [],
+                "group": str(problem.problem_id),
+                "prompt_name": "issues/iterators",
+                "prompt_version": None,
+            }
         ],
     )
 
@@ -826,15 +831,15 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
         creation_meta=result_db.CreationMeta(),
     )
     options = annotator.AnnotationOptions(
-        llm_provider_config=dict(
-            provider="openai",
-            model="gpt-4o-mini",
-        ),
+        llm_provider_config={
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
         prompt_config=prompt_types.PromptBuildConfig(
             prompt_name="code_summary",
-            partial_vars=dict(
-                target_word_count=30,
-            ),
+            partial_vars={
+                "target_word_count": 30,
+            },
         ),
         target_indices=target_indices,
         min_results_per_item=1,
@@ -851,10 +856,10 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
     assert report.total_tokens_exchanged > 0
     # now do a 2nd annotation pass w/ same db but different prompt
     options = annotator.AnnotationOptions(
-        llm_provider_config=dict(
-            provider="openai",
-            model="gpt-4o-mini",
-        ),
+        llm_provider_config={
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+        },
         prompt_config=prompt_types.PromptBuildConfig(
             prompt_name="hints/docs",
         ),

@@ -1,4 +1,5 @@
 import os
+import typing
 
 import pytest
 
@@ -6,27 +7,43 @@ import pyine.utils.llm_providers as lp
 
 
 class InMemoryRateLimiter:
-    def __init__(self, **cfg):
+    def __init__(
+        self,
+        **cfg: typing.Any,
+    ) -> None:
         self.config = cfg
 
 
 class RunnableSequence:
-    def __init__(self, *steps):
+    def __init__(
+        self,
+        *steps: typing.Any,
+    ) -> None:
         self.steps = steps
 
 
 class ChatDeepSeek:
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> None:
         self.rate_limiter = kwargs.pop("rate_limiter", None)
         self.init_kwargs = kwargs
         self.retry_config = None
         self.structured_model = None
 
-    def with_retries(self, **cfg):
+    def with_retries(
+        self,
+        **cfg: typing.Any,
+    ) -> "ChatDeepSeek":
         self.retry_config = cfg
         return self
 
-    def with_structured_output(self, model):
+    def with_structured_output(
+        self,
+        model: typing.Any,
+    ) -> "ChatDeepSeek":
         self.structured_model = model
         return self
 
@@ -35,12 +52,14 @@ class ChatOpenAI(ChatDeepSeek):
     pass
 
 
-def test_invalid_provider_raises():
+def test_invalid_provider_raises() -> None:
     with pytest.raises(NotImplementedError):
         lp.get_model_from_provider("bogus")
 
 
-def test_deepseek_with_env_and_retries(monkeypatch: pytest.MonkeyPatch):
+def test_deepseek_with_env_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # patch imported modules directly so we control behavior regardless of installed deps
     monkeypatch.setattr(
         lp.langchain_core.rate_limiters,
@@ -67,7 +86,9 @@ def test_deepseek_with_env_and_retries(monkeypatch: pytest.MonkeyPatch):
     assert llm.retry_config == {"max_retries": 7}
 
 
-def test_openai_env_default_base(monkeypatch: pytest.MonkeyPatch):
+def test_openai_env_default_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # ensure env provides API key, and OPENAI_BASE_URL is not set so default applies
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "OPENAI_KEY")
@@ -80,7 +101,9 @@ def test_openai_env_default_base(monkeypatch: pytest.MonkeyPatch):
     assert llm.init_kwargs["base_url"] == "https://api.openai.com/v1"
 
 
-def test_deepseek_explicit_keys_override_env(monkeypatch: pytest.MonkeyPatch):
+def test_deepseek_explicit_keys_override_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # set env to different values, but pass explicit ones to ensure override
     monkeypatch.setenv("DEEPSEEK_API_KEY", "ENVKEY")
     monkeypatch.setenv("DEEPSEEK_API_BASE_URL", "https://env.example")

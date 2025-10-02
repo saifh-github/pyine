@@ -4,7 +4,7 @@ import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_full_output_config_and_template():
+def test_get_full_output_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("issues/todos", version="full_output_1-5L/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     for example in config.examples:

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import time
 import typing
 
@@ -92,7 +93,7 @@ class DummyRunnable(pyine.utils.concurrency.SupportsAInvoke):
         exc: BaseException | None = None,
         expect_config: typing.Mapping[str, typing.Any] | None = None,
         on_call: typing.Any = None,  # async callable or None
-    ):
+    ) -> None:
         self.result = result
         self.delay = delay
         self.exc = exc
@@ -120,7 +121,7 @@ class DummyRunnable(pyine.utils.concurrency.SupportsAInvoke):
 
 
 @pytest.mark.asyncio
-async def test_all_success_preserves_order():
+async def test_all_success_preserves_order() -> None:
     jobs = [
         pyine.utils.concurrency.Job(DummyRunnable(result="A", delay=0.3), {"q": 1}),
         pyine.utils.concurrency.Job(DummyRunnable(result="B", delay=0.1), {"q": 2}),
@@ -134,7 +135,7 @@ async def test_all_success_preserves_order():
 
 
 @pytest.mark.asyncio
-async def test_per_request_timeout_marks_error_only_for_slow_tasks():
+async def test_per_request_timeout_marks_error_only_for_slow_tasks() -> None:
     slow = DummyRunnable(result="too slow", delay=0.2)
     fast = DummyRunnable(result="ok", delay=0.01)
     out = await pyine.utils.concurrency.run_independent(
@@ -154,7 +155,7 @@ async def test_per_request_timeout_marks_error_only_for_slow_tasks():
 
 
 @pytest.mark.asyncio
-async def test_exceptions_are_captured_per_job():
+async def test_exceptions_are_captured_per_job() -> None:
     boom = DummyRunnable(exc=ValueError("boom"))
     ok = DummyRunnable(result=42)
     out = await pyine.utils.concurrency.run_independent(
@@ -171,13 +172,13 @@ async def test_exceptions_are_captured_per_job():
 
 
 @pytest.mark.asyncio
-async def test_global_concurrency_cap_is_respected():
+async def test_global_concurrency_cap_is_respected() -> None:
     # track peak concurrency with an async critical section
     current = 0
     peak = 0
     lock = asyncio.Lock()
 
-    async def on_call():
+    async def on_call() -> None:
         nonlocal current, peak
         async with lock:
             current += 1
@@ -199,7 +200,7 @@ async def test_global_concurrency_cap_is_respected():
 
 
 @pytest.mark.asyncio
-async def test_config_is_passed_to_each_runnable():
+async def test_config_is_passed_to_each_runnable() -> None:
     cfg = {"max_concurrency": 7}
     r = DummyRunnable(result="ok", expect_config=cfg)
     out = await pyine.utils.concurrency.run_independent(
@@ -212,13 +213,13 @@ async def test_config_is_passed_to_each_runnable():
 
 
 @pytest.mark.asyncio
-async def test_empty_jobs_returns_empty_list():
+async def test_empty_jobs_returns_empty_list() -> None:
     out = await pyine.utils.concurrency.run_independent([])
     assert out == []
 
 
 @pytest.mark.asyncio
-async def test_run_with_sliding_window_respects_cap_and_processes_all_results():
+async def test_run_with_sliding_window_respects_cap_and_processes_all_results() -> None:
     n_items = 10
     cap = 3
     items = list(range(n_items))
@@ -227,18 +228,27 @@ async def test_run_with_sliding_window_respects_cap_and_processes_all_results():
         time.sleep(0.05)
         return x * 2
 
-    def submit_one(item, executor):
+    def submit_one(
+        item: int,
+        executor: concurrent.futures.Executor,
+    ) -> concurrent.futures.Future[int]:
         return executor.submit(worker, item)
 
     results: dict[int, int] = {}
 
-    def process_result(item, result):
+    def process_result(
+        item: int,
+        result: int,
+    ) -> None:
         results[item] = result
 
     callback_calls = 0
     peak_inflight = 0
 
-    def progress_callback(in_flight, completed):
+    def progress_callback(
+        in_flight: typing.Collection[concurrent.futures.Future[int]] | None,
+        completed: int,
+    ) -> None:
         nonlocal callback_calls, peak_inflight
         callback_calls += 1
         if in_flight is not None:
@@ -260,7 +270,7 @@ async def test_run_with_sliding_window_respects_cap_and_processes_all_results():
 
 
 @pytest.mark.asyncio
-async def test_run_with_sliding_window_collects_failures_without_aborting():
+async def test_run_with_sliding_window_collects_failures_without_aborting() -> None:
     items = [1, 2, 3]
 
     def worker(x: int) -> int:
@@ -269,12 +279,18 @@ async def test_run_with_sliding_window_collects_failures_without_aborting():
         time.sleep(0.01)
         return x * 10
 
-    def submit_one(item, executor):
+    def submit_one(
+        item: int,
+        executor: concurrent.futures.Executor,
+    ) -> concurrent.futures.Future[int]:
         return executor.submit(worker, item)
 
     results: dict[int, int] = {}
 
-    def process_result(item, result):
+    def process_result(
+        item: int,
+        result: int,
+    ) -> None:
         results[item] = result
 
     with pytest.raises(pyine.utils.concurrency.SlidingWindowExecutionError) as exc_info:

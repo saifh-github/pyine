@@ -4,7 +4,7 @@ import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_get_full_output_config_and_template():
+def test_get_full_output_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("hints/docs", version="full_output/v1.0")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     last_example = config.examples[-1]

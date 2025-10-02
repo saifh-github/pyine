@@ -5,7 +5,7 @@ import pyine.utils.tokenizers
 import pyine.utils.transformers
 
 
-def test_get_hf_tokenizer():
+def test_get_hf_tokenizer() -> None:
     model_name = "gpt2"
     tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(model_name)
     assert pyine.utils.transformers.is_hf_tokenizer(tokenizer)
@@ -24,17 +24,17 @@ def test_get_hf_tokenizer():
     assert tokenizer.padding_side == "right"
 
 
-def test_get_openai_tokenizer():
+def test_get_openai_tokenizer() -> None:
     model_name = "gpt-4o"
     tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(model_name)
     assert isinstance(tokenizer, tiktoken.Encoding)
     test_str = "Hello, world!"
     output = tokenizer.encode(test_str)
     assert isinstance(output, list) and len(output) > 0
-    assert all([0 <= tid < tokenizer.n_vocab for tid in output])
+    assert all(0 <= tid < tokenizer.n_vocab for tid in output)
 
 
-def test_unknown_openai_tokenizer():
+def test_unknown_openai_tokenizer() -> None:
     model_name = "gpt-unknown"
     tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(model_name, raise_if_not_found=False)
     assert tokenizer is not None

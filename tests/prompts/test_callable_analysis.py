@@ -3,13 +3,14 @@ import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
 import pytest
+import pytest_mock
 
 import pyine.prompts.configs.callable_analysis as callable_analysis
 import pyine.prompts.manager
 import pyine.prompts.utils
 
 
-def test_callable_analysis_response_validation():
+def test_callable_analysis_response_validation() -> None:
     response = callable_analysis.CallableAnalysisResponse(
         entrypoint_function_name="test_func",
         entrypoint_function_arg_names=[],
@@ -41,7 +42,7 @@ def test_callable_analysis_response_validation():
         )
 
 
-def test_get_config_and_template():
+def test_get_config_and_template() -> None:
     config = pyine.prompts.manager.get_prompt_config("callable_analysis")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     first_example = config.examples[0]
@@ -73,7 +74,9 @@ def test_get_config_and_template():
     assert "Now, provide the structured output" in chat_template.messages[1].prompt.template
 
 
-def test_get_chain(mocker):
+def test_get_chain(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
     model = mocker.MagicMock()
     chain = pyine.prompts.manager.get_prompt_chain(model, "code_analysis")
     assert isinstance(chain, langchain_core.runnables.RunnableSequence)

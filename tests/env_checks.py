@@ -9,7 +9,7 @@ import pyine.utils.reprod
 pyine.utils.reprod.load_dotenv()
 
 
-def has_taco_dataset():
+def has_taco_dataset() -> bool:
     """Returns True if the TACO dataset is available."""
     try:
         path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
@@ -18,7 +18,7 @@ def has_taco_dataset():
     return path.exists()
 
 
-def has_taco_traces_dataset():
+def has_taco_traces_dataset() -> bool:
     """Returns True if the TACO traces dataset is available."""
     try:
         path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
@@ -27,7 +27,7 @@ def has_taco_traces_dataset():
     return path.exists()
 
 
-def has_taco_traces_dataset_split():
+def has_taco_traces_dataset_split() -> bool:
     """Returns true if the TACO traces dataset split is available."""
     try:
         path = pyine.data.utils.splits.get_dataset_split_file_path("TACO", must_exist=True)
@@ -41,7 +41,7 @@ TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
 TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
 
 
-def has_hf_access_token():
+def has_hf_access_token() -> bool:
     """Return True if a Hugging Face user access token is available."""
     token = os.environ.get("HF_TOKEN", None)
     return token is not None and len(token) > 0
@@ -50,7 +50,7 @@ def has_hf_access_token():
 HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
 
 
-def has_openai_api_key():
+def has_openai_api_key() -> bool:
     """Return True if an OpenAI API key is available."""
     key = os.environ.get("OPENAI_API_KEY", None)
     return key is not None and len(key) > 0

@@ -48,7 +48,7 @@ def test_capture_llm_handler_manual_event_sequence() -> None:
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available",
 )
-def test_capture_llm_handler_records_events_with_openai_chat():
+def test_capture_llm_handler_records_events_with_openai_chat() -> None:
     model_name = "gpt-4o-mini"
     handler = pyine.utils.langchain.CaptureLLMHandler()
     llm = langchain_openai.ChatOpenAI(model=model_name, temperature=0, max_tokens=16)

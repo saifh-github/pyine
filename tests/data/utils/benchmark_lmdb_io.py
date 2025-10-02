@@ -59,7 +59,7 @@ def _generate_dummy_dict(
 def benchmark_serialization_methods(
     num_samples: int = 100,
     use_random_data: bool = False,
-):
+) -> None:
     compression_configs = {
         "pickle": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.PICKLE),
         "pickle_lz4": lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.PICKLE_LZ4),

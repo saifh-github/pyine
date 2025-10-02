@@ -1,3 +1,6 @@
+import pathlib
+import typing
+
 import lmdb
 import pytest
 
@@ -5,7 +8,7 @@ import pyine.data.utils.lmdb_io as lmdb_io
 
 
 @pytest.fixture
-def mock_lmdb_env(tmp_path):
+def mock_lmdb_env(tmp_path: pathlib.Path) -> lmdb.Environment:
     """Fixture to set up a mock LMDB environment for testing."""
     env_path = tmp_path / "test_lmdb"
     env = lmdb.open(str(env_path), map_size=10**6, max_readers=10)
@@ -16,7 +19,7 @@ def mock_lmdb_env(tmp_path):
 class TestCreateKeysFunctions:
     """Tests the _create_metadata_key, _create_sample_key, and _decode_sample_key functions."""
 
-    def test_create_keys(self):
+    def test_create_keys(self) -> None:
         result = lmdb_io._create_metadata_key("key1")
         assert isinstance(result, bytes)
         assert result.startswith(lmdb_io.METADATA_PREFIX)
@@ -36,19 +39,25 @@ class TestLMDBWriteAndRead:
 
     def _get_writer(
         self,
-        path,
-        map_size=10**6,
-        max_readers=10,
-        serialization=lmdb_io.SerializationConfig(method=lmdb_io.SerializationMethod.MSGSPEC),
-    ):
+        path: typing.Any,
+        map_size: int = 10**6,
+        max_readers: int = 10,
+        serialization: lmdb_io.SerializationConfig | None = None,
+    ) -> lmdb_io.LMDBWriter:
+        serialization_config = serialization or lmdb_io.SerializationConfig(
+            method=lmdb_io.SerializationMethod.MSGSPEC,
+        )
         return lmdb_io.LMDBWriter(
             path=path,
             map_size=map_size,
             max_readers=max_readers,
-            serialization_config=serialization,
+            serialization_config=serialization_config,
         )
 
-    def test_writer_init(self, mock_lmdb_env):
+    def test_writer_init(
+        self,
+        mock_lmdb_env: typing.Any,
+    ) -> None:
         writer = self._get_writer(path=mock_lmdb_env.path())
         assert writer.path is not None
         assert writer.map_size == 10**6
@@ -56,7 +65,10 @@ class TestLMDBWriteAndRead:
         writer.close()
         assert writer.env is None
 
-    def test_put_simple(self, mock_lmdb_env):
+    def test_put_simple(
+        self,
+        mock_lmdb_env: typing.Any,
+    ) -> None:
         writer = self._get_writer(path=mock_lmdb_env.path())
         key, value = "key1", {"test": 1}
         inserted_key = writer.put(key=key, value=value)
@@ -84,7 +96,11 @@ class TestLMDBWriteAndRead:
         "serialization_method",
         list(lmdb_io.SerializationMethod),
     )
-    def test_writer_with_various_serialization_methods(self, mock_lmdb_env, serialization_method):
+    def test_writer_with_various_serialization_methods(
+        self,
+        mock_lmdb_env: typing.Any,
+        serialization_method: lmdb_io.SerializationMethod,
+    ) -> None:
         serialization_cfg = lmdb_io.SerializationConfig(method=serialization_method)
         writer = self._get_writer(path=mock_lmdb_env.path(), serialization=serialization_cfg)
         key, value = "key1", {"test": 1}
@@ -98,12 +114,15 @@ class TestLMDBWriteAndRead:
         result = reader.get("key1")
         assert result == value
 
-    def test_put_batch(self, mock_lmdb_env):
+    def test_put_batch(
+        self,
+        mock_lmdb_env: typing.Any,
+    ) -> None:
         writer = self._get_writer(path=mock_lmdb_env.path())
         entries = {"key1": b"value1", "key2": b"value2"}
         inserted_keys = writer.put_batch(items=entries)
         assert len(inserted_keys) == 2
-        assert all([isinstance(v, bytes) for v in inserted_keys.values()])
+        assert all(isinstance(v, bytes) for v in inserted_keys.values())
         with writer.env.begin() as txn:
             encoded_value1 = txn.get(inserted_keys["key1"])
             assert encoded_value1 is not None
@@ -134,7 +153,10 @@ class TestLMDBWriteAndRead:
         found_vals = tuple(v for vals in reader.iter_batched(batch_size=100) for v in vals)
         assert found_vals == tuple(entries.values())
 
-    def test_get_indices(self, mock_lmdb_env):
+    def test_get_indices(
+        self,
+        mock_lmdb_env: typing.Any,
+    ) -> None:
         writer = self._get_writer(path=mock_lmdb_env.path())
         test_data = {
             "problem_001": {"type": "problem", "id": 1},
@@ -208,6 +230,6 @@ class TestLMDBWriteAndRead:
         assert len(keys) == 0
 
         with pytest.raises(TypeError):
-            reader.get_indices(123)  # noqa; should be string
+            typing.cast("typing.Any", reader).get_indices(123)
 
         reader.close()

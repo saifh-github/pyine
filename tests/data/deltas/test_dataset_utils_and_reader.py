@@ -14,7 +14,9 @@ import pyine.utils.portability
 import tests.env_checks
 
 
-def _check_deltas_ok(deltas):
+def _check_deltas_ok(
+    deltas: list[pyine.data.deltas.dataset_utils.Delta],
+) -> None:
     """Utility function that checks that all provided deltas are valid."""
     # first delta should be parent calling -> entrypoint
     assert deltas[0].event_relationship == pyine.data.deltas.dataset_utils.EventRelationship.ENTRYPOINT
@@ -58,7 +60,7 @@ def test_dataset_paths(
 
 
 @pytest.mark.parametrize("input_val", [0, 1, 2])
-def test_delta_generation_with_raised_exception(input_val: int):
+def test_delta_generation_with_raised_exception(input_val: int) -> None:
     """Test delta generation from trace steps with raised exceptions."""
     example_snippet = """\
 in_val = int(input("Enter a value: "))
@@ -96,7 +98,7 @@ print("all done")
         assert not trace_result.stdout
 
 
-def test_delta_generation_with_generator_expr():
+def test_delta_generation_with_generator_expr() -> None:
     """Test delta generation from trace steps with generator expressions."""
     example_snippet = """\
 in_vals = []
@@ -131,7 +133,7 @@ print(f"The result is: {int(res)}")
     assert trace_result.stdout == "The result is: 3156\n"
 
 
-def test_delta_generation_with_exception_propagation():
+def test_delta_generation_with_exception_propagation() -> None:
     """Test delta generation from trace steps with exception propagation."""
     example_snippet = """\
 def do_thing(area: float) -> float:

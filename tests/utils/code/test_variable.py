@@ -1,7 +1,7 @@
 from pyine.utils.code.variables import analyze_definitions
 
 
-def test_analyze_definitions__simple_case():
+def test_analyze_definitions__simple_case() -> None:
     code = """
 import os
 
@@ -21,7 +21,7 @@ x = 1
     assert res["class_count_toplevel"] == 0
 
 
-def test_analyze_definitions__case_with_class():
+def test_analyze_definitions__case_with_class() -> None:
     code = """
 import os
 
@@ -42,7 +42,7 @@ class MyClass:
     assert res["class_count_toplevel"] == 1
 
 
-def test_analyze_definitions__case_with_class_and_function():
+def test_analyze_definitions__case_with_class_and_function() -> None:
     code = """
 import os
 
@@ -65,7 +65,7 @@ class MyClass:
     assert res["class_count_toplevel"] == 1
 
 
-def test_analyze_definitions__case_with_class_and_two_functions():
+def test_analyze_definitions__case_with_class_and_two_functions() -> None:
     code = """
 import os
 
@@ -91,7 +91,7 @@ class MyClass:
     assert res["class_count_toplevel"] == 1
 
 
-def test_analyze_definitions__more_complex_case():
+def test_analyze_definitions__more_complex_case() -> None:
     code = """
 import os as o, sys
 x, (y, z) = 1, (2, 3)

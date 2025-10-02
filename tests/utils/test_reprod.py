@@ -1,5 +1,6 @@
 import builtins
 import pathlib
+import typing
 
 import dotenv
 import pytest
@@ -7,22 +8,24 @@ import pytest
 import pyine.utils.reprod as reprod
 
 
-def test_get_framework_version_package_missing(monkeypatch: pytest.MonkeyPatch):
-    class PNF(Exception):
-        pass
-
+def test_get_framework_version_package_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeMeta:
         class PackageNotFoundError(Exception):
             pass
 
-        def version(self, name):  # noqa: ARG002
+        def version(
+            self,
+            name: str,
+        ) -> None:  # noqa: ARG002
             raise FakeMeta.PackageNotFoundError()
 
     monkeypatch.setattr(reprod.importlib, "metadata", FakeMeta(), raising=True)
     assert reprod.get_framework_version().startswith("0.0.0-unknown")
 
 
-def test_get_git_repo_regular():
+def test_get_git_repo_regular() -> None:
     # can't really test anything more specific than types by default
     hash = reprod.get_git_revision_hash()
     assert isinstance(hash, str) and len(hash)
@@ -30,11 +33,17 @@ def test_get_git_repo_regular():
     assert isinstance(is_clean, bool)
 
 
-def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
+def test_get_git_revision_hash_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # simulate ImportError for git module
     real_import = builtins.__import__
 
-    def fake_import(name, *args, **kwargs):
+    def fake_import(
+        name: str,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         if name == "git":
             raise ImportError("no git")
         return real_import(name, *args, **kwargs)
@@ -44,7 +53,9 @@ def test_get_git_revision_hash_import_error(monkeypatch: pytest.MonkeyPatch):
     assert reprod.is_git_repo_clean() is False
 
 
-def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
+def test_get_git_revision_hash_invalid_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # simulate git module present but repo invalid
     real_import = builtins.__import__
 
@@ -53,10 +64,18 @@ def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
             pass
 
         class Repo:
-            def __init__(self, *args, **kwargs):  # noqa: ARG002
+            def __init__(
+                self,
+                *args: typing.Any,
+                **kwargs: typing.Any,
+            ) -> None:  # noqa: ARG002
                 raise FakeGit.InvalidGitRepositoryError()
 
-    def fake_import(name, *args, **kwargs):
+    def fake_import(
+        name: str,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         if name == "git":
             return FakeGit
         return real_import(name, *args, **kwargs)
@@ -66,21 +85,27 @@ def test_get_git_revision_hash_invalid_repo(monkeypatch: pytest.MonkeyPatch):
     assert reprod.is_git_repo_clean() is False
 
 
-def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
+def test_get_installed_packages_fallback_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # force importlib.metadata.distributions to raise ImportError to try pip branch
     real_import = builtins.__import__
 
     class FakeMeta:
-        def distributions(self):
+        def distributions(self) -> typing.Any:
             raise ImportError("boom")
 
     monkeypatch.setattr(reprod.importlib, "metadata", FakeMeta(), raising=True)
 
     class FakePip:
-        def get_installed_distributions(self):  # noqa: RUF100
+        def get_installed_distributions(self) -> typing.Any:  # noqa: RUF100
             raise AttributeError("no dist")
 
-    def fake_import(name, *args, **kwargs):
+    def fake_import(
+        name: str,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         if name == "pip":
             return FakePip()
         return real_import(name, *args, **kwargs)
@@ -89,7 +114,9 @@ def test_get_installed_packages_fallback_empty(monkeypatch: pytest.MonkeyPatch):
     assert reprod.get_installed_packages() == []
 
 
-def test_compute_hash_file_and_dir(tmp_path: pathlib.Path):
+def test_compute_hash_file_and_dir(
+    tmp_path: pathlib.Path,
+) -> None:
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
     h_file = reprod.compute_hash(f, algorithm="md5")
@@ -113,13 +140,15 @@ def test_compute_hash_file_and_dir(tmp_path: pathlib.Path):
         bad.chmod(0o644)
 
 
-def test_compute_hash_of_bytes_array():
+def test_compute_hash_of_bytes_array() -> None:
     b = b"\x00\x01\x02"
     h = reprod.compute_hash(b, algorithm="md5")
     assert len(h) == 32
 
 
-def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
+def test_get_params_hash_stable_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Obj:
         pass
 
@@ -130,13 +159,19 @@ def test_get_params_hash_stable_addresses(monkeypatch: pytest.MonkeyPatch):
     assert s1 == s2
 
 
-def test_entrypoint_setup_first_and_second_call(monkeypatch: pytest.MonkeyPatch):
+def test_entrypoint_setup_first_and_second_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # patch logging and pydantic loader to avoid side effects by patching real modules
     calls = {"setup_logging": 0}
 
     import pyine.utils.logging as real_log_mod
 
-    def fake_setup_logging(level, log_to_file, log_path):
+    def fake_setup_logging(
+        level: int,
+        log_to_file: bool,
+        log_path: typing.Any,
+    ) -> None:
         calls["setup_logging"] += 1
 
     monkeypatch.setattr(real_log_mod, "setup_logging", fake_setup_logging, raising=True)

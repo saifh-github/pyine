@@ -8,7 +8,11 @@ import pytest
 import pyine.utils.logging as log_utils
 
 
-def test_setup_logging_console_only(tmp_path: str, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch):
+def test_setup_logging_console_only(
+    tmp_path: str,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.chdir(tmp_path)  # run in temp dir to avoid writing to repo root
     log_utils.setup_logging(level=logging.DEBUG, log_to_file=False)
     out = capsys.readouterr().out
@@ -18,7 +22,10 @@ def test_setup_logging_console_only(tmp_path: str, capsys: pytest.CaptureFixture
     assert not os.path.exists(f"{log_utils.PROJECT_LOGGER_NAME}.log")
 
 
-def test_setup_logging_with_file(tmp_path: str, monkeypatch: pytest.MonkeyPatch):
+def test_setup_logging_with_file(
+    tmp_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     log_path = pathlib.Path(tmp_path) / "some_dir" / "dummy.log"
     log_utils.setup_logging(level=logging.INFO, log_to_file=True, log_path=log_path)
     main_logger = logging.getLogger(log_utils.PROJECT_LOGGER_NAME)

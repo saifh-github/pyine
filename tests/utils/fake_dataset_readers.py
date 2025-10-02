@@ -37,7 +37,6 @@ Example usage (pytest + monkeypatch):
 
 import dataclasses
 import datetime
-import functools
 import hashlib
 import random
 import typing
@@ -115,7 +114,7 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         lmdb_path: typing.Any | None = None,
         *,
         config: FakeTraceDataConfig | None = None,
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> None:
         super().__init__()
         # merge config from kwargs if provided
@@ -124,7 +123,7 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         )
         self._dataset_name = self._cfg.dataset_name
         self._subset_name = self._cfg.subset_name
-        self._rng = random.Random(self._cfg.seed)
+        self._rng = random.Random(self._cfg.seed)  # noqa: S311 - deterministic pseudo-rng for tests
         # public attributes mirroring real reader
         self.problem_keys: list[str] = []
         self.trace_keys: list[str] = []
@@ -138,6 +137,7 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         # internal storages
         self._problems: list[traces_utils.CodingProblem] = []
         self._traces: list[exec_utils.TraceResult] = []
+        self._problem_data_cache: dict[int | str, traces_utils.CodingProblem] = {}
         # generate problems and traces
         self._generate_data()
 
@@ -150,12 +150,15 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         idx = self._resolve_index(index_or_key)
         return self._traces[idx]
 
-    @functools.lru_cache(maxsize=512)
     def get_problem_data(self, index_or_key: int | str) -> traces_utils.CodingProblem:
+        cache_key = index_or_key
+        if cache_key in self._problem_data_cache:
+            return self._problem_data_cache[cache_key]
         idx = self._resolve_index(index_or_key)
         problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
-        # internal problem_idx is already an integer index into self._problems
-        return self._problems[problem_idx]
+        problem = self._problems[problem_idx]
+        self._problem_data_cache[cache_key] = problem
+        return problem
 
     def get_tags(self, index_or_key: int | str) -> list[str]:
         idx = self._resolve_index(index_or_key)
@@ -258,10 +261,10 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
             )
             for s_idx in range(self._cfg.solutions_per_problem)
         ]
-        cp = traces_utils.CodingProblem(
+        return traces_utils.CodingProblem(
             source_dataset_name=self._dataset_name,
             source_data_path=f"/{self._dataset_name}/{self._subset_name}",
-            source_data_hash=hashlib.sha1(f"{pid}".encode()).hexdigest()[:16],
+            source_data_hash=hashlib.sha256(f"{pid}".encode()).hexdigest()[:16],
             problem_id=pid,
             problem_statement=f"Compute f(x) = 2*x for problem {p_idx}",
             problem_tags=["math", "toy"],
@@ -271,7 +274,6 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
             parsing_errors=None,
             is_banned=False,
         )
-        return cp
 
     def _make_trace(
         self,
@@ -350,7 +352,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
         lmdb_path: typing.Any | None = None,
         *,
         config: FakeTraceDataConfig | None = None,
-        **kwargs,
+        **kwargs: typing.Any,
     ) -> None:
         super().__init__(lmdb_path=lmdb_path, config=config, **kwargs)
         # build deltas indices/keys and precompute deltas

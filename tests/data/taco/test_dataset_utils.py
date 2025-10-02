@@ -7,7 +7,10 @@ import pyine.data.taco.dataset_utils as tdu
 import pyine.utils.filesystem as fs_utils
 
 
-def test_get_latest_repackaged_dataset_path_no_folders(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+def test_get_latest_repackaged_dataset_path_no_folders(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # point data root to tmp
     monkeypatch.setattr(fs_utils, "get_data_root_path", lambda: tmp_path)
     rpkg_root = tmp_path / "TACO" / "repackaged"
@@ -16,7 +19,10 @@ def test_get_latest_repackaged_dataset_path_no_folders(tmp_path: pathlib.Path, m
         _ = tdu.get_latest_repackaged_dataset_path()
 
 
-def test_get_latest_repackaged_dataset_path_selects_latest(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+def test_get_latest_repackaged_dataset_path_selects_latest(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(fs_utils, "get_data_root_path", lambda: tmp_path)
     rpkg_root = tmp_path / "TACO" / "repackaged"
     rpkg_root.mkdir(parents=True, exist_ok=True)
@@ -29,13 +35,14 @@ def test_get_latest_repackaged_dataset_path_selects_latest(tmp_path: pathlib.Pat
 
 
 def test_get_new_repackaged_dataset_path_uses_today_and_version(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-):
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(fs_utils, "get_data_root_path", lambda: tmp_path)
 
     class FakeDate(datetime.date):
         @classmethod
-        def today(cls):
+        def today(cls) -> datetime.date:
             return cls(2025, 1, 2)
 
     # patch the date class used by module's datetime

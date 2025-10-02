@@ -2,6 +2,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import pytest_mock
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
@@ -265,7 +266,9 @@ class TestSampleBuilderRealData:
         tests.env_checks.TACO_TRACES_DATASET_MISSING,
         reason="TACO traces dataset is missing, cannot check sample generation",
     )
-    def test_sample_generation_on_taco_traces(self):
+    def test_sample_generation_on_taco_traces(
+        self,
+    ) -> None:
         dataset_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
         taco_reader = pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
         if len(taco_reader) < 1000:
@@ -436,7 +439,7 @@ print(x)
         self,
         small_fake_reader: FakeTraceDatasetReader,
         nested_call_trace: "_FakeTrace",
-        mocker,
+        mocker: pytest_mock.MockerFixture,
     ) -> None:
         cfg = SampleTransformConfig(
             min_partial_trace_steps=1,
@@ -465,7 +468,7 @@ print(x)
         self,
         small_fake_reader: FakeTraceDatasetReader,
         nested_call_trace: "_FakeTrace",
-        mocker,
+        mocker: pytest_mock.MockerFixture,
     ) -> None:
         cfg = SampleTransformConfig(
             min_partial_trace_steps=1,
@@ -489,7 +492,10 @@ print(x)
         assert sample.trace_step_count == 2
 
 
-def test_code_summary_is_used_from_prompt_db(small_fake_reader: FakeTraceDatasetReader, tmp_path) -> None:
+def test_code_summary_is_used_from_prompt_db(
+    small_fake_reader: FakeTraceDatasetReader,
+    tmp_path: pathlib.Path,
+) -> None:
     # create a temporary prompt result DB and insert a single code summary for one solution id
     db_path = tmp_path / "prompt_results.sqlite"
     db = pyine.prompts.PromptResultDB(str(db_path))

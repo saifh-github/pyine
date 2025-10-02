@@ -9,15 +9,18 @@ import pyine.utils.timers as timers
 def test_timeit_function() -> None:
     """Test that timeit function correctly measures execution time."""
 
-    def sample_function():
+    def sample_function() -> int:
         time.sleep(0.1)
         return 42
 
     class LocalLogger:
-        def __init__(self):
-            self.messages = []
+        def __init__(self) -> None:
+            self.messages: list[str] = []
 
-        def info(self, message):
+        def info(
+            self,
+            message: str,
+        ) -> None:
             self.messages.append(message)
 
     local_logger = LocalLogger()
@@ -91,7 +94,9 @@ def test_time_limit_no_timeout_on_short_execution() -> None:
 
 def test_timeit_decorator_stdout_default_name(capsys: pytest.CaptureFixture) -> None:
     @timers.timeit
-    def greet(x):
+    def greet(
+        x: int,
+    ) -> int:
         time.sleep(0.01)
         return x
 
@@ -102,36 +107,39 @@ def test_timeit_decorator_stdout_default_name(capsys: pytest.CaptureFixture) -> 
 
 def test_timeit_decorator_with_name_and_logger() -> None:
     class LocalLogger:
-        def __init__(self):
-            self.messages = []
+        def __init__(self) -> None:
+            self.messages: list[str] = []
 
-        def info(self, m):
-            self.messages.append(m)
+        def info(
+            self,
+            message: str,
+        ) -> None:
+            self.messages.append(message)
 
     local_logger = LocalLogger()
 
     @timers.timeit(name="custom", logger=local_logger)
-    def f():
+    def f() -> int:
         time.sleep(0.01)
         return 7
 
     assert f() == 7
-    assert any([msg.startswith("Time [custom]: ") for msg in local_logger.messages])
+    assert any(msg.startswith("Time [custom]: ") for msg in local_logger.messages)
 
 
-def test_timeit_invalid_func_argument_typeerror():
+def test_timeit_invalid_func_argument_typeerror() -> None:
     with pytest.raises(TypeError):
         timers.timeit(123)  # type: ignore[arg-type]
 
 
-def test_get_human_readable_time_units():
+def test_get_human_readable_time_units() -> None:
     assert timers.get_human_readable_time(0.0) == "0.0ns"
     assert timers.get_human_readable_time(0.5) == "500.000ms"
     assert timers.get_human_readable_time(90.0) == "1.500m"
     assert timers.get_human_readable_time(3600.0) == "1.000h"
 
 
-def test_parse_timedelta_valid_and_invalid():
+def test_parse_timedelta_valid_and_invalid() -> None:
     td = timers.parse_timedelta("1h30m")
     assert td.total_seconds() == 5400
     td2 = timers.parse_timedelta("2.5s10ms2µs3ns")
@@ -143,7 +151,9 @@ def test_parse_timedelta_valid_and_invalid():
         _ = timers.parse_timedelta("not-a-duration")
 
 
-def test_time_limit_raises_when_sigalrm_missing(monkeypatch: pytest.MonkeyPatch):
+def test_time_limit_raises_when_sigalrm_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Simulate platform without SIGALRM
     monkeypatch.delattr(signal, "SIGALRM", raising=False)
     with pytest.raises(ValueError), timers.TimeLimit(0.01):

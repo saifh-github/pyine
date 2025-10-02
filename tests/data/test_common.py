@@ -28,7 +28,10 @@ def _mk_dirs(tmp_path: pathlib.Path, kind: str, source: str, names: list[str]) -
         ("prefix.2025-09-10.lmdb.extra", None),
     ],
 )
-def test_parse_date_from_dirname(name: str, expected):
+def test_parse_date_from_dirname(
+    name: str,
+    expected: tuple[int, int, int] | None,
+) -> None:
     fn = pyine.data.common._parse_date_from_dirname
     d = fn(name)
     if expected is None:
@@ -39,7 +42,11 @@ def test_parse_date_from_dirname(name: str, expected):
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_simple(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_simple(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     # create three dataset dirs with different dates and tags
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
@@ -58,7 +65,11 @@ def test_resolve_latest_dataset_path_simple(monkeypatch, tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_with_filter_regex(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_with_filter_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -79,7 +90,11 @@ def test_resolve_latest_dataset_path_with_filter_regex(monkeypatch, tmp_path, ki
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_filter_eliminates_all(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_filter_eliminates_all(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -100,7 +115,11 @@ def test_resolve_latest_dataset_path_filter_eliminates_all(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_invalid_regex(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_invalid_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(tmp_path, kind, src, ["a.2025-01-01.lmdb"])
@@ -112,14 +131,20 @@ def test_resolve_latest_dataset_path_invalid_regex(monkeypatch, tmp_path, kind):
         )
 
 
-def test_resolve_latest_dataset_path_invalid_kind(tmp_path):
+def test_resolve_latest_dataset_path_invalid_kind(
+    tmp_path: pathlib.Path,
+) -> None:
     # no need to create dirs; we validate kind first in code
     with pytest.raises(ValueError):
         pyine.data.common.resolve_latest_dataset_path(kind="unknown", source_dataset_name="TACO")
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_invalid_base_dir(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_invalid_base_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     # do not create required directories so the base dir is invalid
     with pytest.raises(FileNotFoundError):
@@ -127,7 +152,11 @@ def test_resolve_latest_dataset_path_invalid_base_dir(monkeypatch, tmp_path, kin
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_latest_dataset_path_no_valid_date_suffix(monkeypatch, tmp_path, kind):
+def test_resolve_latest_dataset_path_no_valid_date_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     # name matches numeric pattern but encodes an invalid date so parser will drop it -> ValueError
@@ -137,7 +166,11 @@ def test_resolve_latest_dataset_path_no_valid_date_suffix(monkeypatch, tmp_path,
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_glob_default(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_glob_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -163,7 +196,11 @@ def test_resolve_matching_dataset_paths_glob_default(monkeypatch, tmp_path, kind
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_regex_prefix(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_regex_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -185,7 +222,11 @@ def test_resolve_matching_dataset_paths_regex_prefix(monkeypatch, tmp_path, kind
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_is_regex_param(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_is_regex_param(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -208,7 +249,11 @@ def test_resolve_matching_dataset_paths_is_regex_param(monkeypatch, tmp_path, ki
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_glob_prefix_forces_glob(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_glob_prefix_forces_glob(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(
@@ -229,7 +274,7 @@ def test_resolve_matching_dataset_paths_glob_prefix_forces_glob(monkeypatch, tmp
     assert [p.name for p in matched] == ["aa.2025-12-01.lmdb", "bb.2025-12-02.lmdb"]
 
 
-def test_resolve_matching_dataset_paths_invalid_kind():
+def test_resolve_matching_dataset_paths_invalid_kind() -> None:
     with pytest.raises(ValueError):
         pyine.data.common.resolve_matching_dataset_paths(
             kind="weird",
@@ -239,7 +284,11 @@ def test_resolve_matching_dataset_paths_invalid_kind():
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_missing_base_dir(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_missing_base_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     with pytest.raises(FileNotFoundError):
         pyine.data.common.resolve_matching_dataset_paths(
@@ -250,7 +299,11 @@ def test_resolve_matching_dataset_paths_missing_base_dir(monkeypatch, tmp_path, 
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_no_match(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_no_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(tmp_path, kind, src, ["a.2025-01-01.lmdb"])
@@ -262,7 +315,11 @@ def test_resolve_matching_dataset_paths_no_match(monkeypatch, tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_empty_pattern(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_empty_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(tmp_path, kind, src, ["a.2025-01-01.lmdb"])
@@ -275,7 +332,11 @@ def test_resolve_matching_dataset_paths_empty_pattern(monkeypatch, tmp_path, kin
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_invalid_regex(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_invalid_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
     _mk_dirs(tmp_path, kind, src, ["a.2025-01-01.lmdb"])
@@ -288,11 +349,15 @@ def test_resolve_matching_dataset_paths_invalid_regex(monkeypatch, tmp_path, kin
 
 
 @pytest.mark.parametrize("kind", ["traces", "deltas"])
-def test_resolve_matching_dataset_paths_matches_subdirectories(monkeypatch, tmp_path, kind):
+def test_resolve_matching_dataset_paths_matches_subdirectories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
     """Ensure patterns with path separators match directories recursively under the source root."""
     monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     src = "TACO"
-    created = _mk_dirs(
+    _mk_dirs(
         tmp_path,
         kind,
         src,
