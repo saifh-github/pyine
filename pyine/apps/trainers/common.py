@@ -2,7 +2,6 @@ import inspect
 import logging
 import typing
 
-import langchain_core.runnables
 import pydantic
 import transformers
 
@@ -11,7 +10,6 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.langchain
-import pyine.utils.llm_providers
 import pyine.utils.transformers
 import wandb
 
@@ -54,14 +52,14 @@ def prepare_datamodule(
     dm.setup()
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets = (
-            config.datamodule_config.train_subset_names
-            + config.datamodule_config.valid_subset_names
-            + config.datamodule_config.eval_subset_names
-        )
+        target_subsets = [
+            *config.datamodule_config.train_subset_names,
+            *config.datamodule_config.valid_subset_names,
+            *config.datamodule_config.eval_subset_names,
+        ]
         dm_stats = dm.get_stats(target_subsets)
-        dm_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
-        runtime.wandb_run.summary.update(dm_stats)
+        summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
+        wandb_summary.update(summary_stats)  # noqa
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             config.evals_config.define_metrics_for_wandb(
                 wandb_run=runtime.wandb_run,
@@ -71,7 +69,7 @@ def prepare_datamodule(
 
 
 async def evaluate_model(
-    model: langchain_core.runnables.Runnable | transformers.PreTrainedModel,
+    model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer | None,
     datamodule: pyine.data.datamodule.BaseDataModule,
     config: AppMainConfig,
@@ -95,10 +93,11 @@ async def evaluate_model(
     if pyine.utils.transformers.is_hf_model(model):
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
+        hf_model = typing.cast("transformers.PreTrainedModel", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             logger.info(f"running trained model evaluation on the {eval_subset_name} subset...")
-            evaluation_result = await config.evals_config.evaluate_hf_model(
-                model=model,
+            evaluation_result: typing.Any = await config.evals_config.evaluate_hf_model(
+                model=hf_model,
                 tokenizer=tokenizer,
                 datamodule=datamodule,
                 eval_subset_name=eval_subset_name,
@@ -113,10 +112,11 @@ async def evaluate_model(
             raise ValueError(f"invalid model ({type(model)})")
         if tokenizer is not None:
             raise NotImplementedError("tokenizer support in runnable chain eval is not implemented")
+        chain_model = typing.cast("pyine.evals.utils.InvocableModelChain", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             logger.info(f"running chain evaluation on the {eval_subset_name} subset...")
-            evaluation_result = await config.evals_config.evaluate_runnable_model(
-                chain=model,
+            evaluation_result: typing.Any = await config.evals_config.evaluate_runnable_model(
+                chain=chain_model,
                 datamodule=datamodule,
                 eval_subset_name=eval_subset_name,
                 verbose=True,
@@ -126,20 +126,23 @@ async def evaluate_model(
             pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
             evaluation_results[eval_subset_name] = evaluation_result
     if config.use_wandb_logging and evaluation_results:
+        if runtime is None:
+            raise RuntimeError("runtime configuration with wandb run must be provided when logging to wandb")
         wandb_run_id = runtime.wandb_run_id
         if wandb_run_id is None:
             raise RuntimeError("wandb run ID is not set; should have been initialized already")
-        if not hasattr(runtime.wandb_run, "log"):
-            # reopen the run in case it was closed (e.g. like the openai integration always does)
-            runtime.wandb_run = wandb.init(id=runtime.wandb_run_id, resume="must")
+        wandb_run = runtime.wandb_run
+        if wandb_run is None or not hasattr(wandb_run, "log"):
+            wandb_run = wandb.init(id=wandb_run_id, resume="must")
+            runtime.wandb_run = wandb_run
         logger.info(f"logging evaluation results to wandb run id: {wandb_run_id}...")
         config.evals_config.log_metrics(
-            wandb_run=runtime.wandb_run,
+            wandb_run=wandb_run,
             results_by_subset=evaluation_results,
         )
         for subset_name, subset_result in evaluation_results.items():
             config.evals_config.log_predictions(
-                wandb_run=runtime.wandb_run,
+                wandb_run=wandb_run,
                 subset_name=subset_name,
                 subset_results=subset_result,
             )

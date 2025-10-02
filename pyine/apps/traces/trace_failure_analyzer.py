@@ -17,7 +17,6 @@ import pyine.data.traces.dataset_writer
 import pyine.utils.code.execution
 import pyine.utils.filesystem
 import pyine.utils.logging
-from pyine.data.traces.dataset_writer import TraceDatasetWriterConfig, _CodeToTrace
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,8 @@ def _json_default(value: typing.Any) -> typing.Any:
     if isinstance(value, pathlib.Path):
         return str(value)
     if isinstance(value, (set, frozenset, tuple)):
-        return list(value)
+        iterable_value = typing.cast("typing.Iterable[typing.Any]", value)
+        return list(iterable_value)
     if isinstance(value, datetime.datetime):
         return value.isoformat()
     if isinstance(value, datetime.date):
@@ -58,8 +58,8 @@ def _summarize_trace_result(
     trace_result: pyine.utils.code.execution.TraceResult,
 ) -> dict[str, typing.Any]:
     """Return a concise dictionary with the most useful trace metadata."""
-    metadata = trace_result.metadata if isinstance(trace_result.metadata, dict) else {}
-    summary = {
+    metadata: dict[str, typing.Any] = trace_result.metadata
+    summary: dict[str, typing.Any] = {
         "entrypoint_name": trace_result.entrypoint_name,
         "valid_step_count": trace_result.valid_step_count,
         "total_step_count": trace_result.total_step_count,
@@ -95,7 +95,7 @@ def _build_trace_request(
     test_idx: int,
     inputs: typing.Any,
     outputs: typing.Any,
-) -> _CodeToTrace:
+) -> pyine.data.traces.dataset_writer.TraceRequest:
     """Build a TraceRequest object from a CodingProblem and Solution."""
     trace_identifier = pyine.data.traces.dataset_utils.TraceIdentifier(
         dataset=solution.solution_id.dataset,
@@ -106,7 +106,7 @@ def _build_trace_request(
         augment_category=None,
         augment_idx=None,
     )
-    return _CodeToTrace(
+    return pyine.data.traces.dataset_writer.TraceRequest(
         code_string=solution.code,
         trace_id=trace_identifier,
         entrypoint_name=problem.entrypoint_name,
@@ -164,9 +164,13 @@ def run_trace_failure_analysis(
     logger.info("using dataset root: %s", resolved_dataset_root)
     out_dir = _ensure_output_dir(output_dir)
     logger.info("logging failures under: %s", out_dir)
-    config = TraceDatasetWriterConfig(
-        source_dataset_name=dataset_name,
-        execution_timeout_seconds=timeout_seconds,
+    config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig.model_validate(
+        {
+            "source_dataset_name": dataset_name,
+            "execution_timeout_seconds": timeout_seconds,
+            "allow_banned_samples": allow_banned,
+            "reformat_code_strings": reformat_code_strings,
+        }
     )
     iterator = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name=dataset_name,
@@ -267,7 +271,7 @@ def run_trace_failure_analysis(
                     attempt_started = datetime.datetime.now()
                     attempt_started_perf = time.perf_counter()
                     try:
-                        trace_result, compare_result = pyine.data.traces.dataset_writer._trace_code_snippet(
+                        trace_result, compare_result = pyine.data.traces.dataset_writer.trace_code_snippet(
                             code_snippet=trace_request,
                             config=config,
                         )

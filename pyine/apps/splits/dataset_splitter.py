@@ -36,15 +36,18 @@ import itertools
 import json
 import logging
 import pathlib
+import typing
 
 import click
 import yaml
 
 import pyine.data.taco.dataset_utils
-import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.utils.filesystem
 import pyine.utils.reprod
+
+if typing.TYPE_CHECKING:
+    import pydantic
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +58,12 @@ def _get_group_rules(
     use_solution_count_group: bool,
 ) -> list[str]:
     """Returns the prefixes to use for each group."""
-    group_prefixes = []
+    group_prefixes: list[str] = []
     if use_difficulty_group:
         group_prefixes.append("difficulty:")
     if use_solution_count_group:
         group_prefixes.append("solutions:")
-    group_rules = []
+    group_rules: list[str] = []
     for tag_list in tag_lists:
         for tag in tag_list:
             for group_prefix in group_prefixes:
@@ -218,7 +221,10 @@ def split(
         tag_lists=tag_lists,
         source_data_hashes=hash_list,
         subset_assignments=assignments,
-        creation_metadata=pyine.utils.reprod.get_reprod_metadata(),
+        creation_metadata=typing.cast(
+            "dict[str, pydantic.JsonValue]",
+            pyine.utils.reprod.get_reprod_metadata(),
+        ),
         config=split_config,
     )
     result.to_file(output_path)

@@ -179,7 +179,7 @@ ______________________________________________________________________
 **Script:** [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
 
 **Main use:** iterates over coding problems/solutions from a source dataset, runs
-`pyine.data.traces.dataset_writer._trace_code_snippet`, and records detailed metadata for every
+`pyine.data.traces.dataset_writer.trace_code_snippet`, and records detailed metadata for every
 execution or output-comparison failure under `logs/traced-test-failures/`.
 
 **Example:**

@@ -1,8 +1,6 @@
 import enum
-import typing
 
 import hydra_zen
-import langchain_core.runnables
 import pydantic
 import transformers
 
@@ -21,6 +19,16 @@ class EvalType(enum.StrEnum):
     CODE_EXEC = enum.auto()
     """Code execution model evaluation pipeline."""
     # TODO: add more here later
+
+
+class EvalResult(pydantic.BaseModel):
+    """Container for evaluation metrics and captured artifacts."""
+
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (immutable)."""
+
+    metrics: pyine.evals.utils.MetricsDictType
+    """Dictionary of aggregated evaluation metrics; keys are metric names, values are eval outcomes."""
 
 
 class RunnableEvalConfig(pydantic.BaseModel):
@@ -72,11 +80,11 @@ class BaseEvalsConfig(pydantic.BaseModel):
 
     async def evaluate_runnable_model(
         self,
-        chain: langchain_core.runnables.Runnable,
+        chain: pyine.evals.utils.InvocableModelChain,
         datamodule: pyine.data.datamodule.BaseDataModule,
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> pyine.evals.utils.MetricsDictType:
+    ) -> EvalResult:
         """Evaluates a LangChain text prediction chain using the specified subset.
 
         Args:
@@ -86,10 +94,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
             verbose: Whether to verbosely report progress.
 
         Returns:
-            The evaluation results as a dictionary of metrics.
+            The evaluation results, which contains a dictionary of metrics.
         """
         if self.eval_type is None:
-            return {}
+            return EvalResult(metrics={})
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     async def evaluate_hf_model(
@@ -99,7 +107,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         datamodule: pyine.data.datamodule.BaseDataModule,
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> pyine.evals.utils.MetricsDictType:
+    ) -> EvalResult:
         """Evaluates a HuggingFace-Transformers model using the specified subset.
 
         Args:
@@ -110,10 +118,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
             verbose: Whether to verbosely report progress.
 
         Returns:
-            The evaluation results as a dictionary of metrics.
+            The evaluation results, which contains a dictionary of metrics.
         """
         if self.eval_type is None:
-            return {}
+            return EvalResult(metrics={})
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
     def define_metrics_for_wandb(
@@ -129,7 +137,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     def log_metrics(
         self,
         wandb_run: wandb.Run,
-        results_by_subset: dict[str, typing.Any],
+        results_by_subset: dict[str, EvalResult],
         *,
         table_key: str = "evals/metrics_table",
         step: int | None = None,
@@ -153,7 +161,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         self,
         wandb_run: wandb.Run,
         subset_name: str,
-        subset_results: typing.Any,
+        subset_results: EvalResult,
         *,
         table_key: str | None = None,
         max_rows: int = 32,

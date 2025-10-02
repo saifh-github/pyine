@@ -135,6 +135,18 @@ def _parse_kv_list_to_dict(
     return result
 
 
+def _ensure_mapping_dict(
+    value: typing.Any,
+    error_message: str,
+) -> dict[str, typing.Any]:
+    """Parses and ensures that the provided value is a dictionary of kwargs."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise click.BadParameter(error_message)
+    return typing.cast("dict[str, typing.Any]", value)
+
+
 def _build_dataset_reader(
     dataset_path: pathlib.Path,
     dataset_loader: str | None,
@@ -163,7 +175,7 @@ def _build_dataset_reader(
 
 
 def _async_main_wrapper(
-    fn: typing.Callable[..., typing.Awaitable[None]],
+    fn: typing.Callable[..., typing.Coroutine[typing.Any, typing.Any, None]],
 ) -> typing.Callable[..., None]:
     @functools.wraps(fn)
     def wrapper(
@@ -436,25 +448,27 @@ async def main(
         logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
     if target_indices:
         try:
-            target_indices = pyine.utils.portability.parse_indices_spec(target_indices)
+            parsed_target_indices = pyine.utils.portability.parse_indices_spec(target_indices)
         except ValueError as exc:
             raise click.BadParameter(f"invalid target indices spec: {exc}") from exc
-        for idx in target_indices:
+        for idx in parsed_target_indices:
             if idx < 0 or idx >= len(dataset):
                 raise click.BadParameter(f"invalid target index: {idx}")
         if indices_list is None:
-            indices_list = target_indices
+            indices_list = parsed_target_indices
         else:
-            indices_list = [idx for idx in indices_list if idx in target_indices]
+            # target specific indices inside the already-generated list
+            indices_list = [idx for idx in indices_list if idx in parsed_target_indices]
     logger.debug(f"target indices: {indices_list}")
 
     # -------- prepare provider/llm-related stuff --------
 
     llm_kwargs: dict[str, typing.Any] = {}
     if llm_config_file is not None:
-        file_cfg = _load_yaml_or_json_file(llm_config_file) or {}
-        if not isinstance(file_cfg, dict):
-            raise click.BadParameter("--llm-config-file must decode to a mapping/dict")
+        file_cfg = _ensure_mapping_dict(
+            _load_yaml_or_json_file(llm_config_file),
+            "--llm-config-file must decode to a mapping/dict",
+        )
         llm_kwargs.update(file_cfg)
     if llm_kv:
         llm_kwargs.update(_parse_kv_list_to_dict(llm_kv))
@@ -468,11 +482,10 @@ async def main(
 
     prompt_partial_vars: dict[str, typing.Any] = {}
     if prompt_vars:
-        inline_vars = _parse_yaml_or_json_value(prompt_vars)
-        if inline_vars is None:
-            inline_vars = {}
-        if not isinstance(inline_vars, dict):
-            raise click.BadParameter("--prompt-vars must decode to a mapping/dict")
+        inline_vars = _ensure_mapping_dict(
+            _parse_yaml_or_json_value(prompt_vars),
+            "--prompt-vars must decode to a mapping/dict",
+        )
         prompt_partial_vars.update(inline_vars)
         logger.debug(f"parsed prompt partial vars: {prompt_partial_vars}")
     prompt_config = pyine.prompts.types.PromptBuildConfig(
@@ -486,21 +499,20 @@ async def main(
 
     shared_meta_dict: dict[str, typing.Any] = {}
     if shared_meta_file is not None:
-        file_meta = _load_yaml_or_json_file(shared_meta_file)
-        if file_meta is None:
-            file_meta = {}
-        if not isinstance(file_meta, dict):
-            raise click.BadParameter("--shared-meta-file must decode to a mapping/dict")
+        file_meta = _ensure_mapping_dict(
+            _load_yaml_or_json_file(shared_meta_file),
+            "--shared-meta-file must decode to a mapping/dict",
+        )
         shared_meta_dict.update(file_meta)
     if shared_meta:
-        inline_meta = _parse_yaml_or_json_value(shared_meta)
-        if inline_meta is None:
-            inline_meta = {}
-        if not isinstance(inline_meta, dict):
-            raise click.BadParameter("--shared-meta must decode to a mapping/dict")
+        inline_meta = _ensure_mapping_dict(
+            _parse_yaml_or_json_value(shared_meta),
+            "--shared-meta must decode to a mapping/dict",
+        )
         shared_meta_dict.update(inline_meta)
     if shared_meta_dict:
         logger.debug(f"parsed shared meta: {shared_meta_dict}")
+    shared_meta_payload: dict[str, typing.Any] | None = shared_meta_dict if shared_meta_dict else None
 
     shared_tags_list: list[str] | None = None
     if shared_tags:
@@ -527,7 +539,7 @@ async def main(
         max_unsatisfactory_retries=max_unsatisfactory_retries,
         force_generation=force_generation,
         shared_tags=shared_tags_list,
-        shared_meta=typing.cast("dict[str, typing.Any] | None", shared_meta_dict or None),
+        shared_meta=shared_meta_payload,
     )
 
     # -------- launch the annotation process --------

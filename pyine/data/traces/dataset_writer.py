@@ -35,6 +35,8 @@ import pyine.utils.reprod
 
 __all__ = [
     "TraceDatasetWriterConfig",
+    "TraceRequest",
+    "trace_code_snippet",
     "write_dataset",
     "write_dataset_from_taco",
 ]
@@ -306,7 +308,7 @@ class _TestTuple:
 
 
 @dataclasses.dataclass(frozen=True)
-class _CodeToTrace:
+class TraceRequest:
     """Represents a code snippet to trace with a specific set of inputs/outputs and identifiers."""
 
     code_string: str
@@ -389,14 +391,14 @@ def _check_must_skip_solution(
 
 
 def _log_failed_test_to_disk(
-    code_to_trace: _CodeToTrace,
+    code_to_trace: TraceRequest,
     failure_type: str,
     reason: str,
     log_path: pathlib.Path | None,
 ) -> None:
     """Append a human-readable debug entry for a failed test comparison to disk (thread/process-safe).
 
-    The entry contains repr() of each _CodeToTrace attribute plus the failure reason.
+    The entry contains repr() of each TraceRequest attribute plus the failure reason.
     If log_path is None, the function is a no-op.
     """
     if not log_path:
@@ -473,7 +475,7 @@ def _get_test_tuples(
 
 
 def _get_traces_to_write(
-    to_trace: list[_CodeToTrace],
+    to_trace: list[TraceRequest],
     all_must_succeed: bool,  # useful when tracing the original code, i.e. we want all tests to succeed
     config: TraceDatasetWriterConfig,
     log_fn: typing.Callable,
@@ -484,7 +486,7 @@ def _get_traces_to_write(
     results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
             functools.partial(
-                _trace_code_snippet,
+                trace_code_snippet,
                 code_snippet=code_snippet,
                 config=config,
             )
@@ -542,8 +544,8 @@ def _get_traces_to_write(
     return successful_traces
 
 
-def _trace_code_snippet(
-    code_snippet: _CodeToTrace,
+def trace_code_snippet(
+    code_snippet: TraceRequest,
     config: TraceDatasetWriterConfig,
 ) -> tuple[
     pyine.utils.code.execution.TraceResult,
@@ -654,9 +656,9 @@ def _fetch_augmented_code_to_trace(
     solution: pyine.data.traces.dataset_utils.Solution,
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
-) -> list[_CodeToTrace]:
+) -> list[TraceRequest]:
     """Fetches augmented code snippets to trace for a solution to a coding problem."""
-    augmented_code_to_trace: list[_CodeToTrace] = []
+    augmented_code_to_trace: list[TraceRequest] = []
     if config.generate_obfuscated_solutions:
         # note: obfuscated code is unique and does not vary for each test (unlike other augments)
         obfuscated_code = pyine.utils.code.obfuscation.obfuscate_code(
@@ -666,7 +668,7 @@ def _fetch_augmented_code_to_trace(
             preserve_global_names=([problem.entrypoint_name] if problem.entrypoint_name else []),
         )
         augmented_code_to_trace.extend(
-            _CodeToTrace(
+            TraceRequest(
                 code_string=obfuscated_code,
                 trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                     **vars(solution.solution_id),
@@ -698,7 +700,7 @@ def _fetch_augmented_code_to_trace(
                 augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
                 for record_idx in picked_idxs:
                     augmented_code_to_trace.extend(
-                        _CodeToTrace(
+                        TraceRequest(
                             code_string=prompt_records[record_idx].result,
                             trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                                 **vars(solution.solution_id),
@@ -776,7 +778,7 @@ def _process_one_solution(
     """Processes one solution to a coding problem; returns a dict of trace results to write to disk."""
     # first step: for all test cases, run the ORIGINAL SOLUTION CODE, and see which test succeeds/fails
     orig_code_to_trace = [
-        _CodeToTrace(
+        TraceRequest(
             code_string=solution.code,  # original code snippet (reformatted but otherwise intact)
             trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
                 **vars(solution.solution_id),

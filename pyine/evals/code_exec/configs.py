@@ -26,6 +26,20 @@ import wandb
 logger = logging.getLogger(__name__)
 
 
+class CodeExecEvalResult(pyine.evals.common.EvalResult):
+    """Container for evaluation metrics and captured artifacts."""
+
+    metrics: pyine.evals.utils.MetricsDictType
+    """Dictionary of aggregated evaluation metrics; keys are metric names, values are eval outcomes."""
+    artifacts: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact]
+    """List of captured evaluation artifacts (include sample data and eval result)."""
+
+    @property
+    def identifiers(self) -> list[str]:
+        """Returns a list of sample identifiers associated with the evaluation results."""
+        return [s.identifier for s in self.artifacts]
+
+
 class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     """Configuration for code execution evaluations."""
 
@@ -44,7 +58,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         datamodule: pyine.data.datamodule.BaseDataModule,
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
+    ) -> CodeExecEvalResult:
         """Evaluates a LangChain text prediction chain for code execution using the specified subset.
 
         The model is expected to be already wrapped inside a LangChain Runnable chain whose invocation
@@ -156,7 +170,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         datamodule: pyine.data.datamodule.BaseDataModule,
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
+    ) -> CodeExecEvalResult:
         """Evaluates a HuggingFace-Transformers model for code execution using the specified subset.
 
         The model is expected to be a HuggingFace-Transformers pretrained model paired with its
@@ -301,7 +315,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         evaluator: pyine.evals.code_exec.utils.OutcomeEvaluator,
         token_usage: pyine.evals.utils.TokenUsageInfo,
         sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData],
-    ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
+    ) -> CodeExecEvalResult:
         """Finalizes the evaluation results by aggregating metrics and preparing captured prediction artifacts."""
         output_metrics = await pyine.evals.code_exec.utils.get_metrics(evaluator, token_usage)
         prediction_artifacts: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
@@ -313,8 +327,9 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                     eval_result=sample_eval,
                 )
             )
-        return pyine.evals.code_exec.utils.CodeExecEvalResult(metrics=output_metrics, artifacts=prediction_artifacts)
+        return CodeExecEvalResult(metrics=output_metrics, artifacts=prediction_artifacts)
 
+    @typing.override
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
@@ -336,10 +351,11 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 step_metric="global_step",
             )  # noqa
 
+    @typing.override
     def log_metrics(
         self,
         wandb_run: wandb.Run,
-        results_by_subset: dict[str, pyine.evals.code_exec.utils.CodeExecEvalResult],
+        results_by_subset: dict[str, CodeExecEvalResult],
         *,
         table_key: str = "evals/metrics_table",
         step: int | None = None,
@@ -374,11 +390,12 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             wandb_run.log({table_key: table}, step=step)  # noqa
         return table
 
+    @typing.override
     def log_predictions(
         self,
         wandb_run: wandb.Run,
         subset_name: str,
-        subset_results: pyine.evals.code_exec.utils.CodeExecEvalResult,
+        subset_results: CodeExecEvalResult,
         *,
         table_key: str | None = None,
         max_rows: int = 32,

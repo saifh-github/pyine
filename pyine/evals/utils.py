@@ -2,8 +2,12 @@ import collections
 import dataclasses
 import typing
 
+import langchain_core.runnables
+
 type MetricsDictType = dict[str, float | int | str]
 """Type used to represent dictionaries of evaluation metrics."""
+type InvocableModelChain = langchain_core.runnables.Runnable[typing.Any, typing.Any]
+"""Type used to represent invocable model chains (i.e. objects with an 'invoke' method)."""
 
 
 UnknownTokenCount = typing.Literal["unknown"]
@@ -244,7 +248,7 @@ def parse_token_usage_from_response(
 def print_metrics(
     metrics: MetricsDictType,
     subset: str,
-    logger: typing.Callable | None = None,
+    logger: typing.Callable[[str], typing.Any] | None = None,
 ) -> None:
     """Helper that prints the given metrics using the provided callable logger (or stdout)."""
     eval_output_strs = []

@@ -168,7 +168,10 @@ line-ending = "auto"  # Use system default line endings
 
 [tool.pyright]
 typeCheckingMode = "strict"
-include = ["pyine", "tests"]
+include = ["pyine"]
+exclude = ["tests"]
+venvPath = "."
+venv = ".venv"
 # Overrides from strict defaults for data science workflows
 reportMissingTypeStubs = false        # Ignore missing third-party type stubs
 reportOptionalMemberAccess = false    # Allow optional member access (e.g., df.column)
