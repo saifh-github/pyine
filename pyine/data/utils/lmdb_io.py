@@ -455,7 +455,7 @@ class LMDBReader:
 
     def __init__(
         self,
-        path: pathlib.Path | typing.AnyStr,
+        path: pathlib.Path | str,
     ) -> None:
         """
         Initialize the optimized LMDB reader.

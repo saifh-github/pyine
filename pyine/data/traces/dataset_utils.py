@@ -19,7 +19,6 @@ import tqdm
 import yaml
 
 import pyine.data.common
-import pyine.data.utils.lmdb_io
 import pyine.prompts.configs.code_analysis
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
@@ -118,16 +117,19 @@ class SolutionIdentifier(CodingProblemIdentifier):
     solution_idx: int
     """Index identifying a specific solution for a coding problem (within the source dataset)."""
 
+    @typing.override
     def __repr__(self) -> str:
         """Returns a string representation of this identifier."""
         return f"{CodingProblemIdentifier.__repr__(self)}/s{self.solution_idx:04d}"
 
-    def get_parent_identifier(self) -> CodingProblemIdentifier:
+    @typing.override
+    def get_parent_identifier(self) -> CodingProblemIdentifier:  # type: ignore[reportIncompatibleMethodOverride]
         """Returns the parent identifier of this object (i.e., a coding problem identifier)."""
         return CodingProblemIdentifier(dataset=self.dataset, subset=self.subset, problem_idx=self.problem_idx)
 
+    @typing.override
     @staticmethod
-    def from_string(identifier_str: str) -> "SolutionIdentifier":
+    def from_string(identifier_str: str) -> "SolutionIdentifier":  # type: ignore[reportIncompatibleMethodOverride]
         """Creates an identifier object from a string representation."""
         assert isinstance(identifier_str, str), "identifier must be a string"
         parent_str, solution_idx_str = identifier_str.rsplit("/s", maxsplit=1)
@@ -155,22 +157,6 @@ class TraceIdentifier(SolutionIdentifier):
         """Returns a string representation of this identifier without the augmentation information."""
         return f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
 
-    def __repr__(self) -> str:
-        """Returns a string representation of this identifier."""
-        out = self._get_augmentless_repr()
-        if self.is_augmented:
-            out += f"/a:{self.augment_category}:{self.augment_idx:03d}"
-        return out
-
-    def get_parent_identifier(self) -> SolutionIdentifier:
-        """Returns the parent identifier of this object (i.e., a solution identifier)."""
-        return SolutionIdentifier(
-            dataset=self.dataset,
-            subset=self.subset,
-            problem_idx=self.problem_idx,
-            solution_idx=self.solution_idx,
-        )
-
     def get_augmentless_identifier(self) -> "TraceIdentifier":
         """Returns a copy of this object without the augmentation information."""
         augmentless_repr = self._get_augmentless_repr()
@@ -188,27 +174,6 @@ class TraceIdentifier(SolutionIdentifier):
             )
             return True
         return False
-
-    @staticmethod
-    def from_string(identifier_str: str) -> "TraceIdentifier":
-        """Creates an identifier object from a string representation."""
-        assert isinstance(identifier_str, str), "identifier must be a string"
-        parent_str, trace_id_str = identifier_str.rsplit("/t", maxsplit=1)
-        parent_id = SolutionIdentifier.from_string(parent_str)
-        has_augm_split = "/a:" in trace_id_str
-        if has_augm_split:
-            test_idx_str, augment_id = trace_id_str.split("/a:", maxsplit=1)
-            augment_category, augment_idx_str = augment_id.split(":", maxsplit=1)
-            augment_idx = int(augment_idx_str)
-        else:
-            augment_category, augment_idx = None, None
-            test_idx_str = trace_id_str
-        return TraceIdentifier(
-            **vars(parent_id),
-            test_idx=int(test_idx_str),
-            augment_category=augment_category,
-            augment_idx=augment_idx,
-        )
 
     @functools.cached_property
     def is_bugged(self) -> bool:
@@ -256,6 +221,46 @@ class TraceIdentifier(SolutionIdentifier):
         for banned_ch in ["/", ",", " ", ":"]:
             proposed = proposed.replace(banned_ch, "_")
         return proposed
+
+    @typing.override
+    def __repr__(self) -> str:
+        """Returns a string representation of this identifier."""
+        out = self._get_augmentless_repr()
+        if self.is_augmented:
+            out += f"/a:{self.augment_category}:{self.augment_idx:03d}"
+        return out
+
+    @typing.override
+    def get_parent_identifier(self) -> SolutionIdentifier:  # type: ignore[reportIncompatibleMethodOverride]
+        """Returns the parent identifier of this object (i.e., a solution identifier)."""
+        return SolutionIdentifier(
+            dataset=self.dataset,
+            subset=self.subset,
+            problem_idx=self.problem_idx,
+            solution_idx=self.solution_idx,
+        )
+
+    @typing.override
+    @staticmethod
+    def from_string(identifier_str: str) -> "TraceIdentifier":  # type: ignore[reportIncompatibleMethodOverride]
+        """Creates an identifier object from a string representation."""
+        assert isinstance(identifier_str, str), "identifier must be a string"
+        parent_str, trace_id_str = identifier_str.rsplit("/t", maxsplit=1)
+        parent_id = SolutionIdentifier.from_string(parent_str)
+        has_augm_split = "/a:" in trace_id_str
+        if has_augm_split:
+            test_idx_str, augment_id = trace_id_str.split("/a:", maxsplit=1)
+            augment_category, augment_idx_str = augment_id.split(":", maxsplit=1)
+            augment_idx = int(augment_idx_str)
+        else:
+            augment_category, augment_idx = None, None
+            test_idx_str = trace_id_str
+        return TraceIdentifier(
+            **vars(parent_id),
+            test_idx=int(test_idx_str),
+            augment_category=augment_category,
+            augment_idx=augment_idx,
+        )
 
 
 class CodingProblem(pydantic.BaseModel):

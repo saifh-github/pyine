@@ -27,7 +27,7 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
 
     def __init__(
         self,
-        lmdb_path: pathlib.Path | typing.AnyStr,
+        lmdb_path: pathlib.Path | str,
     ) -> None:
         super().__init__(lmdb_path=lmdb_path)
         # first, make sure this is actually a deltas dataset, and not just a regular traces dataset

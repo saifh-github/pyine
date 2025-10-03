@@ -63,7 +63,7 @@ async def reprocess_code_samples(
         ]
         if not batch_indices:
             continue
-        batch_samples = []
+        batch_samples: list[tuple[int, dict[str, typing.Any]]] = []
         for sample_idx in batch_indices:
             try:
                 sample = dataset_reader[sample_idx]
@@ -74,81 +74,93 @@ async def reprocess_code_samples(
                 with open(sample_output_path, "w") as fd:
                     json.dump({"error": str(e)}, fd, indent=2)
                 continue
-        all_solutions, solution_mapping = [], []
+        all_solutions: list[dict[str, typing.Any]] = []
+        solution_mapping: list[tuple[int, dict[str, typing.Any]]] = []
         for sample_idx, sample in batch_samples:
-            assert isinstance(sample["solutions"], list)
-            for solution in sample["solutions"]:
-                validation_errors, analysis_outputs = [], []
-                if not isinstance(solution, str):
+            solutions_field = typing.cast("list[typing.Any]", sample.get("solutions", []))
+            for solution_entry in solutions_field:
+                validation_errors: list[str] = []
+                analysis_outputs_entry: list[typing.Any] = []
+                if isinstance(solution_entry, str):
+                    orig_code = solution_entry
+                    code_text = solution_entry
+                else:
                     expected_keys = {
                         "orig_code",
                         "code",
                         "validation_errors",
                         "analysis_outputs",
                     }
-                    assert isinstance(solution, dict) and expected_keys.issubset(solution.keys())
-                    orig_code = solution["orig_code"]
-                    solution = solution["code"]
-                    validation_errors = solution["validation_errors"]
-                    analysis_outputs = solution["analysis_outputs"]
-                else:
-                    orig_code = solution
+                    solution_dict = typing.cast("dict[str, typing.Any]", solution_entry)
+                    if not expected_keys.issubset(solution_dict):
+                        raise ValueError("malformed solution entry")
+                    orig_code = typing.cast("str", solution_dict["orig_code"])
+                    code_text = typing.cast("str", solution_dict["code"])
+                    validation_errors_value = solution_dict["validation_errors"]
+                    analysis_outputs_value = solution_dict["analysis_outputs"]
+                    if isinstance(validation_errors_value, list):
+                        parsed_errors: list[str] = []
+                        for err in typing.cast("list[typing.Any]", validation_errors_value):
+                            parsed_errors.append(str(err))
+                        validation_errors = parsed_errors
+                    if isinstance(analysis_outputs_value, list):
+                        analysis_outputs_entry = list(typing.cast("list[typing.Any]", analysis_outputs_value))
                 try:
-                    solution_token_count = _count_tokens(solution)
+                    solution_token_count = _count_tokens(code_text)
                     query_token_count = solution_token_count + prompt_token_count
                     assert query_token_count <= max_token_count, (
                         f"prompt + solution token count ({query_token_count}) exceeds max ({max_token_count})"
                     )
-                    pyine.utils.code.validation.validate_code(solution)
+                    pyine.utils.code.validation.validate_code(code_text)
                 except Exception as e:
                     validation_errors.append(str(e))
                 all_solutions.append(
                     {
                         "orig_code": orig_code,
-                        "code": solution,
+                        "code": code_text,
                         "validation_errors": validation_errors,
-                        "analysis_outputs": analysis_outputs,
+                        "analysis_outputs": analysis_outputs_entry,
                     }
                 )
                 solution_mapping.append((sample_idx, sample))
         print(f"sending batch [{batch_start}-{batch_end}] with {len(all_solutions)} solutions")
-        analysis_outputs = []
+        analysis_outputs: list[typing.Any] = []
         for i in range(0, len(all_solutions), chunk_size):
             chunk_solutions = all_solutions[i : i + chunk_size]
-            chunk_inputs = [{"code": s["code"]} for s in chunk_solutions]
+            chunk_inputs: list[dict[str, str]] = [{"code": typing.cast("str", s["code"])} for s in chunk_solutions]
             print(f"Processing chunk {i // chunk_size + 1}/{(len(all_solutions) + chunk_size - 1) // chunk_size}")
-            tasks = []
+            tasks: list[typing.Coroutine[typing.Any, typing.Any, typing.Any]] = []
+
+            async def process_with_retry(
+                input_payload: dict[str, typing.Any],
+                max_retries: int = 5,
+                backoff: float = 2,
+            ) -> typing.Any:
+                retries = 0
+                while retries < max_retries:
+                    try:
+                        return await code_analysis_chain.ainvoke(
+                            input_payload,
+                            config={"max_concurrency": 512},
+                        )
+                    except Exception as exc:
+                        full_stop_exceptions = [
+                            "insufficient balance",
+                            "stopping processing at ",
+                        ]
+                        error_text = str(exc)
+                        if any(stop in error_text.lower() for stop in full_stop_exceptions):
+                            raise exc
+                        retries += 1
+                        if retries >= max_retries:
+                            print(f"Failed after {max_retries} retries: {error_text}")
+                            return {"error": error_text}
+                        wait_time = backoff**retries
+                        print(f"Retry {retries} after {wait_time}s due to: {error_text}")
+                        await asyncio.sleep(wait_time)
+                return {"error": "retry attempts exhausted without result"}
+
             for input_data in chunk_inputs:
-
-                async def process_with_retry(
-                    input_data: dict[str, typing.Any],
-                    max_retries: int = 5,
-                    backoff: float = 2,
-                ) -> typing.Any:
-                    retries = 0
-                    while retries < max_retries:
-                        try:
-                            return await code_analysis_chain.ainvoke(
-                                input_data,
-                                config={"max_concurrency": 512},
-                            )
-                        except Exception as exc:
-                            full_stop_exceptions = [
-                                "insufficient balance",
-                                "stopping processing at ",
-                            ]
-                            error_text = str(exc)
-                            if any(stop in error_text.lower() for stop in full_stop_exceptions):
-                                raise exc
-                            retries += 1
-                            if retries >= max_retries:
-                                print(f"Failed after {max_retries} retries: {error_text}")
-                                return {"error": error_text}
-                            wait_time = backoff**retries
-                            print(f"Retry {retries} after {wait_time}s due to: {error_text}")
-                            await asyncio.sleep(wait_time)
-                    return {"error": "retry attempts exhausted without result"}
-
                 tasks.append(process_with_retry(input_data))
             # Wait for all tasks in this chunk to complete
             chunk_results = await asyncio.gather(*tasks)
@@ -156,16 +168,18 @@ async def reprocess_code_samples(
             # add a small delay between chunks to avoid rate limiting
             await asyncio.sleep(1)
         print(f"received batch [{batch_start}-{batch_end}] with {len(analysis_outputs)} outputs")
-        results_by_sample = {}
+        results_by_sample: dict[int, dict[str, typing.Any]] = {}
         for solution_idx, output in enumerate(analysis_outputs):
             sample_idx, sample = solution_mapping[solution_idx]
             # handle both successful responses and error cases
             output_data = output.model_dump() if hasattr(output, "model_dump") else output
-            all_solutions[solution_idx]["analysis_outputs"].append(output_data)
+            analysis_output_list = typing.cast("list[typing.Any]", all_solutions[solution_idx]["analysis_outputs"])
+            analysis_output_list.append(output_data)
             if sample_idx not in results_by_sample:
                 results_by_sample[sample_idx] = sample.copy()
                 results_by_sample[sample_idx]["solutions"] = []
-            results_by_sample[sample_idx]["solutions"].append(all_solutions[solution_idx])
+            sample_solutions = typing.cast("list[dict[str, typing.Any]]", results_by_sample[sample_idx]["solutions"])
+            sample_solutions.append(all_solutions[solution_idx])
         for sample_idx, processed_sample in results_by_sample.items():
             sample_output_path = output_dir_path / f"{sample_idx:06d}.json"
             with open(sample_output_path, "w") as fd:

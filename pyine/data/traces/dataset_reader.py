@@ -25,7 +25,7 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
-class DatasetReader(torch.utils.data.Dataset):
+class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceResult]):
     """PyINE raw trace dataset reader.
 
     This reader provides execution traces stored in an LMDB dataset. Each trace corresponds to a
@@ -46,10 +46,10 @@ class DatasetReader(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        lmdb_path: pathlib.Path | typing.AnyStr,
+        lmdb_path: pathlib.Path | str,
     ) -> None:
         super().__init__()
-        self.path = lmdb_path
+        self.path = pathlib.Path(lmdb_path)
         self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
         self._problem_data_cache: collections.OrderedDict[
             int,
@@ -113,9 +113,12 @@ class DatasetReader(torch.utils.data.Dataset):
             self._load_prepared_metadata()
             return
         self._clear_prepared_metadata()
-        self._problem_indices, self.problem_keys = self.reader.get_indices(
-            pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
-            return_keys=True,
+        self._problem_indices, self.problem_keys = typing.cast(
+            "tuple[list[int], list[str]]",
+            self.reader.get_indices(
+                pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
+                return_keys=True,
+            ),
         )
         if len(self._problem_indices) == 0:
             raise ValueError("no problem data found in the dataset")
@@ -140,9 +143,12 @@ class DatasetReader(torch.utils.data.Dataset):
             problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
             curr_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
             curr_augm_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
-            curr_trace_indices, curr_trace_keys = self.reader.get_indices(
-                pattern=curr_trace_data_pattern,
-                return_keys=True,
+            curr_trace_indices, curr_trace_keys = typing.cast(
+                "tuple[list[int], list[str]]",
+                self.reader.get_indices(
+                    pattern=curr_trace_data_pattern,
+                    return_keys=True,
+                ),
             )
             assert len(curr_trace_indices) == len(curr_trace_keys)
             # for 'forward-compatibility' with deltas datasets, remove any elements with the deltas suffix
@@ -174,7 +180,7 @@ class DatasetReader(torch.utils.data.Dataset):
                 assert trace_data.identifier is not None, "trace identifier is required"
                 assert trace_data.identifier == trace_key, "trace identifier mismatch"
                 trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace_data.identifier)
-                curr_trace_tags = []
+                curr_trace_tags: list[str] = []
                 curr_trace_tags.extend(problem_data.problem_tags)
                 curr_trace_tags.extend(trace_data.tags)
                 if trace_id.is_augmented:
@@ -254,6 +260,7 @@ class DatasetReader(torch.utils.data.Dataset):
             return self.trace_keys.index(trace_key)
         raise KeyError(f"key {trace_key} not found in dataset")
 
+    @typing.override
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
         """Fetches an individual trace data object from the LMDB database by external index or key.
 
@@ -307,7 +314,7 @@ class DatasetReader(torch.utils.data.Dataset):
         return f"{self.__class__.__name__}({self.path}) with {len(self)} instances"
 
 
-DatasetOrDatasetPath = pathlib.Path | typing.AnyStr | DatasetReader
+DatasetOrDatasetPath = pathlib.Path | str | DatasetReader
 
 
 def get_traces_metadata(
@@ -328,7 +335,7 @@ def get_traces_metadata(
         datasets = [datasets]
     readers = [d if isinstance(d, torch.utils.data.Dataset) else DatasetReader(d) for d in datasets]
     logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
-    all_trace_keys = []
+    all_trace_keys: list[str] = []
     for reader in readers:
         all_trace_keys.extend(reader.trace_keys)
     if len(set(all_trace_keys)) != len(all_trace_keys):
