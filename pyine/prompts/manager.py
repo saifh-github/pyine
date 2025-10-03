@@ -255,7 +255,7 @@ def get_prompt_template(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> langchain_core.prompts.BasePromptTemplate:
+) -> langchain_core.prompts.BasePromptTemplate[typing.Any]:
     """Convenience function to get a prompt template using the default manager.
 
     Note: if the prompt is known and registered, we will check its corresponding module to see if
@@ -308,7 +308,7 @@ def get_prompt_template(
 
 
 def get_prompt_chain(
-    model: langchain_core.language_models.BaseLanguageModel,
+    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
     prompt_name: PromptNameType,
     version: PromptVersionType | None = None,
     use_chat_template: bool = False,
@@ -319,7 +319,7 @@ def get_prompt_chain(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> langchain_core.runnables.Runnable:
+) -> langchain_core.runnables.Runnable[typing.Any, typing.Any]:
     """Convenience function to get a runnable prompt chain using the default manager.
 
     Note: if the prompt is known and registered, we will check its corresponding module to see if

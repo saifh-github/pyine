@@ -41,11 +41,13 @@ import typing
 
 import click
 
-import pyine.data.deltas.dataset_utils as delta_utils
-import pyine.data.deltas.dataset_writer as delta_writer
-import pyine.data.traces.dataset_writer as trace_writer
+import pyine.data.deltas.dataset_utils
+import pyine.data.deltas.dataset_writer
+import pyine.data.traces.dataset_utils
+import pyine.data.traces.dataset_writer
 import pyine.data.utils.lmdb_io
 import pyine.prompts
+import pyine.utils.code.output_compare
 import pyine.utils.filesystem
 import pyine.utils.reprod
 
@@ -261,12 +263,12 @@ def traces(
     max_trace_events_per_line: int | None,
     max_trace_var_repr_length: int | None,
     max_trace_valid_events: int | None,
-    max_trace_results_blob_size: int | None,
-    min_solution_line_count: int | None,
-    min_solution_dissimilarity: float | None,
-    execution_timeout_seconds: float | None,
+    max_trace_results_blob_size: int,
+    min_solution_line_count: int,
+    min_solution_dissimilarity: float,
+    execution_timeout_seconds: float,
     target_problem_pattern: str | None,
-    target_problem_ids: str | None,
+    target_problem_ids: str | list[str] | None,
     reformat_code_strings: bool,
     generate_obfuscated_solutions: bool,
     fetch_augmented_solutions: typing.Sequence[str],
@@ -277,7 +279,7 @@ def traces(
 ) -> None:
     """Write a traces dataset from a specified source dataset according to the given configuration."""
     pyine.utils.reprod.entrypoint_setup()
-    fetch_augmented_solutions_dict = {}
+    fetch_augmented_solutions_dict: dict[str, int] = {}
     for tupl_str in fetch_augmented_solutions:
         if "=" not in tupl_str or tupl_str.count("=") != 1:
             raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}")
@@ -289,15 +291,22 @@ def traces(
         except ValueError as exc:
             raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}") from exc
         fetch_augmented_solutions_dict[prompt_name] = int(fetch_count)
-    default_serialization_config = {
-        "method": pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
-        "compression_kwargs": {"level": 3},
-    }
+    default_serialization_config = pyine.data.utils.lmdb_io.SerializationConfig(
+        method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+        compression_kwargs={"level": 3},
+    )
     default_failed_test_log_dir = pyine.utils.filesystem.get_logs_root_path() / "traced-test-failures"
-    if target_problem_ids is not None and "," in target_problem_ids:
+    if isinstance(target_problem_ids, str) and "," in target_problem_ids:
         target_problem_ids = [identifier.strip() for identifier in target_problem_ids.split(",") if identifier.strip()]
-    config = trace_writer.TraceDatasetWriterConfig(
+    problem_id_pattern: pyine.data.traces.dataset_utils.ProblemIdPattern | None = None
+    if target_problem_pattern is not None:
+        problem_id_pattern = pyine.data.traces.dataset_utils.ProblemIdPattern(
+            pattern=target_problem_pattern,
+            is_regex=True,
+        )
+    config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig(
         source_dataset_name=dataset_name,
+        banned_problem_tags_rule=None,
         max_output_traces=max_output_traces,
         max_solutions_per_problem=max_solutions_per_problem,
         max_tests_per_solution=max_tests_per_solution,
@@ -309,12 +318,15 @@ def traces(
         min_solution_line_count=min_solution_line_count,
         min_solution_dissimilarity=min_solution_dissimilarity,
         execution_timeout_seconds=execution_timeout_seconds,
-        target_problem_pattern=target_problem_pattern,
+        target_problem_pattern=problem_id_pattern,
         target_problem_ids=target_problem_ids,
         reformat_code_strings=reformat_code_strings,
+        allow_banned_samples=False,
+        allow_imperfect_solutions=True,
         generate_obfuscated_solutions=generate_obfuscated_solutions,
         fetch_augmented_solutions=fetch_augmented_solutions_dict,
-        prompt_result_db_path=prompt_result_db_path,
+        prompt_result_db_path=str(prompt_result_db_path) if prompt_result_db_path is not None else None,
+        test_output_compare_options=pyine.utils.code.output_compare.get_options_for_code_exec_outputs(),
         writer_serialization_config=default_serialization_config,
         failed_test_log_dir=default_failed_test_log_dir,
     )
@@ -345,7 +357,7 @@ def traces(
         click.echo(f"  force   = {force}")
         return
     try:
-        trace_writer.write_dataset(
+        pyine.data.traces.dataset_writer.write_dataset(
             root_dataset_path=dataset_path,
             output_dataset_path=output_path,
             config=config,
@@ -378,8 +390,8 @@ def traces(
 @click.option(
     "--delta-generator",
     "delta_generator",
-    type=click.Choice([s.value for s in delta_utils.DeltaGeneratorType], case_sensitive=False),  # noqa
-    default=delta_utils.DeltaGeneratorType.SIMPLE.value,
+    type=click.Choice([s.value for s in pyine.data.deltas.dataset_utils.DeltaGeneratorType], case_sensitive=False),  # noqa
+    default=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE.value,
     show_default=True,
 )
 @click.option(
@@ -413,7 +425,7 @@ def deltas_from_traces(
 ) -> None:
     """Write a deltas dataset from an existing traces dataset."""
     pyine.utils.reprod.entrypoint_setup()
-    delta_generator = delta_utils.DeltaGeneratorType.from_str(delta_generator)
+    delta_generator = pyine.data.deltas.dataset_utils.DeltaGeneratorType.from_str(delta_generator)
     if dry_run:
         click.echo("[dry-run] would call deltas writer with:")
         click.echo(f"  traces_dataset_name_or_path = {traces_dataset}")
@@ -422,7 +434,7 @@ def deltas_from_traces(
         click.echo(f"  verbose = {verbose}")
         click.echo(f"  force   = {force}")
         return
-    delta_writer.write_dataset(
+    pyine.data.deltas.dataset_writer.write_dataset(
         traces_dataset_name_or_path=traces_dataset,
         output_dataset_path=output_path,
         delta_generator=delta_generator,

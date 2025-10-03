@@ -4,15 +4,12 @@ import hydra
 import hydra.conf
 import hydra.core.plugins
 import hydra_zen
-import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.utils.filesystem
 import pyine.utils.openai
-import pyine.utils.portability
-import pyine.utils.reprod
 
 target_hydra_version = "1.3"
 """Target Hydra version for this project.
@@ -116,6 +113,8 @@ def get_base_store_and_configs(
     )
     runtime_configs = get_hydra_runtime_configs()
     for config in runtime_configs:
+        if config.name is None:
+            raise ValueError("config name must be defined before registration")
         store(config.config, name=config.name, group=config.group, package=config.package)
 
     # ...add more here if needed (job callbacks? loggers? profilers?)

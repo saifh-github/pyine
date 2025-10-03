@@ -1,3 +1,4 @@
+import collections.abc
 import dataclasses
 import datetime
 import functools
@@ -10,6 +11,7 @@ import site
 import types
 import typing
 
+import hydra_zen.typing
 import numpy as np
 import omegaconf
 import pandas as pd
@@ -398,7 +400,7 @@ def import_from_dotted_path(
 
 
 def get_fully_qualified_name(
-    obj: type | types.ModuleType | typing.Callable,
+    obj: type | types.ModuleType | collections.abc.Callable[..., typing.Any],
 ) -> str:
     """Get the fully qualified name of a type, module, or callable."""
     if isinstance(obj, types.ModuleType):
@@ -507,7 +509,7 @@ yaml.Dumper.add_multi_representer(pathlib.Path, _path_representer)
 
 
 def render_config(
-    cfg_type: type[typing.Any],
+    cfg_type: hydra_zen.typing.Builds[typing.Any] | type[typing.Any],
     cfg_values: typing.Any | None = None,
     *,
     show_field_descriptions: bool = False,
@@ -517,7 +519,7 @@ def render_config(
     """Pretty-prints a config for a dataclass or Pydantic model using rich.
 
     Args:
-        cfg_type: The config class (dataclass or Pydantic model class).
+        cfg_type: The config generated dynamically by hydra-zen. This can be a dataclass.
         cfg_values: (Optional) An instance/dict/DictConfig with assigned values to show. If None,
             the "Value" column falls back to the default.
         show_field_descriptions: (Optional) Whether to show field descriptions. Defaults to False.

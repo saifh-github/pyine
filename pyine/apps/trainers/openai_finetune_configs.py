@@ -10,7 +10,6 @@ import logging
 import typing
 
 import hydra_zen
-import hydra_zen.typing
 import pydantic
 
 import pyine.apps.trainers.common
@@ -324,6 +323,8 @@ def register_hydra_configs(
     )
     configs_to_register.extend(external_configs)
     for config in configs_to_register:
+        if config.name is None:
+            raise ValueError("config name must be defined before registration")
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
     return [*base_configs, *configs_to_register]

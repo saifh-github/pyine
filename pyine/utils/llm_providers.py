@@ -1,4 +1,3 @@
-import functools
 import os
 import typing
 
@@ -44,13 +43,12 @@ class LLMProviderConfig(pydantic.BaseModel):
         return get_model_from_provider_config(self)
 
 
-@functools.wraps(langchain_openai.chat_models.base.BaseChatOpenAI)
 def get_model_from_provider(
     provider: SupportedProviderType,
     rate_limiter_config: dict[str, typing.Any] | None = None,
     with_retry_config: dict[str, typing.Any] | None = None,
     **model_kwargs: typing.Any,  # will be forwarded to the chat model constructor
-) -> langchain_core.language_models.BaseLanguageModel:
+) -> langchain_core.language_models.BaseLanguageModel[typing.Any]:
     """Get a LangChain language model instance from a provider following the OpenAI-style API.
 
     Args:
@@ -97,7 +95,7 @@ def get_model_from_provider(
 
 def get_model_from_provider_config(
     provider_config: LLMProviderConfig,
-) -> langchain_core.language_models.BaseLanguageModel:
+) -> langchain_core.language_models.BaseLanguageModel[typing.Any]:
     """Get a default LLM from a provider config for quick prototyping and testing.
 
     See the `get_model_from_provider` function for more details.

@@ -129,19 +129,15 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
                 if not isinstance(register_fn, RegisterHydraConfigsFuncType):
                     raise TypeError(f"'register_hydra_configs' function in '{py_path}' is not callable")
                 new_configs = register_fn(app_name, eval_type, entrypoint_config, app_configs)
-                if not isinstance(new_configs, list):
-                    logger.warning(
-                        f"unexpected return from 'register_hydra_configs' function in '{py_path}': {type(new_configs)}"
-                    )
-                    continue
+                assert isinstance(new_configs, list), (
+                    f"unexpected return from 'register_hydra_configs' function in '{py_path}': {type(new_configs)}"
+                )
                 valid_configs: list[pyine.configs.schemas.ConfigDescription] = []
                 for cfg in new_configs:
-                    if isinstance(cfg, pyine.configs.schemas.ConfigDescription):
-                        valid_configs.append(cfg)
-                    else:
-                        logger.warning(
-                            f"ignoring invalid config from '{py_path}': expected ConfigDescription, got {type(cfg)}"
-                        )
+                    assert isinstance(cfg, pyine.configs.schemas.ConfigDescription), (
+                        f"invalid config from '{py_path}': expected ConfigDescription, got {type(cfg)}"
+                    )
+                    valid_configs.append(cfg)
                 if valid_configs:
                     output_configs.extend(valid_configs)
                     logger.info(f"registered {len(valid_configs)} external configs from '{py_path}'")

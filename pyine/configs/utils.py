@@ -3,9 +3,11 @@ import typing
 
 import hydra
 import hydra_zen
+import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.utils.portability
+from pyine.configs.base import target_hydra_version
 
 CallableReturningAny = collections.abc.Callable[..., typing.Any]
 HydraZenBuild = hydra_zen.typing.Builds[typing.Any]
@@ -29,19 +31,18 @@ def print_experiment_configs(
         Only configurations with group="experiment" are displayed. All experiment
         configurations are expected to be fully specified and instantiable.
     """
-    import pyine.configs.base  # to get the target hydra version below
-
     splash_msg = f"AVAILABLE EXPERIMENT CONFIGURATIONS FOR THE '{app_name}' APPLICATION:"
     bar_str = "=" * len(splash_msg)
     print(f"\n\n{splash_msg}\n{bar_str}\n\n")
-    exp_config_names = []
+    exp_config_names: list[str] = []
     for config_desc in config_descriptions:
         if config_desc.group != "experiment":
             continue
         # all experiment configs should be fully specified (and thus instantiable as-is)
-        with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
+        with hydra.initialize(config_path=None, version_base=target_hydra_version):
             config_dict = hydra.compose(config_name="entrypoint", overrides=[f"+experiment={config_desc.name}"])
         pyine.utils.portability.render_config(config_desc.config, config_dict)
+        assert config_desc.name is not None, "experiment config name must be defined before registration"
         exp_config_names.append(config_desc.name)
     if not exp_config_names:
         print(">>> No experiment configs found.")
@@ -74,8 +75,7 @@ def hydra_zen_builds(
     assert isinstance(callable_obj, collections.abc.Callable), (
         f"callable_obj must be callable, got: {type(callable_obj)}"
     )
-    builds_cfg = hydra_zen.builds(callable_obj, **kwargs)
-    return typing.cast("HydraZenBuild", builds_cfg)
+    return typing.cast("HydraZenBuild", hydra_zen.builds(callable_obj, **kwargs))
 
 
 def hydra_zen_make_config(
@@ -92,8 +92,7 @@ def hydra_zen_make_config(
     Returns:
         A hydra-zen configuration object cast to `typing.Any`.
     """
-    make_cfg = hydra_zen.make_config(**kwargs)
-    return typing.cast("HydraZenBuild", make_cfg)
+    return typing.cast("HydraZenBuild", hydra_zen.make_config(**kwargs))
 
 
 def make_config_description(

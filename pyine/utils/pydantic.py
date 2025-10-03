@@ -324,7 +324,7 @@ class ClassImportSpec(pydantic.BaseModel):
     def get_updated_spec(
         self,
         **extra_params: typing.Any,
-    ) -> "ClassImportSpec":
+    ) -> typing.Self:
         """Returns a new spec with the given extra params kwargs merged in.
 
         NOTE: the merge is done using OmegaConf to hierarchically merge the two dicts.

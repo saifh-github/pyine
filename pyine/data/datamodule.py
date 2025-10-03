@@ -1,18 +1,17 @@
 """Contains utility functions and a base interface for lightning datamodules."""
 
+from __future__ import annotations
+
 import logging
-import pathlib
 import typing
 
 import datasets as hf_datasets
 import langchain_core.language_models
 import langchain_core.prompts
-import langchain_core.runnables
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
 import torch.utils.data
-import transformers
 
 import pyine.prompts.manager
 import pyine.prompts.types
@@ -22,6 +21,12 @@ import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
 
+if typing.TYPE_CHECKING:
+    import pathlib
+
+    import langchain_core.runnables
+    import transformers
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,10 +34,22 @@ SubsetNameType = str
 """Type used to represent a data subset name (e.g. 'train', 'valid', 'test')."""
 LoaderNameType = str
 """Type used to represent a data loader name (e.g. 'train', 'valid', 'test')."""
-BaseDataParserType = torch.utils.data.Dataset
+BaseDataParserClass = torch.utils.data.Dataset
 """Default base class used for data parsers."""
-BaseDataLoaderType = torch.utils.data.DataLoader
+BaseDataParserType = BaseDataParserClass[typing.Any]
+"""Default base type used for data parsers."""
+BaseDataLoaderClass = torch.utils.data.DataLoader
 """Default base class used for data loaders."""
+BaseDataLoaderType = BaseDataLoaderClass[typing.Any]
+"""Default base type used for data loaders."""
+
+
+def _subset_parser_config_dict_factory() -> dict[SubsetNameType, BaseDataParserConfig]:
+    return {}
+
+
+def _loader_config_dict_factory() -> dict[LoaderNameType, BaseDataLoaderConfig]:
+    return {}
 
 
 class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec):
@@ -47,13 +64,21 @@ class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec):
     # note: no need to override the params field here, datasets don't have anything standardized
 
 
-BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
-    fn=BaseDataLoaderType,
-    name="BaseDataLoaderParamsConfig",
-    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    exclude={"dataset"},  # will be provided at derived class instantiation time
-)
-"""Configuration parameters for the base data loader class."""
+if typing.TYPE_CHECKING:
+
+    class BaseDataLoaderParamsConfig(pydantic.BaseModel):
+        """Stubbed interface for the base data loader params config class defined below."""
+
+        def __getattr__(self, name: str) -> typing.Any: ...
+
+else:
+    BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
+        fn=BaseDataLoaderType,
+        name="BaseDataLoaderParamsConfig",
+        model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        exclude={"dataset"},  # will be provided at derived class instantiation time
+    )
+    """Configuration parameters for the base data loader class."""
 
 
 class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec):
@@ -67,7 +92,10 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec):
     base_class_path: str = pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType)
     """Base class path for the PyTorch data loader class."""
 
-    params: pydantic.SerializeAsAny[BaseDataLoaderParamsConfig] = BaseDataLoaderParamsConfig()
+    params: typing.Annotated[  # type: ignore[override]
+        pydantic.SerializeAsAny[BaseDataLoaderParamsConfig],
+        pydantic.Field(default_factory=BaseDataLoaderParamsConfig),
+    ] = BaseDataLoaderParamsConfig()
     """Default parameters for the data loader."""
 
 
@@ -197,10 +225,10 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     ) -> BaseDataParserType:
         """Instantiates a data parser object for the given subset name."""
         parser_config = self._resolved_dataparser_configs[subset_name]
-        parser = parser_config.instantiate(*args, **extra_kwargs)
-        if not isinstance(parser, BaseDataParserType):
-            raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser)}")
-        return parser
+        parser_obj = parser_config.instantiate(*args, **extra_kwargs)
+        if not isinstance(parser_obj, BaseDataParserClass):
+            raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser_obj)}")
+        return typing.cast("BaseDataParserType", parser_obj)
 
     def instantiate_dataloader(
         self,
@@ -210,33 +238,33 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     ) -> BaseDataLoaderType:
         """Instantiates a data loader object for the given loader name."""
         loader_config = self._resolved_dataloader_configs[loader_name]
-        loader = loader_config.instantiate(*args, **extra_kwargs)
-        if not isinstance(loader, BaseDataLoaderType):
-            raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader)}")
-        return loader
+        loader_obj = loader_config.instantiate(*args, **extra_kwargs)
+        if not isinstance(loader_obj, BaseDataLoaderClass):
+            raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader_obj)}")
+        return typing.cast("BaseDataLoaderType", loader_obj)
 
     def instantiate_datamodule(
         self,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> "BaseDataModule":
+    ) -> BaseDataModule:
         """Instantiates a data module object based on the configured target class path."""
-        dm = self._resolved_datamodule_class(*args, config=self, **extra_kwargs)
-        if not isinstance(dm, BaseDataModule):
-            raise TypeError(f"expected {BaseDataModule} (or subclass), got {type(dm)}")
-        return dm
+        dm_class = self._resolved_datamodule_class
+        if dm_class is None:
+            raise RuntimeError("datamodule class has not been resolved; validate config before use")
+        return dm_class(*args, config=self, **extra_kwargs)
 
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     # cache resolved subset configs so we don't re-resolve them in each getter call
     _resolved_dataparser_configs: dict[SubsetNameType, BaseDataParserConfig] = pydantic.PrivateAttr(
-        default_factory=dict
+        default_factory=_subset_parser_config_dict_factory
     )
     _resolved_dataloader_configs: dict[LoaderNameType, BaseDataLoaderConfig] = pydantic.PrivateAttr(
-        default_factory=dict
+        default_factory=_loader_config_dict_factory
     )
     # cache the resolved datamodule class type also for potential instantiate calls
-    _resolved_datamodule_class: type | None = pydantic.PrivateAttr(default=None)
+    _resolved_datamodule_class: type[BaseDataModule] | None = pydantic.PrivateAttr(default=None)
 
     def _resolve_dataparser_config(
         self,
@@ -246,7 +274,6 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if subset_name not in self.subset_names:
             raise ValueError(f"invalid subset name: {subset_name}, expected one of: {self.subset_names}")
         parser_config = self.default_dataparser_config
-        assert isinstance(parser_config, pyine.utils.pydantic.ClassImportSpec)
         if subset_name in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_name]:
             parser_config = parser_config.get_updated_spec(**self.dataparser_config_overrides[subset_name])
         return parser_config
@@ -259,13 +286,12 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if loader_name not in self.loader_names:
             raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.loader_names}")
         loader_config = self.default_dataloader_config
-        assert isinstance(loader_config, pyine.utils.pydantic.ClassImportSpec)
         if loader_name in self.dataloader_config_overrides and self.dataloader_config_overrides[loader_name]:
             loader_config = loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_name])
         return loader_config
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "BaseDataModuleConfig":
+    def _validate_and_resolve(self) -> BaseDataModuleConfig:
         """Validates and resolves the data parser and data loader configs."""
         for subset_name in self.subset_names:
             self._resolved_dataparser_configs[subset_name] = self._resolve_dataparser_config(subset_name)
@@ -309,8 +335,6 @@ class BaseDataModule(pl.LightningDataModule):
             config: configuration model of data module (parser/loader) settings.
         """
         super().__init__()
-        if not isinstance(config, BaseDataModuleConfig):
-            raise TypeError(f"invalid config type: {type(config)}, expected {BaseDataModuleConfig}")
         self.save_hyperparameters(config.model_dump())
         self.config = config
 
@@ -481,12 +505,12 @@ class ConversationDataParserConfig(BaseDataParserConfig):
 
     def generate_hf_messages_dataset(
         self,
-        named_split: "hf_datasets.NamedSplit",
+        named_split: hf_datasets.NamedSplit,
         raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         keep_in_memory: bool = False,
         num_workers: int | None = None,
-    ) -> "hf_datasets.Dataset":
+    ) -> hf_datasets.Dataset:
         """Generates and returns a HuggingFace messages dataset using an instantiated parser.
 
         This function exists for users that might not want to use raw data loaders directly, and
@@ -534,7 +558,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     def get_prompt_template(
         self,
         **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
-    ) -> langchain_core.prompts.BasePromptTemplate:
+    ) -> langchain_core.prompts.BasePromptTemplate[typing.Any]:
         """Returns the prompt template used for preparing training/evaluation conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
         prompt_kwargs.update(kwargs)
@@ -542,10 +566,10 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     def get_prompt_chain(
         self,
-        model: langchain_core.language_models.BaseLanguageModel,
+        model: langchain_core.language_models.BaseLanguageModel[typing.Any],
         runnable_name: str | None = None,
         **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
-    ) -> langchain_core.runnables.Runnable | None:  # noqa
+    ) -> langchain_core.runnables.Runnable[typing.Any, typing.Any]:
         """Returns the runnable prompt chain used to infer assistant messages in conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
         prompt_kwargs.update(kwargs)
@@ -556,7 +580,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         self,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> "ConversationDataModule":
+    ) -> ConversationDataModule:
         """Instantiates a data module object based on the configured target class path."""
         dm = super().instantiate_datamodule(*args, **extra_kwargs)
         if not isinstance(dm, ConversationDataModule):
@@ -618,10 +642,10 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             )
             if self.use_local_dataset_cache:
                 logger.info(f"saving generated dataset to cache: {dataset_path}")
-                dataset.save_to_disk(dataset_path)
+                dataset.save_to_disk(dataset_path)  # type: ignore[reportUnknownMemberType]
             return dataset
         logger.info(f"loading already-generated dataset from cache: {dataset_path}")
-        return hf_datasets.Dataset.load_from_disk(
+        return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
             dataset_path=dataset_path,
             keep_in_memory=self.keep_message_datasets_in_memory,
         )
@@ -703,9 +727,9 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     @pydantic.model_validator(mode="after")
     @typing.override
-    def _validate_and_resolve(self) -> "ConversationDataModuleConfig":
+    def _validate_and_resolve(self) -> ConversationDataModuleConfig:
         """Validates and resolves prompt config stuff as well as parent checks."""
-        super()._validate_and_resolve()
+        super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType] --- # noqa
         # check if we can instantiate a prompt template given the provided config
         _resolved_template = self.get_prompt_template()
         assert _resolved_template is not None
@@ -730,8 +754,6 @@ class ConversationDataModule(BaseDataModule):
         Args:
             config: configuration model of data module (parser/loader) settings.
         """
-        if not isinstance(config, ConversationDataModuleConfig):
-            raise TypeError(f"invalid config type: {type(config)}, expected {ConversationDataModuleConfig}")
         super().__init__(config)
         self.config: ConversationDataModuleConfig = config
 

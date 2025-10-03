@@ -16,6 +16,12 @@ if typing.TYPE_CHECKING:
         """Stubbed interface for the HuggingFace Trainer Arguments config class defined below."""
 
         def __getattr__(self, name: str) -> typing.Any: ...
+
+    class GenerationConfig(pydantic.BaseModel):
+        """Stubbed interface for the HuggingFace text generation pipeline config class defined below."""
+
+        def __getattr__(self, name: str) -> typing.Any: ...
+
 else:
     TrainingArgsConfig = pyine.utils.pydantic.model_from_callable(
         fn=transformers.TrainingArguments,
@@ -34,15 +40,15 @@ else:
     )
     """Configuration parameters for the HuggingFace Trainer."""
 
-GenerationConfig = pyine.utils.pydantic.model_from_callable(
-    fn=transformers.GenerationConfig,
-    name="GenerationConfig",
-    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides={
-        "max_new_tokens": 128,
-    },
-)
-"""Configuration parameters for the HuggingFace text generation pipeline."""
+    GenerationConfig = pyine.utils.pydantic.model_from_callable(
+        fn=transformers.GenerationConfig,
+        name="GenerationConfig",
+        model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        default_overrides={
+            "max_new_tokens": 128,
+        },
+    )
+    """Configuration parameters for the HuggingFace text generation pipeline."""
 
 
 default_ignore_index: int = -100  # this is an extremely-commonly-used default in pytorch/huggingface

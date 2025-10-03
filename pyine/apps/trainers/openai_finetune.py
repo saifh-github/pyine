@@ -11,10 +11,6 @@ import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
-import pyine.evals.utils
-import pyine.organisms.datamodules.utils.samples
-import pyine.utils.code.output_compare
-import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.openai
 import pyine.utils.reprod
@@ -29,7 +25,7 @@ if typing.TYPE_CHECKING:
 
 def _compute_estimated_train_token_count(
     config: "pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig",
-    dm: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule,
 ) -> int:
     """Approximate the number of tokens used to train a model on the given dataset."""
     tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(
@@ -38,15 +34,11 @@ def _compute_estimated_train_token_count(
     )
     token_count = 0
     for subset_name in config.datamodule_config.train_subset_names:
-        tr_file_path = dm.get_openai_messages_dataset(subset_name)
-        messages = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
-        for msg in messages:
-            if isinstance(msg, dict):
-                token_count += len(tokenizer.encode(msg["content"]))
-            elif isinstance(msg, list):
-                for m in msg:
-                    assert isinstance(m, dict), "what kind of structure is this?"
-                    token_count += len(tokenizer.encode(m["content"]))
+        tr_file_path = datamodule.get_openai_messages_dataset(subset_name)
+        conversations = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
+        for conversation in conversations:
+            for message in conversation:
+                token_count += len(tokenizer.encode(message["content"]))
     return token_count
 
 
@@ -90,12 +82,13 @@ def train(
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run_id is not None
         logger.info(f"using W&B blocking sync under run id: {runtime.wandb_run_id}")
+        wandb_sync_kwargs: dict[str, typing.Any] = {"reinit": "return_previous"}
         wandb.integration.openai.fine_tuning.WandbLogger.sync(
             fine_tune_job_id=job_id,
             openai_client=client,
             project="pyine",
             wait_for_job_success=True,
-            reinit="return_previous",  # reuse already-existing run
+            **wandb_sync_kwargs,
         )
     else:
         try:
@@ -131,13 +124,17 @@ async def main(
     except pyine.utils.reprod.DryRunExit:
         return
 
-    dm = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
+        raise TypeError(
+            f"OpenAI fine-tuning requires a ConversationDataModule; received {type(datamodule).__name__}",
+        )
     client: openai.OpenAI = config.openai_client_config.instantiate()
 
     if not skip_fine_tuning:
         model_name = train(
             client=client,
-            datamodule=dm,
+            datamodule=datamodule,
             config=config,
             runtime=runtime,
         )
@@ -147,24 +144,31 @@ async def main(
         logger.info("skipping fine-tuning, evaluating base model directly")
 
     if config.use_wandb_logging:
-        run_is_finished = getattr(runtime.wandb_run, "_is_finished", True)
+        if runtime is None:
+            raise RuntimeError("runtime config must be provided when logging to wandb")
+        wandb_run_id = runtime.wandb_run_id
+        if wandb_run_id is None:
+            raise RuntimeError("wandb run id must be available when logging to wandb")
+        current_wandb_run = typing.cast("typing.Any", runtime.wandb_run)
+        run_is_finished = getattr(current_wandb_run, "_is_finished", True)
         if run_is_finished:
             # the openai integration 'finalized' the run; re-open it to log the last few metrics/summaries
             # (we replace the original run obj with a re-opened one, hopefully just for summary updates)
             wandb_api = wandb.Api()
-            runtime.wandb_run = wandb_api.run(runtime.wandb_run_id)
-        runtime.wandb_run.summary.update({"model_name": model_name})
+            current_wandb_run = typing.cast("typing.Any", wandb_api.run(wandb_run_id))
+            runtime.wandb_run = current_wandb_run
+        current_wandb_run.summary.update({"model_name": model_name})
 
     model_for_evals = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model=model_name,
         client=client.chat.completions,
     )
-    text_generation_pipeline_for_evals = dm.config.get_prompt_chain(model_for_evals)
+    text_generation_pipeline_for_evals = datamodule.config.get_prompt_chain(model_for_evals)
     await pyine.apps.trainers.common.evaluate_model(
         model=text_generation_pipeline_for_evals,
         tokenizer=None,
-        datamodule=dm,
+        datamodule=datamodule,
         config=config,
         runtime=runtime,
     )

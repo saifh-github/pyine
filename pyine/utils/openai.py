@@ -1,3 +1,4 @@
+import collections
 import datetime
 import logging
 import pathlib
@@ -7,6 +8,7 @@ import time
 import typing
 
 import backoff
+import datasets
 import langchain_core.messages
 import langchain_core.prompts
 import openai
@@ -38,7 +40,7 @@ def get_local_file_directory() -> pathlib.Path:
 
 
 def write_dataset_to_jsonl(
-    dataset: typing.Iterable[dict | list],
+    dataset: typing.Iterable[dict[str, typing.Any] | list[typing.Any]] | datasets.Dataset,
     path: pathlib.Path,
     enforce_openai_min_dataset_size: bool = True,
 ) -> None:
@@ -53,7 +55,7 @@ def write_dataset_to_jsonl(
     """
     samples_str = []
     for sample in dataset:
-        if isinstance(sample, dict):
+        if isinstance(sample, collections.abc.Mapping):
             assert "messages" in sample
             msgs = convert_messages_to_openai(sample["messages"])  # drop every other field except messages
         else:
@@ -295,13 +297,21 @@ def convert_messages_to_openai(
     return oai_messages
 
 
-OpenAIClientParamsConfig = pyine.utils.pydantic.model_from_callable(
-    fn=openai.OpenAI,
-    name="OpenAIClientParamsConfig",
-    model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-    default_overrides={"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
-)
-"""Configuration parameters for the OpenAI client."""
+if typing.TYPE_CHECKING:
+
+    class OpenAIClientParamsConfig(pydantic.BaseModel):
+        """Stubbed interface for the OpenAI client params config class defined below."""
+
+        def __getattr__(self, name: str) -> typing.Any: ...
+
+else:
+    OpenAIClientParamsConfig = pyine.utils.pydantic.model_from_callable(
+        fn=openai.OpenAI,
+        name="OpenAIClientParamsConfig",
+        model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        default_overrides={"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
+    )
+    """Configuration parameters for the OpenAI client."""
 
 
 class OpenAIClientConfig(pyine.utils.pydantic.ClassImportSpec):

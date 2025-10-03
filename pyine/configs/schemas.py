@@ -2,8 +2,8 @@ import logging
 import pathlib
 import typing
 
-import hydra.conf
 import hydra_zen.typing
+import omegaconf
 import pydantic
 
 import pyine.utils.reprod
@@ -21,7 +21,7 @@ class RuntimeConfig(pydantic.BaseModel):
     )
     """Pydantic model configuration (allow extra fields and validate assignments)."""
 
-    exp_name: str = pydantic.Field(hydra.conf.MISSING, frozen=True)
+    exp_name: str = pydantic.Field(omegaconf.MISSING, frozen=True)
     """Name of the experiment; used for output artifact naming and logging."""
     run_name: str = pydantic.Field("${now:%Y%m%d_%H%M%S}", frozen=True)
     """Name of the run; used for output artifact naming and logging."""
@@ -84,10 +84,10 @@ class RuntimeConfig(pydantic.BaseModel):
         """
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
-        default_kwargs = {
+        default_kwargs: dict[str, typing.Any] = {
             "name": f"{self.exp_name}-{self.run_name}",
             "notes": self.notes,
-            "tags": tuple(sorted(set(self.tags))) if self.tags else None,
+            "tags": sorted(set(self.tags)) if self.tags else None,
             "group": self.run_group,
             "job_type": self.app_name,
             # TODO: could set run id based on e.g. slurm id here if needed
@@ -95,14 +95,18 @@ class RuntimeConfig(pydantic.BaseModel):
         default_kwargs.update(extra_kwargs)
         self.wandb_run = wandb.init(**default_kwargs)
         assert self.wandb_run.id == self.wandb_run_id
-        offline = "offline " if self.wandb_run.offline else ""
-        run_info_str = f"initialized {offline} wandb run '{self.wandb_run.name}'\n\tid: {self.wandb_run.id}"
-        if self.wandb_run.url is not None:
-            run_info_str += f"\n\turl: {self.wandb_run.url}"
-        if self.wandb_run.tags is not None:
-            run_info_str += f"\n\ttags: {self.wandb_run.tags}"
-        if self.wandb_run.notes is not None:
-            run_info_str += f"\n\tnotes: {self.wandb_run.notes}"
+        wandb_run_obj = typing.cast("typing.Any", self.wandb_run)
+        offline = "offline " if getattr(wandb_run_obj, "offline", False) else ""
+        run_info_str = f"initialized {offline} wandb run '{wandb_run_obj.name}'\n\tid: {wandb_run_obj.id}"
+        run_url = getattr(wandb_run_obj, "url", None)
+        if run_url is not None:
+            run_info_str += f"\n\turl: {run_url}"
+        run_tags = getattr(wandb_run_obj, "tags", None)
+        if run_tags:
+            run_info_str += f"\n\ttags: {run_tags}"
+        run_notes = getattr(wandb_run_obj, "notes", None)
+        if run_notes is not None:
+            run_info_str += f"\n\tnotes: {run_notes}"
         logger.info(run_info_str)
         return self.wandb_run.id
 
@@ -118,9 +122,12 @@ class RuntimeConfig(pydantic.BaseModel):
         """
         if not self.wandb_run_initialized:
             raise RuntimeError("wandb run is not initialized, cannot add tag")
-        tags_list = list(self.wandb_run.tags) if self.wandb_run.tags else []
-        tags_list.append(tag)
-        self.wandb_run.tags = tuple(sorted(set(tags_list)))
+        wandb_run_obj = typing.cast("typing.Any", self.wandb_run)
+        raw_tags = getattr(wandb_run_obj, "tags", None)
+        tags_tuple = tuple(typing.cast("typing.Iterable[str]", raw_tags)) if raw_tags is not None else ()
+        existing_tags = list(tags_tuple)
+        existing_tags.append(tag)
+        wandb_run_obj.tags = tuple(sorted(set(existing_tags)))
         logger.info(f"added tag '{tag}' to wandb run id: {self.wandb_run_id}")
 
 
@@ -156,24 +163,24 @@ class ConfigDescription(pydantic.BaseModel):
     we will look for a `__cfg_description__`, `__description__`, or `__doc__` field in the config
     to use as the description.
     """
-    config: hydra_zen.typing.Builds[typing.Any] | type[typing.Protocol]
+    config: hydra_zen.typing.Builds[typing.Any] | type[typing.Any]
     """Hydra-zen config object (can be used for instantiations and as a base in new definitions)."""
 
     @staticmethod
     def _check_and_validate_attrib(
         data: dict[str, typing.Any],
+        cfg: dict[str, typing.Any],
         attrib_name: str,
         is_mandatory: bool,
     ) -> None:
         """Checks whether the attribute is present in the config and validates its type."""
-        cfg: dict[str, typing.Any] = data["config"]
-        zen_meta: dict[str, typing.Any] = cfg.get("zen_meta", {})
+        zen_meta: dict[str, typing.Any] = getattr(cfg, "zen_meta", {})
         attrib_val = data.get(attrib_name)
         if attrib_val in (None, ""):
             attrib_val = getattr(zen_meta, f"__cfg_{attrib_name}__", None)
         if attrib_val in (None, ""):
             attrib_val = getattr(cfg, f"__cfg_{attrib_name}__", None)
-        if not isinstance(attrib_val, str) and attrib_val is not None:
+        if attrib_val is not None and not isinstance(attrib_val, str):
             raise TypeError(f"{attrib_name} must be a string, got {type(attrib_val)}")
         if not attrib_val and is_mandatory:
             raise ValueError(f"{attrib_name} must be provided directly or in the config")
@@ -185,11 +192,13 @@ class ConfigDescription(pydantic.BaseModel):
     def _fill_attribs(cls, data: typing.Any) -> typing.Any:
         """Fills the attributes that may be missing."""
         if not isinstance(data, dict) or "config" not in data or not isinstance(data["config"], dict):
-            return data  # let pydantic deal with the mess
-        cls._check_and_validate_attrib(data=data, attrib_name="name", is_mandatory=True)
-        cls._check_and_validate_attrib(data=data, attrib_name="group", is_mandatory=False)
-        cls._check_and_validate_attrib(data=data, attrib_name="package", is_mandatory=False)
-        cls._check_and_validate_attrib(data=data, attrib_name="description", is_mandatory=True)
+            return data  # type: ignore[reportUnknownMemberType] --- let pydantic deal with the mess
+        data = typing.cast("dict[str, typing.Any]", data)
+        cfg = typing.cast("dict[str, typing.Any]", data["config"])
+        cls._check_and_validate_attrib(data=data, cfg=cfg, attrib_name="name", is_mandatory=True)
+        cls._check_and_validate_attrib(data=data, cfg=cfg, attrib_name="group", is_mandatory=False)
+        cls._check_and_validate_attrib(data=data, cfg=cfg, attrib_name="package", is_mandatory=False)
+        cls._check_and_validate_attrib(data=data, cfg=cfg, attrib_name="description", is_mandatory=True)
         return data
 
     @pydantic.model_validator(mode="after")
