@@ -35,7 +35,7 @@ BaseDataLoaderType = torch.utils.data.DataLoader
 """Default base class used for data loaders."""
 
 
-class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataParserType]):
+class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec):
     """Base configuration class for data parser objects.
 
     See the parent class for more information; this class is mostly a placeholder. Derived instances
@@ -56,7 +56,7 @@ BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
 """Configuration parameters for the base data loader class."""
 
 
-class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec[BaseDataLoaderType]):
+class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec):
     """Base configuration class for data loader objects.
 
     See the parent class for more information. Derived instances should specify `class_path` and

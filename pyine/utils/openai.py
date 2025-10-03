@@ -304,7 +304,7 @@ OpenAIClientParamsConfig = pyine.utils.pydantic.model_from_callable(
 """Configuration parameters for the OpenAI client."""
 
 
-class OpenAIClientConfig(pyine.utils.pydantic.ClassImportSpec[openai.OpenAI]):
+class OpenAIClientConfig(pyine.utils.pydantic.ClassImportSpec):
     """Wrapper over the OpenAI client SDK for easy instantiation."""
 
     class_path: str = "openai.OpenAI"
@@ -730,7 +730,7 @@ class OpenAIFineTuner:
         return resp.choices[0].message.content or ""
 
 
-class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec[OpenAIFineTuner]):
+class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec):
     """Wrapper over the OpenAI client SDK for easy instantiation."""
 
     class_path: str = pyine.utils.portability.get_fully_qualified_name(OpenAIFineTuner)

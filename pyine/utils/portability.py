@@ -527,8 +527,10 @@ def render_config(
     cns = console or rich.console.Console(width=200)  # expect this to output in a big terminal window
     # extract basic stuff from the provided config object
     doc = (
-        getattr(cfg_values, "zen_meta", {}).get("__description__", "")
+        getattr(cfg_values, "zen_meta", {}).get("__cfg_description__", "")
+        or getattr(cfg_values, "zen_meta", {}).get("__description__", "")
         or getattr(cfg_values, "zen_meta", {}).get("__doc__", "")
+        or getattr(cfg_type, "__cfg_description__", "")
         or getattr(cfg_type, "__description__", "")
         or getattr(cfg_type, "__doc__", "")
         or "<no config documentation available>"
@@ -598,7 +600,7 @@ def render_config(
             return yaml.safe_dump(val).strip()
         return str(val)
 
-    skipped_field_names = ["_zen_exclude", "__description__", "zen_meta"]
+    skipped_field_names = ["_zen_exclude", "__cfg_description__", "__description__", "zen_meta"]
 
     # if the provided config is a dataclass...
     if dataclasses.is_dataclass(cfg_type):

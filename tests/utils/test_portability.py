@@ -425,7 +425,7 @@ def test_render_config_unknown_type_and_doc_selection() -> None:
         __cfg_group__ = "group"
         __doc__ = "Default doc"
 
-    cfg_values = types.SimpleNamespace(zen_meta={"__description__": " Custom desc "})
+    cfg_values = types.SimpleNamespace(zen_meta={"__cfg_description__": " Custom desc "})
     console = rich.console.Console(record=True, width=80)
     portability.render_config(
         UnknownConfig,

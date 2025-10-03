@@ -1,10 +1,10 @@
 import enum
 
-import hydra_zen
 import pydantic
 import transformers
 
 import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.transformers
@@ -199,16 +199,16 @@ def get_evals_configs(
         return pyine.evals.code_exec.configs.get_evals_configs(group=group)
     if eval_type is None:
         return [
-            pyine.configs.schemas.ConfigDescription(
+            pyine.configs.utils.make_config_description(
+                BaseEvalsConfig,
                 name="base",
                 group=group,
-                config=hydra_zen.builds(
-                    BaseEvalsConfig,
-                    # -------------
-                    populate_full_signature=True,
-                    hydra_convert="object",
-                ),
                 description="Default evaluation settings (no evals unless overridden).",
+                config={
+                    # -------------
+                    "populate_full_signature": True,
+                    "hydra_convert": "object",
+                },
             )
         ]
     raise NotImplementedError(f"evaluation type {eval_type} not implemented")

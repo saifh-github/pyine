@@ -260,7 +260,7 @@ class TestClassImportSpec:
             },
         )
         with pytest.raises(TypeError) as exc_info:
-            _ = pyd.ClassImportSpec[DummyUnrelated](
+            _ = pyd.ClassImportSpec(
                 class_path="pkg.module.DummySub",
                 base_class_path="pkg.module.DummyBase",
                 params={"a": 7, "b": {"k": "v"}},

@@ -4,7 +4,6 @@ import dataclasses
 import logging
 import typing
 
-import hydra_zen
 import langchain_core.messages
 import langchain_core.runnables
 import torch
@@ -12,6 +11,7 @@ import tqdm
 import transformers
 
 import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.code_exec.utils
 import pyine.evals.common
@@ -482,20 +482,20 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
 def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns code execution evaluation configs for hydra zen storage."""
-    base_config = pyine.configs.schemas.ConfigDescription(
+    base_config = pyine.configs.utils.make_config_description(
+        CodeExecEvalsConfig,
         name="base",
         group=group,
-        config=hydra_zen.builds(
-            CodeExecEvalsConfig,
+        description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader).",
+        config={
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
                 "_self_",
                 {"llm_grader_provider_config": "openai_gpt5nano"},  # provided by grader configs (called below)
             ],
-        ),
-        description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader).",
+        },
     )
     llm_grader_provider_configs = pyine.evals.grader_configs.get_provider_configs(
         group=f"{group}/llm_grader_provider_config",

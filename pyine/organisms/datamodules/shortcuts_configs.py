@@ -7,11 +7,10 @@ import typing
 import warnings
 
 import hydra.conf
-import hydra_zen
-import hydra_zen.typing
 import pydantic
 
 import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
@@ -359,42 +358,36 @@ def _get_taco_configs(
     if taco_latest_path is not None and taco_split_path is not None:
         # if we have both of these paths, build the demo/testing configs
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            taco_latest_config := pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_latest",
                 group=datamodule_base_config.group,
-                config=(
-                    taco_latest_config := hydra_zen.builds(
-                        ShortcutBiasDataModuleConfig,
-                        lmdb_paths=[taco_latest_path],
-                        split_file_path=taco_split_path,
-                        # -------------
-                        builds_bases=(datamodule_base_config.config,),
-                        zen_meta={
-                            "__description__": (
-                                "Specifies the single most recent instance of a TACO trace dataset found on disk. "
-                                "May contain an arbitrary number of traces with any kind of augmentations."
-                            ),
-                        },
-                    )
+                description=(
+                    "Specifies the single most recent instance of a TACO trace dataset found on disk. "
+                    "May contain an arbitrary number of traces with any kind of augmentations."
                 ),
+                config={
+                    "lmdb_paths": [taco_latest_path],
+                    "split_file_path": taco_split_path,
+                    # -------------
+                    "builds_bases": (datamodule_base_config.config,),
+                },
             )
         )
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_latest_20s",
                 group=datamodule_base_config.group,
-                config=hydra_zen.builds(
-                    ShortcutBiasDataModuleConfig,
-                    max_solution_count=20,  # cap off the dataset size for quick experiments (across each subset)
-                    # -------------
-                    builds_bases=(taco_latest_config,),
-                    zen_meta={
-                        "__description__": (
-                            "Specifies a subset of the most recent TACO trace dataset on disk, with a maximum of 20 "
-                            "solutions per trace. Useful for quick experiments, testing, and demos."
-                        ),
-                    },
+                description=(
+                    "Specifies a subset of the most recent TACO trace dataset on disk, with a maximum of 20 "
+                    "solutions per trace. Useful for quick experiments, testing, and demos."
                 ),
+                config={
+                    "max_solution_count": 20,  # cap off the dataset size for quick experiments (across each subset)
+                    # -------------
+                    "builds_bases": (taco_latest_config.config,),
+                },
             )
         )
 
@@ -405,68 +398,58 @@ def _get_taco_configs(
         assert len(taco_10s10t_v1_paths) == 26, "unexpected number of v1 10s10t datasets"
         # @@@@@@ TODO: update bases w/ reasonable defaults for exps here?
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            taco_10s10t_v1_config := pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_10s10t_v1_full",
                 group=datamodule_base_config.group,
-                config=(
-                    taco_10s10t_v1_config := hydra_zen.builds(
-                        ShortcutBiasDataModuleConfig,
-                        lmdb_paths=taco_10s10t_v1_paths,
-                        split_file_path=taco_split_path,
-                        # -------------
-                        builds_bases=(datamodule_base_config.config,),
-                        zen_meta={
-                            "__description__": (
-                                "Specifies the full 26 instances of the PyINE-TACO 10s10t v1 trace dataset. "
-                                "Used for full-sized experiments on the entire dataset proposed in our first "
-                                "paper. See `pyine/apps/README-10s10t-v1.md` for more information."
-                            ),
-                        },
-                    )
+                description=(
+                    "Specifies the full 26 instances of the PyINE-TACO 10s10t v1 trace dataset. "
+                    "Used for full-sized experiments on the entire dataset proposed in our first "
+                    "paper. See `pyine/apps/README-10s10t-v1.md` for more information."
                 ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths,
+                    "split_file_path": taco_split_path,
+                    # -------------
+                    "builds_bases": (datamodule_base_config.config,),
+                },
             )
         )
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            taco_10s10t_v1_part1_config := pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_10s10t_v1_part1",
                 group=datamodule_base_config.group,
-                config=(
-                    taco_10s10t_v1_part1_config := hydra_zen.builds(
-                        ShortcutBiasDataModuleConfig,
-                        lmdb_paths=[taco_10s10t_v1_paths[0]],
-                        # -------------
-                        builds_bases=(taco_10s10t_v1_config,),
-                        zen_meta={
-                            "__description__": (
-                                "Specifies a subset consisting of the first part (of 26, so about 3.8%) of the "
-                                "PyINE-TACO 10s10t v1 trace dataset. This is a much smaller subset than the full "
-                                "dataset, but should be fairly representative of the full dataset's distribution, "
-                                "and therefore useful for smaller-scale experiments."
-                            ),
-                        },
-                    )
+                description=(
+                    "Specifies a subset consisting of the first part (of 26, so about 3.8%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a much smaller subset than the full "
+                    "dataset, but should be fairly representative of the full dataset's distribution, "
+                    "and therefore useful for smaller-scale experiments."
                 ),
+                config={
+                    "lmdb_paths": [taco_10s10t_v1_paths[0]],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
+                },
             )
         )
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_10s10t_v1_part1_20s",
                 group=datamodule_base_config.group,
-                config=hydra_zen.builds(
-                    ShortcutBiasDataModuleConfig,
-                    lmdb_paths=[taco_10s10t_v1_paths[0]],
-                    split_file_path=taco_split_path,
-                    max_solution_count=20,  # cap off the dataset size for quick experiments (across each subset)
-                    # -------------
-                    builds_bases=(taco_10s10t_v1_part1_config,),
-                    zen_meta={
-                        "__description__": (
-                            "Specifies a subset of the first part of the PyINE-TACO 10s10t v1 trace dataset, "
-                            "with a maximum of 20 solutions per trace. Useful for quick experiments, testing, "
-                            "and demos. Should not be used for anything serious."
-                        ),
-                    },
+                description=(
+                    "Specifies a subset of the first part of the PyINE-TACO 10s10t v1 trace dataset, "
+                    "with a maximum of 20 solutions per trace. Useful for quick experiments, testing, "
+                    "and demos. Should not be used for anything serious."
                 ),
+                config={
+                    "lmdb_paths": [taco_10s10t_v1_paths[0]],
+                    "split_file_path": taco_split_path,
+                    "max_solution_count": 20,  # cap off the dataset size for quick experiments (across each subset)
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_part1_config.config,),
+                },
             )
         )
 
@@ -480,11 +463,12 @@ def get_configs(
     """Generates and returns shortcuts-datamodule-specific configs for hydra zen storage."""
     if eval_type != pyine.evals.common.EvalType.CODE_EXEC:
         raise NotImplementedError(f"unsupported eval type for shortcuts datamodule: {eval_type}")
-    shortcuts_dm_base_config = pyine.configs.schemas.ConfigDescription(
+    shortcuts_dm_base_config = pyine.configs.utils.make_config_description(
+        ShortcutBiasDataModuleConfig,
         name="base",
         group=group,
-        config=hydra_zen.builds(
-            ShortcutBiasDataModuleConfig,
+        description="Base shortcuts datamodule settings; not specific to any actual source dataset.",
+        config={
             **get_datamodule_config(
                 lmdb_paths=hydra.conf.MISSING,  # must be specified by user
                 split_file_path=hydra.conf.MISSING,  # must be specified by user
@@ -492,12 +476,9 @@ def get_configs(
                 as_pydantic=False,
             ),
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_meta={
-                "__description__": "Base shortcuts datamodule settings; not specific to any actual source dataset.",
-            },
-        ),
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
     return [
         shortcuts_dm_base_config,

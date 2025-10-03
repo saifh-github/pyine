@@ -8,6 +8,7 @@ import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.configs.searchpath
+import pyine.configs.utils
 import pyine.utils.filesystem
 import pyine.utils.openai
 import pyine.utils.portability
@@ -25,37 +26,33 @@ def get_hydra_runtime_configs(
     group: str = "runtime",
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns runtime configs for hydra zen storage."""
-    default_runtime_config = pyine.configs.schemas.ConfigDescription(
+    default_runtime_config = pyine.configs.utils.make_config_description(
+        pyine.configs.schemas.RuntimeConfig,
         name="default",
         group=group,
-        config=hydra_zen.builds(
-            pyine.configs.schemas.RuntimeConfig,
-            # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_meta={
-                "__description__": (
-                    "Provides default runtime settings for all apps; should only be missing a "
-                    "`exp_name` definition by an override or by the user, and optional notes/tags."
-                ),
-            },
+        description=(
+            "Provides default runtime settings for all apps; should only be missing a "
+            "`exp_name` definition by an override or by the user, and optional notes/tags."
         ),
+        config={
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
-    dry_run_runtime_config = pyine.configs.schemas.ConfigDescription(
+    dry_run_runtime_config = pyine.configs.utils.make_config_description(
         name="dry_run",
         group=group,
-        config=hydra_zen.make_config(
-            dry_run=True,
-            # -------------
-            bases=(default_runtime_config.config,),
-            zen_meta={
-                "__description__": (
-                    "Provides default runtime settings for dry-run apps; overrides the default "
-                    "settings, but still requires `exp_name` to be set by an override or by the "
-                    "user, and optional notes/tags."
-                ),
-            },
+        description=(
+            "Provides default runtime settings for dry-run apps; overrides the default "
+            "settings, but still requires `exp_name` to be set by an override or by the "
+            "user, and optional notes/tags."
         ),
+        config={
+            "dry_run": True,
+            # -------------
+            "bases": (default_runtime_config.config,),
+        },
     )
     return [default_runtime_config, dry_run_runtime_config]
 
@@ -64,32 +61,28 @@ def get_openai_client_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns OpenAI client configs for hydra zen storage."""
-    default_openai_client_config = pyine.configs.schemas.ConfigDescription(
+    default_openai_client_config = pyine.configs.utils.make_config_description(
+        pyine.utils.openai.OpenAIClientConfig,
         name="default",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.openai.OpenAIClientConfig,
-            params={"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
+        description="Default OpenAI client settings with all default (no timeout).",
+        config={
+            "params": {"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_meta={
-                "__description__": "Default OpenAI client settings with all default (no timeout).",
-            },
-        ),
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
-    timeout300s_openai_client_config = pyine.configs.schemas.ConfigDescription(
+    timeout300s_openai_client_config = pyine.configs.utils.make_config_description(
+        pyine.utils.openai.OpenAIClientConfig,
         name="timeout300s",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.openai.OpenAIClientConfig,
-            params={"timeout": 300},
+        description="Default OpenAI client settings with a 300-second timeout.",
+        config={
+            "params": {"timeout": 300},
             # -------------
-            builds_bases=(default_openai_client_config.config,),
-            zen_meta={
-                "__description__": "Default OpenAI client settings with a 300-second timeout.",
-            },
-        ),
+            "builds_bases": (default_openai_client_config.config,),
+        },
     )
     return [default_openai_client_config, timeout300s_openai_client_config]
 
@@ -143,29 +136,3 @@ def get_base_hydra_default_overrides() -> list[dict[str, typing.Any]]:
         {"override /hydra/hydra_logging": "colorlog"},
         {"override /hydra/job_logging": "colorlog"},
     ]
-
-
-def print_experiment_configs(
-    config_descriptions: list[pyine.configs.schemas.ConfigDescription],
-    app_name: str,
-) -> None:
-    """Prints the available experiment configs for the app."""
-    splash_msg = f"AVAILABLE EXPERIMENT CONFIGURATIONS FOR THE '{app_name}' APPLICATION:"
-    bar_str = "=" * len(splash_msg)
-    print(f"\n\n{splash_msg}\n{bar_str}\n\n")
-    exp_config_names = []
-    for config_desc in config_descriptions:
-        if config_desc.group != "experiment":
-            continue
-        # all experiment configs should be fully specified (and thus instantiable as-is)
-        with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
-            config_dict = hydra.compose(config_name="entrypoint", overrides=[f"+experiment={config_desc.name}"])
-        pyine.utils.portability.render_config(config_desc.config, config_dict)
-        exp_config_names.append(config_desc.name)
-    if not exp_config_names:
-        print(">>> No experiment configs found.")
-    else:
-        print("\n>>> Summary of available experiment overrides:")
-        for exp_config_name in exp_config_names:
-            print(f"\t+experiment={exp_config_name}")
-    print("\nAll done.")

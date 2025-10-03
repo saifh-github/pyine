@@ -142,57 +142,67 @@ class ConfigDescription(pydantic.BaseModel):
     Note: if None, we will look for a "__cfg_group__" field in the config to use as the group.
     """
     package: str | None = None
-    """Optional package name used when storing this config in the hydra store."""
-    config: hydra_zen.typing.Builds | type[typing.Protocol]
-    """Hydra-zen config object (can be used for instantiations and as a base in new definitions)."""
+    """Optional package name used when storing this config in the hydra store.
+
+    Note: if None, we will look for a "__cfg_package__" field in the config to use as the package.
+    """
     description: str | None = None
     """Description of the config; should be informative to potential users.
 
+    Providing descriptions is STRONGLY encouraged to document your configuration decisions; these
+    will likely be printed alongside your config when registered in the hydra store.
+
     Note: although this field defaults to `None`, it is required for validation; when it is `None`,
-    we will look for a "__description__" or "__doc__" field in the config to use as the description.
+    we will look for a `__cfg_description__`, `__description__`, or `__doc__` field in the config
+    to use as the description.
     """
+    config: hydra_zen.typing.Builds[typing.Any] | type[typing.Protocol]
+    """Hydra-zen config object (can be used for instantiations and as a base in new definitions)."""
+
+    @staticmethod
+    def _check_and_validate_attrib(
+        data: dict[str, typing.Any],
+        attrib_name: str,
+        is_mandatory: bool,
+    ) -> None:
+        """Checks whether the attribute is present in the config and validates its type."""
+        cfg: dict[str, typing.Any] = data["config"]
+        zen_meta: dict[str, typing.Any] = cfg.get("zen_meta", {})
+        attrib_val = data.get(attrib_name)
+        if attrib_val in (None, ""):
+            attrib_val = getattr(zen_meta, f"__cfg_{attrib_name}__", None)
+        if attrib_val in (None, ""):
+            attrib_val = getattr(cfg, f"__cfg_{attrib_name}__", None)
+        if not isinstance(attrib_val, str) and attrib_val is not None:
+            raise TypeError(f"{attrib_name} must be a string, got {type(attrib_val)}")
+        if not attrib_val and is_mandatory:
+            raise ValueError(f"{attrib_name} must be provided directly or in the config")
+        if attrib_val:
+            data[attrib_name] = attrib_val
 
     @pydantic.model_validator(mode="before")
     @classmethod
     def _fill_attribs(cls, data: typing.Any) -> typing.Any:
         """Fills the attributes that may be missing."""
-        if not isinstance(data, dict):
-            return data
-        cfg = data.get("config")
-
-        name = data.get("name")
-        if name in (None, "") and cfg is not None:
-            name = getattr(cfg, "__cfg_name__", None)
-        if not name:
-            raise ValueError("name must be provided or found in the config")
-        if not isinstance(name, str):
-            raise TypeError(f"name must be a string, got {type(name)}")
-        data["name"] = name
-
-        group = data.get("group")
-        if group in (None, "") and cfg is not None:
-            group = getattr(cfg, "__cfg_group__", None)
-        if group is not None:
-            if not isinstance(group, str):
-                raise TypeError(f"group must be a string, got {type(group)}")
-            data["group"] = group
-
-        desc = data.get("description")
-        if desc in (None, "") and cfg is not None:
-            desc = getattr(cfg, "__description__", "") or getattr(cfg, "__doc__", "")
-        if not desc:
-            raise ValueError("description must be provided or found in the config")
-        if not isinstance(desc, str):
-            raise TypeError(f"description must be a string, got {type(desc)}")
-        data["description"] = desc
-
+        if not isinstance(data, dict) or "config" not in data or not isinstance(data["config"], dict):
+            return data  # let pydantic deal with the mess
+        cls._check_and_validate_attrib(data=data, attrib_name="name", is_mandatory=True)
+        cls._check_and_validate_attrib(data=data, attrib_name="group", is_mandatory=False)
+        cls._check_and_validate_attrib(data=data, attrib_name="package", is_mandatory=False)
+        cls._check_and_validate_attrib(data=data, attrib_name="description", is_mandatory=True)
         return data
 
     @pydantic.model_validator(mode="after")
     def _attach_config_attributes(self) -> "ConfigDescription":
         """Attaches description/name/group to the config."""
-        # @@@@ might need to update zen exclude?
-        self.config.__description__ = self.description
         self.config.__cfg_name__ = self.name
         self.config.__cfg_group__ = self.group
+        self.config.__cfg_package__ = self.package
+        self.config.__cfg_description__ = self.description
+        if hasattr(self.config, "zen_meta"):
+            # @@@@ TODO might need to update zen exclude?
+            self.config.zen_meta["__cfg_name__"] = self.name
+            self.config.zen_meta["__cfg_group__"] = self.group
+            self.config.zen_meta["__cfg_package__"] = self.package
+            self.config.zen_meta["__cfg_description__"] = self.description
         return self

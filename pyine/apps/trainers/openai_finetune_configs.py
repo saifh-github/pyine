@@ -18,6 +18,7 @@ import pyine.apps.trainers.openai_finetune
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
+import pyine.configs.utils
 import pyine.evals.common
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.models.utils.openai
@@ -113,68 +114,62 @@ def _get_ft_params_configs(
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns fine-tuning parameter configs for hydra zen storage."""
     assert isinstance(group, str) and group
-    default_sft_params_config = pyine.configs.schemas.ConfigDescription(
+    default_sft_params_config = pyine.configs.utils.make_config_description(
+        pyine.utils.openai.OpenAIFineTunerParamsConfig,
         name="openai_gpt-4.1-mini_default_sft",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.openai.OpenAIFineTunerParamsConfig,
-            base_model="gpt-4.1-mini-2025-04-14",
-            method={"type": "supervised"},
-            seed="${runtime.seed}",
-            suffix="default-sft",
-            metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
-            # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_wrappers=_openai_finetuner_method_params_config_wrapper,
-            zen_meta={
-                "__description__": (
-                    "Default settings for OpenAI supervised fine-tuning using gpt-4.1-mini. These "
-                    "settings should be pretty cheap to run (especially compared to rlft)."
-                ),
-            },
+        description=(
+            "Default settings for OpenAI supervised fine-tuning using gpt-4.1-mini. These "
+            "settings should be pretty cheap to run (especially compared to rlft)."
         ),
+        config={
+            "base_model": "gpt-4.1-mini-2025-04-14",
+            "method": {"type": "supervised"},
+            "seed": "${runtime.seed}",
+            "suffix": "default-sft",
+            "metadata": pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "zen_wrappers": _openai_finetuner_method_params_config_wrapper,
+        },
     )
-    default_rlft_params_config = pyine.configs.schemas.ConfigDescription(
+    default_rlft_params_config = pyine.configs.utils.make_config_description(
+        pyine.utils.openai.OpenAIFineTunerParamsConfig,
         name="openai_o4-mini_default_rlft",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.openai.OpenAIFineTunerParamsConfig,
-            base_model="o4-mini-2025-04-16",
-            seed="${runtime.seed}",
-            suffix="default-rlft",
-            metadata=pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
+        description=(
+            "Default settings for OpenAI RL fine-tuning using o4-mini.\n\n"
+            "NOTE: as of 2025-09-03, training o4-mini using these settings is VERY COSTLY, even for "
+            "VERY TINY datasets (we're talking hundreds of dollars per run here, minimum). Do not "
+            "use these settings unless you know what you are doing."
+        ),
+        config={
+            "base_model": "o4-mini-2025-04-16",
+            "seed": "${runtime.seed}",
+            "suffix": "default-rlft",
+            "metadata": pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False),
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
                 "_self_",
                 {"override method": "default_pred_grader_rlft_method"},
             ],
-            zen_wrappers=_openai_finetuner_method_params_config_wrapper,
-            zen_meta={
-                "__description__": (
-                    "Default settings for OpenAI RL fine-tuning using o4-mini.\n\n"
-                    "NOTE: as of 2025-09-03, training o4-mini using these settings is VERY COSTLY, even for "
-                    "VERY TINY datasets (we're talking hundreds of dollars per run here, minimum). Do not "
-                    "use these settings unless you know what you are doing."
-                ),
-            },
-        ),
+            "zen_wrappers": _openai_finetuner_method_params_config_wrapper,
+        },
     )
-    default_pred_grader_rlft_method_config = pyine.configs.schemas.ConfigDescription(
+    default_pred_grader_rlft_method_config = pyine.configs.utils.make_config_description(
+        pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig,
         name="default_pred_grader_rlft_method",
         group=group + "/method",
-        config=hydra_zen.builds(
-            pyine.organisms.models.utils.openai.PredGraderFineTuneMethodConfig,
+        description="Default settings for OpenAI RL fine-tuning method (relies on an LLM grader).",
+        config={
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_wrappers=_openai_finetuner_method_config_getter,
-            zen_meta={
-                "__description__": "Default settings for OpenAI RL fine-tuning method (relies on an LLM grader).",
-            },
-        ),
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "zen_wrappers": _openai_finetuner_method_config_getter,
+        },
     )
     return [
         default_sft_params_config,
@@ -189,25 +184,23 @@ def _get_app_configs(
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns application configs for hydra zen storage."""
     assert isinstance(group, str) and group
-    app_main_config = pyine.configs.schemas.ConfigDescription(
+    app_main_config = pyine.configs.utils.make_config_description(
+        OpenAIFineTuneAppMainConfig,
         name="base",
         group=group,
-        config=hydra_zen.builds(
-            OpenAIFineTuneAppMainConfig,
+        description="Base settings for the OpenAI fine-tuner app.",
+        config={
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
                 "_self_",
                 {"datamodule_config": "base"},
                 {"openai_client_config": "default"},
                 {"openai_finetuner_config": "openai_gpt-4.1-mini_default_sft"},
                 {"evals_config": "base"},
             ],
-            zen_meta={
-                "__description__": "Base settings for the OpenAI fine-tuner app.",
-            },
-        ),
+        },
     )
     datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
         eval_type=eval_type,
@@ -255,29 +248,27 @@ def _get_experiment_configs(
         exp_name = f"{dm_config.name}{config_type_str}"
         desc_str = "eval-only" if config_type_str == "_eval_only" else "regular fine-tuning"
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            pyine.configs.utils.make_config_description(
                 name=exp_name,
                 group=group,
                 package=package,
-                config=hydra_zen.make_config(
-                    runtime={"exp_name": exp_name},
-                    skip_fine_tuning=(config_type_str == "_eval_only"),
+                description=(
+                    f"Experiment settings that combines the '{dm_config.name}' datamodule settings with "
+                    f"good default arguments for the app's {desc_str} entrypoint.\n\n"
+                    f"Description for 'config/datamodule_config={dm_config.name}': {dm_config.description}"
+                ),
+                config={
+                    "runtime": {"exp_name": exp_name},
+                    "skip_fine_tuning": config_type_str == "_eval_only",
                     # -------------
-                    hydra_defaults=[
+                    "hydra_defaults": [
                         "_self_",
                         {"override /config/datamodule_config": dm_config.name},
                         # use openai client with 300s timeout for all predefined experiments
                         {"override /config/openai_client_config": "timeout300s"},
                     ],
-                    bases=(entrypoint_config.config,),
-                    zen_meta={
-                        "__description__": (
-                            f"Experiment settings that combines the '{dm_config.name}' datamodule settings with "
-                            f"good default arguments for the app's {desc_str} entrypoint.\n\n"
-                            f"Description for 'config/datamodule_config={dm_config.name}': {dm_config.description}"
-                        ),
-                    },
-                ),
+                    "bases": (entrypoint_config.config,),
+                },
             )
         )
     return outputs
@@ -297,24 +288,22 @@ def register_hydra_configs(
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    entrypoint_config = pyine.configs.schemas.ConfigDescription(
+    entrypoint_config = pyine.configs.utils.make_config_description(
+        _async_main_wrapper,
         name="entrypoint",
         group=None,
-        config=hydra_zen.builds(
-            _async_main_wrapper,
-            skip_fine_tuning=False,
+        description="Entrypoint settings for the OpenAI fine-tuner app.",
+        config={
+            "skip_fine_tuning": False,
             # -------------
-            populate_full_signature=True,
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_defaults": [
                 "_self_",
                 {"config": "base"},  # from this module (`_get_app_configs`)
                 {"runtime": "default"},  # from pyine.configs.base
                 *pyine.configs.base.get_base_hydra_default_overrides(),
             ],
-            zen_meta={
-                "__description__": "Entrypoint settings for the OpenAI fine-tuner app.",
-            },
-        ),
+        },
     )
     store, base_configs = pyine.configs.base.get_base_store_and_configs("openai_finetune")
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
@@ -343,7 +332,7 @@ def register_hydra_configs(
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
     # TODO: if we ever have more than one eval type, add a selector based on launch args here
-    pyine.configs.base.print_experiment_configs(
+    pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
         app_name="openai_finetune",
     )

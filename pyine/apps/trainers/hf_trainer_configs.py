@@ -20,6 +20,7 @@ import pyine.apps.trainers.hf_trainer
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
+import pyine.configs.utils
 import pyine.evals.common
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.reprod
@@ -82,9 +83,12 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     ) -> typing.Any:
         """Ensures the lora field is a LoraConfig instance when provided as a dict."""
         if isinstance(data, dict):
-            lora_config: typing.Any = data.get("lora_config")
+            typed_data = typing.cast("dict[str, typing.Any]", data)
+            lora_config = typed_data.get("lora_config")
             if isinstance(lora_config, dict) and not isinstance(lora_config, peft.LoraConfig):
-                data["lora_config"] = peft.LoraConfig(**lora_config)
+                typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
+                typed_data["lora_config"] = peft.LoraConfig(**typed_lora_config)
+            return typed_data
         return data
 
     @property
@@ -129,7 +133,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     """Instantiates and returns the pretrained model specified in the config."""
     logger.info(f"setting up model: {config.base_model}")
     dtype, device_map = config.target_dtype, config.device_map
-    model_kwargs = {
+    model_kwargs: dict[str, typing.Any] = {
         "torch_dtype": dtype,
         "device_map": device_map,
         **config.auto_model_config,
@@ -148,20 +152,38 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     else:
         raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
     logger.debug(f"auto model config: {model_kwargs}")
-    model = transformers.AutoModelForCausalLM.from_pretrained(config.base_model, **model_kwargs)
+    base_model = typing.cast(
+        "transformers.PreTrainedModel",
+        transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
+            config.base_model,
+            **model_kwargs,
+        ),
+    )
+    model: transformers.PreTrainedModel = base_model
     if config.lora_config is not None:
         logger.info("  (setting up LoRA adapters)")
         logger.debug(f"lora_config: {config.lora_config}")
-        model = peft.get_peft_model(model, config.lora_config)
+        model = typing.cast(
+            "transformers.PreTrainedModel",
+            peft.get_peft_model(model, config.lora_config),
+        )
     logger.info(f"model successfully created:\n{model}")
-    logger.debug(f"model config: {model.config.to_json_string()}")
+    model_config = getattr(model, "config", None)
+    if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):
+        logger.debug(f"model config: {model_config.to_json_string()}")
     if hasattr(model, "peft_config"):
         logger.debug(f"model peft_config: {model.peft_config}")
-    if hasattr(model, "get_nb_trainable_parameters") and callable(model.get_nb_trainable_parameters):
-        trainable_param_count, total_param_count = model.get_nb_trainable_parameters()
+    get_trainable_params = getattr(model, "get_nb_trainable_parameters", None)
+    if callable(get_trainable_params):
+        trainable_param_count, total_param_count = typing.cast(
+            "tuple[int, int]",
+            get_trainable_params(),
+        )
         logger.info(f"trainable param count: {trainable_param_count:,d}")
         logger.info(f"total param count: {total_param_count:,d}")
-        logger.info(f"trainable param %: {100 * trainable_param_count / total_param_count:.3f}")
+        if total_param_count:
+            trainable_ratio = (100 * trainable_param_count) / total_param_count
+            logger.info(f"trainable param %: {trainable_ratio:.3f}")
     return model
 
 
@@ -199,108 +221,102 @@ def _get_trainer_args_configs(
     use_bf16 = bool(is_cuda and torch.cuda.is_bf16_supported())
     use_fp16 = bool(is_cuda and not use_bf16)
     pin_mem = bool(is_cuda)
-    base_config = pyine.configs.schemas.ConfigDescription(
+    base_config = pyine.configs.utils.make_config_description(
+        pyine.utils.transformers.TrainingArgsConfig,
         name="base",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.transformers.TrainingArgsConfig,
-            # some args are auto-deduced from hardware
-            use_cpu=use_cpu,
-            fp16=use_fp16,
-            bf16=use_bf16,
-            tf32=is_cuda,
-            dataloader_pin_memory=pin_mem,
-            # extra generic args set based on runtime config
-            run_name="${runtime.exp_name}-${runtime.run_name}",
-            output_dir="${hydra:runtime.output_dir}",
-            logging_dir="${hydra:runtime.output_dir}/logs",
-            seed="${runtime.seed}",
-            # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_meta={
-                "__description__": (
-                    "Base training arguments for all trainer configs; auto-determines some arguments "
-                    "based on available hardware, and fills other arguments based on runtime config."
-                ),
-            },
+        description=(
+            "Base training arguments for all trainer configs; auto-determines some arguments "
+            "based on available hardware, and fills other arguments based on runtime config."
         ),
+        config={
+            # some args are auto-deduced from hardware
+            "use_cpu": use_cpu,
+            "fp16": use_fp16,
+            "bf16": use_bf16,
+            "tf32": is_cuda,
+            "dataloader_pin_memory": pin_mem,
+            # extra generic args set based on runtime config
+            "run_name": "${runtime.exp_name}-${runtime.run_name}",
+            "output_dir": "${hydra:runtime.output_dir}",
+            "logging_dir": "${hydra:runtime.output_dir}/logs",
+            "seed": "${runtime.seed}",
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
     # TODO @@@@@@ add distrib trainer config with local_rank and ddp/fsdp stuff? or deepspeed/accelerate?
     # TODO @@@@@@ add configs w/ debug settings? (and tokens/sec or tokens seen metrics?)
-    train_default_config = pyine.configs.schemas.ConfigDescription(
+    train_default_config = pyine.configs.utils.make_config_description(
+        pyine.utils.transformers.TrainingArgsConfig,
         name="train_default",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.transformers.TrainingArgsConfig,
-            do_train=True,  # not used by trainer (meant to be checked by app)
-            do_eval=True,  # not used by trainer (meant to be checked by app)
-            do_predict=True,  # not used by trainer (meant to be checked by app)
-            per_device_train_batch_size=1,  # minimizes resource usage by default (good for tests/demos)
-            per_device_eval_batch_size=1,  # minimizes resource usage by default (good for tests/demos)
-            # auto_find_batch_size=True,  # would be nice to use in some cases (but off by default)
-            logging_steps=5,  # number of training steps between logging
-            logging_first_step=True,  # defines whether to log metrics/losses on the first step or not
-            max_steps=2000,  # maximum number of training steps to perform
-            eval_on_start=True,  # perform evaluation at the start of training (as a sanity check)
-            eval_strategy="steps",  # performs evaluation (validation) every N steps
-            eval_steps=500,  # number of training steps between two evaluations (w/ steps strategy)
-            eval_accumulation_steps=1,  # moves eval results from device to cpu each eval step
-            save_strategy="steps",  # checkpoint saving strategy during training
-            save_steps=500,  # training steps between checkpoint saves (w/ steps strategy); multiple of eval_steps
-            save_total_limit=3,  # maximum checkpoints to keep (overwrites oldest if exceeded)
-            load_best_model_at_end=True,  # whether to load the best checkpoint after training (loss-based default)
-            remove_unused_columns=False,  # safer with custom collators/generation
-            include_for_metrics=[
+        description=(
+            "Default training arguments for all trainer configs; applies on top of the `base` "
+            "arguments config (which auto-determines some stuff), and provides a number of "
+            "reasonable defaults for training (e.g. batch sizes, step counts, ...)."
+        ),
+        config={
+            "do_train": True,  # not used by trainer (meant to be checked by app)
+            "do_eval": True,  # not used by trainer (meant to be checked by app)
+            "do_predict": True,  # not used by trainer (meant to be checked by app)
+            "per_device_train_batch_size": 1,  # minimizes resource usage by default (good for tests/demos)
+            "per_device_eval_batch_size": 1,  # minimizes resource usage by default (good for tests/demos)
+            # "auto_find_batch_size": True,  # would be nice to use in some cases (but off by default)
+            "logging_steps": 5,  # number of training steps between logging
+            "logging_first_step": True,  # defines whether to log metrics/losses on the first step or not
+            "max_steps": 2000,  # maximum number of training steps to perform
+            "eval_on_start": True,  # perform evaluation at the start of training (as a sanity check)
+            "eval_strategy": "steps",  # performs evaluation (validation) every N steps
+            "eval_steps": 500,  # number of training steps between two evaluations (w/ steps strategy)
+            "eval_accumulation_steps": 1,  # moves eval results from device to cpu each eval step
+            "save_strategy": "steps",  # checkpoint saving strategy during training
+            "save_steps": 500,  # training steps between checkpoint saves (w/ steps strategy); multiple of eval_steps
+            "save_total_limit": 3,  # maximum checkpoints to keep (overwrites oldest if exceeded)
+            "load_best_model_at_end": True,  # whether to load the best checkpoint after training (loss-based default)
+            "remove_unused_columns": False,  # safer with custom collators/generation
+            "include_for_metrics": [
                 "inputs",
                 "loss",
             ],  # data to forward to the compute_metrics callback
-            # dataloader_drop_last=True,  # might want to keep this off for small demos/tests
-            # dataloader_num_workers=4,  # might want to keep default (0) for small demos/debug
-            # group_by_length=True,  # might be useful for some experiments, but off by default
-            # length_column_name="...",  # might need to specify this if we toggle on the above
+            # "dataloader_drop_last": True,  # might want to keep this off for small demos/tests
+            # "dataloader_num_workers": 4,  # might want to keep default (0) for small demos/debug
+            # "group_by_length": True,  # might be useful for some experiments, but off by default
+            # "length_column_name": "...",  # might need to specify this if we toggle on the above
             # -------------
-            builds_bases=(base_config.config,),
-            zen_meta={
-                "__description__": (
-                    "Default training arguments for all trainer configs; applies on top of the `base` "
-                    "arguments config (which auto-determines some stuff), and provides a number of "
-                    "reasonable defaults for training (e.g. batch sizes, step counts, ...)."
-                ),
-            },
-        ),
+            "builds_bases": (base_config.config,),
+        },
     )
-    eval_default_config = pyine.configs.schemas.ConfigDescription(
+    eval_default_config = pyine.configs.utils.make_config_description(
+        pyine.utils.transformers.TrainingArgsConfig,
         name="eval_default",
         group=group,
-        config=hydra_zen.builds(
-            pyine.utils.transformers.TrainingArgsConfig,
-            do_train=False,  # not used by trainer (meant to be checked by app)
-            do_eval=False,  # not used by trainer (meant to be checked by app)
-            do_predict=True,  # not used by trainer (meant to be checked by app)
-            per_device_eval_batch_size=1,  # default to lowest-resource-utilization possible
-            # auto_find_batch_size=True,  # would be nice to use in some cases (but off by default)
-            eval_accumulation_steps=1,  # moves eval results from device to cpu each eval step
-            eval_strategy="no",  # we'll call trainer.evaluate()/predict() manually
-            save_strategy="no",  # no need to save any checkpoints in this config
-            # prediction_loss_only=False,  # unclear if we should use this
-            max_steps=0,  # should not be doing any training in this config
-            remove_unused_columns=False,  # safer with custom collators/generation
-            include_for_metrics=[
+        description=(
+            "Default eval-only (prediction) arguments for all trainer configs; applies on top of "
+            "the `base` arguments config (which auto-determines some stuff), and provides a number "
+            "of reasonable defaults for evaluation (e.g. batch sizes, step counts, ...)."
+        ),
+        config={
+            "do_train": False,  # not used by trainer (meant to be checked by app)
+            "do_eval": False,  # not used by trainer (meant to be checked by app)
+            "do_predict": True,  # not used by trainer (meant to be checked by app)
+            "per_device_eval_batch_size": 1,  # default to lowest-resource-utilization possible
+            # "auto_find_batch_size": True,  # would be nice to use in some cases (but off by default)
+            "eval_accumulation_steps": 1,  # moves eval results from device to cpu each eval step
+            "eval_strategy": "no",  # we'll call trainer.evaluate()/predict() manually
+            "save_strategy": "no",  # no need to save any checkpoints in this config
+            # "prediction_loss_only": False,  # unclear if we should use this
+            "max_steps": 0,  # should not be doing any training in this config
+            "remove_unused_columns": False,  # safer with custom collators/generation
+            "include_for_metrics": [
                 "inputs",
                 "loss",
             ],  # data to forward to the compute_metrics callback
-            # dataloader_num_workers=4,  # might want to keep default (0) for small demos/debug
+            # "dataloader_num_workers": 4,  # might want to keep default (0) for small demos/debug
             # -------------
-            builds_bases=(base_config.config,),
-            zen_meta={
-                "__description__": (
-                    "Default eval-only (prediction) arguments for all trainer configs; applies on top of"
-                    "the `base` arguments config (which auto-determines some stuff), and provides a number "
-                    "of reasonable defaults for evaluation (e.g. batch sizes, step counts, ...)."
-                ),
-            },
-        ),
+            "builds_bases": (base_config.config,),
+        },
     )
     return [base_config, train_default_config, eval_default_config]
 
@@ -309,21 +325,19 @@ def _get_lora_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns LoRA adaptor configs for hydra zen storage."""
-    default_lora_config = pyine.configs.schemas.ConfigDescription(
+    default_lora_config = pyine.configs.utils.make_config_description(
+        peft.LoraConfig,
         name="default",
         group=group,
-        config=hydra_zen.builds(
-            peft.LoraConfig,
-            # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            zen_meta={
-                "__description__": (
-                    "Default LoRA settings for all trainer configs; applies to all models, and provides "
-                    "a reasonable default for LoRA adaptation. See `peft.LoraConfig` for more details."
-                ),
-            },
+        description=(
+            "Default LoRA settings for all trainer configs; applies to all models, and provides "
+            "a reasonable default for LoRA adaptation. See `peft.LoraConfig` for more details."
         ),
+        config={
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
     return [default_lora_config]
 
@@ -334,26 +348,24 @@ def _get_app_configs(
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns application configs for hydra zen storage."""
     assert isinstance(group, str) and group
-    app_main_config = pyine.configs.schemas.ConfigDescription(
+    app_main_config = pyine.configs.utils.make_config_description(
+        HFTrainerAppMainConfig,
         name="base",
         group=group,
-        config=hydra_zen.builds(
-            HFTrainerAppMainConfig,
-            base_model="Qwen/Qwen2.5-Coder-7B-Instruct",  # we propose this default for base experiments
+        description="Base settings for the HF trainer app.",
+        config={
+            "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",  # we propose this default for base experiments
             # -------------
-            populate_full_signature=True,
-            hydra_convert="object",
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
                 "_self_",
                 {"datamodule_config": "base"},
                 {"training_args_config": "base"},
                 # {"lora_config": "null"},  # left out here = deactivated (null)
                 {"evals_config": "base"},
             ],
-            zen_meta={
-                "__description__": "Base settings for the HF trainer app.",
-            },
-        ),
+        },
     )
     datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
         eval_type=eval_type,
@@ -401,29 +413,27 @@ def _get_experiment_configs(
     for dm_config, trainer_config in itertools.product(dm_configs, trainer_configs):
         exp_name = f"{dm_config.name}_{trainer_config.name}"
         outputs.append(
-            pyine.configs.schemas.ConfigDescription(
+            pyine.configs.utils.make_config_description(
                 name=exp_name,
                 group=group,
                 package=package,
-                config=hydra_zen.make_config(
-                    runtime={"exp_name": exp_name},
+                description=(
+                    f"Experiment config that combines the '{dm_config.name}' datamodule settings with "
+                    f"the '{trainer_config.name}' HF model trainer settings for the app's entrypoint.\n\n"
+                    f"Description for 'config={trainer_config.name}': {trainer_config.description}\n\n"
+                    f"Description for 'config/datamodule_config={dm_config.name}': {dm_config.description}\n\n"
+                ),
+                config={
+                    "runtime": {"exp_name": exp_name},
                     # -------------
-                    hydra_defaults=[
+                    "hydra_defaults": [
                         "_self_",
                         {"override /config": trainer_config.name},
                         {"override /config/training_args_config": "train_default"},
                         {"override /config/datamodule_config": dm_config.name},
                     ],
-                    bases=(entrypoint_config.config,),
-                    zen_meta={
-                        "__description__": (
-                            f"Experiment config that combines the '{dm_config.name}' datamodule settings with "
-                            f"the '{trainer_config.name}' HF model trainer settings for the app's entrypoint.\n\n"
-                            f"Description for 'config={trainer_config.name}': {trainer_config.description}\n\n"
-                            f"Description for 'config/datamodule_config={dm_config.name}': {dm_config.description}\n\n"
-                        ),
-                    },
-                ),
+                    "bases": (entrypoint_config.config,),
+                },
             )
         )
     return outputs
@@ -443,23 +453,21 @@ def register_hydra_configs(
     that these cannot be used for config setup.
     """
     pyine.utils.reprod.load_dotenv()
-    entrypoint_config = pyine.configs.schemas.ConfigDescription(
+    entrypoint_config = pyine.configs.utils.make_config_description(
+        _async_main_wrapper,
         name="entrypoint",
         group=None,
-        config=hydra_zen.builds(
-            _async_main_wrapper,
+        description="Entrypoint settings for the HuggingFace trainer app.",
+        config={
             # -------------
-            populate_full_signature=True,
-            hydra_defaults=[
+            "populate_full_signature": True,
+            "hydra_defaults": [
                 "_self_",
                 {"config": "base"},  # from this module (`_get_app_configs`)
                 {"runtime": "default"},  # from pyine.configs.base
                 *pyine.configs.base.get_base_hydra_default_overrides(),
             ],
-            zen_meta={
-                "__description__": "Entrypoint settings for the HuggingFace trainer app.",
-            },
-        ),
+        },
     )
     store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")  # runtime registers here
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
@@ -480,6 +488,7 @@ def register_hydra_configs(
     )
     configs_to_register.extend(external_configs)
     for config in configs_to_register:
+        assert config.name is not None, "config names should have been set and validated by now"
         store(config.config, name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
     return [*base_configs, *configs_to_register]
@@ -488,7 +497,7 @@ def register_hydra_configs(
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
     # TODO: if we ever have more than one eval type, add a selector based on launch args here
-    pyine.configs.base.print_experiment_configs(
+    pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
         app_name="hf_trainer",
     )
