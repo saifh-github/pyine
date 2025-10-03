@@ -164,7 +164,7 @@ class LMDBWriter:
         self.max_readers: int = max_readers
         self.path.mkdir(parents=True, exist_ok=True)
         self.serialization = serialization_config or SerializationConfig()
-        self.env: lmdb.Environment = lmdb.open(
+        self._env: lmdb.Environment | None = lmdb.open(  # type: ignore[reportUnknownMemberType]
             path=str(self.path),
             map_size=self.map_size,
             max_readers=self.max_readers,
@@ -211,14 +211,21 @@ class LMDBWriter:
             write_metadata: When True (default), write internal metadata before closing.
                 Set to False in contexts where writes are unsafe (e.g., __del__).
         """
-        if hasattr(self, "env") and self.env is not None:
+        if hasattr(self, "_env") and self._env is not None:
             try:
                 if write_metadata:
                     self._write_internal_metadata()
             finally:
                 # always attempt to close the environment even if metadata write fails
-                self.env.close()
-                self.env = None
+                self._env.close()
+                self._env = None
+
+    @property
+    def env(self) -> lmdb.Environment:
+        """Get the underlying LMDB environment."""
+        if self._env is None:
+            raise RuntimeError("LMDB environment not initialized or previously closed")
+        return self._env
 
     def _serialize(
         self,
@@ -231,19 +238,20 @@ class LMDBWriter:
         if self.serialization.method == SerializationMethod.PICKLE_LZ4:
             _ensure_insecure_serialization_allowed(self.serialization)
             pickled_data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-            return lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)
+            compressed_data = lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
+            return typing.cast("bytes", compressed_data)
         if self.serialization.method == SerializationMethod.MSGSPEC:
             return msgspec.msgpack.encode(obj)
         if self.serialization.method == SerializationMethod.JSON:
             return orjson.dumps(obj)
         if self.serialization.method == SerializationMethod.JSON_LZ4:
             json_data = orjson.dumps(obj)
-            return lz4.frame.compress(json_data, **self.serialization.compression_kwargs)
+            compressed_data = lz4.frame.compress(json_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
+            return typing.cast("bytes", compressed_data)
         if self.serialization.method == SerializationMethod.JSON_ZSTD:
             zstd_compressor = zstandard.ZstdCompressor(**self.serialization.compression_kwargs)
             json_data = orjson.dumps(obj)
             return zstd_compressor.compress(json_data)
-        # noinspection PyUnreachableCode
         raise NotImplementedError
 
     def write_metadata(self, metadata: dict[str, typing.Any], overwrite: bool = False) -> dict[str, bytes]:
@@ -257,10 +265,10 @@ class LMDBWriter:
             A dictionary mapping metadata fields to the internal keys used to store them.
         """
         output_keys: dict[str, bytes] = {}
-        with self.env.begin(write=True) as txn:
+        with self.env.begin(write=True) as txn:  # type: ignore[reportUnknownMemberType]
             for key, value in metadata.items():
                 key_bytes = _create_metadata_key(key)
-                if not overwrite and txn.get(key_bytes) is not None:
+                if not overwrite and txn.get(key_bytes) is not None:  # type: ignore[reportUnknownMemberType]
                     raise ValueError(f"Metadata key '{key}' already exists. Use overwrite=True to replace it.")
                 self._write_metadata_value(txn, key, value)
                 output_keys[key] = key_bytes
@@ -268,9 +276,9 @@ class LMDBWriter:
 
     def _write_internal_metadata(self) -> None:
         """Writes fixed metadata fields as well as reproducibility tags to the database."""
-        with self.env.begin(write=True) as txn:
+        with self.env.begin(write=True) as txn:  # type: ignore[reportUnknownMemberType]
             # store the next internal key for continuity (if needed)
-            txn.put(
+            txn.put(  # type: ignore[reportUnknownMemberType]
                 _NEXT_INTERNAL_KEY,
                 struct.pack(">Q", self._next_internal_key),
                 overwrite=True,
@@ -297,7 +305,7 @@ class LMDBWriter:
         encoded_value = msgspec.msgpack.encode(value)
         if not (0 < len(encoded_value) < self.max_allowed_value_length):
             raise ValueError("metadata value length error")
-        txn.put(key_bytes, encoded_value, overwrite=True)
+        txn.put(key_bytes, encoded_value, overwrite=True)  # type: ignore[reportUnknownMemberType]
 
     def get_size_on_disk(self) -> int:
         """Calculate the total size of the LMDB dataset stored on disk (in bytes)."""
@@ -324,22 +332,19 @@ class LMDBWriter:
         Returns:
             The internal key used to store the value in the database.
         """
-        # noinspection PyUnreachableCode
-        if not isinstance(key, str):
-            raise ValueError(f"key must be a string, but got: {type(key)}")
         if key in self.key_map:
             raise ValueError(f"key '{key}' already exists in the database")
         internal_key = _create_sample_key(self._next_internal_key)
         if not (0 < len(internal_key) < self.env.max_key_size()):
             raise RuntimeError("internal key length error")
-        with self.env.begin(write=True) as txn:
+        with self.env.begin(write=True) as txn:  # type: ignore[reportUnknownMemberType]
             try:
                 encoded_value = self._serialize(value)
             except Exception as e:
                 raise RuntimeError(f"failed to serialize value for key: {key}") from e
             if not (0 < len(encoded_value) < self.max_allowed_value_length):
                 raise ValueError("encoded value length error")
-            ret = txn.put(internal_key, encoded_value, overwrite=True)
+            ret = txn.put(internal_key, encoded_value, overwrite=True)  # type: ignore[reportUnknownMemberType]
             if not ret:
                 raise RuntimeError("internal key collision")
         self.max_encoded_value_length = max(self.max_encoded_value_length, len(encoded_value))
@@ -379,14 +384,9 @@ class LMDBWriter:
         generated_internal_keys: dict[str, bytes] = {}  # input key to internal key mapping
         encountered_errors: dict[str, Exception] = {}  # (failed) input key to exception mapping
         items_iterator = tqdm.tqdm(items.items(), desc="Writing to database") if show_progress else items.items()
-        with self.env.begin(write=True) as txn:
+        with self.env.begin(write=True) as txn:  # type: ignore[reportUnknownMemberType]
             for key, value in items_iterator:
-                # noinspection PyUnreachableCode
                 try:
-                    if not isinstance(key, str):
-                        raise ValueError(f"key must be a string, but got: {type(key)}")
-                    if key in self.key_map:
-                        raise ValueError(f"key '{key}' already exists in the database")
                     internal_key = _create_sample_key(self._next_internal_key)
                     if not (0 < len(internal_key) < self.env.max_key_size()):
                         raise RuntimeError("internal key length error")
@@ -396,7 +396,7 @@ class LMDBWriter:
                         raise RuntimeError(f"failed to serialize value for key: {key}") from e
                     if not (0 < len(encoded_value) < self.max_allowed_value_length):
                         raise ValueError("encoded value length error")
-                    ret = txn.put(internal_key, encoded_value, overwrite=True)
+                    ret = txn.put(internal_key, encoded_value, overwrite=True)  # type: ignore[reportUnknownMemberType]
                     if not ret:
                         raise RuntimeError("internal key collision")
                 except Exception as e:
@@ -464,7 +464,7 @@ class LMDBReader:
             path: Path to the LMDB database
         """
         self.path: pathlib.Path = pathlib.Path(path)
-        self.env = lmdb.open(
+        self._env: lmdb.Environment | None = lmdb.open(  # type: ignore[reportUnknownMemberType]
             str(self.path),
             readonly=True,  # open in read-only mode for better performance and safety
             readahead=True,  # always enable readahead for better sequential read performance
@@ -473,6 +473,19 @@ class LMDBReader:
         )
         self._load_metadata()
 
+    def close(self) -> None:
+        """Close the database."""
+        if hasattr(self, "_env") and self._env is not None:
+            self._env.close()
+            self._env = None
+
+    @property
+    def env(self) -> lmdb.Environment:
+        """Get the underlying LMDB environment."""
+        if self._env is None:
+            raise RuntimeError("LMDB environment not initialized or previously closed")
+        return self._env
+
     def _deserialize(self, data: bytes) -> typing.Any:
         """Deserialize bytes into an object."""
         if self.serialization.method == SerializationMethod.PICKLE:
@@ -480,39 +493,42 @@ class LMDBReader:
             return pickle.loads(data)  # noqa: S301 - gated by allow_insecure_serialization
         if self.serialization.method == SerializationMethod.PICKLE_LZ4:
             _ensure_insecure_serialization_allowed(self.serialization)
-            decompressed_data = lz4.frame.decompress(data)
+            decompressed_data = typing.cast("bytes", lz4.frame.decompress(data))  # type: ignore[reportUnknownMemberType]
             return pickle.loads(decompressed_data)  # noqa: S301 - gated by allow_insecure_serialization
         if self.serialization.method == SerializationMethod.MSGSPEC:
             return msgspec.msgpack.decode(data)
         if self.serialization.method == SerializationMethod.JSON:
             return orjson.loads(data)
         if self.serialization.method == SerializationMethod.JSON_LZ4:
-            decompressed_data = lz4.frame.decompress(data)
+            decompressed_data = typing.cast("bytes", lz4.frame.decompress(data))  # type: ignore[reportUnknownMemberType]
             return orjson.loads(decompressed_data)
         if self.serialization.method == SerializationMethod.JSON_ZSTD:
             zstd_decompressor = zstandard.ZstdDecompressor()
-            decompressed_data = zstd_decompressor.decompress(data)
+            decompressed_data: bytes = zstd_decompressor.decompress(data)
             return orjson.loads(decompressed_data)
-        # noinspection PyUnreachableCode
         raise NotImplementedError
 
     def _load_metadata(self) -> None:
         """Load metadata from the database."""
         # note: for metadata, we always store stuff with msgspec
-        with self.env.begin() as txn:
-            next_internal_key_bytes = txn.get(_NEXT_INTERNAL_KEY)
+        with self.env.begin() as txn:  # type: ignore[reportUnknownMemberType]
+
+            def _get_and_decode_metadata(key: str) -> typing.Any:
+                metadata_key_bytes: bytes = _create_metadata_key(key)
+                metadata_val_bytes: bytes | None = txn.get(metadata_key_bytes)  # type: ignore[reportUnknownMemberType]
+                assert metadata_val_bytes is not None
+                return msgspec.msgpack.decode(metadata_val_bytes)
+
+            next_internal_key_bytes: bytes | None = txn.get(_NEXT_INTERNAL_KEY)  # type: ignore[reportUnknownMemberType]
             if next_internal_key_bytes is None:
                 raise ValueError("database does not contain next_internal_key; did writing closure fail?")
-            self._next_internal_key: int = struct.unpack(">Q", next_internal_key_bytes)[0]
-            map_size_bytes = txn.get(_create_metadata_key("map_size"))
-            self.orig_map_size: int = msgspec.msgpack.decode(map_size_bytes)
-            sample_count_bytes = txn.get(_create_metadata_key("sample_count"))
-            self.sample_count: int = msgspec.msgpack.decode(sample_count_bytes)
-            serialization_bytes = txn.get(_create_metadata_key("serialization"))
-            self.serialization = SerializationConfig(**msgspec.msgpack.decode(serialization_bytes))
-            max_encoded_value_length_bytes = txn.get(_create_metadata_key("max_encoded_value_length"))
-            self.max_encoded_value_length: int = msgspec.msgpack.decode(max_encoded_value_length_bytes)
-            self.key_map: dict[str, bytes] = msgspec.msgpack.decode(txn.get(_create_metadata_key("key_map")))
+            self._next_internal_key: int = struct.unpack(">Q", next_internal_key_bytes)[0]  # type: ignore[reportUnknownArgumentType]
+            self.orig_map_size: int = _get_and_decode_metadata("map_size")
+            self.sample_count: int = _get_and_decode_metadata("sample_count")
+            serialization_raw: dict[str, typing.Any] = _get_and_decode_metadata("serialization")
+            self.serialization = SerializationConfig(**serialization_raw)
+            self.max_encoded_value_length: int = _get_and_decode_metadata("max_encoded_value_length")
+            self.key_map: dict[str, bytes] = _get_and_decode_metadata("key_map")
             if len(self.key_map) != self.sample_count:
                 raise RuntimeError("key_map length does not match sample_count")
 
@@ -536,27 +552,21 @@ class LMDBReader:
     def __iter__(self) -> typing.Iterator[typing.Any]:
         return self.iter_from()
 
-    def close(self) -> None:
-        """Close the database."""
-        if hasattr(self, "env") and self.env is not None:
-            self.env.close()
-            self.env = None
-
     def get_metadata(self) -> dict[str, typing.Any]:
         """Returns a dictionary of all metadata stored in the database."""
         # note: for metadata, we always store stuff with msgspec
-        results = {}
-        with self.env.begin(write=False) as txn:
-            cursor = txn.cursor()
-            found = cursor.set_range(METADATA_PREFIX)
+        results: dict[str, typing.Any] = {}
+        with self.env.begin(write=False) as txn:  # type: ignore[reportUnknownMemberType]
+            cursor = txn.cursor()  # type: ignore[reportUnknownMemberType]
+            found = cursor.set_range(METADATA_PREFIX)  # type: ignore[reportUnknownMemberType]
             while found:
-                key = cursor.key()
+                key = typing.cast("bytes | None", cursor.key())
                 if key is None or not key.startswith(METADATA_PREFIX):
                     break
                 metadata_field_name = _decode_metadata_key(key)
                 if metadata_field_name in results:
                     raise RuntimeError(f"duplicate metadata field: {metadata_field_name}")
-                metadata_value_encoded = cursor.value()
+                metadata_value_encoded = typing.cast("bytes", cursor.value())
                 results[metadata_field_name] = msgspec.msgpack.decode(metadata_value_encoded)
                 found = cursor.next()
         return results
@@ -567,19 +577,16 @@ class LMDBReader:
 
     def get(self, key_or_idx: int | str) -> typing.Any:
         """Get a value by its key or dataset index."""
-        # noinspection PyUnreachableCode
         if isinstance(key_or_idx, str):
             if key_or_idx not in self.key_map:
                 raise KeyError(f"key '{key_or_idx}' not found in the database")
             key = self.key_map[key_or_idx]
-        elif isinstance(key_or_idx, int):
+        else:
             if not (0 <= key_or_idx < len(self)):
                 raise IndexError(f"index {key_or_idx} out of range (0 <= index < {len(self)})")
             key = _create_sample_key(key_or_idx)
-        else:
-            raise TypeError(f"key_or_idx must be a string or integer, but got: {type(key_or_idx)}")
-        with self.env.begin() as txn:
-            output = txn.get(key)
+        with self.env.begin() as txn:  # type: ignore[reportUnknownMemberType]
+            output: bytes | None = txn.get(key)  # type: ignore[reportUnknownMemberType]
             if output is not None:
                 output = self._deserialize(output)
             return output
@@ -599,10 +606,8 @@ class LMDBReader:
             If `return_keys` is False: List of sample indices (integers) of matched keys, sorted in ascending order.
             If `return_keys` is True: Tuple of (indices, keys) where both lists are sorted by index order.
         """
-        if not isinstance(pattern, str):
-            raise TypeError("pattern must be a string")
         matched_keys = fnmatch.filter(self.key_map.keys(), pattern)
-        index_key_pairs = [((_decode_sample_key(self.key_map[key])), key) for key in matched_keys]
+        index_key_pairs: list[tuple[int, str]] = [(_decode_sample_key(self.key_map[key]), key) for key in matched_keys]
         index_key_pairs.sort()
         if return_keys:
             indices, keys = zip(*index_key_pairs, strict=False) if index_key_pairs else ([], [])
@@ -625,8 +630,8 @@ class LMDBReader:
             if end_idx < start_idx:
                 raise ValueError("end_idx must be greater than or equal to start_idx")
         start_key = _create_sample_key(start_idx)
-        with self.env.begin() as txn:
-            cursor = txn.cursor()
+        with self.env.begin() as txn:  # type: ignore[reportUnknownMemberType]
+            cursor = txn.cursor()  # type: ignore[reportUnknownMemberType]
             found = cursor.set_range(start_key)
             while found:
                 key, value = cursor.item()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 import datetime
 import functools
@@ -15,10 +17,10 @@ import orjson
 import pydantic
 
 import pyine.data.utils.filter_rules
+import pyine.prompts.types
 import pyine.utils.filesystem
 import pyine.utils.langchain
 import pyine.utils.reprod
-from pyine.prompts.types import PromptBuildConfig, PromptNameType, PromptVersionType
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
@@ -76,9 +78,9 @@ class PromptResultRecord(pydantic.BaseModel):
     """Freeze the model to prevent record modifications after creation."""
     identifier: str
     """Identifier for the record; unlikely unique, as we might have different versions/prompts with the same data."""
-    prompt_name: PromptNameType | None = None
+    prompt_name: pyine.prompts.types.PromptNameType | None = None
     """Name of the prompt that generated this record."""
-    prompt_version: PromptVersionType | None = None
+    prompt_version: pyine.prompts.types.PromptVersionType | None = None
     """Version of the prompt that generated this record."""
     group: str | None = None
     """Optional group name for grouping similar records together."""
@@ -122,8 +124,8 @@ class PromptResultDB:
         meta: dict[str, pydantic.JsonValue] | None = None,
         tags: list[str] | None = None,
         group: str | None = None,
-        prompt_name: PromptNameType | None = None,
-        prompt_version: PromptVersionType | None = None,
+        prompt_name: pyine.prompts.types.PromptNameType | None = None,
+        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
         creation_meta: CreationMeta | None = None,
     ) -> int:
         """Stores a new prompt/result record in the database.
@@ -191,8 +193,8 @@ class PromptResultDB:
         self,
         identifier: str,
         *,
-        prompt_name: "pyine.prompts.types.PromptNameType | None" = None,
-        prompt_version: "pyine.prompts.types.PromptVersionType | None" = None,
+        prompt_name: pyine.prompts.types.PromptNameType | None = None,
+        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -233,8 +235,8 @@ class PromptResultDB:
         self,
         group: str,
         *,
-        prompt_name: "pyine.prompts.types.PromptNameType | None" = None,
-        prompt_version: "pyine.prompts.types.PromptVersionType | None" = None,
+        prompt_name: pyine.prompts.types.PromptNameType | None = None,
+        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -273,7 +275,7 @@ class PromptResultDB:
         self,
         prompt_name: str,
         *,
-        prompt_version: "pyine.prompts.types.PromptVersionType | None" = None,
+        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -382,8 +384,8 @@ class PromptResultDB:
         *,
         identifier: str | None = None,
         group: str | None = None,
-        prompt_name: PromptNameType | None = None,
-        prompt_version: PromptVersionType | None = None,
+        prompt_name: pyine.prompts.types.PromptNameType | None = None,
+        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
         older_than: datetime.timedelta | None = None,
     ) -> int:
         """Delete records matching the provided filters.
@@ -595,7 +597,7 @@ def fetch_or_generate_prompt_results(
     model: langchain_core.language_models.BaseLanguageModel,
     identifier: str,
     input_variables: dict[str, typing.Any],
-    prompt_config: PromptBuildConfig,
+    prompt_config: pyine.prompts.types.PromptBuildConfig,
     *,
     db: PromptResultDB | None = None,
     runnable_name: str | None = None,

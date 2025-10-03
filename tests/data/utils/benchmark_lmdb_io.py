@@ -132,7 +132,6 @@ def benchmark_serialization_methods(
             shutil.rmtree(database_path)
     finally:
         shutil.rmtree(tmp_path)
-    # noinspection PyUnreachableCode
     for method, (database_size, write_time, read_time) in results.items():
         write_speed_mbps = (database_size / (1024 * 1024)) / write_time
         read_speed_mbps = (database_size / (1024 * 1024)) / read_time

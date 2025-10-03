@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import dataclasses
 import datetime
@@ -103,7 +105,7 @@ class CodingProblemIdentifier:
         return f"{self.dataset}/{self.subset}"
 
     @staticmethod
-    def from_string(identifier_str: str) -> "CodingProblemIdentifier":
+    def from_string(identifier_str: str) -> CodingProblemIdentifier:
         """Creates an identifier object from a string representation."""
         assert isinstance(identifier_str, str), "identifier must be a string"
         dataset, subset, problem_idx_str = identifier_str.split("/")
@@ -129,7 +131,7 @@ class SolutionIdentifier(CodingProblemIdentifier):
 
     @typing.override
     @staticmethod
-    def from_string(identifier_str: str) -> "SolutionIdentifier":  # type: ignore[reportIncompatibleMethodOverride]
+    def from_string(identifier_str: str) -> SolutionIdentifier:  # type: ignore[reportIncompatibleMethodOverride]
         """Creates an identifier object from a string representation."""
         assert isinstance(identifier_str, str), "identifier must be a string"
         parent_str, solution_idx_str = identifier_str.rsplit("/s", maxsplit=1)
@@ -157,7 +159,7 @@ class TraceIdentifier(SolutionIdentifier):
         """Returns a string representation of this identifier without the augmentation information."""
         return f"{SolutionIdentifier.__repr__(self)}/t{self.test_idx:04d}"
 
-    def get_augmentless_identifier(self) -> "TraceIdentifier":
+    def get_augmentless_identifier(self) -> TraceIdentifier:
         """Returns a copy of this object without the augmentation information."""
         augmentless_repr = self._get_augmentless_repr()
         return self.from_string(augmentless_repr)
@@ -182,10 +184,12 @@ class TraceIdentifier(SolutionIdentifier):
         The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
         definitions (see `pyine.organisms.datamodules.utils.samples`).
         """
-        return self.is_augmented and (
-            # bugged traces are those generated with issues (except misleading docs)
-            (self.augment_category.startswith("issues_") and self.augment_category != "issues_docs")
-            or "bugged" in self.augment_category
+        if not self.is_augmented:
+            return False
+        augment_category = self.augment_category
+        assert augment_category is not None
+        return (augment_category.startswith("issues_") and augment_category != "issues_docs") or (
+            "bugged" in augment_category
         )
 
     @functools.cached_property
@@ -197,8 +201,10 @@ class TraceIdentifier(SolutionIdentifier):
         """
         if not self.is_augmented:
             return False
-        assert self.augment_category != "hints_stubs", "how can we have a stubbed trace? (those can't be executed)"
-        return self.augment_category.startswith("hints_") or "hinted" in self.augment_category
+        augment_category = self.augment_category
+        assert augment_category is not None
+        assert augment_category != "hints_stubs", "how can we have a stubbed trace? (those can't be executed)"
+        return augment_category.startswith("hints_") or "hinted" in augment_category
 
     @functools.cached_property
     def is_misleading(self) -> bool:
@@ -207,12 +213,20 @@ class TraceIdentifier(SolutionIdentifier):
         The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
         definitions (see `pyine.organisms.datamodules.utils.samples`).
         """
-        return self.is_augmented and (self.augment_category == "issues_docs" or "misleading" in self.augment_category)
+        if not self.is_augmented:
+            return False
+        augment_category = self.augment_category
+        assert augment_category is not None
+        return augment_category == "issues_docs" or "misleading" in augment_category
 
     @functools.cached_property
     def is_obfuscated(self) -> bool:
         """Returns whether this trace is based on obfuscated code."""
-        return self.is_augmented and "obfuscated" in self.augment_category
+        if not self.is_augmented:
+            return False
+        augment_category = self.augment_category
+        assert augment_category is not None
+        return "obfuscated" in augment_category
 
     @staticmethod
     def get_clean_augment_category(proposed: str) -> str:
@@ -242,7 +256,7 @@ class TraceIdentifier(SolutionIdentifier):
 
     @typing.override
     @staticmethod
-    def from_string(identifier_str: str) -> "TraceIdentifier":  # type: ignore[reportIncompatibleMethodOverride]
+    def from_string(identifier_str: str) -> TraceIdentifier:  # type: ignore[reportIncompatibleMethodOverride]
         """Creates an identifier object from a string representation."""
         assert isinstance(identifier_str, str), "identifier must be a string"
         parent_str, trace_id_str = identifier_str.rsplit("/t", maxsplit=1)
@@ -391,14 +405,20 @@ class Solution(pydantic.BaseModel):
 class _BannedData:
     """Data class containing banned data information."""
 
-    metadata: dict = dataclasses.field(default_factory=dict)
+    metadata: dict[int, typing.Any] = dataclasses.field(
+        default_factory=(lambda: typing.cast("dict[int, typing.Any]", {}))
+    )
     """Dataset-dependent map of banned metadata; allows some stuff to be entirely avoided."""
-    problems: dict[str, list[int]] = dataclasses.field(default_factory=dict)
+    problems: dict[str, list[int]] = dataclasses.field(
+        default_factory=(lambda: typing.cast("dict[str, list[int]]", {}))
+    )
     """Generic banned problems indices map.
 
     For each data subset (e.g. 'train', 'valid', ...), provides a list of banned problem indices.
     """
-    solutions: dict[str, dict[int, list[int]]] = dataclasses.field(default_factory=dict)
+    solutions: dict[str, dict[int, list[int]]] = dataclasses.field(
+        default_factory=(lambda: typing.cast("dict[str, dict[int, list[int]]]", {}))
+    )
     """Generic banned solutions indices map.
 
     For each data subset (e.g. 'train', 'valid', ...), provides a dictionary pairing problem
@@ -517,7 +537,7 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     """Hash of the split file where the assignments were parsed from."""
 
     @pydantic.model_validator(mode="after")
-    def _post_validator(self) -> "TraceDatasetMetadata":
+    def _post_validator(self) -> TraceDatasetMetadata:
         """Confirms that all dataset traces contain reasonable types and the subsets do not overlap."""
         if not self.base_traces:
             raise ValueError("base traces must not be empty")
@@ -644,7 +664,7 @@ class CodingProblemIterator:
         else:
             self.banned = self._load_banned_data()
         self.add_orig_subset_as_tag = add_orig_subset_as_tag
-        self.problems_metadata: list[typing.Any] = self._prepare_problem_metadata()
+        self.problems_metadata: list[pathlib.Path] = self._prepare_problem_metadata()
         self._current_idx = 0
         self._show_progress = show_progress
         self._progress_bar = None
@@ -653,7 +673,7 @@ class CodingProblemIterator:
         self._prefetch_cache_size: int = int(prefetch_cache_size)
         if self._use_prefetch and self._prefetch_cache_size <= 0:
             raise ValueError("prefetch_cache_size must be >= 1 when async prefetch is enabled")
-        self._prefetch_queue: queue.Queue | None = None
+        self._prefetch_queue: queue.Queue[typing.Any] | None = None
         self._prefetch_thread: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
         self._prefetch_sentinel: object = object()
@@ -661,7 +681,7 @@ class CodingProblemIterator:
     def _validate_target_problem_ids(
         self,
         target_problem_ids: str | pathlib.Path | list[str] | list[int] | None,
-    ) -> set["CodingProblemIterator._TargetProblemSpec"]:
+    ) -> set[CodingProblemIterator._TargetProblemSpec]:
         """Validates and resolves the target problem IDs, if needed."""
         if isinstance(target_problem_ids, (str, pathlib.Path)):
             target_problem_ids_path = pathlib.Path(target_problem_ids)
@@ -680,8 +700,9 @@ class CodingProblemIterator:
             target_problem_ids = []
         if not isinstance(target_problem_ids, list):
             raise ValueError(f"target problem IDs must be list, str, or path; got {type(target_problem_ids)}")
+        normalized_problem_ids = typing.cast("list[typing.Any]", target_problem_ids)
         specs: set[CodingProblemIterator._TargetProblemSpec] = set()
-        for raw_idx, raw_identifier in enumerate(target_problem_ids):
+        for raw_idx, raw_identifier in enumerate(normalized_problem_ids):
             if isinstance(raw_identifier, str):
                 identifier_str = raw_identifier.strip()
                 if not identifier_str:
@@ -710,7 +731,7 @@ class CodingProblemIterator:
                     ) from exc
                 specs.add(CodingProblemIterator._TargetProblemSpec(problem_idx=problem_idx, subset=None))
             elif isinstance(raw_identifier, int):
-                specs.add(CodingProblemIterator._TargetProblemSpec(problem_idx=int(raw_identifier), subset=None))
+                specs.add(CodingProblemIterator._TargetProblemSpec(problem_idx=raw_identifier, subset=None))
             else:
                 raise ValueError(f"target problem IDs must be string or int; got {type(raw_identifier)}")
         return specs
@@ -753,7 +774,7 @@ class CodingProblemIterator:
         if self._prefetch_thread is not None and self._prefetch_thread.is_alive():
             return
         logger.info("starting coding problem iterator async prefetch worker")
-        self._prefetch_queue = queue.Queue(maxsize=self._prefetch_cache_size)
+        self._prefetch_queue = queue.Queue[typing.Any](maxsize=self._prefetch_cache_size)
         self._stop_event = threading.Event()
         self._prefetch_thread = threading.Thread(
             target=self._prefetch_worker,
@@ -797,7 +818,9 @@ class CodingProblemIterator:
         with contextlib.suppress(Exception):
             self._stop_prefetching()
 
-    def _prepare_problem_metadata(self) -> list:
+    def _prepare_problem_metadata(
+        self,
+    ) -> list[pathlib.Path]:
         """Prepares problem metadata for the iterator, loading high-level source data."""
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
@@ -805,7 +828,7 @@ class CodingProblemIterator:
             json_file_paths = sorted(self.root_data_path.glob("*.json"))
             if not json_file_paths:
                 raise FileNotFoundError(f"no JSON files found in the dataset root directory: {self.root_data_path}")
-            output_paths = []
+            output_paths: list[pathlib.Path] = []
             # we actually need to pop the files open and check which ones contain any data
             # (repackaging might have resulted in empty JSONs with only an error code)
             for json_file_path in json_file_paths:
@@ -828,17 +851,19 @@ class CodingProblemIterator:
                     continue
                 with json_file_path.open("r", encoding="utf-8") as fd:
                     try:
-                        json_data = orjson.loads(fd.read())
+                        json_payload = orjson.loads(fd.read())
                     except orjson.JSONDecodeError as e:
                         logger.warning(f"skipping invalid JSON file: {json_file_path} ({e})")
                         continue  # there's likely something not escaped probably in the file
-                assert isinstance(json_data, dict)
+                assert isinstance(json_payload, dict)
+                json_data = typing.cast("dict[str, typing.Any]", json_payload)
                 if len(json_data) == 1 and "error" in json_data:
                     logger.debug(f"skipping empty JSON file: {json_file_path}")
                     continue  # skip this file (useless; prior repackaging failed)
+                subset_value = typing.cast("str | None", json_data.get("subset"))
                 if self._target_problem_specs and not self._matches_target_problem(
                     problem_idx=problem_idx,
-                    subset=json_data.get("subset"),
+                    subset=subset_value,
                 ):
                     continue
                 output_paths.append(json_file_path)
@@ -852,10 +877,14 @@ class CodingProblemIterator:
     ) -> _BannedData:
         """Load banned data info for a target dataset."""
         with open(str(BANNED_DATA_YAML_PATH)) as f:
-            banned_data = yaml.safe_load(f) or {}
-        banned_metadata_all = banned_data.get("banned_metadata", {})
-        banned_problems_all = banned_data.get("banned_problems", {})
-        banned_solutions_all = banned_data.get("banned_solutions", {})
+            raw_banned_data: typing.Any = yaml.safe_load(f) or {}
+        banned_data = typing.cast("dict[str, typing.Any]", raw_banned_data)
+        banned_metadata_all = typing.cast("dict[str, dict[int, typing.Any]]", banned_data.get("banned_metadata", {}))
+        banned_problems_all = typing.cast("dict[str, dict[str, list[int]]]", banned_data.get("banned_problems", {}))
+        banned_solutions_all = typing.cast(
+            "dict[str, dict[str, dict[int, list[int]]]]",
+            banned_data.get("banned_solutions", {}),
+        )
         target_banned_metadata = banned_metadata_all.get(self.dataset_name, {})
         target_banned_problems = banned_problems_all.get(self.dataset_name, {})
         target_banned_solutions = banned_solutions_all.get(self.dataset_name, {})
@@ -887,23 +916,29 @@ class CodingProblemIterator:
         assert isinstance(problem_data, dict)
         assert self.dataset_name in SUPPORTED_SOURCE_DATASETS
         if self.dataset_name == "TACO":
-            parsing_errors = []
+            parsing_errors: list[str] = []
             if not problem_data or problem_data.get("error"):
-                parsing_errors.append(problem_data.get("error"))
+                error_value = problem_data.get("error")
+                if error_value is not None:
+                    parsing_errors.append(str(error_value))
             problem_idx = problem_data["__problem_idx__"]  # for TACO, this is a unique id across subsets
             problem_id = CodingProblemIdentifier(
                 dataset=self.dataset_name,
                 subset=problem_data["subset"],
                 problem_idx=problem_idx,
             )
-            problem_statement = problem_data["question"]
+            problem_statement = typing.cast("str", problem_data["question"])
             is_banned = problem_id.problem_idx in self.banned.problems.get(problem_id.subset, [])
             inputs_array = problem_data["input_output"]["inputs"]
             outputs_array = problem_data["input_output"]["outputs"]
             assert isinstance(inputs_array, list) and isinstance(outputs_array, list)
-            assert len(inputs_array) == len(outputs_array)
-            test_inout_pairs = [(inputs, outputs) for inputs, outputs in zip(inputs_array, outputs_array, strict=False)]
-            entrypoint_name = problem_data["input_output"].get("fn_name", None)
+            inputs_list = typing.cast("list[typing.Any]", inputs_array)
+            outputs_list = typing.cast("list[typing.Any]", outputs_array)
+            assert len(inputs_list) == len(outputs_list)
+            test_inout_pairs: list[tuple[typing.Any, typing.Any]] = [
+                (inputs, outputs) for inputs, outputs in zip(inputs_list, outputs_list, strict=False)
+            ]
+            entrypoint_name = typing.cast("str | None", problem_data["input_output"].get("fn_name", None))
 
             def _tag_cleaner(x: str | None) -> str:
                 if x is None:
@@ -918,17 +953,18 @@ class CodingProblemIterator:
                 tags.append(f"subset:{_tag_cleaner(problem_data['subset'])}")
             for tag_group in ["raw_tags", "tags", "skill_types"]:
                 tags.extend(f"{tag_group}:{_tag_cleaner(tag)}" for tag in problem_data.get(tag_group, []))
-            solutions, solution_ids = [], []
+            solutions: list[Solution] = []
+            solution_ids: list[SolutionIdentifier] = []
             if "solutions" not in problem_data or not problem_data["solutions"]:
                 parsing_errors.append("no solutions found")
             else:
-                rpkgd_solutions = problem_data["solutions"]
+                rpkgd_solutions = typing.cast("list[dict[str, typing.Any]]", problem_data["solutions"])
                 banned_solution_idxs = self.banned.solutions.get(problem_id.subset, {}).get(
                     problem_id.problem_idx,
                     [],
                 )
                 assert all(isinstance(s, dict) and "code" in s for s in rpkgd_solutions), "missing repackaged code?"
-                for solution_idx, solution in enumerate(rpkgd_solutions):
+                for solution_idx, solution_dict in enumerate(rpkgd_solutions):
                     solution_id = SolutionIdentifier(
                         dataset=self.dataset_name,
                         subset=problem_data["subset"],
@@ -936,30 +972,38 @@ class CodingProblemIterator:
                         solution_idx=solution_idx,
                     )
                     solution_ids.append(solution_id)
-                    analysis_errors = solution.get("validation_errors", [])
+                    validation_errors_value = solution_dict.get("validation_errors", [])
+                    analysis_errors_list: list[str] = []
+                    if isinstance(validation_errors_value, list):
+                        for err in typing.cast("list[typing.Any]", validation_errors_value):
+                            analysis_errors_list.append(str(err))
+                    analysis_outputs_value = solution_dict.get("analysis_outputs", [])
+                    if not isinstance(analysis_outputs_value, list) or not analysis_outputs_value:
+                        raise ValueError(f"invalid analysis outputs for: {solution_id}")
+                    analysis_outputs_list = list(typing.cast("list[typing.Any]", analysis_outputs_value))
                     try:
                         analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
-                            solution["analysis_outputs"][-1],  # take the latest analysis result
+                            analysis_outputs_list[-1],
                         )
                     except Exception as e:
                         raise ValueError(f"invalid analysis results for: {solution_id}") from e
-                    solution_code = solution["code"]
+                    solution_code = typing.cast("str", solution_dict["code"])
                     if self.reformat_code_strings:
                         try:
                             solution_code = pyine.utils.code.formatting.format_code(solution_code)
                         except Exception as e:
-                            analysis_errors.append(str(e))
+                            analysis_errors_list.append(str(e))
                     if self.validate_code_strings:
                         try:
                             pyine.utils.code.validation.validate_code(solution_code)
                         except Exception as e:
-                            analysis_errors.append(str(e))
+                            analysis_errors_list.append(str(e))
                     solutions.append(
                         Solution(
                             parent_id=problem_id,
                             solution_id=solution_id,
                             code=solution_code,
-                            analysis_errors=(analysis_errors if analysis_errors else None),
+                            analysis_errors=(analysis_errors_list if analysis_errors_list else None),
                             analysis_results=analysis_results,
                             is_banned=solution_id.solution_idx in banned_solution_idxs,
                         )
@@ -1000,17 +1044,18 @@ class CodingProblemIterator:
         """Returns the next coding problem and solutions object tuple."""
         if self._use_prefetch and self._prefetch_queue is not None:
             item = self._prefetch_queue.get()
-            # check for sentinel indicating completion or error
-            if isinstance(item, tuple) and len(item) == 2 and item[0] is self._prefetch_sentinel:
-                _, exc = item
-                if self._progress_bar is not None:
-                    self._progress_bar.close()
-                    self._progress_bar = None
-                self._stop_prefetching()
-                if exc is not None:
-                    raise exc
-                raise StopIteration
-            problem, solutions = item
+            if isinstance(item, tuple):
+                tuple_item = typing.cast("tuple[typing.Any, ...]", item)
+                if len(tuple_item) == 2 and tuple_item[0] is self._prefetch_sentinel:
+                    _, exc = typing.cast("tuple[object, Exception | None]", tuple_item)
+                    if self._progress_bar is not None:
+                        self._progress_bar.close()
+                        self._progress_bar = None
+                    self._stop_prefetching()
+                    if exc is not None:
+                        raise exc
+                    raise StopIteration
+            problem, solutions = typing.cast("tuple[CodingProblem, list[Solution]]", item)
             if self._progress_bar is not None:
                 self._progress_bar.update(1)
             return problem, solutions

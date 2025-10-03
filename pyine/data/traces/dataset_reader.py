@@ -6,6 +6,8 @@ dataset format. See also the demo notebook (in the project's root `notebooks` di
 for an example of how to use this dataset reader.
 """
 
+from __future__ import annotations
+
 import collections
 import fnmatch
 import functools
@@ -50,7 +52,16 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
     ) -> None:
         super().__init__()
         self.path = pathlib.Path(lmdb_path)
-        self.reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        self.reader = pyine.data.utils.lmdb_io.LMDBReader(self.path)
+        self._problem_indices: list[int] = []
+        self.problem_keys: list[str] = []
+        self._trace_indices: list[int] = []
+        self.trace_keys: list[str] = []
+        self._trace_idx_to_problem_idx: dict[int, int] = {}
+        self.trace_key_to_problem_key: dict[str, str] = {}
+        self._augment_idx_to_parent_trace_idx: dict[int, int] = {}
+        self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         self._problem_data_cache: collections.OrderedDict[
             int,
             pyine.data.traces.dataset_utils.CodingProblem,
@@ -82,19 +93,24 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
     def _load_prepared_metadata(self) -> None:
         """Loads the prepared trace maps and metadata from the lmdb directory."""
         with open(self._get_prepared_metadata_path(), "rb") as fd:
-            encoded_data = msgspec.msgpack.decode(fd.read())
-        # key lists are public attributes, as there is little chance of confusion about their contents
-        self.problem_keys: list[str] = encoded_data["problem_keys"]
-        self.trace_keys: list[str] = encoded_data["trace_keys"]
-        self.trace_key_to_problem_key: dict[str, str] = encoded_data["trace_key_to_problem_key"]
-        self.augment_key_to_parent_trace_key: dict[str, str] = encoded_data["augment_key_to_parent_trace_key"]
-        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = [
-            pyine.data.traces.dataset_utils.TraceMetadata(**trace_meta) for trace_meta in encoded_data["trace_metadata"]
+            decoded_obj = msgspec.msgpack.decode(fd.read())
+        decoded_data = typing.cast("dict[str, typing.Any]", decoded_obj)
+        self._problem_indices = list(typing.cast("list[int]", decoded_data["problem_indices"]))
+        self.problem_keys = list(typing.cast("list[str]", decoded_data["problem_keys"]))
+        self._trace_indices = list(typing.cast("list[int]", decoded_data["trace_indices"]))
+        self.trace_keys = list(typing.cast("list[str]", decoded_data["trace_keys"]))
+        self._trace_idx_to_problem_idx = dict(typing.cast("dict[int, int]", decoded_data["trace_idx_to_problem_idx"]))
+        self.trace_key_to_problem_key = dict(typing.cast("dict[str, str]", decoded_data["trace_key_to_problem_key"]))
+        self._augment_idx_to_parent_trace_idx = dict(
+            typing.cast("dict[int, int]", decoded_data["augment_idx_to_parent_trace_idx"])
+        )
+        self.augment_key_to_parent_trace_key = dict(
+            typing.cast("dict[str, str]", decoded_data["augment_key_to_parent_trace_key"])
+        )
+        metadata_payload = typing.cast("list[dict[str, typing.Any]]", decoded_data["trace_metadata"])
+        self.trace_metadata = [
+            pyine.data.traces.dataset_utils.TraceMetadata(**trace_meta) for trace_meta in metadata_payload
         ]
-        # indices lists are private attributes, as they correspond to indices from the internal database
-        self._trace_indices: list[int] = encoded_data["trace_indices"]
-        self._trace_idx_to_problem_idx: dict[int, int] = encoded_data["trace_idx_to_problem_idx"]
-        self._augment_idx_to_parent_trace_idx: dict[int, int] = encoded_data["augment_idx_to_parent_trace_idx"]
 
     def _clear_prepared_metadata(self) -> None:
         """Clears the prepared trace metadata from the lmdb directory."""
@@ -113,24 +129,25 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
             self._load_prepared_metadata()
             return
         self._clear_prepared_metadata()
+        problem_indices_result = self.reader.get_indices(
+            pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
+            return_keys=True,
+        )
         self._problem_indices, self.problem_keys = typing.cast(
             "tuple[list[int], list[str]]",
-            self.reader.get_indices(
-                pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
-                return_keys=True,
-            ),
+            problem_indices_result,
         )
         if len(self._problem_indices) == 0:
             raise ValueError("no problem data found in the dataset")
         if len(self._problem_indices) != len(self.problem_keys):
             raise RuntimeError("problem indices/keys length mismatch")
-        self._trace_indices: list[int] = []
-        self.trace_keys: list[str] = []
-        self._trace_idx_to_problem_idx: dict[int, int] = {}
-        self.trace_key_to_problem_key: dict[str, str] = {}
-        self._augment_idx_to_parent_trace_idx: dict[int, int] = {}
-        self.augment_key_to_parent_trace_key: dict[str, str] = {}
-        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        self._trace_indices = []
+        self.trace_keys = []
+        self._trace_idx_to_problem_idx = {}
+        self.trace_key_to_problem_key = {}
+        self._augment_idx_to_parent_trace_idx = {}
+        self.augment_key_to_parent_trace_key = {}
+        self.trace_metadata = []
         for prob_iter_idx, (problem_idx, problem_key) in enumerate(
             zip(self._problem_indices, self.problem_keys, strict=False)
         ):
@@ -143,27 +160,25 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
             problem_data = pyine.data.traces.dataset_utils.CodingProblem.model_validate(problem_data)
             curr_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.TRACE_DATA_SUFFIX
             curr_augm_trace_data_pattern = problem_key + pyine.data.traces.dataset_utils.AUGM_TRACE_DATA_SUFFIX
+            trace_indices_result = self.reader.get_indices(
+                pattern=curr_trace_data_pattern,
+                return_keys=True,
+            )
             curr_trace_indices, curr_trace_keys = typing.cast(
                 "tuple[list[int], list[str]]",
-                self.reader.get_indices(
-                    pattern=curr_trace_data_pattern,
-                    return_keys=True,
-                ),
+                trace_indices_result,
             )
             assert len(curr_trace_indices) == len(curr_trace_keys)
             # for 'forward-compatibility' with deltas datasets, remove any elements with the deltas suffix
-            curr_trace_indices, curr_trace_keys = zip(
-                *[
-                    (idx, key)
-                    for idx, key in zip(curr_trace_indices, curr_trace_keys, strict=False)
-                    if not key.endswith(pyine.data.traces.dataset_utils.DELTAS_SUFFIX)
-                ],
-                strict=False,
-            )
-            if len(curr_trace_indices) == 0:
+            filtered_pairs = [
+                (idx, key)
+                for idx, key in zip(curr_trace_indices, curr_trace_keys, strict=False)
+                if not key.endswith(pyine.data.traces.dataset_utils.DELTAS_SUFFIX)
+            ]
+            if not filtered_pairs:
                 raise ValueError(f"no trace data found for problem: {problem_key}")
-            if len(curr_trace_indices) != len(curr_trace_keys):
-                raise RuntimeError("trace indices/keys length mismatch")
+            curr_trace_indices = [idx for idx, _ in filtered_pairs]
+            curr_trace_keys = [key for _, key in filtered_pairs]
             self._trace_indices.extend(curr_trace_indices)
             self.trace_keys.extend(curr_trace_keys)
             curr_augm_key_to_parent_key: dict[str, str] = {}

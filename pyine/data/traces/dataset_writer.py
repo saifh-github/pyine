@@ -4,6 +4,8 @@ This module contains a writer for a dataset of code execution traces.
 See the `write_dataset` function for more information.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import datetime
 import functools
@@ -18,19 +20,18 @@ import warnings
 import numpy as np
 import pydantic
 
+import pyine.data.taco.dataset_utils
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
 import pyine.data.utils.lmdb_io
+import pyine.prompts
 import pyine.prompts.manager
 import pyine.utils.code.execution
-import pyine.utils.code.formatting
 import pyine.utils.code.obfuscation
 import pyine.utils.code.output_compare
 import pyine.utils.code.validation
 import pyine.utils.concurrency
 import pyine.utils.filesystem
-import pyine.utils.logging
-import pyine.utils.portability
 import pyine.utils.reprod
 
 __all__ = [
@@ -270,7 +271,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     _rng: np.random.RandomState | None = pydantic.PrivateAttr(default=None)
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "TraceDatasetWriterConfig":
+    def _validate_and_resolve(self) -> TraceDatasetWriterConfig:
         """Validates and resolves config settings."""
         supported_solution_augm_prompts = [
             # we only support prompts related to modified (buggy) code that is not test-specific
@@ -279,20 +280,30 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             if prompt_name.startswith("issues/") and prompt_name != "issues/docs"
         ]
         for prompt_name, fetch_count in self.fetch_augmented_solutions.items():
-            if not isinstance(prompt_name, pyine.prompts.PromptNameType):
-                raise ValueError(f"invalid prompt name: {prompt_name}")
             if prompt_name not in supported_solution_augm_prompts:
                 raise ValueError(f"unsupported prompt for trace writer: {prompt_name}")
-            if not isinstance(fetch_count, int) or fetch_count < 0:
+            if fetch_count < 0:
                 raise ValueError(f"invalid fetch count for prompt '{prompt_name}': {fetch_count}")
         if self.prompt_result_db_path is not None:
-            if not isinstance(self.prompt_result_db_path, str):
-                raise ValueError(f"invalid prompt result db path: {self.prompt_result_db_path}")
             self._prompt_result_db = pyine.prompts.PromptResultDB(self.prompt_result_db_path)
         else:
             self._prompt_result_db = pyine.prompts.get_framework_db()
         self._rng = np.random.RandomState(seed=self.seed)
         return self
+
+    @property
+    def prompt_result_db(self) -> pyine.prompts.PromptResultDB:
+        """Returns the prompt result db; raises if not initialized."""
+        if self._prompt_result_db is None:
+            raise RuntimeError("prompt result db not initialized")
+        return self._prompt_result_db
+
+    @property
+    def rng(self) -> np.random.RandomState:
+        """Returns the RNG associated with this config; raises if not initialized."""
+        if self._rng is None:
+            raise RuntimeError("config RNG not initialized")
+        return self._rng
 
 
 @dataclasses.dataclass(frozen=True)
@@ -323,21 +334,47 @@ class TraceRequest:
     """Expected (resulting) outputs to check after tracing this code string."""
 
 
+class TraceResultDump(typing.TypedDict):
+    """Partial structure stored in LMDB for each trace result."""
+
+    identifier: str | None
+    """Identifier for the trace which also corresponds to the LMDB database key for the record."""
+    traced_steps: list[typing.Any]
+    """Tracing results, i.e. execution steps recorded during tracing."""
+
+
+TraceExecutionOutcome = tuple[
+    pyine.utils.code.execution.TraceResult,
+    pyine.utils.code.output_compare.CompareResult,
+]
+TraceResultBatch = dict[str, TraceResultDump]
+
+
+def _make_trace_identifier(
+    solution_id: pyine.data.traces.dataset_utils.SolutionIdentifier,
+    test_idx: int,
+    augment_category: str | None,
+    augment_idx: int | None,
+) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+    """Builds a trace identifier from a solution identifier and augmentation metadata."""
+    return pyine.data.traces.dataset_utils.TraceIdentifier(
+        dataset=solution_id.dataset,
+        subset=solution_id.subset,
+        problem_idx=solution_id.problem_idx,
+        solution_idx=solution_id.solution_idx,
+        test_idx=test_idx,
+        augment_category=augment_category,
+        augment_idx=augment_idx,
+    )
+
+
 def _check_must_skip_problem(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solutions: list[pyine.data.traces.dataset_utils.Solution],
     config: TraceDatasetWriterConfig,
-    contains_banned_tags: typing.Callable,
+    contains_banned_tags: typing.Callable[[list[str]], bool],
 ) -> str | None:
     """Checks if a problem should be skipped due to banned tags or other conditions."""
-    # noinspection PyUnreachableCode
-    if not isinstance(problem, pyine.data.traces.dataset_utils.CodingProblem):
-        raise TypeError("problem must be a CodingProblem instance")
-    # noinspection PyUnreachableCode
-    if not isinstance(solutions, list):
-        raise TypeError("solutions must be a list")
-    if not all(isinstance(s, pyine.data.traces.dataset_utils.Solution) for s in solutions):
-        raise TypeError("solutions must contain only Solution instances")
     if problem.potential_solution_ids != [s.solution_id for s in solutions]:
         raise ValueError("mismatch between problem.potential_solution_ids and provided solutions")
     if problem.parsing_errors:
@@ -478,12 +515,12 @@ def _get_traces_to_write(
     to_trace: list[TraceRequest],
     all_must_succeed: bool,  # useful when tracing the original code, i.e. we want all tests to succeed
     config: TraceDatasetWriterConfig,
-    log_fn: typing.Callable,
+    log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
-) -> dict[str, dict]:  # str(TraceId) -> trace results dump, for writing to disk
+) -> TraceResultBatch:  # str(TraceId) -> trace results dump, for writing to disk
     """Traces an array of code snippets with a specific test tuple and returns the results."""
     # we actually run all traces in parallel (using a shared pool not to over-burden the system)
-    results, errors = pyine.utils.concurrency.run_in_parallel(
+    raw_results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
             functools.partial(
                 trace_code_snippet,
@@ -495,12 +532,14 @@ def _get_traces_to_write(
         use_processes=False,
         use_shared_pool=True,  # by default, shared pool has machine-specific worker count
     )
+    results = typing.cast("list[TraceExecutionOutcome | None]", raw_results)
     if not (len(results) == len(errors) == len(to_trace)):
         raise RuntimeError("unexpected number of results/errors")
-    successful_traces = {}
-    for trace_idx, (run_result, run_error) in enumerate(zip(results, errors, strict=False)):
+    successful_traces: TraceResultBatch = {}
+    for trace_idx, run_error in enumerate(errors):
         code_to_trace = to_trace[trace_idx]
-        if run_error:
+        run_result = results[trace_idx]
+        if run_error is not None:
             if isinstance(run_error, pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS):
                 raise run_error  # main process likely needs to stop, so raise again
             exception_origin = traceback.extract_tb(run_error.__traceback__)[-1]
@@ -525,6 +564,8 @@ def _get_traces_to_write(
                     log_path=fail_log_path,
                 )
         else:
+            if run_result is None:
+                raise RuntimeError("missing trace result despite no error")
             trace_result, test_result = run_result
             if not test_result:
                 log_fn(f"{code_to_trace.trace_id}: failed output check: {test_result.reason}")
@@ -535,9 +576,13 @@ def _get_traces_to_write(
                     log_path=fail_log_path,
                 )
             else:
-                if str(code_to_trace.trace_id) != trace_result.identifier:
+                identifier = trace_result.identifier
+                if identifier is None:
+                    raise RuntimeError("trace identifier missing in result")
+                if str(code_to_trace.trace_id) != identifier:
                     raise RuntimeError("trace identifier mismatch")
-                successful_traces[str(trace_result.identifier)] = trace_result.model_dump()
+                trace_dump = typing.cast("TraceResultDump", trace_result.model_dump())
+                successful_traces[identifier] = trace_dump
     if all_must_succeed and len(successful_traces) != len(to_trace):
         log_fn(f"discarding {len(successful_traces)} traces due to some failure(s) in batch")
         return {}  # do not return any of the traces, it's unclear if the solution was any good
@@ -556,16 +601,17 @@ def trace_code_snippet(
     Both tracing results and expected vs found output comparison results are returned. The latter
     will be used to determine if the solution will be written to the dataset or discarded.
     """
-    test_inputs, test_outputs = code_snippet.test_inputs, code_snippet.test_outputs
-    if (
-        code_snippet.entrypoint_name is not None
-        and isinstance(test_inputs, list)
-        and isinstance(test_outputs, list)
-        and len(test_inputs) == len(test_outputs) == 1
-    ):
+    test_inputs: typing.Any = code_snippet.test_inputs
+    test_outputs: typing.Any = code_snippet.test_outputs
+    if code_snippet.entrypoint_name is not None and isinstance(test_inputs, list) and isinstance(test_outputs, list):
+        typed_inputs = typing.cast("list[typing.Any]", test_inputs)
+        typed_outputs = typing.cast("list[typing.Any]", test_outputs)
+        if len(typed_inputs) == len(typed_outputs) == 1:
+            test_inputs = typed_inputs[0]
+            test_outputs = typed_outputs[0]
         # TODO: confirm that these are fine everywhere and they do not cause some i/o issues?
-        test_inputs = test_inputs[0]
-        test_outputs = test_outputs[0]
+        # they are meant to be single-input/output wrappers for entrypoint-based execution
+    expected_for_compare = typing.cast("typing.Any", test_outputs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # no need to capture warnings related to traced code
         pyine.utils.code.validation.validate_code(code_snippet.code_string)  # last check before tracing
@@ -582,9 +628,12 @@ def trace_code_snippet(
             timeout_seconds=config.execution_timeout_seconds,
             use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
         )
-    comp = functools.partial(
-        pyine.utils.code.output_compare.compare,
-        options=config.test_output_compare_options,
+    comp = typing.cast(
+        "typing.Callable[[typing.Any, typing.Any], pyine.utils.code.output_compare.CompareResult]",
+        functools.partial(
+            pyine.utils.code.output_compare.compare,
+            options=config.test_output_compare_options,
+        ),
     )
     default_test_result = None  # will store the most useful test result (across all comparison cases)
     if trace_result.exception is not None:
@@ -602,7 +651,7 @@ def trace_code_snippet(
                 raise exc from RemoteTracebackError(trace_result.exception.traceback)
             raise exc
         # the exec raised a catchable exception; the only way this was a 'success' is if we also expected one
-        exception_test_result = comp(str(trace_result.exception), str(test_outputs))
+        exception_test_result = comp(str(trace_result.exception), str(expected_for_compare))
         if exception_test_result:
             return (
                 trace_result,
@@ -612,10 +661,10 @@ def trace_code_snippet(
         if trace_result.exception.type == SystemExit.__name__:
             # that was likely called on purpose, i.e. the program finished and produced something
             # ...maybe it's the exit code or exception message itself we need to match?
-            exception_msg_test_result = comp(trace_result.exception.message, test_outputs)
+            exception_msg_test_result = comp(trace_result.exception.message, expected_for_compare)
             if exception_msg_test_result:
                 return trace_result, exception_msg_test_result
-            exception_exit_code_test_result = comp(trace_result.return_value, test_outputs)
+            exception_exit_code_test_result = comp(trace_result.return_value, expected_for_compare)
             if exception_exit_code_test_result:
                 return trace_result, exception_exit_code_test_result
             # if we get here, checks failed, maybe something was printed before exiting?
@@ -630,21 +679,24 @@ def trace_code_snippet(
     if code_snippet.entrypoint_name is not None or trace_result.return_value is not None:
         # the executed code returned a value that SHOULD be the expected one
         # (if the code had a specific entrypoint, this is the only possible outcome)
-        return_val_test_result = comp(trace_result.return_value, test_outputs)
+        return_val_test_result = comp(trace_result.return_value, expected_for_compare)
         if return_val_test_result:
             return trace_result, return_val_test_result
         if default_test_result is None:
             return_val_test_result.reason = f"unexpected entrypoint return value: {return_val_test_result.reason}"
             default_test_result = return_val_test_result
     # last chance: if we get here, assume the value we need to check is a printed output (in stdout)
-    stdout_test_result = comp(trace_result.stdout, test_outputs)
+    stdout_test_result = comp(trace_result.stdout, expected_for_compare)
     if stdout_test_result:
         return trace_result, stdout_test_result
     # if the expected outputs are a list of strings, last-last fix attempt: merge them into a string
-    if isinstance(test_outputs, list) and all(isinstance(s, str) for s in test_outputs):
-        stdout_test_result = comp(trace_result.stdout, "\n".join(test_outputs))
-        if stdout_test_result:
-            return trace_result, stdout_test_result
+    if isinstance(test_outputs, list):
+        test_outputs_list = typing.cast("list[typing.Any]", test_outputs)
+        if all(isinstance(item, str) for item in test_outputs_list):
+            test_output_strings = typing.cast("list[str]", test_outputs_list)
+            stdout_test_result = comp(trace_result.stdout, "\n".join(test_output_strings))
+            if stdout_test_result:
+                return trace_result, stdout_test_result
     if default_test_result is None:
         stdout_test_result.reason = f"unexpected stdout output: {stdout_test_result.reason}"
         default_test_result = stdout_test_result
@@ -670,8 +722,8 @@ def _fetch_augmented_code_to_trace(
         augmented_code_to_trace.extend(
             TraceRequest(
                 code_string=obfuscated_code,
-                trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
-                    **vars(solution.solution_id),
+                trace_id=_make_trace_identifier(
+                    solution_id=solution.solution_id,
                     test_idx=test_tuple.test_idx,
                     augment_category="obfuscated",
                     augment_idx=0,  # obfuscation is unique, so always augment idx = 0
@@ -684,26 +736,24 @@ def _fetch_augmented_code_to_trace(
         )
     if config.fetch_augmented_solutions:
         # for pre-generated code augments (containing issues, hints, ...) we pick a subset of available results
-        assert config._prompt_result_db is not None and config._rng is not None
         for prompt_name, fetch_count in config.fetch_augmented_solutions.items():
-            prompt_records = config._prompt_result_db.get_by_identifier(
+            prompt_records = config.prompt_result_db.get_by_identifier(
                 # if we ever want to support hinted-code-tracing, we'll need to modify this logic
                 # (using the solution id for db lookups only works for buggy code that is not test-specific)
                 identifier=str(solution.solution_id),
                 prompt_name=prompt_name,
             )
-            assert isinstance(prompt_records, list)
-            assert all(isinstance(r, pyine.prompts.PromptResultRecord) for r in prompt_records)
             if prompt_records:
                 fetch_count = min(fetch_count, len(prompt_records))
-                picked_idxs = config._rng.choice(len(prompt_records), size=fetch_count, replace=False)
+                picked_idx_array = config.rng.choice(len(prompt_records), size=fetch_count, replace=False)
+                picked_idxs = [int(idx) for idx in picked_idx_array.tolist()]
                 augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
                 for record_idx in picked_idxs:
                     augmented_code_to_trace.extend(
                         TraceRequest(
                             code_string=prompt_records[record_idx].result,
-                            trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
-                                **vars(solution.solution_id),
+                            trace_id=_make_trace_identifier(
+                                solution_id=solution.solution_id,
                                 test_idx=test_tuple.test_idx,
                                 augment_category=augm_category,
                                 augment_idx=record_idx,
@@ -722,11 +772,11 @@ def _process_solutions(
     solutions: list[pyine.data.traces.dataset_utils.Solution],
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
-    log_fn: typing.Callable,
+    log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
-) -> dict[str, dict]:  # str(TraceId) -> trace results dump, for writing to disk
+) -> TraceResultBatch:  # str(TraceId) -> trace results dump, for writing to disk
     """Traces an array of solutions and returns the results."""
-    results, errors = pyine.utils.concurrency.run_in_parallel(
+    raw_results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
             functools.partial(
                 _process_one_solution,
@@ -742,12 +792,14 @@ def _process_solutions(
         use_processes=False,  # using thread since tracing itself occurs in processes (and blocks)
         use_shared_pool=False,  # avoid using a shared pool at this level (one used at trace level)
     )
+    results = typing.cast("list[TraceResultBatch | None]", raw_results)
     if not (len(results) == len(errors) == len(solutions)):
         raise RuntimeError("unexpected number of results/errors")
-    outputs_to_write = {}
-    for solution_idx, (run_result, run_error) in enumerate(zip(results, errors, strict=False)):
+    outputs_to_write: TraceResultBatch = {}
+    for solution_idx, run_error in enumerate(errors):
         solution = solutions[solution_idx]
-        if run_error:
+        run_result = results[solution_idx]
+        if run_error is not None:
             if isinstance(run_error, pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS):
                 raise run_error  # main process likely needs to stop, so raise again
             exception_origin = traceback.extract_tb(run_error.__traceback__)[-1]
@@ -761,8 +813,10 @@ def _process_solutions(
             full_error_msg = f"({type(run_error).__name__})" + exception_msg
             log_fn(f"{solution.solution_id}: failed to process: {full_error_msg}")
         else:
-            assert isinstance(run_result, dict)
-            assert not any(key in outputs_to_write for key in run_result)
+            if run_result is None:
+                raise RuntimeError("missing solution result despite no error")
+            if any(key in outputs_to_write for key in run_result):
+                raise RuntimeError("duplicate trace ids across solution batches")
             outputs_to_write.update(run_result)
     return outputs_to_write
 
@@ -772,16 +826,16 @@ def _process_one_solution(
     solution: pyine.data.traces.dataset_utils.Solution,
     test_tuples: list[_TestTuple],
     config: TraceDatasetWriterConfig,
-    log_fn: typing.Callable,
+    log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
-) -> dict[str, dict]:  # str(TraceId) -> trace results dump, for writing to disk
+) -> TraceResultBatch:  # str(TraceId) -> trace results dump, for writing to disk
     """Processes one solution to a coding problem; returns a dict of trace results to write to disk."""
     # first step: for all test cases, run the ORIGINAL SOLUTION CODE, and see which test succeeds/fails
     orig_code_to_trace = [
         TraceRequest(
             code_string=solution.code,  # original code snippet (reformatted but otherwise intact)
-            trace_id=pyine.data.traces.dataset_utils.TraceIdentifier(
-                **vars(solution.solution_id),
+            trace_id=_make_trace_identifier(
+                solution_id=solution.solution_id,
                 test_idx=test_tuple.test_idx,
                 augment_category=None,  # original code = no augmentation applied
                 augment_idx=None,  # no augmentation applied = no index to provide
@@ -882,7 +936,7 @@ def write_dataset(
         fail_dir_path = pathlib.Path(config.failed_test_log_dir)
         fail_dir_path.mkdir(parents=True, exist_ok=True)
         fail_log_path = fail_dir_path / f"{output_dataset_path.name}.log"
-    trace_event_counts = []
+    trace_event_counts: list[int] = []
     written_outputs = 0  # total number of traces that we will have written
     log(f"creating LMDB dataset at: {output_dataset_path}...")
     writer = pyine.data.utils.lmdb_io.LMDBWriter(
@@ -924,7 +978,7 @@ def write_dataset(
             )
             retained_solution_indices = [clustered_solution_idxs[0] for clustered_solution_idxs in code_dupe_clusters]
             # trace each solution with all available test inputs/outputs
-            solutions_to_trace = []
+            solutions_to_trace: list[pyine.data.traces.dataset_utils.Solution] = []
             for solution_idx, solution in enumerate(solutions):
                 err_msg = _check_must_skip_solution(problem, solution, solution_idx, retained_solution_indices, config)
                 if err_msg is not None:
@@ -948,10 +1002,14 @@ def write_dataset(
                 log(f"{problem}: no valid solution found")
             else:
                 log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
-                written_traces, errored_traces = writer.put_batch(
+                put_result = writer.put_batch(
                     traces_to_write,
                     show_progress=False,
                     raise_on_error=False,
+                )
+                written_traces, errored_traces = typing.cast(
+                    "tuple[dict[str, bytes], dict[str, Exception]]",
+                    put_result,
                 )
                 for errored_trace_id, error in errored_traces.items():
                     logger.warning(f"{errored_trace_id} skipped, error writing trace: {error}")
@@ -960,7 +1018,8 @@ def write_dataset(
                     problem_metadata_key = str(problem) + pyine.data.traces.dataset_utils.PROBLEM_DATA_SUFFIX
                     writer.put(key=problem_metadata_key, value=problem.model_dump())  # will raise on error
                 for written_trace_id in written_traces:
-                    trace_event_counts.append(len(traces_to_write[written_trace_id]["traced_steps"]))
+                    traced_steps = traces_to_write[written_trace_id]["traced_steps"]
+                    trace_event_counts.append(len(traced_steps))
                 written_outputs += len(written_traces)
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
                 break  # if we already reached our target output dataset size, we're done
@@ -1005,31 +1064,29 @@ def write_dataset_from_taco(
         The LMDBWriter object that was used to write the traces (once writing is complete). This
         object should have already been closed, and can be used to read attributes from the dataset.
     """
-    import pyine.data.taco.dataset_utils
-
     log = logger.info if verbose else logger.debug
+    source_path: pathlib.Path
     if source_dataset_path is None:
-        source_dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+        source_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
     else:
-        source_dataset_path = pathlib.Path(source_dataset_path)
+        source_path = pathlib.Path(source_dataset_path)
     cfg = TraceDatasetWriterConfig(
         source_dataset_name="TACO",
         **config_kwargs,
     )
-    log(f"will attempt to read TACO dataset from: {source_dataset_path}")
+    log(f"will attempt to read TACO dataset from: {source_path}")
     if output_dataset_path is None:
-        if output_dataset_tag is None:
-            output_dataset_tag = cfg.get_short_hash()
-        output_dataset_path = pyine.data.traces.dataset_utils.get_new_dataset_path(
+        output_tag = output_dataset_tag or cfg.get_short_hash()
+        output_path: pathlib.Path = pyine.data.traces.dataset_utils.get_new_dataset_path(
             source_dataset_name="TACO",
-            dataset_name_tag=output_dataset_tag,
+            dataset_name_tag=output_tag,
         )
     else:
-        output_dataset_path = pathlib.Path(output_dataset_path)
-    log(f"will write TACO traces dataset to: {output_dataset_path}")
+        output_path = pathlib.Path(output_dataset_path)
+    log(f"will write TACO traces dataset to: {output_path}")
     return write_dataset(
-        root_dataset_path=source_dataset_path,
-        output_dataset_path=output_dataset_path,
+        root_dataset_path=source_path,
+        output_dataset_path=output_path,
         config=cfg,
         verbose=verbose,
         force_overwrite=force_overwrite,

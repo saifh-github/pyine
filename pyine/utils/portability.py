@@ -248,7 +248,6 @@ def get_portable_function_name(callabl: typing.Callable) -> str:
 
     if isinstance(callabl, functools.partial):  # recursively get wrapped function names
         return f"functools.partial({get_portable_function_name(callabl.func)})"
-    # noinspection PyUnreachableCode
     if isinstance(callabl, types.MethodType):  # handle bound callables
         func = callabl.__func__
         module = getattr(func, "__module__", None)
@@ -417,7 +416,6 @@ def get_fully_qualified_name(
     mod = getattr(obj, "__module__", "") or ""
     qual = getattr(obj, "__qualname__", getattr(obj, "__name__", None))
     if qual is None:
-        # noinspection PyUnreachableCode
         if callable(obj):
             cls = obj.__class__  # noqa
             mod = getattr(cls, "__module__", "") or ""

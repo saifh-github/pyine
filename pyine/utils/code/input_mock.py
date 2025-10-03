@@ -42,7 +42,6 @@ class MockInput:
                 raise StopIteration
             return line
 
-    # noinspection PyUnreachableCode
     def __init__(self, inputs: str = "", encoding: str = "utf-8") -> None:
         """Initialize the MockInput instance with an input string to be read from.
 
