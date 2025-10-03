@@ -55,7 +55,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     async def evaluate_runnable_model(
         self,
         chain: langchain_core.runnables.Runnable,
-        datamodule: pyine.data.datamodule.BaseDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule,
         eval_subset_name: str,
         verbose: bool = False,
     ) -> CodeExecEvalResult:
@@ -167,7 +167,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        datamodule: pyine.data.datamodule.BaseDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule,
         eval_subset_name: str,
         verbose: bool = False,
     ) -> CodeExecEvalResult:
@@ -194,8 +194,6 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 "model must be a HuggingFace-Transformers pretrained model that supports text generation; "
                 f"got: {type(model)}"
             )
-        if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
-            raise ValueError(f"datamodule is not a conversation data module: {type(datamodule)}")
         _log = logger.info if verbose else logger.debug
         _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
         text_prompts_ds = datamodule.get_hf_messages_dataset(

@@ -135,17 +135,17 @@ class TestFakeDeltaDatasetReader:
     ) -> None:
         idx = 0
         deltas_by_idx = delta_reader[idx]
-        assert isinstance(deltas_by_idx, deltas_utils.TraceDeltaList)
+        assert isinstance(deltas_by_idx, deltas_utils.TraceResultWithDeltas)
         tkey = delta_reader.trace_keys[idx]
         deltas_by_tkey = delta_reader[tkey]
-        assert isinstance(deltas_by_tkey, deltas_utils.TraceDeltaList)
+        assert isinstance(deltas_by_tkey, deltas_utils.TraceResultWithDeltas)
         dkey = delta_reader.deltas_keys[idx]
         deltas_by_dkey = delta_reader[dkey]
-        assert isinstance(deltas_by_dkey, deltas_utils.TraceDeltaList)
+        assert isinstance(deltas_by_dkey, deltas_utils.TraceResultWithDeltas)
         # get the corresponding trace and verify id consistency
         trace_res = delta_reader.get_trace_data(idx)
         assert isinstance(trace_res, exec_utils.TraceResult)
-        assert deltas_by_idx.trace_id == str(trace_res.identifier)
+        assert deltas_by_idx.identifier == str(trace_res.identifier)
 
     def test_index_and_key_errors(
         self,

@@ -11,7 +11,7 @@ import typing
 
 import pyine.data.deltas.dataset_utils
 import pyine.data.traces.dataset_reader
-import pyine.data.traces.dataset_utils
+import pyine.utils.code.execution
 
 
 class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
@@ -36,9 +36,14 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
         # split the trace indices/keys into trace results and deltas
         assert len(self._trace_indices) == len(self.trace_keys)
         deltas_pattern = f"*{pyine.data.deltas.dataset_utils.DELTAS_SUFFIX}"
-        self._deltas_indices, self.deltas_keys = self.reader.get_indices(
-            pattern=deltas_pattern,
-            return_keys=True,
+        self._deltas_indices: list[int]
+        self.deltas_keys: list[str]
+        self._deltas_indices, self.deltas_keys = typing.cast(
+            "tuple[list[int], list[str]]",
+            self.reader.get_indices(
+                pattern=deltas_pattern,
+                return_keys=True,
+            ),
         )
         for dkey, didx in zip(self.deltas_keys, self._deltas_indices, strict=False):
             assert dkey not in self.trace_keys
@@ -46,31 +51,40 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
         if len(self._trace_indices) != len(self._deltas_indices):
             raise RuntimeError("all execution traces should have a corresponding deltas entry")
 
-    def __getitem__(self, index_or_key: int | str) -> pyine.data.deltas.dataset_utils.TraceDeltaList:
+    @typing.override
+    def __getitem__(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.deltas.dataset_utils.TraceResultWithDeltas:
         """Fetches a list of trace deltas from the LMDB database by external trace index or key.
 
         Args:
             index_or_key: index or key of the trace for which to retrieve deltas.
 
         Returns:
-            A `TraceDeltaList` object containing the requested trace deltas.
+            A `TraceResultWithDeltas` object containing the requested trace result and deltas.
         """
-        if isinstance(index_or_key, int):
-            if not (0 <= index_or_key < len(self)):
-                raise IndexError(f"index {index_or_key} out of range")
-        elif isinstance(index_or_key, str):
-            if index_or_key not in self.trace_keys and index_or_key not in self.deltas_keys:
-                raise KeyError(f"key {index_or_key} not found in dataset")
-            if index_or_key in self.deltas_keys:
-                index_or_key = self.deltas_keys.index(index_or_key)
-            else:
-                index_or_key = self.trace_keys.index(index_or_key)
-        else:  # pragma: no cover
-            raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
-        internal_deltas_idx = self._deltas_indices[index_or_key]
-        return pyine.data.deltas.dataset_utils.TraceDeltaList.model_validate(self.reader.get(internal_deltas_idx))
+        resolved_index = self._resolve_trace_index_or_key(index_or_key)
+        internal_deltas_idx = self._deltas_indices[resolved_index]
+        deltas_payload = self.reader.get(internal_deltas_idx)
+        return pyine.data.deltas.dataset_utils.TraceResultWithDeltas.model_validate(deltas_payload)
 
-    def get_trace_data(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.CodingProblem:
+    @typing.override
+    def _resolve_trace_key(
+        self,
+        trace_key: str,
+    ) -> int:
+        """Returns the dataset position for the provided user-facing key."""
+        if trace_key in self.deltas_keys:
+            return self.deltas_keys.index(trace_key)
+        if trace_key in self.trace_keys:
+            return self.trace_keys.index(trace_key)
+        raise KeyError(f"key {trace_key} not found in dataset")
+
+    def get_trace_data(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.utils.code.execution.TraceResult:
         """Fetches an individual trace data object from the LMDB database by external index or key.
 
         Args:

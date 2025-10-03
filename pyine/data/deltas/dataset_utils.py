@@ -13,14 +13,12 @@ import pyine.data.common
 import pyine.data.traces.dataset_utils
 import pyine.utils.code.execution
 import pyine.utils.filesystem
-import pyine.utils.portability
-import pyine.utils.reprod
 
 __all__ = [
     "EventRelationship",
     "TraceDelta",
     "DeltaGeneratorType",
-    "TraceDeltaList",
+    "TraceResultWithDeltas",
     "simple_delta_generator",
     "get_deltas_from_trace_steps",
     "get_latest_dataset_path",
@@ -113,14 +111,12 @@ class DeltaGeneratorType(enum.StrEnum):
         raise ValueError(f"invalid delta generator type: {s}")
 
 
-class TraceDeltaList(pydantic.BaseModel):
-    """Dataclass used to store a list of trace deltas."""
+class TraceResultWithDeltas(pyine.utils.code.execution.TraceResult):
+    """Dataclass used to store a list of trace deltas, derived from TraceResult."""
 
     model_config = pydantic.ConfigDict(frozen=True, use_enum_values=True)
     """Pydantic model configuration (freezes the dataclass)."""
 
-    trace_id: str
-    """Unique identifier for the parent trace."""
     deltas: list[TraceDelta]
     """A list of trace deltas."""
     gen_type: DeltaGeneratorType
@@ -129,22 +125,7 @@ class TraceDeltaList(pydantic.BaseModel):
     def __str__(self) -> str:
         """Returns a string representation of the trace delta list."""
         deltas_str = [f"\n{d}" for d in self.deltas]
-        return f"{self.trace_id}:deltas=[{deltas_str}\n]"
-
-    def __len__(self) -> int:
-        """Returns the number of deltas in the list."""
-        return len(self.deltas)
-
-    def __iter__(self) -> typing.Iterator[TraceDelta]:
-        """Returns an iterator over the deltas in the list."""
-        return iter(self.deltas)
-
-    def __getitem__(
-        self,
-        index: int,
-    ) -> TraceDelta:
-        """Returns the delta at the given index."""
-        return self.deltas[index]
+        return f"{self.identifier}:deltas=[{deltas_str}\n]"
 
 
 def _wrapped_delta_generator(
@@ -164,7 +145,7 @@ def _wrapped_delta_generator(
 def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[str, str]:
     """Compares two variable dicts and returns added/updated entries."""
     # note: we purposefully do NOT show missing/removed values in deltas to reduce useless spam/outputs
-    output = {}
+    output: dict[str, str] = {}
     for key in next.keys() - curr.keys():  # keys added to next
         output[key] = next[key]
     for key in curr.keys() & next.keys():  # keys updated in next
@@ -176,13 +157,6 @@ def simple_delta_generator(curr: dict[str, str], next: dict[str, str]) -> dict[s
 class _CallStack:
     """A stack of caller ids and variables, used to track context during execution."""
 
-    orig_caller_trace_key = pyine.utils.code.execution.TraceKey(
-        # fill these with arbitrary but unique values to be able to easily identify it
-        file=pyine.utils.code.execution.EXEC_PARENT_FILE_NAME,
-        line=0,
-        object="<module>",
-    )
-
     def __init__(
         self,
         include_global_vars: bool,
@@ -190,6 +164,12 @@ class _CallStack:
         """Initializes the call stack (it will be empty at first, until initialized)."""
         self._stack: list[tuple[pyine.utils.code.execution.TraceKey, dict[str, typing.Any]]] = []
         self._incl_g = include_global_vars
+        self.orig_caller_trace_key = pyine.utils.code.execution.TraceKey(
+            # fill these with arbitrary but unique values to be able to easily identify it
+            file=pyine.utils.code.execution.EXEC_PARENT_FILE_NAME,
+            line=0,
+            object="<module>",
+        )
 
     def is_initialized(self) -> bool:
         """Returns whether the call stack is initialized."""
@@ -201,7 +181,6 @@ class _CallStack:
         Returns the hardcoded parent caller id that will identify when we exit the traced code.
         """
         assert not self.is_initialized(), "entrypoint should be initialized only once, when stack is empty"
-
         self._stack.append((self.orig_caller_trace_key, curr_step.arguments))
         return self.orig_caller_trace_key
 
@@ -366,7 +345,7 @@ def get_deltas_from_trace_steps(
     delta_generator: DeltaGeneratorType,
     include_global_vars: bool = True,
     verbose: bool = False,
-) -> TraceDeltaList:
+) -> TraceResultWithDeltas:
     """Generates a list of deltas from a trace result."""
     assert trace_res.identifier is not None, "need identifier when generating deltas"
     log = logger.info if verbose else logger.debug
@@ -558,10 +537,10 @@ def get_deltas_from_trace_steps(
             )
             continue
         raise NotImplementedError("unhandled delta with relationship: " + str(relationship))
-    return TraceDeltaList(
-        trace_id=trace_res.identifier,
+    return TraceResultWithDeltas(
         deltas=output_deltas,
         gen_type=delta_generator,
+        **trace_res.model_dump(),
     )
 
 

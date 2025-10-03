@@ -75,7 +75,7 @@ if typing.TYPE_CHECKING:
 def train(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
-    datamodule: pyine.data.datamodule.BaseDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule,
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> transformers.Trainer:
@@ -92,8 +92,6 @@ def train(
         The instantiated trainer object that can be used for predictions.
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
-    if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
-        raise NotImplementedError(f"unsupported datamodule type: {type(datamodule)}")
     train_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -180,7 +178,11 @@ async def main(
     except pyine.utils.reprod.DryRunExit:
         return
 
-    dm = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
+        raise TypeError(
+            f"HuggingFace trainer requires a ConversationDataModule; received {type(datamodule).__name__}",
+        )
     model = config.get_model()
     tokenizer = config.get_tokenizer()
 
@@ -188,16 +190,21 @@ async def main(
         _ = train(
             model=model,
             tokenizer=tokenizer,
-            datamodule=dm,
+            datamodule=datamodule,
             config=config,
             runtime=runtime,
         )
+    # note: if not training, the model+tokenizer states will depend the specified model name/path
+    # (those might correspond to the base model or to a local checkpoint from a previous run)
 
     if config.training_args_config.do_predict:
+        if config.use_wandb_logging:
+            assert runtime is not None and runtime.wandb_run is not None, "invalid wandb runtime"
+            runtime.wandb_run.summary["model_name"] = model.config.name_or_path
         await pyine.apps.trainers.common.evaluate_model(
             model=model,
             tokenizer=tokenizer,
-            datamodule=dm,
+            datamodule=datamodule,
             config=config,
             runtime=runtime,
         )

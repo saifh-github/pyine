@@ -401,7 +401,6 @@ def _get_experiment_configs(
     For more information on the individual experiments, refer to their docstrings and to any
     potential README.md file in the corresponding experiment directory.
     """
-
     # fetch and validate necessary datamodule and trainer configs from main configs set
     dm_configs = [
         config for config in app_configs if config.group == "config/datamodule_config" and config.name != "base"
@@ -469,7 +468,7 @@ def register_hydra_configs(
             ],
         },
     )
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")  # runtime registers here
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
     configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(

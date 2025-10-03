@@ -81,7 +81,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     async def evaluate_runnable_model(
         self,
         chain: pyine.evals.utils.InvocableModelChain,
-        datamodule: pyine.data.datamodule.BaseDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule,
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
@@ -104,7 +104,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        datamodule: pyine.data.datamodule.BaseDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule,
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:

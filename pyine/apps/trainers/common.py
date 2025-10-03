@@ -71,7 +71,7 @@ def prepare_datamodule(
 async def evaluate_model(
     model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer | None,
-    datamodule: pyine.data.datamodule.BaseDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule,
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> dict[str, typing.Any]:

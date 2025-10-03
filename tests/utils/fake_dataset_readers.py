@@ -5,7 +5,7 @@ This module provides fakes for:
 - pyine.data.traces.dataset_reader.DatasetReader
 - pyine.data.deltas.dataset_reader.DatasetReader
 
-They generate realistic-enough data structures (TraceResult, CodingProblem, TraceDeltaList) to
+They generate realistic-enough data structures (TraceResult, CodingProblem, TraceResultWithDeltas) to
 avoid dumb mocks while remaining lightweight and fully in-memory. They can be used directly or
 monkeypatched to replace real readers in unit tests.
 
@@ -344,7 +344,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
     """Fake replacement for pyine.data.deltas.dataset_reader.DatasetReader.
 
     Inherits fake traces generation and adds deltas for each trace. __getitem__ returns
-    TraceDeltaList instead of TraceResult. Also supports indexing by the ".../deltas" key.
+    TraceResultWithDeltas instead of TraceResult. Also supports indexing by the ".../deltas" key.
     """
 
     def __init__(
@@ -358,7 +358,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
         # build deltas indices/keys and precompute deltas
         self._deltas_indices: list[int] = []
         self.deltas_keys: list[str] = []
-        self._deltas: list[deltas_utils.TraceDeltaList] = []
+        self._deltas: list[deltas_utils.TraceResultWithDeltas] = []
         for i, tkey in enumerate(self.trace_keys):
             dkey = f"{tkey}{traces_utils.DELTAS_SUFFIX}"
             self.deltas_keys.append(dkey)
@@ -367,7 +367,7 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
             self._deltas.append(dlist)
         assert len(self._deltas_indices) == len(self._deltas) == len(self)
 
-    def __getitem__(self, index_or_key: int | str) -> deltas_utils.TraceDeltaList:
+    def __getitem__(self, index_or_key: int | str) -> deltas_utils.TraceResultWithDeltas:
         if isinstance(index_or_key, int):
             if not (0 <= index_or_key < len(self)):
                 raise IndexError(f"index {index_or_key} out of range")
@@ -390,12 +390,10 @@ class FakeDeltaDatasetReader(FakeTraceDatasetReader):
 
     # ---------------------------- internals ----------------------------
 
-    def _make_deltas(self, trace_res: exec_utils.TraceResult) -> deltas_utils.TraceDeltaList:
-        dlist = deltas_utils.get_deltas_from_trace_steps(
+    def _make_deltas(self, trace_res: exec_utils.TraceResult) -> deltas_utils.TraceResultWithDeltas:
+        return deltas_utils.get_deltas_from_trace_steps(
             trace_res=trace_res,
             delta_generator=deltas_utils.DeltaGeneratorType.SIMPLE,
             include_global_vars=True,
             verbose=False,
         )
-        # ensure the trace_id is a string so it mirrors real datasets
-        return deltas_utils.TraceDeltaList.model_validate(dlist.model_dump())

@@ -234,17 +234,25 @@ class DatasetReader(torch.utils.data.Dataset):
         """Returns the name of the parent dataset used to create this dataset."""
         return self.metadata["parent_dataset"]["dataset_name"]
 
-    def _get_trace_idx_from_idx_or_key(self, index_or_key: int | str) -> int:
-        """Returns an external trace index from an external index or key."""
+    def _resolve_trace_index_or_key(
+        self,
+        index_or_key: int | str,
+    ) -> int:
+        """Returns the dataset position for the provided user-facing index or key."""
         if isinstance(index_or_key, int):
-            if not (0 <= index_or_key < len(self)):
-                raise IndexError(f"index {index_or_key} out of range")
-            return index_or_key
-        if isinstance(index_or_key, str):
-            if index_or_key not in self.trace_keys:
-                raise KeyError(f"key {index_or_key} not found in dataset")
-            return self.trace_keys.index(index_or_key)
-        raise ValueError(f"invalid index_or_key type: {type(index_or_key)}")
+            if 0 <= index_or_key < len(self):
+                return index_or_key
+            raise IndexError(f"index {index_or_key} out of range")
+        return self._resolve_trace_key(index_or_key)
+
+    def _resolve_trace_key(
+        self,
+        trace_key: str,
+    ) -> int:
+        """Returns the dataset position for the provided user-facing key."""
+        if trace_key in self.trace_keys:
+            return self.trace_keys.index(trace_key)
+        raise KeyError(f"key {trace_key} not found in dataset")
 
     def __getitem__(self, index_or_key: int | str) -> pyine.utils.code.execution.TraceResult:
         """Fetches an individual trace data object from the LMDB database by external index or key.
@@ -255,7 +263,7 @@ class DatasetReader(torch.utils.data.Dataset):
         Returns:
             A `TraceResult` object containing the requested trace data.
         """
-        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        trace_idx = self._resolve_trace_index_or_key(index_or_key)
         internal_trace_idx = self._trace_indices[trace_idx]
         return pyine.utils.code.execution.TraceResult.model_validate(self.reader.get(internal_trace_idx))
 
@@ -271,7 +279,7 @@ class DatasetReader(torch.utils.data.Dataset):
         Returns:
             A `CodingProblem` object containing the problem data associated with the trace.
         """
-        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        trace_idx = self._resolve_trace_index_or_key(index_or_key)
         internal_trace_idx = self._trace_indices[trace_idx]
         cached = self._problem_data_cache.get(internal_trace_idx)
         if cached is not None:
@@ -286,12 +294,12 @@ class DatasetReader(torch.utils.data.Dataset):
 
     def get_trace_metadata(self, index_or_key: int | str) -> pyine.data.traces.dataset_utils.TraceMetadata:
         """Returns the metadata associated with a trace by external index or key."""
-        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        trace_idx = self._resolve_trace_index_or_key(index_or_key)
         return self.trace_metadata[trace_idx]
 
     def get_tags(self, index_or_key: int | str) -> list[str]:
         """Returns a list of tags for a given trace so that we can decide whether to filter it."""
-        trace_idx = self._get_trace_idx_from_idx_or_key(index_or_key)
+        trace_idx = self._resolve_trace_index_or_key(index_or_key)
         return self.trace_metadata[trace_idx].tags.copy()
 
     def __str__(self) -> str:
