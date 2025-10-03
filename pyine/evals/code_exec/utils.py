@@ -30,10 +30,28 @@ class SampleEval:
     """Exact match result (following potential string normalization)."""
     soft_match: pyine.utils.code.output_compare.CompareResult
     """Soft match result (using the framework's output comparison function)."""
-    llm_score: float | asyncio.Task | None
+    _llm_score: float | asyncio.Task | None
     """Score in [0, 1] returned by a LLM grader, if used."""
     tags: list[str]
     """Arbitrary tags used for grouping/filtering (e.g., difficulty, source)."""
+
+    @property
+    def llm_score(self) -> float | None:
+        """Returns the LLM score, if available; raises if the score is a future."""
+        if self._llm_score is None or isinstance(self._llm_score, float):
+            return self._llm_score
+        if isinstance(self._llm_score, asyncio.Task):
+            raise RuntimeError("attempting to access llm score before it is ready")
+        raise ValueError(f"unexpected LLM score type: {type(self._llm_score)}")
+
+    @staticmethod
+    async def gather_llm_scores(eval_objs: typing.Iterable["SampleEval"]) -> None:
+        objs_with_future = [obj for obj in eval_objs if isinstance(obj._llm_score, asyncio.Task)]
+        if objs_with_future:
+            scores = await asyncio.gather(*(obj._llm_score for obj in objs_with_future))
+            # re-assign the scores to the original items
+            for obj, score in zip(objs_with_future, scores, strict=False):
+                obj._llm_score = _decode_response(score)
 
 
 AccuracyType = typing.Literal["hard", "soft", "grader"]
@@ -160,17 +178,6 @@ class OutcomeEvaluator:
         )
         return self._decode_response(response)
 
-    @staticmethod
-    def _decode_response(
-        response: float | pyine.utils.code.output_compare.GradingResult,
-    ) -> float:
-        """Helper to decode a response from the LLM grader."""
-        if isinstance(response, float):
-            return response
-        if isinstance(response, pyine.utils.code.output_compare.GradingResult):
-            return response.score
-        raise NotImplementedError(f"LLM grader returned unexpected response type: {type(response)}")
-
     def add_sample(
         self,
         identifier: str,
@@ -198,7 +205,7 @@ class OutcomeEvaluator:
                 predicted=predicted,
                 hard_match=hard_match,
                 soft_match=soft_match,
-                llm_score=llm_score,
+                _llm_score=llm_score,
                 tags=tags if tags is not None else [],
             )
         )
@@ -331,13 +338,7 @@ class OutcomeEvaluator:
     async def _gather_grader_results(self, selected_items: dict[int, SampleEval]) -> None:
         """Helper to gather LLM-based score grading results asynchronously."""
         if self.use_async_llm_grader:
-            future_item_idxs = [idx for idx, item in selected_items.items() if isinstance(item.llm_score, asyncio.Task)]
-            futures = [selected_items[idx].llm_score for idx in future_item_idxs]
-            if futures:
-                scores = await asyncio.gather(*futures)
-                # re-assign the scores to the original items
-                for item_idx, score in zip(future_item_idxs, scores, strict=False):
-                    selected_items[item_idx].llm_score = self._decode_response(score)
+            await SampleEval.gather_llm_scores(selected_items.values())
 
     @staticmethod
     def get_metric_names() -> list[str]:
@@ -406,6 +407,17 @@ class OutcomeEvaluator:
             hard_vs_grader=counts["hard_vs_grader"] / total_overlap,
             soft_vs_grader=counts["soft_vs_grader"] / total_overlap,
         )
+
+
+def _decode_response(
+    response: float | pyine.utils.code.output_compare.GradingResult,
+) -> float:
+    """Helper to decode a response from the LLM grader."""
+    if isinstance(response, float):
+        return response
+    if isinstance(response, pyine.utils.code.output_compare.GradingResult):
+        return response.score
+    raise NotImplementedError(f"LLM grader returned unexpected response type: {type(response)}")
 
 
 def _safe_ratio(

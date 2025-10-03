@@ -149,15 +149,13 @@ async def main(
         wandb_run_id = runtime.wandb_run_id
         if wandb_run_id is None:
             raise RuntimeError("wandb run id must be available when logging to wandb")
-        current_wandb_run = typing.cast("typing.Any", runtime.wandb_run)
-        run_is_finished = getattr(current_wandb_run, "_is_finished", True)
+        run_is_finished = getattr(runtime.wandb_run, "_is_finished", True)
         if run_is_finished:
             # the openai integration 'finalized' the run; re-open it to log the last few metrics/summaries
             # (we replace the original run obj with a re-opened one, hopefully just for summary updates)
             wandb_api = wandb.Api()
-            current_wandb_run = typing.cast("typing.Any", wandb_api.run(wandb_run_id))
-            runtime.wandb_run = current_wandb_run
-        current_wandb_run.summary.update({"model_name": model_name})
+            runtime.wandb_run = wandb_api.run(wandb_run_id)
+        runtime.wandb_run.summary.update({"model_name": model_name})  # type: ignore[reportUnknownMemberType]
 
     model_for_evals = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",

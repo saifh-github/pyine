@@ -1,9 +1,11 @@
 import collections
+import collections.abc
 import concurrent.futures
 import dataclasses
 import logging
 import typing
 
+import datasets
 import langchain_core.messages
 import langchain_core.runnables
 import torch
@@ -54,7 +56,10 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     @typing.override
     async def evaluate_runnable_model(
         self,
-        chain: langchain_core.runnables.Runnable,
+        chain: langchain_core.runnables.Runnable[
+            dict[str, typing.Any],
+            langchain_core.messages.AIMessage,
+        ],
         datamodule: pyine.data.datamodule.ConversationDataModule,
         eval_subset_name: str,
         verbose: bool = False,
@@ -92,10 +97,13 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 sample_data_store[sample.identifier] = sample
                 response = chain.invoke(sample._asdict())
                 assert isinstance(response, langchain_core.messages.AIMessage)
+                response_text = response.text
+                if not isinstance(response_text, str):
+                    raise TypeError("expected runnable response to expose text content as a string")
                 evaluator.add_sample(
                     identifier=sample.identifier,
                     expected=sample.expected_output,
-                    predicted=response.content,
+                    predicted=response_text,
                     tags=sample.get_tag_list(),
                 )
                 token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
@@ -109,47 +117,61 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             prog_bar = tqdm.tqdm(total=len(sample_idxs), disable=not verbose, desc="waiting for results")
 
             def _submit_one(
-                sample_idx: typing.Hashable,
-                executor: concurrent.futures.Executor,
-            ) -> concurrent.futures.Future:
-                sample_idx = typing.cast("int", sample_idx)
+                sample_idx: int,
+                executor: concurrent.futures.Executor | None,
+            ) -> concurrent.futures.Future[langchain_core.messages.AIMessage]:
                 sample = sample_generator[sample_idx]
                 assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
                 assert sample_idx not in sample_lut
                 sample_lut[sample_idx] = sample
+                if executor is None:
+                    raise RuntimeError("executor is unexpectedly None in sliding window submission")
                 return executor.submit(
                     chain.invoke,
                     sample._asdict(),
                 )
 
             def _process_result(
-                sample_idx: typing.Hashable,
-                response: langchain_core.messages.AIMessage,
+                sample_idx: int,
+                response: langchain_core.messages.AIMessage | None,
             ) -> None:
                 nonlocal token_usage
-                sample_idx = typing.cast("int", sample_idx)
                 sample = sample_lut.pop(sample_idx)
+                if response is None:
+                    raise RuntimeError("runnable response was unexpectedly None")
                 assert isinstance(response, langchain_core.messages.AIMessage)
+                response_text = response.text
+                if not isinstance(response_text, str):
+                    raise TypeError("expected runnable response to expose text content as a string")
                 sample_data_store[sample.identifier] = sample
                 evaluator.add_sample(
                     identifier=sample.identifier,
                     expected=sample.expected_output,
-                    predicted=response.content,
+                    predicted=response_text,
                     tags=sample.get_tag_list(),
                 )
                 prog_bar.update(1)
                 token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
 
-            async def _progress_callback(_: list[typing.Hashable], completed: list[typing.Hashable]) -> None:
+            async def _progress_callback(_: list[int], completed: list[int]) -> None:
                 if verbose and completed and len(completed) % async_metrics_compute_rate == 0:
                     output_metrics = await pyine.evals.code_exec.utils.get_metrics(evaluator, token_usage)
                     prog_bar.write(f"progress report (completed {len(completed)}): {output_metrics}")
 
             await pyine.utils.concurrency.run_with_sliding_window(
                 input_items=sample_idxs,
-                submit_one=_submit_one,
-                process_result=_process_result,
-                progress_callback=_progress_callback,
+                submit_one=typing.cast(
+                    "pyine.utils.concurrency.SubmissionFuncType[langchain_core.messages.AIMessage]",
+                    _submit_one,
+                ),
+                process_result=typing.cast(
+                    "pyine.utils.concurrency.ProcessorFuncType[langchain_core.messages.AIMessage]",
+                    _process_result,
+                ),
+                progress_callback=typing.cast(
+                    "pyine.utils.concurrency.ProgressCallbackType",
+                    _progress_callback,
+                ),
                 max_workers=max_workers,
                 max_in_flight_jobs=max_in_flight_jobs,
             )
@@ -203,12 +225,14 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             tokenizer=tokenizer,
             apply_chat_template_eval_config=True,
         )
+        assert isinstance(text_prompts_ds, datasets.Dataset), "expected HuggingFace dataset"
         if self.eval_generation_config is None:
-            gen_config = getattr(model, "generation_config", None)
-            if gen_config is None:
-                gen_config = transformers.GenerationConfig.from_model_config(model.config)
+            raw_gen_config = getattr(model, "generation_config", None)
+            if raw_gen_config is None:
+                raw_gen_config = transformers.GenerationConfig.from_model_config(model.config)
         else:
-            gen_config = self.eval_generation_config
+            raw_gen_config = self.eval_generation_config
+        gen_config = pyine.utils.transformers.resolve_hf_generation_config(raw_gen_config)
         if self.eval_generation_max_new_tokens_override is not None:
             gen_config.max_new_tokens = self.eval_generation_max_new_tokens_override
         gen_config.validate()
@@ -221,18 +245,18 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             nonlocal sample_idx
             assert isinstance(sample, collections.abc.Mapping), f"unexpected sample data type: {type(sample)}"
             assert "text" in sample, "missing 'text' key from chat template application in sample data?"
-            if model_max_seq_len:
-                max_gen_len = gen_config.max_new_tokens or model_max_seq_len - gen_config.max_length
-                max_prompt_len = model_max_seq_len - max_gen_len
-                encoded_inputs = tokenizer(sample["text"], truncation=True, max_length=max_prompt_len)
-            else:
-                encoded_inputs = tokenizer(sample["text"])
+            assert isinstance(sample['text'], str), "expected chat template application to yield string prompts"
+            max_gen_len = gen_config.max_new_tokens or model_max_seq_len - gen_config.max_length
+            max_prompt_len = model_max_seq_len - max_gen_len
+            encoded_inputs = tokenizer(sample["text"], truncation=True, max_length=max_prompt_len)
+            input_ids = typing.cast("list[int]", encoded_inputs["input_ids"])
+            attention_mask = typing.cast("list[int]", encoded_inputs["attention_mask"])
             output = {
                 "sample_idx": sample_idx,
                 **sample,
-                "input_ids": encoded_inputs["input_ids"],
-                "attention_mask": encoded_inputs["attention_mask"],
-                "input_len": len(encoded_inputs["input_ids"]),
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "input_len": len(input_ids),
             }
             sample_idx += 1
             return output
@@ -240,7 +264,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         text_prompts_ds = text_prompts_ds.map(_prepare_model_inputs, desc="encoding eval prompts")
         assert len(text_prompts_ds) == sample_idx
         prepared_eval_ds = text_prompts_ds.sort("input_len", reverse=True)
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = torch.utils.data.DataLoader[dict[str, typing.Any]](
             prepared_eval_ds,
             batch_size=self.eval_batch_size,
             shuffle=False,
@@ -275,7 +299,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         for gen_result in wrapped_generation_results:
             assert "sample_idx" in gen_result and isinstance(gen_result["sample_idx"], int)
             orig_sample_idx = gen_result["sample_idx"]
-            orig_sample = text_prompts_ds[orig_sample_idx]
+            orig_sample = typing.cast("dict[str, typing.Any]", text_prompts_ds[orig_sample_idx])
             assert orig_sample["sample_idx"] == orig_sample_idx
             assert "sample_data" in orig_sample, "we asked to get the original data earlier"
             orig_sample_data = orig_sample["sample_data"]
@@ -287,7 +311,9 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             prediction = gen_result["prediction"]
             assert isinstance(prediction, str)
             assert "generated_tokens" in gen_result, "missing generated tokens? (bad key?)"
-            generated_tokens = gen_result["generated_tokens"]
+            generated_tokens = typing.cast("torch.Tensor", gen_result["generated_tokens"])
+            prompt_input_len = int(orig_sample["input_len"])
+            generated_token_count = int(generated_tokens.numel())
             evaluator.add_sample(
                 identifier=orig_sample_data.identifier,
                 expected=orig_sample_data.expected_output,
@@ -295,11 +321,11 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 tags=orig_sample_data.get_tag_list(),
             )
             token_usage += pyine.evals.utils.TokenUsageInfo(
-                total_tokens=len(generated_tokens) + orig_sample["input_len"],
-                prompt_tokens=orig_sample["input_len"],
+                total_tokens=generated_token_count + prompt_input_len,
+                prompt_tokens=prompt_input_len,
                 cached_tokens="unknown",
                 reasoning_tokens="unknown",
-                completion_tokens=len(generated_tokens),
+                completion_tokens=generated_token_count,
             )
         _log("finalizing metrics and preparing artifacts for logging")
         return await self._finalize_evaluation_results(
@@ -353,7 +379,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     def log_metrics(
         self,
         wandb_run: wandb.Run,
-        results_by_subset: dict[str, CodeExecEvalResult],
+        results_by_subset: dict[str, pyine.evals.common.EvalResult],
         *,
         table_key: str = "evals/metrics_table",
         step: int | None = None,
@@ -371,17 +397,19 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         """
         metric_names: set[str] = set()
         for subset_result in results_by_subset.values():
+            assert isinstance(subset_result, CodeExecEvalResult)
             metric_names.update(subset_result.metrics.keys())
         ordered_metric_names = sorted(metric_names)
         columns = ["subset", *ordered_metric_names]
         table = wandb.Table(columns=columns)
         for subset_name, subset_result in results_by_subset.items():
+            assert isinstance(subset_result, CodeExecEvalResult)
             row: list[typing.Any] = [subset_name]
             for metric_name in ordered_metric_names:
                 row.append(subset_result.metrics.get(metric_name))
             table.add_data(*row)
             prefixed_metrics = {f"evals/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
-            wandb_run.summary.update(prefixed_metrics)
+            wandb_run.summary.update(prefixed_metrics)  # type: ignore[reportUnknownMemberType]
         if step is None:
             wandb_run.log({table_key: table})  # noqa
         else:
@@ -393,7 +421,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         self,
         wandb_run: wandb.Run,
         subset_name: str,
-        subset_results: CodeExecEvalResult,
+        subset_results: pyine.evals.common.EvalResult,
         *,
         table_key: str | None = None,
         max_rows: int = 32,
@@ -419,6 +447,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         """
         if table_key is None:
             table_key = f"evals/{subset_name}/predictions"
+        assert isinstance(subset_results, CodeExecEvalResult)
         incorrect: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         correct: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         for item in subset_results.artifacts:

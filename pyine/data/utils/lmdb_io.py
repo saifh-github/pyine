@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import enum
 import fnmatch
@@ -176,7 +178,7 @@ class LMDBWriter:
         self.max_allowed_value_length: int = max_allowed_value_length  # in bytes
         self._reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
 
-    def __enter__(self) -> "LMDBWriter":
+    def __enter__(self) -> LMDBWriter:
         """Context manager entry point; returns the LMDBWriter instance."""
         return self
 
@@ -238,16 +240,14 @@ class LMDBWriter:
         if self.serialization.method == SerializationMethod.PICKLE_LZ4:
             _ensure_insecure_serialization_allowed(self.serialization)
             pickled_data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-            compressed_data = lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
-            return typing.cast("bytes", compressed_data)
+            return lz4.frame.compress(pickled_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
         if self.serialization.method == SerializationMethod.MSGSPEC:
             return msgspec.msgpack.encode(obj)
         if self.serialization.method == SerializationMethod.JSON:
             return orjson.dumps(obj)
         if self.serialization.method == SerializationMethod.JSON_LZ4:
             json_data = orjson.dumps(obj)
-            compressed_data = lz4.frame.compress(json_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
-            return typing.cast("bytes", compressed_data)
+            return lz4.frame.compress(json_data, **self.serialization.compression_kwargs)  # type: ignore[reportUnknownMemberType]
         if self.serialization.method == SerializationMethod.JSON_ZSTD:
             zstd_compressor = zstandard.ZstdCompressor(**self.serialization.compression_kwargs)
             json_data = orjson.dumps(obj)
@@ -515,24 +515,25 @@ class LMDBReader:
 
             def _get_and_decode_metadata(key: str) -> typing.Any:
                 metadata_key_bytes: bytes = _create_metadata_key(key)
-                metadata_val_bytes: bytes | None = txn.get(metadata_key_bytes)  # type: ignore[reportUnknownMemberType]
-                assert metadata_val_bytes is not None
-                return msgspec.msgpack.decode(metadata_val_bytes)
+                metadata_val_bytes = txn.get(metadata_key_bytes)  # type: ignore[reportUnknownMemberType]
+                if metadata_val_bytes is None:
+                    raise KeyError(f"metadata field '{key}' missing from LMDB dataset")
+                return msgspec.msgpack.decode(metadata_val_bytes)  # type: ignore[reportUnknownMemberType]
 
             next_internal_key_bytes: bytes | None = txn.get(_NEXT_INTERNAL_KEY)  # type: ignore[reportUnknownMemberType]
             if next_internal_key_bytes is None:
                 raise ValueError("database does not contain next_internal_key; did writing closure fail?")
-            self._next_internal_key: int = struct.unpack(">Q", next_internal_key_bytes)[0]  # type: ignore[reportUnknownArgumentType]
-            self.orig_map_size: int = _get_and_decode_metadata("map_size")
-            self.sample_count: int = _get_and_decode_metadata("sample_count")
-            serialization_raw: dict[str, typing.Any] = _get_and_decode_metadata("serialization")
+            self._next_internal_key = typing.cast("int", struct.unpack(">Q", next_internal_key_bytes)[0])  # type: ignore[reportUnknownArgumentType]
+            self.orig_map_size = typing.cast("int", _get_and_decode_metadata("map_size"))
+            self.sample_count = typing.cast("int", _get_and_decode_metadata("sample_count"))
+            serialization_raw = typing.cast("dict[str, typing.Any]", _get_and_decode_metadata("serialization"))
             self.serialization = SerializationConfig(**serialization_raw)
-            self.max_encoded_value_length: int = _get_and_decode_metadata("max_encoded_value_length")
-            self.key_map: dict[str, bytes] = _get_and_decode_metadata("key_map")
+            self.max_encoded_value_length = typing.cast("int", _get_and_decode_metadata("max_encoded_value_length"))
+            self.key_map = typing.cast("dict[str, bytes]", _get_and_decode_metadata("key_map"))
             if len(self.key_map) != self.sample_count:
                 raise RuntimeError("key_map length does not match sample_count")
 
-    def __enter__(self) -> "LMDBReader":
+    def __enter__(self) -> LMDBReader:
         return self
 
     def __exit__(
@@ -560,15 +561,15 @@ class LMDBReader:
             cursor = txn.cursor()  # type: ignore[reportUnknownMemberType]
             found = cursor.set_range(METADATA_PREFIX)  # type: ignore[reportUnknownMemberType]
             while found:
-                key = typing.cast("bytes | None", cursor.key())
+                key = typing.cast("bytes | None", cursor.key())  # type: ignore[reportUnknownMemberType]
                 if key is None or not key.startswith(METADATA_PREFIX):
                     break
                 metadata_field_name = _decode_metadata_key(key)
                 if metadata_field_name in results:
                     raise RuntimeError(f"duplicate metadata field: {metadata_field_name}")
-                metadata_value_encoded = typing.cast("bytes", cursor.value())
+                metadata_value_encoded = typing.cast("bytes", cursor.value())  # type: ignore[reportUnknownMemberType]
                 results[metadata_field_name] = msgspec.msgpack.decode(metadata_value_encoded)
-                found = cursor.next()
+                found = cursor.next()  # type: ignore[reportUnknownMemberType]
         return results
 
     def get_size_on_disk(self) -> int:
@@ -581,7 +582,7 @@ class LMDBReader:
             if key_or_idx not in self.key_map:
                 raise KeyError(f"key '{key_or_idx}' not found in the database")
             key = self.key_map[key_or_idx]
-        else:
+        else:  # key_or_idx is int (validated by signature)
             if not (0 <= key_or_idx < len(self)):
                 raise IndexError(f"index {key_or_idx} out of range (0 <= index < {len(self)})")
             key = _create_sample_key(key_or_idx)
@@ -610,8 +611,11 @@ class LMDBReader:
         index_key_pairs: list[tuple[int, str]] = [(_decode_sample_key(self.key_map[key]), key) for key in matched_keys]
         index_key_pairs.sort()
         if return_keys:
-            indices, keys = zip(*index_key_pairs, strict=False) if index_key_pairs else ([], [])
-            return list(indices), list(keys)
+            if not index_key_pairs:
+                return [], []
+            indices_list = [idx for idx, _key in index_key_pairs]
+            keys_list = [_key for _idx, _key in index_key_pairs]
+            return indices_list, keys_list
         return [idx for idx, _ in index_key_pairs]
 
     def iter_from(
@@ -620,28 +624,24 @@ class LMDBReader:
         end_idx: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         """Iterate through items starting from a specific index, yielding values sequentially."""
-        if not isinstance(start_idx, int):
-            raise TypeError("start_idx must be an integer")
         if start_idx < 0:
             raise ValueError("start_idx must be non-negative")
-        if end_idx is not None:
-            if not isinstance(end_idx, int):
-                raise TypeError("end_idx must be an integer or None")
-            if end_idx < start_idx:
-                raise ValueError("end_idx must be greater than or equal to start_idx")
+        if end_idx is not None and end_idx < start_idx:
+            raise ValueError("end_idx must be greater than or equal to start_idx")
         start_key = _create_sample_key(start_idx)
         with self.env.begin() as txn:  # type: ignore[reportUnknownMemberType]
             cursor = txn.cursor()  # type: ignore[reportUnknownMemberType]
-            found = cursor.set_range(start_key)
+            found = cursor.set_range(start_key)  # type: ignore[reportUnknownMemberType]
             while found:
-                key, value = cursor.item()
+                key, value = cursor.item()  # type: ignore[reportUnknownMemberType]
+                assert isinstance(key, bytes) and isinstance(value, bytes)
                 if not key.startswith(SAMPLE_PREFIX):
                     break
                 current_idx = _decode_sample_key(key)
                 if end_idx is not None and current_idx >= end_idx:
                     break
                 yield self._deserialize(value)
-                found = cursor.next()
+                found = cursor.next()  # type: ignore[reportUnknownMemberType]
 
     def iter_batched(
         self,
@@ -660,7 +660,7 @@ class LMDBReader:
         Yields:
             Batches of sample data
         """
-        batch = []
+        batch: list[typing.Any] = []
         for sample in self.iter_from(start_idx, end_idx):
             batch.append(sample)
             if len(batch) >= batch_size:

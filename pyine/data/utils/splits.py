@@ -10,7 +10,6 @@ import tqdm
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
 import pyine.utils.filesystem
-import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +184,7 @@ class SplitConfig(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def _post_validator(self) -> "SplitConfig":
         """Confirms that inter-setting configuration is valid and resolves filter rules."""
-        if any(not isinstance(name, str) or name == "" for name in self.subset_names):
+        if any(name == "" for name in self.subset_names):
             raise ValueError("subset names must be non-empty")
         unknown_names = [name for name in self.subset_assign_rules_map if name not in self.subset_names]
         if unknown_names:
@@ -404,7 +403,10 @@ def get_dataset_split_result(
     if potential_path.is_file():
         split_file_path = potential_path
     else:
-        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path, must_exist=True)
+        split_file_path = get_dataset_split_file_path(
+            str(source_dataset_name_or_split_file_path),
+            must_exist=True,
+        )
     with open(split_file_path, "rb") as fd:
         split_result_dict = orjson.loads(fd.read())
     return SplitResult.model_validate(split_result_dict)
@@ -423,7 +425,10 @@ def get_dataset_split_part_file_paths(
     if potential_path.is_file():
         split_file_path = potential_path
     else:
-        split_file_path = get_dataset_split_file_path(source_dataset_name_or_split_file_path, must_exist=False)
+        split_file_path = get_dataset_split_file_path(
+            str(source_dataset_name_or_split_file_path),
+            must_exist=False,
+        )
     expected_part_file_name_pattern = f"{split_file_path.stem}.problem_ids.*of*{part_extension}"
     part_file_paths = list(split_file_path.parent.glob(expected_part_file_name_pattern))
     part_file_paths.sort()

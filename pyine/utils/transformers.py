@@ -540,6 +540,19 @@ def supports_text_generation(obj: typing.Any) -> bool:
     return bool(has_generate and (is_encdec or looks_like_lm or has_pifg))
 
 
+def resolve_hf_generation_config(
+    config: transformers.GenerationConfig
+    | pyine.utils.transformers.GenerationConfig
+    | collections.abc.Mapping[str, typing.Any],
+) -> transformers.GenerationConfig:
+    """Return a HuggingFace generation config from supported configuration inputs."""
+    if isinstance(config, transformers.GenerationConfig):
+        return transformers.GenerationConfig(**config.to_dict())
+    if isinstance(config, pyine.utils.transformers.GenerationConfig):
+        return transformers.GenerationConfig(**config.model_dump())
+    return transformers.GenerationConfig(**dict(config))
+
+
 def run_text_generation(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,

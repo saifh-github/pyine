@@ -1,4 +1,3 @@
-import inspect
 import logging
 import typing
 
@@ -74,7 +73,7 @@ async def evaluate_model(
     datamodule: pyine.data.datamodule.ConversationDataModule,
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> dict[str, typing.Any]:
+) -> dict[str, pyine.evals.common.EvalResult]:
     """Evaluates the given model on the specified data subset using the internal evals config.
 
     Args:
@@ -85,9 +84,9 @@ async def evaluate_model(
         runtime: The runtime configuration, which may contain W&B run information.
 
     Returns:
-        The evaluation results as a dictionary of metrics.
+        The evaluation results as a dictionary indexed by evaluated subset name.
     """
-    evaluation_results: dict[str, typing.Any] = {}
+    evaluation_results: dict[str, pyine.evals.common.EvalResult] = {}
     if config.evals_config.eval_type is None:
         return evaluation_results
     if pyine.utils.transformers.is_hf_model(model):
@@ -96,15 +95,14 @@ async def evaluate_model(
         hf_model = typing.cast("transformers.PreTrainedModel", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             logger.info(f"running trained model evaluation on the {eval_subset_name} subset...")
-            evaluation_result: typing.Any = await config.evals_config.evaluate_hf_model(
+            evaluation_result = await config.evals_config.evaluate_hf_model(
                 model=hf_model,
                 tokenizer=tokenizer,
                 datamodule=datamodule,
                 eval_subset_name=eval_subset_name,
                 verbose=True,
             )
-            if inspect.isawaitable(evaluation_result):
-                evaluation_result = await evaluation_result
+            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
             pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
             evaluation_results[eval_subset_name] = evaluation_result
     else:
@@ -115,14 +113,13 @@ async def evaluate_model(
         chain_model = typing.cast("pyine.evals.utils.InvocableModelChain", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             logger.info(f"running chain evaluation on the {eval_subset_name} subset...")
-            evaluation_result: typing.Any = await config.evals_config.evaluate_runnable_model(
+            evaluation_result = await config.evals_config.evaluate_runnable_model(
                 chain=chain_model,
                 datamodule=datamodule,
                 eval_subset_name=eval_subset_name,
                 verbose=True,
             )
-            if inspect.isawaitable(evaluation_result):
-                evaluation_result = await evaluation_result
+            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
             pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
             evaluation_results[eval_subset_name] = evaluation_result
     if config.use_wandb_logging and evaluation_results:
