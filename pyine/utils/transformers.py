@@ -1,4 +1,4 @@
-import collections
+import collections.abc
 import contextlib
 import typing
 
@@ -79,30 +79,44 @@ class ExampleBatchTensors(typing.TypedDict):
     """Length of the full example (prompt + potential response), prior to padding."""
 
 
+type ConversationMessage = dict[str, typing.Any]
+"""Alias for messages in conversation datasets."""
+
+type ConversationHistory = list[ConversationMessage]
+"""Alias for ordered conversation histories."""
+
+
 def _build_example_ids_from_conversation_parts(
     tokenizer: transformers.PreTrainedTokenizer,
-    history_msgs: list[dict],
-    assistant_msg: dict,
+    history_msgs: ConversationHistory,
+    assistant_msg: ConversationMessage,
     max_seq_len: int | None,
 ) -> _ExampleData | None:
     """Turns a (history, assistant) pair into token ids and prompt length.
 
     Returns None when the assistant message is empty.
     """
-    assistant_text = assistant_msg.get("content", "").strip()
+    assistant_raw = assistant_msg.get("content", "")
+    assistant_text = str(assistant_raw).strip()
     if not assistant_text:
         return None
     # from a conversation history and an assistant message, build the prompt text block
-    prompt_text = tokenizer.apply_chat_template(
+    apply_template_attr = getattr(tokenizer, "apply_chat_template", None)
+    if apply_template_attr is None:
+        raise AttributeError("tokenizer must support apply_chat_template")
+    apply_template = typing.cast("typing.Callable[..., str]", apply_template_attr)
+    prompt_text = apply_template(
         # this will convert multi-turn messages into a single text block w/ proper role tags and delimiters
         history_msgs,
         tokenize=False,
         add_generation_prompt=True,
     )
-    full_text = prompt_text + assistant_text
+    full_text = f"{prompt_text}{assistant_text}"
     # tokenize the prompt and full text, and return the prompt ids and full ids
-    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-    full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]
+    prompt_encoding = tokenizer(prompt_text, add_special_tokens=False)
+    full_encoding = tokenizer(full_text, add_special_tokens=False)
+    prompt_ids = typing.cast("list[int]", prompt_encoding["input_ids"])
+    full_ids = typing.cast("list[int]", full_encoding["input_ids"])
     if max_seq_len is not None and len(full_ids) > max_seq_len:
         # the full prompt has too many tokens for the model, so we need to truncate it
         response_len = len(full_ids) - len(prompt_ids)
@@ -146,10 +160,10 @@ def prepare_examples_from_conversations(
     We also keep "prompt_len" so the collator can later mask prompt tokens in labels.
     """
 
-    def _split_to_examples(example: dict) -> dict[str, typing.Any]:
+    def _split_to_examples(example: dict[str, typing.Any]) -> dict[str, typing.Any]:
         # called on a single conversation by Dataset.map; must return a dict of column->values
         # (if returned values are lists of equal length, HF "explodes" them into multiple rows)
-        messages: list[dict] = example[messages_key]
+        messages = typing.cast("ConversationHistory", example[messages_key])
         out_input_ids: list[list[int]] = []
         out_prompt_len: list[int] = []
         for msg_idx, message in enumerate(messages):
@@ -159,12 +173,13 @@ def prepare_examples_from_conversations(
             # history is everything before the currently-targeted assistant message
             history = messages[:msg_idx]
             result = _build_example_ids_from_conversation_parts(tokenizer, history, message, max_seq_len)
-            if not result:
+            if result is None:
                 # skip empty/invalid assistant messages
                 continue
             # collect one example per assistant turn; HF will create as many rows as we return here
+            prompt_ids = result["prompt_ids"]
             out_input_ids.append(result["input_ids"])
-            out_prompt_len.append(len(result["prompt_ids"]))
+            out_prompt_len.append(len(prompt_ids))
         # only return columns needed for training; others are discarded via remove_columns below
         return {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
 
@@ -180,8 +195,16 @@ def prepare_examples_from_conversations(
     )
     # mapping with list outputs creates nested rows tied to original row; flatten to simple rows
     dataset = dataset.flatten_indices()
+
     # keep only rows that actually contain tokenized inputs
-    return dataset.filter(lambda row: isinstance(row["input_ids"], list) and len(row["input_ids"]) > 0)
+    def _has_input_ids(row: dict[str, typing.Any]) -> bool:
+        input_ids = row.get("input_ids")
+        if not isinstance(input_ids, list):
+            return False
+        typed_input_ids = typing.cast("list[typing.Any]", input_ids)
+        return len(typed_input_ids) > 0
+
+    return dataset.filter(_has_input_ids)
 
 
 class FixedSizePaddingCollatorWithPromptMask:
@@ -208,7 +231,10 @@ class FixedSizePaddingCollatorWithPromptMask:
         self.max_length = max_length
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
-        assert self.tokenizer.pad_token_id is not None, "tokenizer must have a pad token"
+        pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if not isinstance(pad_token_id, int):
+            raise ValueError("tokenizer must expose an integer pad token")
+        self._pad_token_id = pad_token_id
 
     def __call__(
         self,
@@ -225,7 +251,7 @@ class FixedSizePaddingCollatorWithPromptMask:
             assert "input_ids" in feature, "missing expected input_ids column in feature dict"
             assert "prompt_len" in feature, "missing expected prompt_len column in feature dict"
             # left-truncate if necessary to keep the tail (usually contains the answer)
-            orig_ids = feature["input_ids"]
+            orig_ids = typing.cast("list[int]", feature["input_ids"])
             prompt_len = int(feature["prompt_len"])
             if len(orig_ids) > self.max_length:
                 overflow = len(orig_ids) - self.max_length
@@ -237,7 +263,7 @@ class FixedSizePaddingCollatorWithPromptMask:
             input_len = len(token_ids)
             pad_len = self.max_length - input_len
             # right-pad to a fixed length
-            input_ids = token_ids + [self.tokenizer.pad_token_id] * pad_len
+            input_ids = token_ids + [self._pad_token_id] * pad_len
             attention_mask = [1] * input_len + [0] * pad_len
             # labels mirror input ids but ignore loss on prompt and padding positions
             labels = input_ids.copy()
@@ -288,10 +314,22 @@ class BatchwisePaddingCollator:
     ) -> None:
         """Initializes the collator."""
         self.max_allowed_length = max_allowed_length
-        self.keep_extra_fields = keep_extra_fields or []
+        if isinstance(keep_extra_fields, list):
+            self._forward_all_fields = False
+            self._keep_extra_fields = list(keep_extra_fields)
+        elif keep_extra_fields:
+            assert keep_extra_fields is True
+            self._forward_all_fields = True
+            self._keep_extra_fields = []
+        else:
+            self._forward_all_fields = False
+            self._keep_extra_fields = []
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
-        assert self.tokenizer.pad_token_id is not None, "tokenizer must have a pad token"
+        pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if not isinstance(pad_token_id, int):
+            raise ValueError("tokenizer must expose an integer pad token")
+        self._pad_token_id = pad_token_id
 
     def __call__(
         self,
@@ -307,11 +345,15 @@ class BatchwisePaddingCollator:
             for unexpected_field in unexpected_field_names:
                 if unexpected_field in data:
                     raise ValueError(f"input to batch contains unexpected field: {unexpected_field}")
-        input_len, prompt_len = [], []
+        input_lengths: list[int] = []
+        prompt_lengths: list[int] = []
         for data in to_batch:
-            curr_input_len = data.get("input_len", len(data["input_ids"]))
-            if "prompt_len" in data or "prompt_ids" in data:
-                curr_prompt_len = data.get("prompt_len", len(data["prompt_ids"]))
+            input_ids_list = typing.cast("list[int]", data["input_ids"])
+            curr_input_len = int(data.get("input_len", len(input_ids_list)))
+            if "prompt_len" in data:
+                curr_prompt_len = int(data["prompt_len"])
+            elif "prompt_ids" in data:
+                curr_prompt_len = len(typing.cast("list[int]", data["prompt_ids"]))
             else:
                 curr_prompt_len = curr_input_len
             if curr_prompt_len > curr_input_len:
@@ -324,39 +366,48 @@ class BatchwisePaddingCollator:
                     f"found an element with an input length ({curr_input_len}) "
                     f"larger than max_allowed_length ({self.max_allowed_length})"
                 )
-            input_len.append(curr_input_len)
-            prompt_len.append(curr_prompt_len)
+            input_lengths.append(curr_input_len)
+            prompt_lengths.append(curr_prompt_len)
         input_ids = torch.nn.utils.rnn.pad_sequence(
-            [torch.tensor(data["input_ids"], dtype=torch.long) for data in to_batch],
+            [torch.tensor(typing.cast("list[int]", data["input_ids"]), dtype=torch.long) for data in to_batch],
             batch_first=True,
-            padding_value=self.tokenizer.pad_token_id,
+            padding_value=self._pad_token_id,
         )
         attn_mask = torch.nn.utils.rnn.pad_sequence(
-            [torch.tensor(data["attention_mask"], dtype=torch.long) for data in to_batch],
+            [torch.tensor(typing.cast("list[int]", data["attention_mask"]), dtype=torch.long) for data in to_batch],
             batch_first=True,
             padding_value=0,
         )
         # labels mirror input ids but ignore loss on prompt and padding positions
         labels = input_ids.clone()
-        for row_idx, (input_l, prompt_l) in enumerate(zip(input_len, prompt_len, strict=False)):
+        for row_idx, input_l in enumerate(input_lengths):
+            prompt_l = prompt_lengths[row_idx]
             labels[row_idx, :prompt_l] = self.ignore_index
             labels[row_idx, input_l:] = self.ignore_index
-        output = ExampleBatchTensors(
-            input_ids=input_ids,
-            attention_mask=attn_mask,
-            labels=labels,
-            prompt_len=prompt_len,
-            input_len=input_len,
-        )
+        batch_dict: dict[str, typing.Any] = {
+            "input_ids": input_ids,
+            "attention_mask": attn_mask,
+            "labels": labels,
+            "prompt_len": prompt_lengths,
+            "input_len": input_lengths,
+        }
         # carry over targeted (or all) metadata fields with the input batch order
-        if self.keep_extra_fields:
-            keep_extra_fields = self.keep_extra_fields
-            if not isinstance(keep_extra_fields, list):
-                assert keep_extra_fields is True
-                keep_extra_fields = {key for data in to_batch for key in data}
-            metadata = {k: [data[k] for data in to_batch] for k in keep_extra_fields if k not in expected_field_names}
-            output.update(metadata)
-        return output
+        if self._forward_all_fields or self._keep_extra_fields:
+            if self._forward_all_fields:
+                ordered_keys: list[str] = []
+                seen: set[str] = set()
+                for data in to_batch:
+                    for key in data:
+                        if key in expected_field_names or key in seen:
+                            continue
+                        ordered_keys.append(key)
+                        seen.add(key)
+                keys_to_forward = ordered_keys
+            else:
+                keys_to_forward = [key for key in self._keep_extra_fields if key not in expected_field_names]
+            for key in keys_to_forward:
+                batch_dict[key] = [data[key] for data in to_batch]
+        return typing.cast("ExampleBatchTensors", batch_dict)
 
 
 def infer_effective_max_seq_len(
@@ -393,7 +444,7 @@ def _get_base_pretrained_model(obj: typing.Any) -> transformers.PreTrainedModel 
     Should be able to peek through DDP/FSDP/DeepSpeed/Accelerate, PEFT, TRL, pipelines, etc.; if
     the method cannot find a `PreTrainedModel` in the object, returns None.
     """
-    seen = set()
+    seen: set[int] = set()
     cur = obj
     # first, check the simplest case, i.e. if the object itself is what we want
     if isinstance(obj, transformers.PreTrainedModel):
@@ -489,11 +540,10 @@ def supports_text_generation(obj: typing.Any) -> bool:
     return bool(has_generate and (is_encdec or looks_like_lm or has_pifg))
 
 
-@torch.no_grad()
 def run_text_generation(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
-    dataloader: torch.utils.data.DataLoader,
+    dataloader: torch.utils.data.DataLoader[dict[str, typing.Any]],
     gen_config: transformers.GenerationConfig,
     forward_batch_keys: list[str] | bool | None = None,
     generated_text_key: str = "prediction",
@@ -529,51 +579,65 @@ def run_text_generation(
         ``generated_text_key`` and, if requested, any forwarded metadata keys with values aligned
         to the batch order.
     """
-    results: list[dict] = []
+    results: list[dict[str, typing.Any]] = []
     device = next(model.parameters()).device
     want_amp = device.type == "cuda" and model.dtype in (torch.bfloat16, torch.float16)
-    amp_context = torch.autocast(device_type="cuda", dtype=model.dtype) if want_amp else contextlib.nullcontext()
+    amp_context: contextlib.AbstractContextManager[typing.Any] = (
+        torch.autocast(device_type="cuda", dtype=model.dtype) if want_amp else contextlib.nullcontext()
+    )
     expected_field_names = ["input_ids", "attention_mask", "input_len"]
-    forward_batch_keys = forward_batch_keys or []
-    prog_bar = tqdm.tqdm(dataloader, desc="generating predictions", smoothing=0.1, disable=not verbose)
-    for batch in prog_bar:
-        assert isinstance(batch, dict), f"unexpected batch type: {type(batch)}"
-        for field_name in expected_field_names:
-            if field_name not in batch:
-                raise ValueError(f"batch dictionary is missing expected field: {field_name}")
-        input_ids: torch.Tensor = batch["input_ids"].to(device, non_blocking=True)
-        attn_mask: torch.Tensor = batch["attention_mask"].to(device, non_blocking=True)
-        input_len: list[int] = batch["input_len"]
-        with amp_context:
-            generation_result = model.generate(
-                input_ids=input_ids,
-                attention_mask=attn_mask,
-                generation_config=gen_config,
-                return_dict_in_generate=True,
-            )
-        # note: generation_result.sequences includes the prompt + newly generated tokens
-        generated_output = generation_result.sequences.to("cpu")  # [B, prompt+new]
-        assert generated_output.ndim == 2 and generated_output.shape[0] == len(input_len)
-        for sample_idx, sample_result in enumerate(generated_output):
-            new_tokens_ids = sample_result[input_len[sample_idx] :]
-            new_text = tokenizer.decode(
-                new_tokens_ids,
-                skip_special_tokens=True,
-                # clean_up_tokenization_spaces=False,
-            )
-            curr_output = {
-                generated_tokens_key: new_tokens_ids,
-                generated_text_key: new_text,
-            }
-            # carry over targeted (or all) metadata fields with the input batch order
-            if forward_batch_keys:
-                curr_target_keys = forward_batch_keys
-                if not isinstance(curr_target_keys, list):
-                    assert curr_target_keys is True
-                    curr_target_keys = list(batch)  # forward all preexisting fields
-                assert generated_tokens_key not in curr_target_keys
-                assert generated_text_key not in curr_target_keys
-                metadata = {k: batch[k][sample_idx] for k in curr_target_keys}
-                curr_output.update(metadata)
-            results.append(curr_output)
+    forward_all_keys = forward_batch_keys is True
+    selected_forward_keys: list[str] = list(forward_batch_keys) if isinstance(forward_batch_keys, list) else []
+    generate_fn = typing.cast(
+        "typing.Callable[..., transformers.generation.utils.GenerateOutput]",
+        model.generate,
+    )
+    decode_attr = typing.cast("typing.Any", tokenizer).decode
+    decode_fn = typing.cast("typing.Callable[..., str]", decode_attr)
+    with torch.no_grad():
+        prog_bar = tqdm.tqdm(dataloader, desc="generating predictions", smoothing=0.1, disable=not verbose)
+        for batch in prog_bar:
+            assert isinstance(batch, dict), f"unexpected batch type: {type(batch)}"
+            for field_name in expected_field_names:
+                if field_name not in batch:
+                    raise ValueError(f"batch dictionary is missing expected field: {field_name}")
+            input_ids = typing.cast("torch.Tensor", batch["input_ids"]).to(device, non_blocking=True)
+            attn_mask = typing.cast("torch.Tensor", batch["attention_mask"]).to(device, non_blocking=True)
+            input_len = typing.cast("list[int]", batch["input_len"])
+            with amp_context:
+                generation_result = generate_fn(
+                    input_ids=input_ids,
+                    attention_mask=attn_mask,
+                    generation_config=gen_config,
+                    return_dict_in_generate=True,
+                )
+            # note: generation_result.sequences includes the prompt + newly generated tokens
+            sequences = typing.cast("torch.Tensor", generation_result.sequences)
+            generated_output = sequences.to("cpu")  # [B, prompt+new]
+            assert generated_output.ndim == 2 and generated_output.shape[0] == len(input_len)
+            for sample_idx in range(generated_output.shape[0]):
+                sample_result = generated_output[sample_idx]
+                new_tokens_ids = sample_result[input_len[sample_idx] :]
+                new_text = decode_fn(
+                    new_tokens_ids,
+                    skip_special_tokens=True,
+                    # clean_up_tokenization_spaces=False,
+                )
+                curr_output: dict[str, typing.Any] = {
+                    generated_tokens_key: new_tokens_ids,
+                    generated_text_key: new_text,
+                }
+                # carry over targeted (or all) metadata fields with the input batch order
+                if forward_all_keys or selected_forward_keys:
+                    curr_target_keys: list[str]
+                    if forward_all_keys:
+                        batch_keys = typing.cast("typing.Iterable[str]", batch.keys())
+                        curr_target_keys = list(batch_keys)
+                    else:
+                        curr_target_keys = selected_forward_keys
+                    assert generated_tokens_key not in curr_target_keys
+                    assert generated_text_key not in curr_target_keys
+                    metadata: dict[str, typing.Any] = {k: batch[k][sample_idx] for k in curr_target_keys}
+                    curr_output.update(metadata)
+                results.append(curr_output)
     return results

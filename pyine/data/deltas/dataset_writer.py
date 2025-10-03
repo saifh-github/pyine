@@ -13,10 +13,7 @@ import pyine.data.deltas.dataset_utils
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.lmdb_io
-import pyine.utils.code.execution
 import pyine.utils.filesystem
-import pyine.utils.portability
-import pyine.utils.reprod
 
 DeltaGeneratorType = pyine.data.deltas.dataset_utils.DeltaGeneratorType
 
@@ -52,21 +49,22 @@ def write_dataset(
         object should have already been closed, and can be used to read attributes from the dataset.
     """
     log = logger.info if verbose else logger.debug
-    if traces_dataset_name_or_path in pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS:
-        traces_dataset_name_or_path = pyine.data.traces.dataset_utils.get_latest_dataset_path(
-            traces_dataset_name_or_path
-        )
-    traces_dataset_name_or_path = pathlib.Path(traces_dataset_name_or_path)
-    if not traces_dataset_name_or_path.exists():
-        raise FileNotFoundError(f"traces dataset not found at: {traces_dataset_name_or_path}")
-    trace_reader = pyine.data.traces.dataset_reader.DatasetReader(lmdb_path=traces_dataset_name_or_path)
+    if isinstance(traces_dataset_name_or_path, str) and (
+        traces_dataset_name_or_path in pyine.data.traces.dataset_utils.SUPPORTED_SOURCE_DATASETS
+    ):
+        resolved_traces_path = pyine.data.traces.dataset_utils.get_latest_dataset_path(traces_dataset_name_or_path)
+    else:
+        resolved_traces_path = pathlib.Path(traces_dataset_name_or_path)
+    if not resolved_traces_path.exists():
+        raise FileNotFoundError(f"traces dataset not found at: {resolved_traces_path}")
+    trace_reader = pyine.data.traces.dataset_reader.DatasetReader(lmdb_path=resolved_traces_path)
     pyine.utils.filesystem.check_output_path_overwrite(output_dataset_path, force=force_overwrite)
     writer = pyine.data.utils.lmdb_io.LMDBWriter(path=output_dataset_path)
     writer.write_metadata(
         {
             "parent_dataset": {
                 "dataset_name": trace_reader.parent_dataset_name,
-                "dataset_path": str(traces_dataset_name_or_path),
+                "dataset_path": str(resolved_traces_path),
                 "dataset_hash": trace_reader.hash,
                 "dataset_metadata": trace_reader.metadata,
                 "trace_count": len(trace_reader),
@@ -74,20 +72,25 @@ def write_dataset(
             "delta_generator": delta_generator.value,
         }
     )
-    delta_counts = []
-    seen_problem_ids, seen_trace_ids = set(), set()
+    delta_counts: list[int] = []
+    seen_problem_ids: set[pyine.data.traces.dataset_utils.CodingProblemIdentifier] = set()
+    seen_trace_ids: set[pyine.data.traces.dataset_utils.TraceIdentifier] = set()
     for trace_idx in tqdm.tqdm(range(len(trace_reader)), desc="parsing traces from raw dataset"):
         trace = trace_reader[trace_idx]
-        trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(trace.identifier)
+        identifier_str = trace.identifier
+        if identifier_str is None:
+            raise ValueError("trace is missing an identifier")
+        trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(identifier_str)
         assert trace_id not in seen_trace_ids
         seen_trace_ids.add(trace_id)
         problem_data = trace_reader.get_problem_data(trace_idx)
-        deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
+        trace_with_deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
             trace_res=trace,
             delta_generator=delta_generator,
         )
-        log(f"generated {len(deltas)} deltas for trace: {trace_id}")
-        if deltas:
+        trace_delta_count = len(trace_with_deltas.deltas)
+        log(f"generated {trace_delta_count} deltas for trace: {trace_id}")
+        if trace_with_deltas.deltas:
             # we will store the problem data, trace, and the new deltas in the output dataset
             if problem_data.problem_id not in seen_problem_ids:
                 # store problem data first, but only if this is a problem we have never seen yet
@@ -100,8 +103,8 @@ def write_dataset(
             trace_output_key = str(trace_id)
             writer.put(key=trace_output_key, value=trace.model_dump())
             deltas_output_key = trace_output_key + pyine.data.deltas.dataset_utils.DELTAS_SUFFIX
-            writer.put(key=deltas_output_key, value=deltas.model_dump())
-        delta_counts.append(len(deltas))
+            writer.put(key=deltas_output_key, value=trace_with_deltas.model_dump())
+        delta_counts.append(trace_delta_count)
     log(f"done; wrote {len(delta_counts)} outputs to LMDB dataset at: {writer.path}!")
     writer.close()
     log(f"\t(dataset size: {writer.get_size_on_disk() / 1024**2:.2f} MB)")
