@@ -35,7 +35,7 @@ class AppMainConfig(pydantic.BaseModel):
 def prepare_datamodule(
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> pyine.data.datamodule.BaseDataModule:
+) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
     """Prepares the configured datamodule and returns it.
 
     Args:
@@ -70,7 +70,7 @@ def prepare_datamodule(
 async def evaluate_model(
     model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer | None,
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> dict[str, pyine.evals.common.EvalResult]:

@@ -247,7 +247,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         self,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> BaseDataModule:
+    ) -> BaseDataModule[typing.Any]:
         """Instantiates a data module object based on the configured target class path."""
         dm_class = self._resolved_datamodule_class
         if dm_class is None:
@@ -264,7 +264,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         default_factory=_loader_config_dict_factory
     )
     # cache the resolved datamodule class type also for potential instantiate calls
-    _resolved_datamodule_class: type[BaseDataModule] | None = pydantic.PrivateAttr(default=None)
+    _resolved_datamodule_class: type[BaseDataModule[typing.Any]] | None = pydantic.PrivateAttr(default=None)
 
     def _resolve_dataparser_config(
         self,
@@ -312,7 +312,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         return self
 
 
-class BaseDataModule(pl.LightningDataModule):
+class BaseDataModule[ConfigType](pl.LightningDataModule):
     """Wraps the standard LightningDataModule interface to combine it with pydantic configs.
 
     Each derived data module will likely correspond to a combination of one dataset and one target
@@ -327,16 +327,18 @@ class BaseDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        config: BaseDataModuleConfig,
+        config: ConfigType,
     ) -> None:
         """Initializes the base interface using the expected configs of parsers/loaders.
 
         Args:
             config: configuration model of data module (parser/loader) settings.
         """
+        if not isinstance(config, BaseDataModuleConfig):
+            raise TypeError(f"expected a config derived from {BaseDataModuleConfig}, got {type(config)}")
         super().__init__()
         self.save_hyperparameters(config.model_dump())
-        self.config = config
+        self.config: ConfigType = config
 
     def prepare_data(self) -> None:
         """Override this function to download/copy/prepare local data for the dataloaders.
@@ -457,6 +459,8 @@ class BaseDataModule(pl.LightningDataModule):
     @property
     def dataloader_names(self) -> tuple[LoaderNameType, ...]:
         """Returns the dataloader names that this particular implementation supports."""
+        if not isinstance(self.config, BaseDataModuleConfig):
+            raise TypeError(f"expected a config derived from {BaseDataModuleConfig}, got {type(self.config)}")
         return self.config.loader_names
 
     def get_stats(self, target_subsets: list[SubsetNameType] | None = None) -> dict[str, int | float | str]:
@@ -473,8 +477,8 @@ class BaseDataModule(pl.LightningDataModule):
         correct function that prepares the dataloader(s). By default, we assume that dataloader
         types are linked to data subsets.
         """
-        if loader_name not in self.config.loader_names:
-            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.config.loader_names}")
+        if loader_name not in self.dataloader_names:
+            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.dataloader_names}")
         expected_getter_name = f"{loader_name}_dataloader"
         if not hasattr(self, expected_getter_name):
             raise ValueError(f"invalid loader name: {loader_name}, no such function: {expected_getter_name}")
@@ -580,7 +584,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         self,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> ConversationDataModule:
+    ) -> ConversationDataModule[typing.Any]:
         """Instantiates a data module object based on the configured target class path."""
         dm = super().instantiate_datamodule(*args, **extra_kwargs)
         if not isinstance(dm, ConversationDataModule):
@@ -736,7 +740,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         return self
 
 
-class ConversationDataModule(BaseDataModule):
+class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
     """Data module base class for conversation-based data.
 
     This specialized data module class is designed to work with data that can be structured as
@@ -747,15 +751,16 @@ class ConversationDataModule(BaseDataModule):
 
     def __init__(
         self,
-        config: ConversationDataModuleConfig,
+        config: ConfigType,
     ) -> None:
         """Initializes the base interface using the expected configs of parsers/loaders.
 
         Args:
             config: configuration model of data module (parser/loader) settings.
         """
+        if not isinstance(config, ConversationDataModuleConfig):
+            raise TypeError(f"expected a config derived from {ConversationDataModuleConfig}, got {type(config)}")
         super().__init__(config)
-        self.config: ConversationDataModuleConfig = config
 
     def get_hf_messages_dataset(
         self,

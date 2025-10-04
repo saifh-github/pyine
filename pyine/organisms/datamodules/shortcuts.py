@@ -1,12 +1,11 @@
+from __future__ import annotations
+
 import itertools
 import logging
-import pathlib
 import typing
 
-import datasets as hf_datasets
 import msgspec
 import numpy as np
-import transformers
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
@@ -16,11 +15,15 @@ import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.utils.filesystem
 import pyine.utils.reprod
+from pyine.organisms.datamodules.shortcuts_configs import (
+    ShortcutBiasDataModuleConfig,
+)
 
 if typing.TYPE_CHECKING:
-    from pyine.organisms.datamodules.shortcuts_configs import (
-        ShortcutBiasDataModuleConfig,
-    )
+    import pathlib
+
+    import datasets as hf_datasets
+    import transformers
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ ProblemIdType = str
 """Type def used to represent a coding problem identifier (for cleanliness)."""
 
 
-class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
+class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[ShortcutBiasDataModuleConfig]):
     """DataModule wrapping one or multiple PyINE code trace datasets for shortcut-bias experiments.
 
     This module loads one or more LMDB trace datasets, optionally filters available traces
@@ -45,12 +48,11 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule):
 
     def __init__(
         self,
-        config: "ShortcutBiasDataModuleConfig",
+        config: ShortcutBiasDataModuleConfig,
         verbose: bool = False,
     ) -> None:
         super().__init__(config)
         self.verbose = verbose
-        self.config: ShortcutBiasDataModuleConfig = config
         self._metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None = None
         self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
         self._subset_parsers: dict[

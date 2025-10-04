@@ -540,15 +540,17 @@ def supports_text_generation(obj: typing.Any) -> bool:
     return bool(has_generate and (is_encdec or looks_like_lm or has_pifg))
 
 
+type GenerationConfigInput = transformers.GenerationConfig | GenerationConfig | collections.abc.Mapping[str, typing.Any]
+"""Accepted input types for ``resolve_hf_generation_config``."""
+
+
 def resolve_hf_generation_config(
-    config: transformers.GenerationConfig
-    | pyine.utils.transformers.GenerationConfig
-    | collections.abc.Mapping[str, typing.Any],
+    config: GenerationConfigInput,
 ) -> transformers.GenerationConfig:
     """Return a HuggingFace generation config from supported configuration inputs."""
     if isinstance(config, transformers.GenerationConfig):
-        return transformers.GenerationConfig(**config.to_dict())
-    if isinstance(config, pyine.utils.transformers.GenerationConfig):
+        return config
+    if isinstance(config, GenerationConfig):
         return transformers.GenerationConfig(**config.model_dump())
     return transformers.GenerationConfig(**dict(config))
 
@@ -601,12 +603,8 @@ def run_text_generation(
     expected_field_names = ["input_ids", "attention_mask", "input_len"]
     forward_all_keys = forward_batch_keys is True
     selected_forward_keys: list[str] = list(forward_batch_keys) if isinstance(forward_batch_keys, list) else []
-    generate_fn = typing.cast(
-        "typing.Callable[..., transformers.generation.utils.GenerateOutput]",
-        model.generate,
-    )
-    decode_attr = typing.cast("typing.Any", tokenizer).decode
-    decode_fn = typing.cast("typing.Callable[..., str]", decode_attr)
+    generate_fn = typing.cast("typing.Callable[..., typing.Any]", model.generate)
+    decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)
     with torch.no_grad():
         prog_bar = tqdm.tqdm(dataloader, desc="generating predictions", smoothing=0.1, disable=not verbose)
         for batch in prog_bar:

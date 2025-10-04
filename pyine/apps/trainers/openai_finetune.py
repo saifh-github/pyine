@@ -25,7 +25,7 @@ if typing.TYPE_CHECKING:
 
 def _compute_estimated_train_token_count(
     config: "pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig",
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
 ) -> int:
     """Approximate the number of tokens used to train a model on the given dataset."""
     tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(
@@ -44,7 +44,7 @@ def _compute_estimated_train_token_count(
 
 def train(
     client: openai.OpenAI,
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: "pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> str:

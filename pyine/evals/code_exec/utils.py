@@ -10,10 +10,19 @@ import pydantic
 import pyine.data.utils.filter_rules
 import pyine.evals.utils
 import pyine.organisms.datamodules.utils.samples
+import pyine.prompts.types
 import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
 
 logger = logging.getLogger(__name__)
+
+
+type LLMScoreFuture = asyncio.Task[float]
+"""Type alias for pending LLM score computations."""
+type LLMGraderPayload = dict[str, str]
+"""Typed payload expected by the LLM grading chain."""
+type LLMGraderResponse = float | pyine.utils.code.output_compare.GradingResult
+"""Raw response type emitted by the LLM grading chain."""
 
 
 @dataclasses.dataclass
@@ -30,7 +39,7 @@ class SampleEval:
     """Exact match result (following potential string normalization)."""
     soft_match: pyine.utils.code.output_compare.CompareResult
     """Soft match result (using the framework's output comparison function)."""
-    _llm_score: float | asyncio.Task | None
+    _llm_score: float | LLMScoreFuture | None
     """Score in [0, 1] returned by a LLM grader, if used."""
     tags: list[str]
     """Arbitrary tags used for grouping/filtering (e.g., difficulty, source)."""
@@ -47,11 +56,12 @@ class SampleEval:
     @staticmethod
     async def gather_llm_scores(eval_objs: typing.Iterable["SampleEval"]) -> None:
         objs_with_future = [obj for obj in eval_objs if isinstance(obj._llm_score, asyncio.Task)]
-        if objs_with_future:
-            scores = await asyncio.gather(*(obj._llm_score for obj in objs_with_future))
-            # re-assign the scores to the original items
-            for obj, score in zip(objs_with_future, scores, strict=False):
-                obj._llm_score = _decode_response(score)
+        if not objs_with_future:
+            return
+        tasks: list[LLMScoreFuture] = [typing.cast("LLMScoreFuture", obj._llm_score) for obj in objs_with_future]
+        scores = await asyncio.gather(*tasks)
+        for obj, score in zip(objs_with_future, scores, strict=False):
+            obj._llm_score = score
 
 
 AccuracyType = typing.Literal["hard", "soft", "grader"]
@@ -137,10 +147,12 @@ class OutcomeEvaluator:
             llm_grader_config = pyine.utils.code.output_compare.get_options_for_llm_grading()
         self.llm_grader_config = llm_grader_config
         self.llm_provider_config = llm_provider_config
-        self._llm_grader_chain = None
-        if llm_provider_config is not None:
+        self._llm_grader_chain: pyine.prompts.types.PromptRunnable | None = None
+        if self.llm_provider_config is not None:
             model = pyine.utils.llm_providers.get_model_from_provider_config(self.llm_provider_config)
-            self._llm_grader_chain = self.llm_grader_config.get_chain(model, runnable_name=runnable_name)
+            runnable_config = typing.cast("pyine.prompts.types.PromptBuildConfig", self.llm_grader_config)
+            chain = runnable_config.get_chain(model, runnable_name=runnable_name)
+            self._llm_grader_chain = chain
             logger.debug("setting up code exec outcome evaluator WITH llm grader")
         else:
             logger.debug("setting up code exec outcome evaluator WITHOUT llm grader")
@@ -156,27 +168,53 @@ class OutcomeEvaluator:
         expected: str,
         predicted: str,
         config: langchain_core.runnables.RunnableConfig | None = None,
-    ) -> float | asyncio.Task:
+    ) -> float | LLMScoreFuture:
         if not self.is_llm_grader_available():
             raise ValueError("LLM grader not configured, scoring is unavailable")
+        assert self._llm_grader_chain is not None  # narrow type for pyright
         if self.use_async_llm_grader:
             return asyncio.create_task(
-                self._llm_grader_chain.ainvoke(
-                    {
-                        "expected_output": expected,
-                        "predicted_output": predicted,
-                    },
+                self._invoke_llm_grader_async(
+                    expected=expected,
+                    predicted=predicted,
                     config=config,
-                ),
+                )
             )
-        response = self._llm_grader_chain.invoke(
-            {
-                "expected_output": expected,
-                "predicted_output": predicted,
-            },
+        return self._invoke_llm_grader_sync(
+            expected=expected,
+            predicted=predicted,
             config=config,
         )
-        return self._decode_response(response)
+
+    async def _invoke_llm_grader_async(
+        self,
+        expected: str,
+        predicted: str,
+        config: langchain_core.runnables.RunnableConfig | None = None,
+    ) -> float:
+        if self._llm_grader_chain is None:
+            raise RuntimeError("LLM grader chain unexpectedly missing during async invoke")
+        payload: LLMGraderPayload = {
+            "expected_output": expected,
+            "predicted_output": predicted,
+        }
+        response = await self._llm_grader_chain.ainvoke(payload, config=config)
+        return _decode_response(typing.cast("LLMGraderResponse", response))
+
+    def _invoke_llm_grader_sync(
+        self,
+        expected: str,
+        predicted: str,
+        config: langchain_core.runnables.RunnableConfig | None = None,
+    ) -> float:
+        if self._llm_grader_chain is None:
+            raise RuntimeError("LLM grader chain unexpectedly missing during sync invoke")
+        payload: LLMGraderPayload = {
+            "expected_output": expected,
+            "predicted_output": predicted,
+        }
+        response = self._llm_grader_chain.invoke(payload, config=config)
+        return _decode_response(typing.cast("LLMGraderResponse", response))
 
     def add_sample(
         self,
@@ -195,7 +233,7 @@ class OutcomeEvaluator:
         """
         hard_match = expected.strip() == predicted.strip() if self.strip_hard_checks else expected == predicted
         soft_match = pyine.utils.code.output_compare.compare(expected, predicted, self.soft_checks_config)
-        llm_score: float | asyncio.Task | None = None
+        llm_score: float | LLMScoreFuture | None = None
         if self.is_llm_grader_available():
             llm_score = self.get_llm_grader_score(expected=expected, predicted=predicted)
         self.results.append(
@@ -350,9 +388,9 @@ class OutcomeEvaluator:
         score_threshold: float = 0.5,
         identifier_selector: typing.Callable[[str], bool] | None = None,
         tags_filter_rule: str | None = None,
-    ) -> dict[str, float]:
+    ) -> pyine.evals.utils.MetricsDictType:
         """Computes and returns a dictionary of metrics."""
-        output = {
+        output: pyine.evals.utils.MetricsDictType = {
             "accuracy/hard": self.compute_hard_accuracy(identifier_selector, tags_filter_rule),
             "accuracy/soft": self.compute_soft_accuracy(identifier_selector, tags_filter_rule),
         }
@@ -434,5 +472,6 @@ async def get_metrics(
 ) -> pyine.evals.utils.MetricsDictType:
     """Compute and returns metrics associated with the current evaluation result."""
     output_metrics: pyine.evals.utils.MetricsDictType = await evaluator.compute_metrics()
-    output_metrics.update({f"token_usage/{k}": v for k, v in token_usage.asdict().items()})
+    for key, value in token_usage.asdict().items():
+        output_metrics[f"token_usage/{key}"] = float(value)
     return output_metrics

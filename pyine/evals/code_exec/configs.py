@@ -17,7 +17,7 @@ import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.code_exec.utils
 import pyine.evals.common
-import pyine.evals.grader_configs
+import pyine.evals.configs
 import pyine.evals.utils
 import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
@@ -60,7 +60,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             dict[str, typing.Any],
             langchain_core.messages.AIMessage,
         ],
-        datamodule: pyine.data.datamodule.ConversationDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> CodeExecEvalResult:
@@ -189,7 +189,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        datamodule: pyine.data.datamodule.ConversationDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> CodeExecEvalResult:
@@ -237,6 +237,14 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             gen_config.max_new_tokens = self.eval_generation_max_new_tokens_override
         gen_config.validate()
         model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
+        maybe_max_new_tokens = typing.cast("int | None", gen_config.max_new_tokens)  # type: ignore[reportUnknownVariableType]
+        max_generation_tokens = (  # type: ignore[reportUnknownVariableType]
+            maybe_max_new_tokens
+            if maybe_max_new_tokens is not None and maybe_max_new_tokens > 0
+            else model_max_seq_len - typing.cast("int", gen_config.max_length)  # type: ignore[reportUnknownMemberType]
+        )
+        max_prompt_len: int = model_max_seq_len - max_generation_tokens
+        assert max_prompt_len > 0, "invalid max prompt length"
         sample_idx = 0
 
         def _prepare_model_inputs(
@@ -246,8 +254,6 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             assert isinstance(sample, collections.abc.Mapping), f"unexpected sample data type: {type(sample)}"
             assert "text" in sample, "missing 'text' key from chat template application in sample data?"
             assert isinstance(sample['text'], str), "expected chat template application to yield string prompts"
-            max_gen_len = gen_config.max_new_tokens or model_max_seq_len - gen_config.max_length
-            max_prompt_len = model_max_seq_len - max_gen_len
             encoded_inputs = tokenizer(sample["text"], truncation=True, max_length=max_prompt_len)
             input_ids = typing.cast("list[int]", encoded_inputs["input_ids"])
             attention_mask = typing.cast("list[int]", encoded_inputs["attention_mask"])
@@ -261,11 +267,11 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             sample_idx += 1
             return output
 
-        text_prompts_ds = text_prompts_ds.map(_prepare_model_inputs, desc="encoding eval prompts")
+        text_prompts_ds = text_prompts_ds.map(_prepare_model_inputs, desc="encoding eval prompts")  # type: ignore[reportUnknownMemberType]
         assert len(text_prompts_ds) == sample_idx
         prepared_eval_ds = text_prompts_ds.sort("input_len", reverse=True)
         dataloader = torch.utils.data.DataLoader[dict[str, typing.Any]](
-            prepared_eval_ds,
+            typing.cast("torch.utils.data.Dataset[dict[str, typing.Any]]", prepared_eval_ds),
             batch_size=self.eval_batch_size,
             shuffle=False,
             num_workers=1,
@@ -407,7 +413,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             row: list[typing.Any] = [subset_name]
             for metric_name in ordered_metric_names:
                 row.append(subset_result.metrics.get(metric_name))
-            table.add_data(*row)
+            table.add_data(*row)  # type: ignore[reportUnknownMemberType]
             prefixed_metrics = {f"evals/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
             wandb_run.summary.update(prefixed_metrics)  # type: ignore[reportUnknownMemberType]
         if step is None:
@@ -499,7 +505,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 prediction.eval_result.llm_score,
                 ", ".join(prediction.eval_result.tags),
             ]
-            table.add_data(*row)
+            table.add_data(*row)  # type: ignore[reportUnknownMemberType]
         if step is None:
             wandb_run.log({table_key: table})  # noqa
         else:
@@ -524,7 +530,7 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
             ],
         },
     )
-    llm_grader_provider_configs = pyine.evals.grader_configs.get_provider_configs(
+    llm_grader_provider_configs = pyine.evals.configs.get_grader_provider_configs(
         group=f"{group}/llm_grader_provider_config",
     )
     return [base_config, *llm_grader_provider_configs]

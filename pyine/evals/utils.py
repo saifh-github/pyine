@@ -1,4 +1,4 @@
-import collections
+import collections.abc
 import dataclasses
 import typing
 
@@ -8,6 +8,8 @@ type MetricsDictType = dict[str, float | int | str]
 """Type used to represent dictionaries of evaluation metrics."""
 type InvocableModelChain = langchain_core.runnables.Runnable[typing.Any, typing.Any]
 """Type used to represent invocable model chains (i.e. objects with an 'invoke' method)."""
+type TokenUsageMapping = collections.abc.Mapping[str, typing.Any]
+"""Type used for mapping-like containers that expose token usage information."""
 
 
 UnknownTokenCount = typing.Literal["unknown"]
@@ -147,24 +149,31 @@ def parse_token_usage_from_response(
             if hasattr(obj, check_attrib):
                 return getattr(obj, check_attrib)
         if isinstance(obj, collections.abc.Mapping):
+            mapping_obj = typing.cast("TokenUsageMapping", obj)
             for check_attrib in attribs_to_check:
-                if check_attrib in obj:
-                    return obj[check_attrib]
+                if check_attrib in mapping_obj:
+                    return mapping_obj[check_attrib]
         # if it's a PromptResultRecord-like object, dig into creation_meta.llm_output
         # (support both attribute-style and dict-style access for creation_meta)
-        creation_meta = getattr(obj, "creation_meta", None)
+        if isinstance(obj, collections.abc.Mapping):
+            mapping_obj = typing.cast("TokenUsageMapping", obj)
+            creation_meta = mapping_obj.get("creation_meta")
+        else:
+            creation_meta = getattr(obj, "creation_meta", None)
         if creation_meta is not None:
             inner = getattr(creation_meta, "llm_output", None)
             if inner is None and isinstance(creation_meta, collections.abc.Mapping):
-                inner = creation_meta.get("llm_output", None)
+                creation_meta_mapping = typing.cast("TokenUsageMapping", creation_meta)
+                inner = creation_meta_mapping.get("llm_output", None)
             if inner is not None:
                 return _get_usage_mapping(inner)
         # some callers might directly pass the raw llm_output dict
         if isinstance(obj, collections.abc.Mapping):
             # sometimes the raw llm output might be nested under a known key
+            mapping_obj = typing.cast("TokenUsageMapping", obj)
             for key in ("llm_output", "raw", "response"):
-                if key in obj and obj[key] is not None:
-                    return _get_usage_mapping(obj[key])
+                if key in mapping_obj and mapping_obj[key] is not None:
+                    return _get_usage_mapping(mapping_obj[key])
         return None
 
     def _maybe_get_number(
@@ -180,7 +189,8 @@ def parse_token_usage_from_response(
             if hasattr(container, subcontainer_name):
                 container = getattr(container, subcontainer_name)
             elif isinstance(container, dict) and subcontainer_name in container:
-                container = container.get(subcontainer_name)
+                typed_container = typing.cast("dict[str, typing.Any]", container)
+                container = typed_container.get(subcontainer_name)
             else:
                 return None  # failed to get expected subcontainer
         # try both attribute access and mapping access for the targeted value
@@ -189,7 +199,8 @@ def parse_token_usage_from_response(
             if isinstance(val, (int, float)) and not isinstance(val, bool):
                 return int(val)
         if isinstance(container, dict) and name in container:
-            val = container.get(name)
+            typed_container = typing.cast("dict[str, typing.Any]", container)
+            val = typed_container.get(name)
             if isinstance(val, (int, float)) and not isinstance(val, bool):
                 return int(val)
         return None
@@ -251,7 +262,7 @@ def print_metrics(
     logger: typing.Callable[[str], typing.Any] | None = None,
 ) -> None:
     """Helper that prints the given metrics using the provided callable logger (or stdout)."""
-    eval_output_strs = []
+    eval_output_strs: list[str] = []
     for key, val in metrics.items():
         if isinstance(val, float):
             eval_output_strs.append(f"\t{key}: {val:.3f}")

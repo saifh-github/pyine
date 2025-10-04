@@ -1,3 +1,4 @@
+import collections.abc
 import typing
 
 import langchain_core.language_models
@@ -5,10 +6,18 @@ import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
 
-PromptNameType = str
+type PromptNameType = str
 """Type used to represent a prompt name (e.g. 'code_summary')."""
-PromptVersionType = str
+type PromptVersionType = str
 """Type used to represent a prompt version (e.g. 'v1.0', or 'with_structured_output')."""
+type PromptInputMapping = collections.abc.Mapping[str, typing.Any]
+"""Standard input mapping type expected by runnable prompt chains."""
+type PromptRunnable = langchain_core.runnables.Runnable[PromptInputMapping, typing.Any]
+"""Runnable type alias with concrete input and output typing."""
+type PromptTemplate = langchain_core.prompts.BasePromptTemplate[typing.Any]
+"""Prompt template alias with explicit format output typing."""
+type LanguageModel = langchain_core.language_models.BaseLanguageModel[typing.Any]
+"""Language model alias with explicit generics for prompt building."""
 
 
 class PromptBuildConfig(pydantic.BaseModel):
@@ -41,7 +50,7 @@ class PromptBuildConfig(pydantic.BaseModel):
     examples_block_variables: dict[str, typing.Any] | None = None
     """Optional variables to substitute in the examples block."""
 
-    def get_template(self) -> langchain_core.prompts.BasePromptTemplate:
+    def get_template(self) -> PromptTemplate:
         """Returns a LangChain prompt template for this prompt."""
         import pyine.prompts.manager
 
@@ -59,9 +68,9 @@ class PromptBuildConfig(pydantic.BaseModel):
 
     def get_chain(
         self,
-        model: langchain_core.language_models.BaseLanguageModel,
+        model: LanguageModel,
         runnable_name: str | None = None,
-    ) -> langchain_core.runnables.Runnable:
+    ) -> PromptRunnable:
         """Returns a LangChain runnable chain for this prompt."""
         import pyine.prompts.manager
 

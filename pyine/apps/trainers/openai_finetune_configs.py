@@ -19,6 +19,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.organisms.models.utils.openai
 import pyine.utils.openai
@@ -207,7 +208,7 @@ def _get_app_configs(
     )
     openai_client_configs = pyine.configs.base.get_openai_client_configs(group=f"{group}/openai_client_config")
     ft_params_configs = _get_ft_params_configs(group=f"{group}/openai_finetuner_config")
-    evals_configs = pyine.evals.common.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
+    evals_configs = pyine.evals.configs.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
     # ... add more trainer configs here if needed
     return [
         app_main_config,

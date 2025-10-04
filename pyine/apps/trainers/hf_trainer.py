@@ -75,7 +75,7 @@ if typing.TYPE_CHECKING:
 def train(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
-    datamodule: pyine.data.datamodule.ConversationDataModule,
+    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> transformers.Trainer:

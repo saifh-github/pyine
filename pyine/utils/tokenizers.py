@@ -23,7 +23,7 @@ def get_hf_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
     if override_padding_to_right_side:
         tokenizer.padding_side = "right"
-    return tokenizer
+    return typing.cast("transformers.PreTrainedTokenizer", tokenizer)
 
 
 @functools.lru_cache(maxsize=64)

@@ -1,10 +1,9 @@
 import enum
+import typing
 
 import pydantic
 import transformers
 
-import pyine.configs.schemas
-import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.transformers
@@ -81,7 +80,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     async def evaluate_runnable_model(
         self,
         chain: pyine.evals.utils.InvocableModelChain,
-        datamodule: pyine.data.datamodule.ConversationDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
@@ -104,7 +103,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        datamodule: pyine.data.datamodule.ConversationDataModule,
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
@@ -186,29 +185,3 @@ class BaseEvalsConfig(pydantic.BaseModel):
         if self.eval_type is None:
             return None
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
-
-
-def get_evals_configs(
-    eval_type: EvalType,
-    group: str,
-) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns evals configs for hydra zen storage."""
-    if eval_type == EvalType.CODE_EXEC:
-        import pyine.evals.code_exec.configs
-
-        return pyine.evals.code_exec.configs.get_evals_configs(group=group)
-    if eval_type is None:
-        return [
-            pyine.configs.utils.make_config_description(
-                BaseEvalsConfig,
-                name="base",
-                group=group,
-                description="Default evaluation settings (no evals unless overridden).",
-                config={
-                    # -------------
-                    "populate_full_signature": True,
-                    "hydra_convert": "object",
-                },
-            )
-        ]
-    raise NotImplementedError(f"evaluation type {eval_type} not implemented")

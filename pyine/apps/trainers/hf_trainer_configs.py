@@ -22,6 +22,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.reprod
 import pyine.utils.tokenizers
@@ -373,7 +374,7 @@ def _get_app_configs(
     )
     trainer_args_configs = _get_trainer_args_configs(group=f"{group}/training_args_config")
     lora_configs = _get_lora_configs(group=f"{group}/lora_config")
-    evals_configs = pyine.evals.common.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
+    evals_configs = pyine.evals.configs.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
     # ... add more trainer configs here if needed
     return [
         app_main_config,

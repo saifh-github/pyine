@@ -1,14 +1,12 @@
-"""Hydra-zen config builder for LLM-as-a-judge (grader) evaluation configs."""
-
 import hydra_zen
-import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.utils.llm_providers
+from pyine.evals.common import EvalType
 
 
-def get_provider_configs(group: str) -> list[pyine.configs.schemas.ConfigDescription]:
+def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns LLM-based-grader provider configs for hydra zen storage."""
     openai_llm_provider_config = hydra_zen.builds(
         pyine.utils.llm_providers.LLMProviderConfig,
@@ -38,3 +36,15 @@ def get_provider_configs(group: str) -> list[pyine.configs.schemas.ConfigDescrip
         },
     )
     return [openai_gpt5_mini_config, openai_gpt5_nano_config]
+
+
+def get_evals_configs(
+    eval_type: EvalType,
+    group: str,
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Generates and returns evals configs for hydra zen storage."""
+    import pyine.evals.code_exec.configs
+
+    if eval_type == EvalType.CODE_EXEC:
+        return pyine.evals.code_exec.configs.get_evals_configs(group=group)
+    raise NotImplementedError(f"evaluation type {eval_type} not implemented")
