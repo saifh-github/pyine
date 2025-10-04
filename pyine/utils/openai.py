@@ -366,11 +366,15 @@ class OpenAIFineTunerParamsConfig(pydantic.BaseModel):
     """
     timeout_override: float | None = None
     """Override of the default client timeout for the fine-tuning job."""
-    file_upload_params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    file_upload_params: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Additional parameters to pass to the Files API when uploading fine-tuning files."""
     files_purpose: str | None = "fine-tune"
     """Default 'purpose' to use with the Files API (set to None to not send a purpose)."""
-    job_params: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    job_params: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Additional fine-tuning job parameters to pass through to jobs.create (method-specific)."""
 
 

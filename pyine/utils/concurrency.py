@@ -279,8 +279,8 @@ async def run_independent(
 type InputItemType = typing.Hashable
 """Type used to represent an input item; should be a lightweight hashable object."""
 type SubmissionFuncType[OutputItemType] = typing.Callable[
-    [InputItemType, concurrent.futures.Executor | None],
-    concurrent.futures.Future[OutputItemType],
+    [InputItemType, concurrent.futures.Executor],
+    concurrent.futures.Future[OutputItemType] | None,
 ]
 """Type used to represent job submission callable.
 

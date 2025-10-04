@@ -29,7 +29,9 @@ class CapturedEvent(pydantic.BaseModel):
         default_factory=lambda: datetime.datetime.now(),
     )
     """Timestamp of event creation (in local time)."""
-    kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    kwargs: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Keyword arguments passed to the LLM call; may include e.g. invocation_params."""
 
 

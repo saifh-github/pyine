@@ -118,14 +118,12 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
             def _submit_one(
                 sample_idx: int,
-                executor: concurrent.futures.Executor | None,
+                executor: concurrent.futures.Executor,
             ) -> concurrent.futures.Future[langchain_core.messages.AIMessage]:
                 sample = sample_generator[sample_idx]
                 assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
                 assert sample_idx not in sample_lut
                 sample_lut[sample_idx] = sample
-                if executor is None:
-                    raise RuntimeError("executor is unexpectedly None in sliding window submission")
                 return executor.submit(
                     chain.invoke,
                     sample._asdict(),

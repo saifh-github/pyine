@@ -26,7 +26,9 @@ class LLMProviderConfig(pydantic.BaseModel):
     """Configuration for the rate limiter."""
     with_retry_config: dict[str, typing.Any] | None = None
     """Configuration for the retry mechanism."""
-    model_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    model_kwargs: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Keyword arguments to be passed to the LLM constructor."""
 
     @classmethod

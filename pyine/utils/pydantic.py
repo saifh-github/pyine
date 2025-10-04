@@ -286,8 +286,8 @@ class ClassImportSpec(pydantic.BaseModel):
             description="Dotted import path to the required base class of the target class.",
         ),
     ]
-    params: dict[str, typing.Any] | pydantic.BaseModel = pydantic.Field(
-        default_factory=dict,
+    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
         description="Keyword arguments passed to the target class constructor.",
     )
     params_key: typing.Annotated[

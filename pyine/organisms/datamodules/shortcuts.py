@@ -336,7 +336,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def make_dataloader(
         self,
         loader_name: pyine.data.datamodule.LoaderNameType,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
         """Creates and returns a dataloader for the given name."""
         assert loader_name is not None, "loader name must be specified"
         parser = self.get_parser(loader_name)
@@ -348,21 +348,21 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     @typing.override
     def train_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
         """Return the training data loader."""
         return self.make_dataloader("train")
 
     @typing.override
     def val_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
         """Return the validation data loader."""
         return self.make_dataloader("valid")
 
     @typing.override
     def test_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoaderType:
+    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
         """Return the test data loader."""
         return self.make_dataloader("test")
 

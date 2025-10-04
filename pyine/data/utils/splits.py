@@ -37,7 +37,9 @@ class SplitConfig(pydantic.BaseModel):
     """Seed to use for reproducibility."""
     subset_names: list[SubsetNameType] = pydantic.Field(min_length=2)
     """List of subset names to use (mandatory, must be fully specified)."""
-    subset_assign_rules_map: dict[SubsetNameType, FilterRuleType] = pydantic.Field(default_factory=dict)
+    subset_assign_rules_map: dict[SubsetNameType, FilterRuleType] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[SubsetNameType, FilterRuleType]", {}),
+    )
     """Dictionary mapping subset names to filter rules.
 
     The specified filter rules will be applied, in order, to the tags of parsed data samples, and
@@ -57,7 +59,9 @@ class SplitConfig(pydantic.BaseModel):
 
     MANDATORY FIELD; the specified probabilities should always sum to 1.
     """
-    stratif_group_rules: list[FilterRuleType] = pydantic.Field(default_factory=list)
+    stratif_group_rules: list[FilterRuleType] = pydantic.Field(
+        default_factory=lambda: typing.cast("list[FilterRuleType]", []),
+    )
     """List of filter rules applied to the tags of parsed data samples to form stratification groups.
 
     This list can be empty, in which case no stratification rules will be applied, and all samples

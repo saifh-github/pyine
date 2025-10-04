@@ -144,14 +144,6 @@ type AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]
 """Type used to describe prompt augmentation probability maps."""
 
 
-def _empty_prob_map() -> AugmProbMapType:
-    return {}
-
-
-def _empty_identifier_set() -> set[str]:
-    return set()
-
-
 class AugmentedAnnotationOptions(pydantic.BaseModel):
     """Options controlling augmented annotations (i.e. annotations that rely on previous annotations).
 
@@ -172,7 +164,7 @@ class AugmentedAnnotationOptions(pydantic.BaseModel):
     # -------- settings for 'bugged_hinted' and 'bugged_misleading' code generation --------
 
     buggy_code_before_hinting_prob_map: AugmProbMapType = pydantic.Field(
-        default_factory=_empty_prob_map,  # empty map = turned off by default
+        default_factory=lambda: typing.cast("AugmProbMapType", {}),  # empty map = turned off by default
         description=(
             "Probability map specifying whether to fetch a buggy version of a code string before "
             "applying a hint generation prompt (misleading or not). The key of the map can be an "
@@ -340,7 +332,7 @@ class AnnotationOptions(pydantic.BaseModel):
     _test_data_cache: pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache | None = (
         pydantic.PrivateAttr(default=None)
     )
-    _already_seen_ids: set[str] = pydantic.PrivateAttr(default_factory=_empty_identifier_set)
+    _already_seen_ids: set[str] = pydantic.PrivateAttr(default_factory=lambda: typing.cast("set[str]", set()))
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "AnnotationOptions":
@@ -538,7 +530,7 @@ def _default_input_variables_builder(
         )
         if test_case is not None:
             assert test_case.test_idx != trace_id.test_idx
-            output["expected_output"] = str(test_case.expected_output)  # new misleading output
+            output["expected_output"] = str(test_case.outputs)  # new misleading output
             output[_INTERNAL_MISLEADING_TOKEN] = str(trace.expected_output)  # orig expected output
         elif is_mislead_prompting:
             # if we did not manage to find an alternative test case for this prompt, skip the instance
@@ -825,9 +817,9 @@ class AnnotationReport:
     """Total number of tokens exchanged with the LLM (best-effort find, not reliable if not using OpenAI models)."""
     errors: int = 0
     """Total number of errors caught during processing."""
-    error_message_tracebacks: list[str] = dataclasses.field(default_factory=list)
+    error_message_tracebacks: list[str] = dataclasses.field(default_factory=lambda: typing.cast("list[str]", []))
     """List of tracebacks for each error caught during processing (these are long!)."""
-    error_messages: list[str] = dataclasses.field(default_factory=list)
+    error_messages: list[str] = dataclasses.field(default_factory=lambda: typing.cast("list[str]", []))
     """List of error messages for each error caught during processing (useful for printing)."""
 
     def add(self, other: "AnnotationReport") -> "AnnotationReport":
@@ -982,7 +974,7 @@ async def annotate_trace_dataset(
     def _submit_one(
         sample_idx: typing.Hashable,
         executor: concurrent.futures.Executor,
-    ) -> concurrent.futures.Future | None:
+    ) -> concurrent.futures.Future[AnnotationReport] | None:
         sample_idx = typing.cast("int", sample_idx)
         trace, problem = dataset[sample_idx], dataset.get_problem_data(sample_idx)
         sample_id = identifier_getter(trace, problem, config)
@@ -1035,7 +1027,7 @@ def _process_one_annotation(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     sample_idx: int,
     sample_id: str,
-    model: langchain_core.language_models.BaseLanguageModel,
+    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
     config: AnnotationOptions,
     dry_run: bool,
     base_filter_fn: typing.Callable[[list[str]], bool],
@@ -1063,13 +1055,16 @@ def _process_one_annotation(
         if config.output_validator:
             output_validator = config.output_validator
         else:
-            output_validator = functools.partial(
-                _default_output_validator,
-                trace=trace,
-                problem=problem,
-                config=config,
-                input_vars=input_vars,
-                tags=tags,
+            output_validator = typing.cast(
+                "pyine.prompts.result_db.ValidatorCallableType",
+                functools.partial(
+                    _default_output_validator,
+                    trace=trace,
+                    problem=problem,
+                    config=config,
+                    input_vars=input_vars,
+                    tags=tags,
+                ),
             )
         records = pyine.prompts.result_db.fetch_or_generate_prompt_results(
             model=model,
@@ -1101,6 +1096,8 @@ def _process_one_annotation(
             # best-effort for openai-like LLM outputs
             llm_output = new_rec.creation_meta.llm_output or {}
             token_usage_dict = llm_output.get("token_usage", {})
+            assert isinstance(token_usage_dict, dict)
+            token_usage_dict = typing.cast("dict[str, int]", token_usage_dict)
             rep.total_tokens_exchanged += token_usage_dict.get("total_tokens", 0)
     except (KeyboardInterrupt, GeneratorExit, MemoryError, asyncio.CancelledError):
         raise  # we should not be trying to catch/silence there here

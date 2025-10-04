@@ -61,13 +61,12 @@ def _apply_prompt_template_to_sample(
         messages = prompt_template.format_messages(**sample_args)
         assert isinstance(messages, list)
         # note: we currently only support single-turn interactions here, so one request per convo
-        message_list = typing.cast("list[langchain_core.messages.BaseMessage]", messages)
-        assert sum(isinstance(m, langchain_core.messages.SystemMessage) for m in message_list) <= 1
-        assert sum(isinstance(m, langchain_core.messages.HumanMessage) for m in message_list) == 1
-        assert sum(isinstance(m, langchain_core.messages.AIMessage) for m in message_list) == 0
-        assert len(message_list) in [1, 2]  # we currently only support single-turn transforms here
-        if merge_system_with_user and len(message_list) == 2:
-            system_msg, user_msg = message_list
+        assert sum(isinstance(m, langchain_core.messages.SystemMessage) for m in messages) <= 1
+        assert sum(isinstance(m, langchain_core.messages.HumanMessage) for m in messages) == 1
+        assert sum(isinstance(m, langchain_core.messages.AIMessage) for m in messages) == 0
+        assert len(messages) in [1, 2]  # we currently only support single-turn transforms here
+        if merge_system_with_user and len(messages) == 2:
+            system_msg, user_msg = messages
             assert isinstance(system_msg, langchain_core.messages.SystemMessage)
             assert isinstance(user_msg, langchain_core.messages.HumanMessage)
             system_content = _extract_message_content(system_msg, "system")
@@ -75,12 +74,12 @@ def _apply_prompt_template_to_sample(
             merged_messages: list[langchain_core.messages.BaseMessage] = [
                 langchain_core.messages.HumanMessage(system_content + "\n\n" + user_content)
             ]
-            message_list = merged_messages
+            messages = merged_messages
         if append_answer:
-            message_list.append(langchain_core.messages.AIMessage(sample_data.expected_output))
+            messages.append(langchain_core.messages.AIMessage(sample_data.expected_output))
         if use_hf_messages:
             hf_messages: list[dict[str, str]] = []
-            for msg in message_list:
+            for msg in messages:
                 if isinstance(msg, langchain_core.messages.SystemMessage):
                     content = _extract_message_content(msg, "system")
                     hf_messages.append({"role": "system", "content": content})
@@ -96,7 +95,7 @@ def _apply_prompt_template_to_sample(
             if orig_sample_key:
                 hf_output[orig_sample_key] = sample_args
             return hf_output
-        return message_list
+        return messages
     formatted_output = prompt_template.format(**sample_args)
     assert isinstance(formatted_output, str)
     if append_answer:
@@ -167,23 +166,22 @@ def _batch_apply_model_template_to_messages(
     assert isinstance(batch, collections.abc.Mapping), f"unexpected input batch type: {type(batch)}"
     assert messages_key in batch, f"missing expected messages key: {messages_key}"
     messages = typing.cast("list[dict[str, str]]", batch[messages_key])
-    text_result = tokenizer.apply_chat_template(
+    text_result = tokenizer.apply_chat_template(  # type: ignore[reportUnknownMemberType]
         conversation=messages,
         **(apply_chat_template_kwargs or {}),
     )
-    if isinstance(text_result, list):
-        if not any(not isinstance(t, str) for t in text_result):
-            raise TypeError("expected tokenizer chat template output to be a list of strings")
-    else:
+    if not isinstance(text_result, list):
         raise TypeError(
             f"expected tokenizer chat template output to be a list of strings, got {type(text_result)}",
         )
+    assert all(isinstance(s, str) for s in text_result), "expected output to be a list of strings"
     assert len(text_result) == len(messages), "length mismatch between input messages and output text"
+    text_result = typing.cast("list[str]", text_result)
     if strip_output:
         text_result = [item.strip() for item in text_result]
     if append_eos_token:
         assert hasattr(tokenizer, "eos_token"), "tokenizer missing eos token"
-        eos_token = typing.cast("str | list[str] | None", tokenizer.eos_token)
+        eos_token = typing.cast("str | list[str] | None", tokenizer.eos_token)  # type: ignore[reportUnknownMemberType]
         if eos_token is None:
             raise ValueError("tokenizer has no EOS token configured")
         eos_suffix = "".join(eos_token) if isinstance(eos_token, list) else str(eos_token)
@@ -217,10 +215,10 @@ def apply_model_template_to_messages(
             apply_chat_template_kwargs=apply_chat_template_kwargs,
         )
     )
-    mapped_dataset = hf_messages_dataset.map(
+    mapped_dataset: hf_datasets.Dataset = hf_messages_dataset.map(  # type: ignore[reportUnknownMemberType]
         function=transform_batch,
         batched=True,
         desc="applying tokenizer chat template",
         keep_in_memory=keep_in_memory,
     )
-    return typing.cast("hf_datasets.Dataset", mapped_dataset)
+    return mapped_dataset

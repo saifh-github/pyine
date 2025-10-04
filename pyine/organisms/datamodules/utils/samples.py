@@ -9,23 +9,25 @@ import typing
 import datasets as hf_datasets
 import numpy as np
 import pydantic
+import torch
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
-import pyine.data.utils.filter_rules
 import pyine.prompts
-import pyine.utils.code.blocks
+import pyine.prompts.manager
 import pyine.utils.code.execution
 import pyine.utils.concurrency
 import pyine.utils.portability
-import pyine.utils.reprod
 from pyine.utils.code.execution import (
     TraceEvent,
     TraceEventType,
 )
 
 logger = logging.getLogger(__name__)
+
+type TraceIdType = pyine.data.traces.dataset_utils.TraceIdentifier
+"""Helper type for trace IDs."""
 
 
 def get_supported_augment_types() -> list[str]:
@@ -34,19 +36,19 @@ def get_supported_augment_types() -> list[str]:
     Combines the augmentation types from the `SampleInputType` define with all prompt names
     that are known to the prompt manager and that are tied to code augmentations.
     """
-    import pyine.prompts.manager
-
-    pregenerated_augment_types = [
+    pregenerated_augment_types: list[str] = [
         pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
         for prompt_name in pyine.prompts.manager.list_prompts()
         # some of these might actually be impossible to pregenerate, but we keep the check light
         if prompt_name.startswith("issues/") or prompt_name.startswith("hints/")
     ]
-    irrelevant_augment_types = [
+    irrelevant_augment_types: list[str] = [
         "original",
         "stubbed",
     ]  # stubbed code cannot be executed/traced
-    dynamic_augment_types = [t for t in typing.get_args(SampleInputType) if t not in irrelevant_augment_types]
+    dynamic_augment_types: list[str] = [
+        t for t in typing.get_args(SampleInputType) if t not in irrelevant_augment_types
+    ]
     return [*dynamic_augment_types, *pregenerated_augment_types]
 
 
@@ -195,7 +197,7 @@ class SampleData(typing.NamedTuple):
     "correct" one.
     """
 
-    def get_trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
+    def get_trace_id(self) -> TraceIdType:
         """Returns the trace identifier object for this trace."""
         return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
 
@@ -206,19 +208,13 @@ class SampleData(typing.NamedTuple):
         return [tag for tag in self.comma_separated_tags.split(",") if tag]
 
 
-SampleDataParserType = pyine.data.datamodule.BaseDataParserType[SampleData]
+type SampleDataParser = pyine.data.datamodule.BaseDataParserClass[SampleData]
 """Type of the dataset reader used to read traces from LMDB datasets."""
-
-SampleDataLoaderType = pyine.data.datamodule.BaseDataLoaderType[SampleData]
+type SampleDataLoader = pyine.data.datamodule.BaseDataLoaderClass[typing.Any]  # TODO: add a sample batch class
 """Type of the data loader used to batch trace sample data from the dataset parser."""
-
-SampleTransformOutputProbMapType = dict[
-    SampleOutputType,
-    typing.Annotated[  # noqa
-        pydantic.StrictFloat,
-        pydantic.Field(ge=0.0, le=1.0),
-    ],
-]
+type StrictProbability = typing.Annotated[pydantic.StrictFloat, pydantic.Field(ge=0.0, le=1.0)]
+"""Type for probabilities (floats between 0 and 1)."""
+type SampleTransformOutputProbMapType = dict[SampleOutputType, StrictProbability]
 """Type of the probability map used to decide which sample type to generate for each trace."""
 
 SampleTransformStrategyType = typing.Literal["never", "always", "if_too_long", "random", "hybrid"]
@@ -269,7 +265,9 @@ class SampleTransformConfig(pydantic.BaseModel):
     """
     combine_local_and_global_vars_for_partial_samples: bool = True
     """Whether to combine local variables and global variables into a single set for partial samples."""
-    output_type_prob_map: SampleTransformOutputProbMapType = pydantic.Field(default_factory=dict)
+    output_type_prob_map: SampleTransformOutputProbMapType = pydantic.Field(
+        default_factory=lambda: typing.cast("SampleTransformOutputProbMapType", {}),
+    )
     """Probability map used to determine potential output sample types in random/hybrid transform strategies."""
 
     @pydantic.model_validator(mode="after")
@@ -283,16 +281,9 @@ class SampleTransformConfig(pydantic.BaseModel):
         return self
 
 
-SampleSelectionInputProbMapType = dict[
-    SampleInputType,
-    typing.Annotated[  # noqa
-        pydantic.StrictFloat,
-        pydantic.Field(ge=0.0, le=1.0),
-    ],
-]
+type SampleSelectionInputProbMapType = dict[SampleInputType, StrictProbability]
 """Type of the probability map used to decide which sample type to select for each trace."""
-
-SampleSelectionChoiceStrategyType = typing.Literal["latest", "random"]
+type SampleSelectionChoiceStrategyType = typing.Literal["latest", "random"]
 """Possible strategies for selecting modified code snippets when multiple choices are available:
 - 'latest': will pick and return the most-recently-generated code snippet;
 - 'random': will randomly pick a code snippet from the available choices.
@@ -353,11 +344,11 @@ class SampleFilteringConfig(pydantic.BaseModel):
         return self
 
 
-def _draw_type(
-    prob_map: dict[typing.Hashable, float],
+def _draw_type[OutputType](
+    prob_map: dict[OutputType, StrictProbability],
     rng: np.random.Generator,
-    default_fallback: typing.Hashable | None = None,
-) -> typing.Hashable | None:
+    default_fallback: OutputType | None = None,
+) -> OutputType | None:
     """Draws a random sample type from the set of available types."""
     draw_val = rng.random()
     total_mass = 0.0
@@ -368,12 +359,14 @@ def _draw_type(
     return default_fallback
 
 
-LMDBDatasetReadersOrPathsType = (
+type LMDBDatasetReadersOrPathsType = (
     pyine.data.traces.dataset_reader.DatasetReader
     | list[pyine.data.traces.dataset_reader.DatasetReader]
+    | tuple[pyine.data.traces.dataset_reader.DatasetReader]
     | str
     | pathlib.Path
     | list[str | pathlib.Path]
+    | tuple[str | pathlib.Path]
 )
 """Type used to specify source dataset args in the sample builder."""
 
@@ -390,7 +383,7 @@ class _TraceSampleSelectionResult:
     """The code snippet override that will be used in the generated sample (instead of the original)."""
 
 
-class SampleBuilder(SampleDataParserType):
+class SampleBuilder(torch.utils.data.Dataset[SampleData]):
     """Wrapper around the LMDB dataset reader(s) that returns sample data for target traces.
 
     The role of this class is to provide sample filtering, selection, and transformation
@@ -423,11 +416,11 @@ class SampleBuilder(SampleDataParserType):
 
     def __init__(
         self,
-        source_data: LMDBDatasetReadersOrPathsType,  # noqa
+        source_data: LMDBDatasetReadersOrPathsType,
         traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None) = None,  # if none, targets all
-        filtering_config: SampleFilteringConfig | dict | None = None,
-        selection_config: SampleSelectionConfig | dict | None = None,
-        transform_config: SampleTransformConfig | dict | None = None,
+        filtering_config: SampleFilteringConfig | dict[str, typing.Any] | None = None,
+        selection_config: SampleSelectionConfig | dict[str, typing.Any] | None = None,
+        transform_config: SampleTransformConfig | dict[str, typing.Any] | None = None,
         prompt_result_db_path: str | None = None,  # if none, will use framework default
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces."""
@@ -464,25 +457,26 @@ class SampleBuilder(SampleDataParserType):
 
     @staticmethod
     def _init_readers_and_trace_metadata(
-        source_data: LMDBDatasetReadersOrPathsType,  # noqa
+        source_data: LMDBDatasetReadersOrPathsType,
         traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None),  # if none, targets all
     ) -> tuple[
         dict[str, pyine.data.traces.dataset_reader.DatasetReader],
         list[pyine.data.traces.dataset_utils.TraceMetadata],
     ]:
         """Initializes a list of LMDB readers and a list of target traces."""
-        if not isinstance(source_data, (list, tuple)):
-            source_data = [source_data]
-        source_data = list(source_data)
-        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join(str(source) for source in source_data)}")
-        for src_idx, src in enumerate(source_data):
+        source_array = [source_data] if not isinstance(source_data, (list, tuple)) else list(source_data)
+        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join(str(source) for source in source_array)}")
+        for src_idx, src in enumerate(source_array):
             if isinstance(src, (str, pathlib.Path)):
-                source_data[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
-        readers_map = {r.hash: r for r in source_data}
-        assert len(readers_map) > 0
+                source_array[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
+        readers_map: dict[str, pyine.data.traces.dataset_reader.DatasetReader] = {}
+        for reader in source_array:
+            assert isinstance(reader, pyine.data.traces.dataset_reader.DatasetReader)
+            readers_map[reader.hash] = reader
+        assert len(readers_map) > 0, "sample builder initialization expects at least one data source"
         if traces is None:
             logger.debug("(targeting all available traces)")
-            traces = pyine.data.traces.dataset_reader.get_traces_metadata(source_data)
+            traces = pyine.data.traces.dataset_reader.get_traces_metadata(list(readers_map.values()))
         else:
             logger.debug(f"(targeting {len(traces)} traces)")
         assert isinstance(traces, list)
@@ -537,7 +531,6 @@ class SampleBuilder(SampleDataParserType):
     ) -> list[_TraceSampleSelectionResult]:
         """Selects samples to generate from traces according to the specified strategy/options."""
         # first, scan all available traces and identify which augment group they belong to
-        TraceIdType = pyine.data.traces.dataset_utils.TraceIdentifier  # noqa
         trace_lut: dict[TraceIdType, pyine.data.traces.dataset_utils.TraceMetadata] = {}
         cousin_traces: dict[TraceIdType, dict[SampleInputType, list[TraceIdType]]] = {}
         for trace in traces:
@@ -609,7 +602,6 @@ class SampleBuilder(SampleDataParserType):
             assert orig_trace_id in trace_lut, "augmentless id not found in trace lut?"
             target_type = _draw_type(selection_config.input_type_prob_map, rng)  # draw the sample type...
             assert target_type is not None, "unexpected default fallback for input type draw"
-            target_type = typing.cast("SampleInputType", target_type)
             target_trace_meta = trace_lut[orig_trace_id]  # might override this below if targeted obfs code
             if target_type == "original":
                 # keep the original trace as-is, with no code snippet override
@@ -747,7 +739,7 @@ class SampleBuilder(SampleDataParserType):
         # note: we cannot provide stats on the transformed samples as their types are resolved later
         code_type_counts = collections.Counter([s.code_type for s in self.selected_traces])
         code_override_flags = [bool(c.code_override) for c in self.selected_traces]
-        stats = {
+        stats: dict[str, int | float | str] = {
             "sample_count": len(self.selected_traces),
             **{f"code_type_counts/{k}": c for k, c in code_type_counts.items()},
             "code_overrides_count": sum(code_override_flags),
@@ -919,7 +911,7 @@ class SampleBuilder(SampleDataParserType):
         rng: np.random.Generator,
     ) -> SampleData | None:
         """Returns a sample for a function call in the given trace."""
-        candidate_events = []
+        candidate_events: list[tuple[int, TraceEvent]] = []
         # first, list all potential candidate events, i.e. function call events that we'll analyze below
         for step_idx, step in enumerate(trace_data.traced_steps):
             if step is None:
@@ -968,6 +960,7 @@ class SampleBuilder(SampleDataParserType):
                         break  # we found our matching return event, nothing else to do
             if return_event is None:
                 continue  # could not locate the matching return event; go find another candidate
+            assert function_output_str is not None
             # determine step count, i.e. the number of valid events between function call and return
             call_step_count = sum(step is not None for step in trace_data.traced_steps[call_event_idx:return_event_idx])
             if (
@@ -1005,6 +998,7 @@ class SampleBuilder(SampleDataParserType):
                 sample_tags.append("augment:has_code_description")
             sample_tags.append(f"sample_code_type:{trace_code_type}")
             sample_tags.append("sample_output_type:function_return")
+            assert trace_data.identifier is not None, "trace identifier is required"
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
@@ -1062,9 +1056,11 @@ class SampleBuilder(SampleDataParserType):
                 # close the current depth collector (after including RETURN above)
                 if depth_collectors.get(current_depth):
                     # compute step count excluding the closing return
-                    range_step_count = len(depth_collectors[current_depth]) - 1
+                    curr_events = depth_collectors[current_depth]
+                    assert curr_events is not None
+                    range_step_count = len(curr_events) - 1
                     if range_step_count >= (self.transform_config.min_partial_trace_steps or 1):
-                        candidate_event_lists.append(depth_collectors[current_depth])
+                        candidate_event_lists.append(curr_events)
                     depth_collectors[current_depth] = None
                 current_depth -= 1
         # we expect to have closed all collections by encountering matching RETURN events
@@ -1124,6 +1120,7 @@ class SampleBuilder(SampleDataParserType):
                 sample_tags.append("augment:has_code_description")
             sample_tags.append(f"sample_code_type:{trace_code_type}")
             sample_tags.append("sample_output_type:frame_variables")
+            assert trace_data.identifier is not None, "trace identifier is required"
             return SampleData(
                 identifier=trace_data.identifier,
                 code=trace_data.code_string,
@@ -1147,7 +1144,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
 
     class_path: str = pyine.utils.portability.get_fully_qualified_name(SampleBuilder)
     """Fully qualified class path for the trace parser."""
-    params: dict[str, typing.Any] = {
+    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = {
         "filtering_config": SampleFilteringConfig(),
         "selection_config": SampleSelectionConfig(),
         "transform_config": SampleTransformConfig(),
@@ -1186,7 +1183,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         num_workers: int | None = None,
     ) -> "hf_datasets.Dataset":
         """Generates and returns a huggingface messages dataset using a SampleBuilder instance."""
-        dataset = hf_datasets.Dataset.from_generator(
+        dataset: hf_datasets.Dataset = hf_datasets.Dataset.from_generator(  # type: ignore[reportUnknownMemberType]
             generator=SampleBuilderConfig._sample_builder_iter,
             gen_kwargs={
                 "sample_builder_config": self,
@@ -1203,7 +1200,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             )
             num_proc = None
         if raw_transform_fn is not None:
-            dataset = dataset.map(
+            dataset: hf_datasets.Dataset = dataset.map(  # type: ignore[reportUnknownMemberType]
                 function=raw_transform_fn,
                 keep_in_memory=keep_in_memory,
                 num_proc=num_proc,

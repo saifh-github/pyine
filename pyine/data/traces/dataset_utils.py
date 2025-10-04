@@ -406,18 +406,18 @@ class _BannedData:
     """Data class containing banned data information."""
 
     metadata: dict[int, typing.Any] = dataclasses.field(
-        default_factory=(lambda: typing.cast("dict[int, typing.Any]", {}))
+        default_factory=lambda: typing.cast("dict[int, typing.Any]", {}),
     )
     """Dataset-dependent map of banned metadata; allows some stuff to be entirely avoided."""
     problems: dict[str, list[int]] = dataclasses.field(
-        default_factory=(lambda: typing.cast("dict[str, list[int]]", {}))
+        default_factory=lambda: typing.cast("dict[str, list[int]]", {}),
     )
     """Generic banned problems indices map.
 
     For each data subset (e.g. 'train', 'valid', ...), provides a list of banned problem indices.
     """
     solutions: dict[str, dict[int, list[int]]] = dataclasses.field(
-        default_factory=(lambda: typing.cast("dict[str, dict[int, list[int]]]", {}))
+        default_factory=lambda: typing.cast("dict[str, dict[int, list[int]]]", {}),
     )
     """Generic banned solutions indices map.
 

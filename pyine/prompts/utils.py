@@ -127,7 +127,9 @@ class PromptConfig(pydantic.BaseModel):
     """The template used when rendering a set of in-context examples inside the prompt template itself."""
     question: PromptTemplate  # mandatory; otherwise, why are we prompting a model without a question?
     """The question template with placeholder variables."""
-    examples: list[PromptExample] | None = pydantic.Field(default_factory=list)
+    examples: list[PromptExample] | None = pydantic.Field(
+        default_factory=lambda: typing.cast("list[PromptExample]", []),
+    )
     """Examples tied to this prompt that can be used for few-shot/in-context learning."""
     template_block_separator: str = "\n\n"
     """Separator to use between prompt template blocks."""

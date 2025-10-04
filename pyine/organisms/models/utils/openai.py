@@ -3,7 +3,6 @@ import typing
 import langchain_core.messages
 import langchain_core.prompts
 import openai
-import openai.types.chat
 import openai.types.fine_tuning
 import openai.types.graders
 import pydantic
@@ -68,7 +67,7 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
             "type": "reinforcement",
             "reinforcement": openai.types.fine_tuning.reinforcement_method_param.ReinforcementMethodParam(
                 grader=openai.types.graders.score_model_grader_param.ScoreModelGraderParam(
-                    input=prompt_messages,  # noqa
+                    input=prompt_messages,
                     model=self.grader_model,
                     name=self.grader_name,
                     type="score_model",

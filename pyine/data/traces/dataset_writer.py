@@ -222,7 +222,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
     fetch_augmented_solutions: typing.Annotated[
         dict[pyine.prompts.PromptNameType, int],  # augmentation-type-to-fetch-count
         pydantic.Field(
-            default_factory=dict,
+            default_factory=dict,  # lambda: typing.cast(dict[pyine.prompts.PromptNameType, int], {}),
             description=(
                 "Specifies the (max) number of augmented solutions to fetch from the "
                 "prompt result db, for each valid solution."
@@ -307,7 +307,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
 
 
 @dataclasses.dataclass(frozen=True)
-class _TestTuple:
+class TestTuple:
     """Represents a test tuple to use to trace/verify a given solution."""
 
     test_idx: int
@@ -490,13 +490,13 @@ def _log_failed_test_to_disk(
 def _get_test_tuples(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     config: TraceDatasetWriterConfig,
-) -> list[_TestTuple]:
+) -> list[TestTuple]:
     """Gets a list of test tuples to use for tracing/verifying solutions for a coding problem."""
     max_test_count = min((config.max_tests_per_solution or problem.test_count), problem.test_count)
     if max_test_count == 0:
         raise ValueError(f"no test cases found for problem: {problem}")
     candidate_test_tuples = [
-        _TestTuple(test_idx=test_idx, inputs=test_inputs, outputs=test_outputs)
+        TestTuple(test_idx=test_idx, inputs=test_inputs, outputs=test_outputs)
         for test_idx, (test_inputs, test_outputs) in enumerate(problem.test_inout_pairs)
     ]
     if config.max_tests_args_length is not None:
@@ -706,7 +706,7 @@ def trace_code_snippet(
 def _fetch_augmented_code_to_trace(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    test_tuples: list[_TestTuple],
+    test_tuples: list[TestTuple],
     config: TraceDatasetWriterConfig,
 ) -> list[TraceRequest]:
     """Fetches augmented code snippets to trace for a solution to a coding problem."""
@@ -770,7 +770,7 @@ def _fetch_augmented_code_to_trace(
 def _process_solutions(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solutions: list[pyine.data.traces.dataset_utils.Solution],
-    test_tuples: list[_TestTuple],
+    test_tuples: list[TestTuple],
     config: TraceDatasetWriterConfig,
     log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
@@ -824,7 +824,7 @@ def _process_solutions(
 def _process_one_solution(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    test_tuples: list[_TestTuple],
+    test_tuples: list[TestTuple],
     config: TraceDatasetWriterConfig,
     log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,

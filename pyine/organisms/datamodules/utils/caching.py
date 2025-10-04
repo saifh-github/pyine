@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
-class CachedTestData(pyine.data.traces.dataset_writer._TestTuple):  # noqa
+class CachedTestData(pyine.data.traces.dataset_writer.TestTuple):
     """Container for cached coding problem test case data.
 
     Inherits `test_idx`, `inputs`, and `outputs` from the parent class.
@@ -28,13 +28,13 @@ class CachedTestData(pyine.data.traces.dataset_writer._TestTuple):  # noqa
     @functools.cached_property
     def inputs_length(self) -> int:
         if isinstance(self.inputs, (str, bytes, list, tuple, set, dict)):
-            return len(self.inputs)
+            return len(self.inputs)  # type: ignore[reportUnknownMemberType]
         return len(str(self.inputs))
 
     @functools.cached_property
     def outputs_length(self) -> int:
         if isinstance(self.outputs, (str, bytes, list, tuple, set, dict)):
-            return len(self.outputs)
+            return len(self.outputs)  # type: ignore[reportUnknownMemberType]
         return len(str(self.outputs))
 
     @functools.cached_property
@@ -148,6 +148,11 @@ class CodingProblemTestDataCache:
         """Returns True if the cache is available locally."""
         return self._cache_path.is_file()
 
+    @property
+    def cache_size(self) -> int:
+        """Returns the number of test cases cached."""
+        return len(self._cache)
+
     @functools.cached_property
     def _cache_path(self) -> pathlib.Path:
         """Returns the file path used to store cache data in the logs directory."""
@@ -164,9 +169,10 @@ class CodingProblemTestDataCache:
         assert isinstance(dataset_reader.metadata, dict), f"unexpected metadata type: {type(dataset_reader.metadata)}"
         parent_info = dataset_reader.metadata.get("parent_dataset", {})
         assert isinstance(parent_info, dict), f"unexpected parent dataset info type: {type(parent_info)}"
+        parent_info = typing.cast("dict[str, typing.Any]", parent_info)
         dataset_name = parent_info.get("dataset_name")
         dataset_path = parent_info.get("dataset_path")
-        if not dataset_name or not dataset_path:
+        if not isinstance(dataset_name, str) or not isinstance(dataset_path, (str, pathlib.Path)):
             raise ValueError("dataset metadata missing parent dataset information required to build cache")
         dataset_path = pathlib.Path(dataset_path)
         if not dataset_path.exists():
@@ -246,11 +252,12 @@ class CodingProblemTestDataCache:
             return None
         if rng is None:
             rng = self._rng
-        return rng.choice(candidates)
+        picked_candidate_idx = int(rng.choice(len(candidates)))
+        return candidates[picked_candidate_idx]
 
 
 if __name__ == "__main__":
     import pyine.data.taco.dataset_utils
 
     dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
-    assert len(CodingProblemTestDataCache(dataset_name="TACO", dataset_path=dataset_path)._cache) > 0  # noqa
+    assert CodingProblemTestDataCache(dataset_name="TACO", dataset_path=dataset_path).cache_size > 0

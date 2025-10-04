@@ -41,7 +41,9 @@ class PromptBuildConfig(pydantic.BaseModel):
     """Whether to include few-shot examples in the template."""
     target_examples: int | list[int] | None = None
     """Number or list of examples to include in the template; if `None`, all examples are included."""
-    partial_vars: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    partial_vars: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Optional partial variables to use for prompt template substitution."""
     role_variables: dict[str, typing.Any] | None = None
     """Optional variables to substitute in the role block."""

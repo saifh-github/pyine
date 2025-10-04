@@ -147,7 +147,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     }
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
     dataloader_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = pydantic.Field(
-        default_factory=dict
+        default_factory=lambda: typing.cast("dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]]", {}),
     )
     """Overrides for the default DataLoader configuration; will shuffle training data."""
     instantiate_parsers_at_setup: bool = False

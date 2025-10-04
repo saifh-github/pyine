@@ -34,22 +34,10 @@ SubsetNameType = str
 """Type used to represent a data subset name (e.g. 'train', 'valid', 'test')."""
 LoaderNameType = str
 """Type used to represent a data loader name (e.g. 'train', 'valid', 'test')."""
-BaseDataParserClass = torch.utils.data.Dataset
+type BaseDataParserClass[OutputSampleType] = torch.utils.data.Dataset[OutputSampleType]
 """Default base class used for data parsers."""
-BaseDataParserType = BaseDataParserClass[typing.Any]
-"""Default base type used for data parsers."""
-BaseDataLoaderClass = torch.utils.data.DataLoader
+type BaseDataLoaderClass[OutputBatchType] = torch.utils.data.DataLoader[OutputBatchType]
 """Default base class used for data loaders."""
-BaseDataLoaderType = BaseDataLoaderClass[typing.Any]
-"""Default base type used for data loaders."""
-
-
-def _subset_parser_config_dict_factory() -> dict[SubsetNameType, BaseDataParserConfig]:
-    return {}
-
-
-def _loader_config_dict_factory() -> dict[LoaderNameType, BaseDataLoaderConfig]:
-    return {}
 
 
 class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec):
@@ -59,7 +47,7 @@ class BaseDataParserConfig(pyine.utils.pydantic.ClassImportSpec):
     should specify `class_path` and `params`, and optionally `base_class_path` if needed.
     """
 
-    base_class_path: str = pyine.utils.portability.get_fully_qualified_name(BaseDataParserType)
+    base_class_path: str = pyine.utils.portability.get_fully_qualified_name(torch.utils.data.Dataset)
     """Base class path for the PyTorch data parser (dataset) class."""
     # note: no need to override the params field here, datasets don't have anything standardized
 
@@ -73,7 +61,7 @@ if typing.TYPE_CHECKING:
 
 else:
     BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
-        fn=BaseDataLoaderType,
+        fn=BaseDataLoaderClass[typing.Any],
         name="BaseDataLoaderParamsConfig",
         model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
         exclude={"dataset"},  # will be provided at derived class instantiation time
@@ -89,7 +77,7 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec):
     expected by PyTorch data loaders.
     """
 
-    base_class_path: str = pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType)
+    base_class_path: str = pyine.utils.portability.get_fully_qualified_name(torch.utils.data.DataLoader)
     """Base class path for the PyTorch data loader class."""
 
     params: typing.Annotated[  # type: ignore[override]
@@ -136,7 +124,8 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     dataparser_config_overrides: typing.Annotated[
         dict[SubsetNameType, dict[str, typing.Any]],
         pydantic.Field(
-            default_factory=dict,  # no overrides by default, meaning all subsets will use the default config
+            # no overrides by default, meaning all subsets will use the default config
+            default_factory=dict,  # lambda: typing.cast(dict[SubsetNameType, dict[str, typing.Any]], {}),
             description="Data parser configuration dictionary with subset-specific default config overrides.",
         ),
     ]
@@ -147,7 +136,7 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         pydantic.SerializeAsAny[BaseDataLoaderConfig],
         pydantic.Field(
             default=BaseDataLoaderConfig(
-                class_path=pyine.utils.portability.get_fully_qualified_name(BaseDataLoaderType),
+                class_path=pyine.utils.portability.get_fully_qualified_name(torch.utils.data.DataLoader),
                 params=BaseDataLoaderParamsConfig(),
             ),
             validate_default=True,
@@ -157,7 +146,8 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     dataloader_config_overrides: typing.Annotated[
         dict[LoaderNameType, dict[str, typing.Any]],
         pydantic.Field(
-            default_factory=dict,  # no overrides by default, meaning all subsets will use the default config
+            # no overrides by default, meaning all subsets will use the default config
+            default_factory=dict,  # lambda: typing.cast(dict[LoaderNameType, dict[str, typing.Any]], {}),
             description="Data loader configuration dictionary with subset-specific default config overrides.",
         ),
     ]
@@ -222,26 +212,28 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         subset_name: SubsetNameType,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> BaseDataParserType:
+    ) -> BaseDataParserClass[typing.Any]:
         """Instantiates a data parser object for the given subset name."""
         parser_config = self._resolved_dataparser_configs[subset_name]
         parser_obj = parser_config.instantiate(*args, **extra_kwargs)
-        if not isinstance(parser_obj, BaseDataParserClass):
-            raise TypeError(f"expected {BaseDataParserType} (or subclass), got {type(parser_obj)}")
-        return typing.cast("BaseDataParserType", parser_obj)
+        expected_parent_class = torch.utils.data.Dataset
+        if not isinstance(parser_obj, expected_parent_class):
+            raise TypeError(f"expected {expected_parent_class} (or subclass), got {type(parser_obj)}")
+        return typing.cast("BaseDataParserClass[typing.Any]", parser_obj)
 
     def instantiate_dataloader(
         self,
         loader_name: LoaderNameType,
         *args: typing.Any,
         **extra_kwargs: typing.Any,
-    ) -> BaseDataLoaderType:
+    ) -> BaseDataLoaderClass[typing.Any]:
         """Instantiates a data loader object for the given loader name."""
         loader_config = self._resolved_dataloader_configs[loader_name]
         loader_obj = loader_config.instantiate(*args, **extra_kwargs)
-        if not isinstance(loader_obj, BaseDataLoaderClass):
-            raise TypeError(f"expected {BaseDataLoaderType} (or subclass), got {type(loader_obj)}")
-        return typing.cast("BaseDataLoaderType", loader_obj)
+        expected_parent_class = torch.utils.data.DataLoader
+        if not isinstance(loader_obj, expected_parent_class):
+            raise TypeError(f"expected {expected_parent_class} (or subclass), got {type(loader_obj)}")
+        return typing.cast("BaseDataLoaderClass[typing.Any]", loader_obj)
 
     def instantiate_datamodule(
         self,
@@ -258,10 +250,10 @@ class BaseDataModuleConfig(pydantic.BaseModel):
 
     # cache resolved subset configs so we don't re-resolve them in each getter call
     _resolved_dataparser_configs: dict[SubsetNameType, BaseDataParserConfig] = pydantic.PrivateAttr(
-        default_factory=_subset_parser_config_dict_factory
+        default_factory=lambda: typing.cast("dict[SubsetNameType, BaseDataParserConfig]", {}),
     )
     _resolved_dataloader_configs: dict[LoaderNameType, BaseDataLoaderConfig] = pydantic.PrivateAttr(
-        default_factory=_loader_config_dict_factory
+        default_factory=lambda: typing.cast("dict[LoaderNameType, BaseDataLoaderConfig]", {}),
     )
     # cache the resolved datamodule class type also for potential instantiate calls
     _resolved_datamodule_class: type[BaseDataModule[typing.Any]] | None = pydantic.PrivateAttr(default=None)
@@ -490,7 +482,7 @@ class BaseDataModule[ConfigType](pl.LightningDataModule):
     def get_parser(
         self,
         subset_name: SubsetNameType,
-    ) -> BaseDataParserType:
+    ) -> BaseDataParserClass[typing.Any]:
         """Returns a data parser object for a given subset name.
 
         This function exists for users that might not want to use dataloaders directly, and would prefer
@@ -541,20 +533,28 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     message_generator_num_workers: int = 6
     """Defines the number of workers to use when generating message datasets."""
     apply_chat_template_train_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: {
-            "tokenize": False,
-            "add_generation_prompt": False,
-        },
+        default_factory=lambda: typing.cast(
+            "dict[str, typing.Any]",
+            {
+                "tokenize": False,
+                "add_generation_prompt": False,
+            },
+        ),
     )
     """Configuration to use when applying a tokenizer's chat template onto a messages dataset for SFT training."""
     apply_chat_template_eval_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: {
-            "tokenize": False,
-            "add_generation_prompt": True,
-        },
+        default_factory=lambda: typing.cast(
+            "dict[str, typing.Any]",
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+            },
+        ),
     )
     """Configuration to use when applying a tokenizer's chat template onto a messages dataset for evaluations."""
-    apply_chat_template_batching_map_config: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    apply_chat_template_batching_map_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Configuration to use for the batched map operation when applying a tokenizer's chat template."""
     use_local_dataset_cache: bool = True
     """Whether to always try to save/load datasets from the local cache or not."""

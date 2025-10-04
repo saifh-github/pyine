@@ -51,7 +51,9 @@ class SerializationConfig(pydantic.BaseModel):
 
     method: SerializationMethod | str = SerializationMethod.MSGSPEC
     """Serialization method to use."""
-    compression_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    compression_kwargs: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+    )
     """Compression arguments to pass to the compression method (unused if not compressing)."""
     allow_insecure_serialization: bool = False
     """Allow potentially unsafe serialization formats (e.g., pickle)."""

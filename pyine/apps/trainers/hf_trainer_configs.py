@@ -53,7 +53,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
     )
     auto_model_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=dict,
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
         description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
     )
     quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
