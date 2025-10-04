@@ -1,17 +1,18 @@
-import collections
+from __future__ import annotations
+
+import collections.abc
 import functools
 import typing
 
 import langchain_core.messages
 import langchain_core.prompts
-import transformers
 
 import pyine.organisms.datamodules.utils.samples
 import pyine.prompts.manager
-import pyine.prompts.utils
 
 if typing.TYPE_CHECKING:
     import datasets as hf_datasets
+    import transformers
 
 
 SampleTransformInputType = pyine.organisms.datamodules.utils.samples.SampleData | dict[str, typing.Any]
@@ -19,9 +20,20 @@ SampleTransformOutputType = str | list[langchain_core.messages.BaseMessage] | di
 SampleTransformType = typing.Callable[[SampleTransformInputType], SampleTransformOutputType]
 
 
+def _extract_message_content(
+    message: langchain_core.messages.BaseMessage,
+    role: str,
+) -> str:
+    """Returns the string content of a langchain message, enforcing expected typing."""
+    content = typing.cast("typing.Any", message.content)  # type: ignore[reportUnknownMemberType]
+    if isinstance(content, str):
+        return content
+    raise TypeError(f"expected string {role} message content, got {type(content)}")
+
+
 def _apply_prompt_template_to_sample(
     sample: SampleTransformInputType,
-    prompt_template: langchain_core.prompts.BasePromptTemplate,
+    prompt_template: langchain_core.prompts.BasePromptTemplate[typing.Any],
     use_chat_template: bool,
     append_answer: bool,
     use_hf_messages: bool,
@@ -35,48 +47,61 @@ def _apply_prompt_template_to_sample(
 
     Kept static/top-level-friendly for to keep pickling happy.
     """
+    sample_data: pyine.organisms.datamodules.utils.samples.SampleData
+    sample_args: dict[str, typing.Any]
     if isinstance(sample, collections.abc.Mapping):
-        sample_args = sample
-        sample = pyine.organisms.datamodules.utils.samples.SampleData(**sample)
+        sample_dict = dict(sample)
+        sample_args = sample_dict
+        sample_data = pyine.organisms.datamodules.utils.samples.SampleData(**sample_dict)
     else:
-        sample_args = sample._asdict()  # should be a named-tuple-like interface
+        sample_data = sample
+        sample_args = sample_data._asdict()
     if use_chat_template:
-        output = prompt_template.format_messages(**sample_args)
-        assert isinstance(output, list)
+        assert isinstance(prompt_template, langchain_core.prompts.ChatPromptTemplate)
+        messages = prompt_template.format_messages(**sample_args)
+        assert isinstance(messages, list)
         # note: we currently only support single-turn interactions here, so one request per convo
-        assert sum([isinstance(m, langchain_core.messages.SystemMessage) for m in output]) <= 1
-        assert sum([isinstance(m, langchain_core.messages.HumanMessage) for m in output]) == 1
-        assert sum([isinstance(m, langchain_core.messages.AIMessage) for m in output]) == 0  # added below
-        assert len(output) in [
-            1,
-            2,
-        ]  # we currently only support single-turn transforms here
-        if merge_system_with_user and len(output) == 2:
-            output: list[langchain_core.messages.BaseMessage] = [
-                langchain_core.messages.HumanMessage(output[0].content + "\n\n" + output[1].content)
+        message_list = typing.cast("list[langchain_core.messages.BaseMessage]", messages)
+        assert sum(isinstance(m, langchain_core.messages.SystemMessage) for m in message_list) <= 1
+        assert sum(isinstance(m, langchain_core.messages.HumanMessage) for m in message_list) == 1
+        assert sum(isinstance(m, langchain_core.messages.AIMessage) for m in message_list) == 0
+        assert len(message_list) in [1, 2]  # we currently only support single-turn transforms here
+        if merge_system_with_user and len(message_list) == 2:
+            system_msg, user_msg = message_list
+            assert isinstance(system_msg, langchain_core.messages.SystemMessage)
+            assert isinstance(user_msg, langchain_core.messages.HumanMessage)
+            system_content = _extract_message_content(system_msg, "system")
+            user_content = _extract_message_content(user_msg, "human")
+            merged_messages: list[langchain_core.messages.BaseMessage] = [
+                langchain_core.messages.HumanMessage(system_content + "\n\n" + user_content)
             ]
+            message_list = merged_messages
         if append_answer:
-            output.append(langchain_core.messages.AIMessage(sample.expected_output))
+            message_list.append(langchain_core.messages.AIMessage(sample_data.expected_output))
         if use_hf_messages:
-            hf_msgs: list[dict[str, str]] = []
-            for msg in output:
+            hf_messages: list[dict[str, str]] = []
+            for msg in message_list:
                 if isinstance(msg, langchain_core.messages.SystemMessage):
-                    hf_msgs.append({"role": "system", "content": msg.content})
+                    content = _extract_message_content(msg, "system")
+                    hf_messages.append({"role": "system", "content": content})
                 elif isinstance(msg, langchain_core.messages.HumanMessage):
-                    hf_msgs.append({"role": "user", "content": msg.content})
+                    content = _extract_message_content(msg, "human")
+                    hf_messages.append({"role": "user", "content": content})
                 elif isinstance(msg, langchain_core.messages.AIMessage):
-                    hf_msgs.append({"role": "assistant", "content": msg.content})
+                    content = _extract_message_content(msg, "assistant")
+                    hf_messages.append({"role": "assistant", "content": content})
                 else:
                     raise NotImplementedError(f"unsupported message type: {type(msg)}")
-            output: dict[str, typing.Any] = {hf_messages_key: hf_msgs}
+            hf_output: dict[str, typing.Any] = {hf_messages_key: hf_messages}
             if orig_sample_key:
-                output[orig_sample_key] = sample_args
-    else:
-        output = prompt_template.format(**sample_args)
-        if append_answer:
-            assert isinstance(output, str)
-            output += "\n" + sample.expected_output
-    return output
+                hf_output[orig_sample_key] = sample_args
+            return hf_output
+        return message_list
+    formatted_output = prompt_template.format(**sample_args)
+    assert isinstance(formatted_output, str)
+    if append_answer:
+        formatted_output = f"{formatted_output}\n{sample_data.expected_output}"
+    return formatted_output
 
 
 def create_sample_transform(
@@ -131,7 +156,7 @@ def _batch_apply_model_template_to_messages(
     messages_key: str,
     output_key: str,
     keep_original_data: bool,
-    apply_chat_template_kwargs: dict | None,
+    apply_chat_template_kwargs: dict[str, typing.Any] | None,
 ) -> dict[str, typing.Any]:
     """Applies a model template to a batch of messages.
 
@@ -141,47 +166,61 @@ def _batch_apply_model_template_to_messages(
     """
     assert isinstance(batch, collections.abc.Mapping), f"unexpected input batch type: {type(batch)}"
     assert messages_key in batch, f"missing expected messages key: {messages_key}"
-    text = tokenizer.apply_chat_template(
-        batch[messages_key],
+    messages = typing.cast("list[dict[str, str]]", batch[messages_key])
+    text_result = tokenizer.apply_chat_template(
+        conversation=messages,
         **(apply_chat_template_kwargs or {}),
     )
-    assert isinstance(text, list) and len(text) == len(batch[messages_key])
+    if isinstance(text_result, list):
+        if not any(not isinstance(t, str) for t in text_result):
+            raise TypeError("expected tokenizer chat template output to be a list of strings")
+    else:
+        raise TypeError(
+            f"expected tokenizer chat template output to be a list of strings, got {type(text_result)}",
+        )
+    assert len(text_result) == len(messages), "length mismatch between input messages and output text"
     if strip_output:
-        for idx in range(len(text)):
-            text[idx] = text[idx].strip()
+        text_result = [item.strip() for item in text_result]
     if append_eos_token:
-        for idx in range(len(text)):
-            text[idx] += tokenizer.eos_token
-    output = batch.copy() if keep_original_data else {}
-    output[output_key] = text
+        assert hasattr(tokenizer, "eos_token"), "tokenizer missing eos token"
+        eos_token = typing.cast("str | list[str] | None", tokenizer.eos_token)
+        if eos_token is None:
+            raise ValueError("tokenizer has no EOS token configured")
+        eos_suffix = "".join(eos_token) if isinstance(eos_token, list) else str(eos_token)
+        text_result = [item + eos_suffix for item in text_result]
+    output: dict[str, typing.Any] = dict(batch) if keep_original_data else {}
+    output[output_key] = text_result
     return output
 
 
 def apply_model_template_to_messages(
-    hf_messages_dataset: "hf_datasets.Dataset",
+    hf_messages_dataset: hf_datasets.Dataset,
     tokenizer: transformers.PreTrainedTokenizer,
     append_eos_token: bool = False,
     strip_output: bool = False,
     messages_key: str = "messages",
     output_key: str = "text",
     keep_original_data: bool = False,
-    apply_chat_template_kwargs: dict | None = None,
+    apply_chat_template_kwargs: dict[str, typing.Any] | None = None,
     keep_in_memory: bool = False,
-) -> "hf_datasets.Dataset":
+) -> hf_datasets.Dataset:
     """Map a HuggingFace messages dataset to a new dataset with text-only samples."""
-    transform_batch = functools.partial(
-        _batch_apply_model_template_to_messages,
-        tokenizer=tokenizer,
-        append_eos_token=append_eos_token,
-        strip_output=strip_output,
-        messages_key=messages_key,
-        output_key=output_key,
-        keep_original_data=keep_original_data,
-        apply_chat_template_kwargs=apply_chat_template_kwargs,
+    transform_batch: typing.Callable[[collections.abc.Mapping[str, typing.Any]], dict[str, typing.Any]] = (
+        functools.partial(
+            _batch_apply_model_template_to_messages,
+            tokenizer=tokenizer,
+            append_eos_token=append_eos_token,
+            strip_output=strip_output,
+            messages_key=messages_key,
+            output_key=output_key,
+            keep_original_data=keep_original_data,
+            apply_chat_template_kwargs=apply_chat_template_kwargs,
+        )
     )
-    return hf_messages_dataset.map(
+    mapped_dataset = hf_messages_dataset.map(
         function=transform_batch,
         batched=True,
         desc="applying tokenizer chat template",
         keep_in_memory=keep_in_memory,
     )
+    return typing.cast("hf_datasets.Dataset", mapped_dataset)

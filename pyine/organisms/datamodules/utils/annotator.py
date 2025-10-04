@@ -23,9 +23,7 @@ import pyine.data.utils.filter_rules
 import pyine.organisms.datamodules.utils.caching
 import pyine.prompts.result_db
 import pyine.prompts.types
-import pyine.prompts.utils
 import pyine.utils.code.execution
-import pyine.utils.code.validation
 import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.reprod
@@ -146,6 +144,14 @@ type AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]
 """Type used to describe prompt augmentation probability maps."""
 
 
+def _empty_prob_map() -> AugmProbMapType:
+    return {}
+
+
+def _empty_identifier_set() -> set[str]:
+    return set()
+
+
 class AugmentedAnnotationOptions(pydantic.BaseModel):
     """Options controlling augmented annotations (i.e. annotations that rely on previous annotations).
 
@@ -166,7 +172,7 @@ class AugmentedAnnotationOptions(pydantic.BaseModel):
     # -------- settings for 'bugged_hinted' and 'bugged_misleading' code generation --------
 
     buggy_code_before_hinting_prob_map: AugmProbMapType = pydantic.Field(
-        default_factory=dict,  # empty map = turned off by default
+        default_factory=_empty_prob_map,  # empty map = turned off by default
         description=(
             "Probability map specifying whether to fetch a buggy version of a code string before "
             "applying a hint generation prompt (misleading or not). The key of the map can be an "
@@ -180,7 +186,9 @@ class AugmentedAnnotationOptions(pydantic.BaseModel):
     @property
     def is_bugged_hinting_enabled(self) -> bool:
         """Specifies whether 'bugged_hinted' augmentations are enabled."""
-        return self.buggy_code_before_hinting_prob_map and sum(self.buggy_code_before_hinting_prob_map.values()) > 0.0
+        if not self.buggy_code_before_hinting_prob_map:
+            return False
+        return sum(self.buggy_code_before_hinting_prob_map.values()) > 0.0
 
     # -------- settings for 'misleading' and 'bugged_misleading' code generation --------
 
@@ -332,7 +340,7 @@ class AnnotationOptions(pydantic.BaseModel):
     _test_data_cache: pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache | None = (
         pydantic.PrivateAttr(default=None)
     )
-    _already_seen_ids: set[str] = pydantic.PrivateAttr(default_factory=set)
+    _already_seen_ids: set[str] = pydantic.PrivateAttr(default_factory=_empty_identifier_set)
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "AnnotationOptions":
@@ -343,6 +351,36 @@ class AnnotationOptions(pydantic.BaseModel):
             self._prompt_result_db = pyine.prompts.result_db.PromptResultDB(self.db_path)
         self._test_data_cache = None  # will be initialized later, and only if needed
         return self
+
+    def get_prompt_result_db(self) -> pyine.prompts.result_db.PromptResultDB:
+        """Returns the prompt result database associated with these options."""
+        if self._prompt_result_db is None:
+            raise RuntimeError("prompt result database is not initialized yet")
+        return self._prompt_result_db
+
+    def has_test_data_cache(self) -> bool:
+        """Indicates whether the test data cache is ready for use."""
+        return self._test_data_cache is not None
+
+    def get_test_data_cache(self) -> pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache:
+        """Returns the test data cache, asserting it has been initialized."""
+        if self._test_data_cache is None:
+            raise RuntimeError("test data cache is not initialized yet")
+        return self._test_data_cache
+
+    def set_test_data_cache(
+        self,
+        cache: pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache,
+    ) -> None:
+        """Assigns the test data cache."""
+        self._test_data_cache = cache
+
+    def register_identifier(self, identifier: str) -> bool:
+        """Marks an identifier as seen; returns True if it was newly registered."""
+        if identifier in self._already_seen_ids:
+            return False
+        self._already_seen_ids.add(identifier)
+        return True
 
 
 def _default_identifier_resolver(
@@ -366,8 +404,7 @@ def _default_identifier_resolver(
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
         solution_id_str = str(trace_id.get_parent_identifier())
-        if solution_id_str not in config._already_seen_ids:
-            config._already_seen_ids.add(solution_id_str)
+        if config.register_identifier(solution_id_str):
             return solution_id_str
         return None
     prompts_where_trace_gives_identifier = [
@@ -376,8 +413,7 @@ def _default_identifier_resolver(
     ]
     if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
         trace_id_str = str(trace.identifier)
-        if trace_id_str not in config._already_seen_ids:
-            config._already_seen_ids.add(trace_id_str)
+        if config.register_identifier(trace_id_str):
             return trace_id_str
         return None
     # elif config.prompt_config.prompt_name in ...
@@ -468,7 +504,7 @@ def _default_input_variables_builder(
     # assume all prompts can benefit from code descriptions
     if config.augment_config.fetch_code_descriptions:
         # try to go and fetch the description for the parent solution (code summary) from db
-        code_summary_records = config._prompt_result_db.get_by_identifier(
+        code_summary_records = config.get_prompt_result_db().get_by_identifier(
             identifier=str(trace_id.get_parent_identifier()),
             prompt_name="code_summary",
         )
@@ -491,8 +527,8 @@ def _default_input_variables_builder(
     )
 
     if should_apply_misleading:
-        assert config._test_data_cache is not None, "missing test data cache for misleading generation"
-        test_case = config._test_data_cache.sample_alternative_test_case(
+        test_data_cache = config.get_test_data_cache()
+        test_case = test_data_cache.sample_alternative_test_case(
             trace_id=trace_id,
             max_inputs_length_delta=config.augment_config.max_misleading_test_length_delta,
             max_outputs_length_delta=config.augment_config.max_misleading_test_length_delta,
@@ -520,6 +556,7 @@ def _default_input_variables_builder(
         ) in config.augment_config.buggy_code_before_hinting_prob_map.items():
             if np.random.random() > augment_prob:
                 continue  # failed random draw for this bug type
+            bug_prompt_info: dict[str, typing.Any]
             if isinstance(bug_prompt_spec, tuple):
                 bug_prompt_info = {
                     "prompt_name": bug_prompt_spec[0],
@@ -527,7 +564,7 @@ def _default_input_variables_builder(
                 }
             else:
                 bug_prompt_info = {"prompt_name": bug_prompt_spec}
-            buggy_code_records = config._prompt_result_db.get_by_identifier(
+            buggy_code_records = config.get_prompt_result_db().get_by_identifier(
                 identifier=str(trace_id.get_parent_identifier()),
                 **bug_prompt_info,
             )
@@ -656,14 +693,30 @@ def _default_meta_builder(
     metadata dictionary contains the content of the `config.shared_meta` dictionary.
     """
     reprod_metadata = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
-    out_metadata: dict[str, pydantic.JsonValue] = {"reprod": reprod_metadata}
-    out_metadata["llm_provider_config"] = config.llm_provider_config.model_dump()
-    out_metadata["prompt_config"] = config.prompt_config.model_dump()
-    out_metadata["augment_config"] = config.augment_config.model_dump()
-    out_metadata["was_force_generated"] = config.force_generation
-    out_metadata["shared_tags"] = config.shared_tags or []
-    out_metadata.update(config.shared_meta or {})
-    out_metadata.update(kwargs)
+    out_metadata: dict[str, pydantic.JsonValue] = {}
+    out_metadata["reprod"] = typing.cast("pydantic.JsonValue", reprod_metadata)
+    out_metadata["llm_provider_config"] = typing.cast(
+        "pydantic.JsonValue",
+        config.llm_provider_config.model_dump(),
+    )
+    out_metadata["prompt_config"] = typing.cast(
+        "pydantic.JsonValue",
+        config.prompt_config.model_dump(),
+    )
+    out_metadata["augment_config"] = typing.cast(
+        "pydantic.JsonValue",
+        config.augment_config.model_dump(),
+    )
+    out_metadata["was_force_generated"] = typing.cast("pydantic.JsonValue", config.force_generation)
+    shared_tags_json: list[pydantic.JsonValue] = [
+        typing.cast("pydantic.JsonValue", tag) for tag in (config.shared_tags or [])
+    ]
+    out_metadata["shared_tags"] = typing.cast("pydantic.JsonValue", shared_tags_json)
+    if config.shared_meta:
+        out_metadata.update(config.shared_meta)
+    if kwargs:
+        extra_metadata = {key: typing.cast("pydantic.JsonValue", value) for key, value in kwargs.items()}
+        out_metadata.update(extra_metadata)
     return out_metadata
 
 
@@ -871,12 +924,13 @@ async def annotate_trace_dataset(
         raise ValueError(f"prompt '{prompt_name}' is not supported for trace dataset annotation")
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
-    if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and config._test_data_cache is None:
+    if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and not config.has_test_data_cache():
         assert isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader)
         logger.info("preparing or reloading coding problem test data cache for target dataset")
-        config._test_data_cache = (
-            pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(dataset)
-        )
+        cache = pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(dataset)
+        if cache is None:
+            raise ValueError("failed to build coding problem test data cache from dataset metadata")
+        config.set_test_data_cache(cache)
     base_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
         rule=(config.base_filter_rule or ""),
         case_sensitive=False,
@@ -911,7 +965,7 @@ async def annotate_trace_dataset(
                     config=config,
                     dry_run=dry_run,
                     base_filter_fn=base_filter_fn,
-                    db=config._prompt_result_db,
+                    db=config.get_prompt_result_db(),
                     group_getter=group_getter,
                     prompt_input_vars_getter=prompt_input_vars_getter,
                     tags_getter=tags_getter,
@@ -944,7 +998,7 @@ async def annotate_trace_dataset(
             config=config,
             dry_run=dry_run,
             base_filter_fn=base_filter_fn,
-            db=config._prompt_result_db,  # noqa
+            db=config.get_prompt_result_db(),
             group_getter=group_getter,
             prompt_input_vars_getter=prompt_input_vars_getter,
             tags_getter=tags_getter,

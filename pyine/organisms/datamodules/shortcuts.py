@@ -46,6 +46,13 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         config: Configuration object for this datamodule.
     """
 
+    _metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None
+    _readers: list[pyine.data.traces.dataset_reader.DatasetReader]
+    _subset_parsers: dict[
+        pyine.data.datamodule.SubsetNameType,
+        pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
+    ]
+
     def __init__(
         self,
         config: ShortcutBiasDataModuleConfig,
@@ -53,12 +60,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     ) -> None:
         super().__init__(config)
         self.verbose = verbose
-        self._metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None = None
-        self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
-        self._subset_parsers: dict[
-            pyine.data.datamodule.SubsetNameType,
-            pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
-        ] = {}
+        self._metadata = None
+        self._readers = []
+        self._subset_parsers = {}
 
     @typing.override
     def prepare_data(self) -> None:
@@ -72,11 +76,12 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
             logger.info(f"using cached shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
             return
         logger.info(f"preparing shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
-        readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
         # first prep step: identify which traces are to be kept based on our base tag filter rule
-        base_filter = self.config._resolved_base_filter  # noqa
-        assert base_filter is not None, "base filter should have been resolved by now"
-        base_traces_meta = pyine.data.traces.dataset_reader.get_traces_metadata(readers, base_filter=base_filter)
+        assert self.config.base_filter is not None, "base filter should have been resolved by now"
+        base_traces_meta = pyine.data.traces.dataset_reader.get_traces_metadata(
+            list(self.config.lmdb_paths),
+            base_filter=self.config.base_filter,
+        )
         # load coding problem split data and keep relevant assignments
         split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
         split_data = pyine.data.utils.splits.SplitResult.from_file(self.config.split_file_path)
@@ -182,10 +187,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers since they should be read-only and never pickled
         self._readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
-        self._subset_parsers: dict[
-            pyine.data.datamodule.SubsetNameType,
-            pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
-        ] = {}
+        self._subset_parsers.clear()
         for subset_name in self.config.subset_names:
             if self.config.instantiate_parsers_at_setup:
                 self._subset_parsers[subset_name] = self._instantiate_parser_if_needed(subset_name)
@@ -209,7 +211,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
                 "pyine.organisms.datamodules.utils.samples.SampleBuilder",
                 parser,
             )
-        return self._subset_parsers[subset_name]
+        parser = self._subset_parsers[subset_name]
+        assert parser is not None, f"parser for subset {subset_name} should be instantiated"
+        return parser
 
     def _get_traces_meta_for_subset(
         self,
@@ -365,9 +369,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     @typing.override
     def teardown(self, stage: str | None = None) -> None:
         """Close readers when the datamodule is torn down, and unassigns all parser attributes."""
-        self._metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None = None
-        self._subset_parsers: dict[
-            pyine.data.datamodule.SubsetNameType,
-            pyine.organisms.datamodules.utils.samples.SampleBuilder,
-        ] = {}
-        self._readers: list[pyine.data.traces.dataset_reader.DatasetReader] = []
+        self._metadata = None
+        self._subset_parsers.clear()
+        self._readers = []

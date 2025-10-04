@@ -6,7 +6,7 @@ import pathlib
 import typing
 import warnings
 
-import hydra.conf
+import omegaconf
 import pydantic
 
 import pyine.configs.schemas
@@ -19,12 +19,12 @@ import pyine.evals.common
 import pyine.organisms.datamodules.utils.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
-import pyine.utils.portability
 
 
 def _get_datamodule_fully_qualified_name() -> str:
     """Returns the fully qualified name of the `ShortcutBiasDataModule` class."""
     import pyine.organisms.datamodules.shortcuts
+    import pyine.utils.portability
 
     return pyine.utils.portability.get_fully_qualified_name(
         pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule
@@ -41,7 +41,7 @@ def _get_supported_subset_names() -> tuple[pyine.data.datamodule.SubsetNameType,
 
     Ones that possess a suffix correspond to versions found by overriding parser settings.
     """
-    output_subset_names = []
+    output_subset_names: list[pyine.data.datamodule.SubsetNameType] = []
     for subset in _get_default_top_level_subsets():
         output_subset_names.append(subset)
         for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType):
@@ -50,8 +50,25 @@ def _get_supported_subset_names() -> tuple[pyine.data.datamodule.SubsetNameType,
     return tuple(output_subset_names)
 
 
+@typing.overload
 def _get_default_sampler_builder_config(
     seed: typing.Any,
+    *,
+    as_pydantic: typing.Literal[True],
+) -> pyine.organisms.datamodules.utils.samples.SampleBuilderConfig: ...
+
+
+@typing.overload
+def _get_default_sampler_builder_config(
+    seed: typing.Any,
+    *,
+    as_pydantic: typing.Literal[False] = False,
+) -> dict[str, typing.Any]: ...
+
+
+def _get_default_sampler_builder_config(
+    seed: typing.Any,
+    *,
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | pyine.organisms.datamodules.utils.samples.SampleBuilderConfig:
     """Returns the default configuration dictionary used to instantiate sampler builders.
@@ -121,9 +138,9 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     lmdb_paths: typing.Annotated[tuple[pathlib.Path, ...], pydantic.Field(min_length=1)]  # must be specified!
     """Sequence of paths pointing to LMDB datasets containing execution traces."""
-    default_dataparser_config: pydantic.SerializeAsAny[
-        pyine.organisms.datamodules.utils.samples.SampleBuilderConfig
-    ] = _get_default_sampler_builder_config(seed=0, as_pydantic=True)
+    default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig] = (
+        _get_default_sampler_builder_config(seed=0, as_pydantic=True)
+    )
     """Default trace parser configuration (will rely on the TACO dataset if not overridden)."""
     dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = {
         subset: _get_default_sample_builder_overrides_for_subset(subset) for subset in _get_supported_subset_names()
@@ -204,6 +221,11 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
             **self.prompt_config.model_dump(),
         )
 
+    @property
+    def base_filter(self) -> pyine.data.utils.filter_rules.FilterType | None:
+        """Returns the resolved base filter rule used to screen trace tags."""
+        return self._resolved_base_filter
+
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(
@@ -260,7 +282,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     @typing.override
     def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
         """Validates and resolves dataset paths and internal filtering rules."""
-        super()._validate_and_resolve()
+        super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
         for lmdb_path in self.lmdb_paths:
             if not lmdb_path.exists():
                 raise ValueError(f"LMDB dataset does not exist at path: {lmdb_path}")
@@ -284,10 +306,31 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         return self
 
 
+@typing.overload
 def get_datamodule_config(
     lmdb_paths: typing.Any,
     split_file_path: typing.Any,
     seed: typing.Any,
+    *,
+    as_pydantic: typing.Literal[True],
+) -> ShortcutBiasDataModuleConfig: ...
+
+
+@typing.overload
+def get_datamodule_config(
+    lmdb_paths: typing.Any,
+    split_file_path: typing.Any,
+    seed: typing.Any,
+    *,
+    as_pydantic: typing.Literal[False] = False,
+) -> dict[str, typing.Any]: ...
+
+
+def get_datamodule_config(
+    lmdb_paths: typing.Any,
+    split_file_path: typing.Any,
+    seed: typing.Any,
+    *,
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
@@ -470,8 +513,8 @@ def get_configs(
         description="Base shortcuts datamodule settings; not specific to any actual source dataset.",
         config={
             **get_datamodule_config(
-                lmdb_paths=hydra.conf.MISSING,  # must be specified by user
-                split_file_path=hydra.conf.MISSING,  # must be specified by user
+                lmdb_paths=omegaconf.MISSING,  # must be specified by user
+                split_file_path=omegaconf.MISSING,  # must be specified by user
                 seed="${runtime.seed}",
                 as_pydantic=False,
             ),
