@@ -1,8 +1,6 @@
 import typing
 
 if typing.TYPE_CHECKING:
-    import langchain_core.prompts
-
     import pyine.prompts.types
 
 # @@@@ TODO: for experiments, consider pyine.utils.portability.print_code_with_numbered_lines()
@@ -18,7 +16,7 @@ def get_prompt_template(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> "langchain_core.prompts.BasePromptTemplate":
+) -> "pyine.prompts.types.PromptTemplate":
     """Returns the prompt template for the code execution prompt (manager module override).
 
     Note: this implementation appropriately fills in all relevant partial variables, if any.
@@ -26,14 +24,12 @@ def get_prompt_template(
     import pyine.prompts.manager
 
     prompt_config = pyine.prompts.manager.get_prompt_config("code_execution", version=version)
-    template = prompt_config.create_prompt_template(
+    return prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
+        partial_vars=partial_vars,
         role_variables=role_variables,
         context_variables=context_variables,
         examples_block_variables=examples_block_variables,
     )
-    if partial_vars:
-        template = template.partial(**partial_vars)
-    return template

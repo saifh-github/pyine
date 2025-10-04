@@ -2,12 +2,18 @@ import typing
 
 import langchain_core.messages
 import langchain_core.prompts
+import langchain_core.prompts.chat
 import openai
 import openai.types.fine_tuning
 import openai.types.graders
 import pydantic
 
+import pyine.utils.openai
+
 DefaultPromptMsgsType = typing.Literal["default"]
+GraderPromptMessage = openai.types.graders.score_model_grader_param.Input
+GraderPromptMessageContent = openai.types.graders.score_model_grader_param.InputContent
+GraderPromptMessages = list[GraderPromptMessage]
 
 
 class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
@@ -59,7 +65,9 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
         Note: output should be compatible with `openai.types.fine_tuning.job_create_params.Method`.
         """
         if self.pred_grader_prompt_messages != "default":
-            prompt_messages = self.pred_grader_prompt_messages
+            prompt_messages: GraderPromptMessages = self._normalize_prompt_messages(
+                self.pred_grader_prompt_messages,
+            )
         else:
             assert self._resolved_pred_grader_prompt_messages is not None
             prompt_messages = self._resolved_pred_grader_prompt_messages
@@ -89,7 +97,7 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
             ),
         }
 
-    _resolved_pred_grader_prompt_messages: list[dict[str, pydantic.JsonValue]] | None = pydantic.PrivateAttr(
+    _resolved_pred_grader_prompt_messages: GraderPromptMessages | None = pydantic.PrivateAttr(
         default=None,
     )
 
@@ -99,18 +107,60 @@ class PredGraderFineTuneMethodConfig(pydantic.BaseModel):
         if self.pred_grader_prompt_messages == "default":
             import pyine.prompts.manager
 
-            messages = pyine.prompts.manager.get_prompt_template(
+            prompt_template = pyine.prompts.manager.get_prompt_template(
                 "pred_grader",
                 version="score_only_for_openai_grader",
                 use_chat_template=True,
                 include_examples=True,
-            ).messages
+            )
+            if not isinstance(
+                prompt_template,
+                langchain_core.prompts.chat.ChatPromptTemplate,
+            ):
+                raise TypeError("pred_grader prompt must be a ChatPromptTemplate")
+            messages: list[langchain_core.prompts.chat.MessageLike] = prompt_template.messages
             assert len(messages) == 2
             assert isinstance(messages[0], langchain_core.messages.SystemMessage)
             assert isinstance(messages[1], langchain_core.prompts.HumanMessagePromptTemplate)
-            messages = [
+            string_prompt = messages[1].prompt
+            if not isinstance(string_prompt, langchain_core.prompts.StringPromptTemplate):
+                raise TypeError("pred_grader human message must use a StringPromptTemplate")
+            content_template = getattr(string_prompt, "template", None)
+            if not isinstance(content_template, str):
+                raise TypeError("pred_grader human template must expose a string template")
+            normalized_messages: list[typing.Any] = [
                 messages[0],
-                {"role": "user", "content": messages[1].prompt.template},
+                {"role": "user", "content": content_template},
             ]
-            self._resolved_pred_grader_prompt_messages = pyine.utils.openai.convert_messages_to_openai(messages)
+            self._resolved_pred_grader_prompt_messages = self._normalize_prompt_messages(
+                normalized_messages,
+            )
         return self
+
+    def _normalize_prompt_messages(
+        self,
+        prompt_messages: typing.Sequence[typing.Any],
+    ) -> GraderPromptMessages:
+        openai_messages = pyine.utils.openai.convert_messages_to_openai(prompt_messages)
+        normalized_messages: GraderPromptMessages = []
+        valid_roles = {"assistant", "developer", "system", "user"}
+        for raw_message in openai_messages:
+            message_dict: dict[str, typing.Any] = dict(raw_message)
+            role_value = str(message_dict.get("role", "user"))
+            if role_value not in valid_roles:
+                raise ValueError(f"invalid message role: {role_value}")
+            content_value_raw = message_dict.get("content", "")
+            if content_value_raw is None:
+                content_value: GraderPromptMessageContent = ""
+            else:
+                content_value = typing.cast(
+                    "GraderPromptMessageContent",
+                    content_value_raw,
+                )
+            message_dict["role"] = role_value
+            message_dict["content"] = content_value
+            message_dict.setdefault("type", "message")
+            normalized_messages.append(
+                typing.cast("GraderPromptMessage", message_dict),
+            )
+        return normalized_messages

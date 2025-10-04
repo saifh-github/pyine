@@ -14,7 +14,7 @@ type PromptInputMapping = collections.abc.Mapping[str, typing.Any]
 """Standard input mapping type expected by runnable prompt chains."""
 type PromptRunnable = langchain_core.runnables.Runnable[PromptInputMapping, typing.Any]
 """Runnable type alias with concrete input and output typing."""
-type PromptTemplate = langchain_core.prompts.BasePromptTemplate[typing.Any]
+type PromptTemplate = langchain_core.prompts.PromptTemplate | langchain_core.prompts.ChatPromptTemplate
 """Prompt template alias with explicit format output typing."""
 type LanguageModel = langchain_core.language_models.BaseLanguageModel[typing.Any]
 """Language model alias with explicit generics for prompt building."""

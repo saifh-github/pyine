@@ -10,8 +10,6 @@ import typing
 import pyine.prompts.configs.hints.docs as hints_docs
 
 if typing.TYPE_CHECKING:
-    import langchain_core.prompts
-
     import pyine.prompts.types
 
 
@@ -24,7 +22,7 @@ def get_prompt_template(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> "langchain_core.prompts.BasePromptTemplate":
+) -> "pyine.prompts.types.PromptTemplate":
     """Delegate template construction to the hints/docs implementation."""
     return hints_docs.get_prompt_template(
         version=version,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import functools
+import json
 import logging
 import pathlib
 import sqlite3
@@ -24,6 +25,50 @@ import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
+
+
+def _reload_metadata(raw: str | None) -> dict[str, pydantic.JsonValue]:
+    """Load a JSON string into a dictionary of JSON values, falling back to an empty dict."""
+    if not raw:
+        return {}
+    try:
+        loaded: pydantic.JsonValue = orjson.loads(raw)
+    except orjson.JSONDecodeError as exc:
+        raise ValueError("failed to decode json data from record") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"unexpected decoded data type; got: {type(loaded)}")
+    assert all(isinstance(key, str) for key in typing.cast("dict[typing.Any, pydantic.JsonValue]", loaded)), (
+        "unexpected non-str-tag"
+    )
+    return typing.cast("dict[str, pydantic.JsonValue]", loaded)
+
+
+def _reload_tags(raw: str | None) -> list[str]:
+    """Load a JSON string into a list of strings, coerce other element types to str."""
+    if not raw:
+        return []
+    try:
+        loaded: pydantic.JsonValue = orjson.loads(raw)
+    except orjson.JSONDecodeError as exc:
+        raise ValueError("failed to decode json data from record") from exc
+    if not isinstance(loaded, list):
+        raise ValueError(f"unexpected decoded data type; got: {type(loaded)}")
+    assert all(isinstance(tag, str) for tag in typing.cast("list[typing.Any]", loaded)), "unexpected non-str-tag"
+    return typing.cast("list[str]", loaded)
+
+
+def _ensure_text(value: typing.Any) -> str:
+    """Coerce arbitrary values (including lists/dicts/bytes) into a UTF-8 string."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, default=str)  # type: ignore[reportUnknownArgumentType]
+        except TypeError:
+            pass
+    return str(value)  # type: ignore[reportUnknownArgumentType]
 
 
 class CreationMeta(pydantic.BaseModel):
@@ -187,6 +232,8 @@ class PromptResultDB:
                         ),
                     )
                     conn.commit()
+                    if cur.lastrowid is None:
+                        raise RuntimeError("failed to retrieve lastrowid after insert")
                     return int(cur.lastrowid)
                 finally:
                     conn.close()
@@ -295,7 +342,7 @@ class PromptResultDB:
         Returns:
             List of matching PromptResultRecord objects, ordered by identifier and creation time.
         """
-        if prompt_name is None:
+        if not prompt_name:
             raise ValueError("prompt name required")
         sql = ["SELECT * FROM items WHERE prompt_name = ?"]
         params: list[typing.Any] = [prompt_name]
@@ -528,13 +575,17 @@ class PromptResultDB:
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> PromptResultRecord:
         """Convert a sqlite3.Row to a PromptResultRecord."""
-        if not isinstance(row, sqlite3.Row):  # to avoid brittle index mapping
-            raise TypeError("Expected sqlite3.Row with named columns")
         meta_raw = row["meta"]
         tags_raw = row["tags"]
         cmeta_raw = row["creation_meta"]
-        cmeta_dict = orjson.loads(cmeta_raw) if cmeta_raw else {}
-        created_at_raw = cmeta_dict.get("created_at", None)
+        if cmeta_raw:
+            parsed_raw: pydantic.JsonValue = orjson.loads(cmeta_raw)
+            assert isinstance(parsed_raw, dict), f"unexpected cmeta type: {type(parsed_raw)}"
+            assert all(isinstance(key, str) for key in parsed_raw)
+            cmeta_dict = typing.cast("dict[str, typing.Any]", parsed_raw)
+        else:
+            cmeta_dict: dict[str, typing.Any] = {}
+        created_at_raw = cmeta_dict.get("created_at")
         if isinstance(created_at_raw, str):
             try:
                 cmeta_dict["created_at"] = datetime.datetime.fromisoformat(created_at_raw)
@@ -545,7 +596,7 @@ class PromptResultDB:
                 )
                 cmeta_dict.pop("created_at", None)
         if isinstance(cmeta_dict.get("created_at"), datetime.datetime):
-            maybe_naive = cmeta_dict["created_at"]
+            maybe_naive = typing.cast("datetime.datetime", cmeta_dict["created_at"])
             if maybe_naive.tzinfo is None or maybe_naive.tzinfo.utcoffset(maybe_naive) is None:
                 # backward compat: created_at without timezone detected; falling back to row created_at
                 cmeta_dict.pop("created_at", None)
@@ -554,6 +605,7 @@ class PromptResultDB:
             if fallback_created_at.tzinfo is None or fallback_created_at.tzinfo.utcoffset(fallback_created_at) is None:
                 fallback_created_at = fallback_created_at.replace(tzinfo=datetime.UTC)
             cmeta_dict["created_at"] = fallback_created_at.astimezone(datetime.UTC)
+        assert all(isinstance(key, str) for key in cmeta_dict), "unexpected non-str-key in cmeta dict"
         return PromptResultRecord(
             identifier=row["identifier"],
             prompt_name=row["prompt_name"],
@@ -562,8 +614,8 @@ class PromptResultDB:
             creation_meta=CreationMeta(**cmeta_dict),
             prompt=row["prompt"],
             result=row["result"],
-            meta=orjson.loads(meta_raw) if meta_raw else {},
-            tags=orjson.loads(tags_raw) if tags_raw else [],
+            meta=_reload_metadata(meta_raw),
+            tags=_reload_tags(tags_raw),
         )
 
 
@@ -700,23 +752,32 @@ def fetch_or_generate_prompt_results(
                 callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
                 output = chain.invoke(input_variables, config=callback_config)
                 cm = creation_meta if creation_meta is not None else CreationMeta()
-                cm.llm_output = {}
+                llm_output_payload: dict[str, typing.Any] = {}
                 latest_llm_event = llm_event_logger.get_latest_event("llm_end")
-                if latest_llm_event is not None and latest_llm_event.response.llm_output:
-                    cm.llm_output.update(latest_llm_event.response.llm_output)
+                if latest_llm_event is not None:
+                    llm_event_payload = typing.cast(
+                        "dict[str, pydantic.JsonValue] | None",
+                        getattr(latest_llm_event.response, "llm_output", None),
+                    )
+                    if llm_event_payload is not None:
+                        llm_output_payload.update(llm_event_payload)
                 if isinstance(output, str):
                     result_str = output
                 elif isinstance(output, langchain_core.messages.AIMessage):
-                    result_str = output.content
-                    cm.llm_output.update(output.model_dump())
+                    assert isinstance(output, pydantic.BaseModel)
+                    result_str = _ensure_text(output.content)  # type: ignore[reportUnknownMemberType]
+                    llm_output_payload.update(output.model_dump())
                 elif hasattr(output, "model_dump_json") and callable(output.model_dump_json):
-                    result_str = output.model_dump_json()
+                    result_str = typing.cast("str", output.model_dump_json())
+                    assert isinstance(result_str, str)
                     if hasattr(output, "model_dump") and callable(output.model_dump):
-                        cm.llm_output.update(output.model_dump())  # noqa
-                elif isinstance(output, (dict, list)):
-                    result_str = orjson.dumps(output)
+                        output_dump = output.model_dump()
+                        assert isinstance(output_dump, dict)
+                        assert all(isinstance(key, str) for key in output_dump)  # type: ignore[reportUnknownVariableType]
+                        llm_output_payload.update(typing.cast("dict[str, typing.Any]", output_dump))
                 else:
-                    result_str = str(output)
+                    result_str = _ensure_text(output)
+                cm.llm_output = typing.cast("dict[str, pydantic.JsonValue]", dict(llm_output_payload))
                 is_ok = True
                 if output_validator is not None:
                     # validate the produced output if a validator is provided
@@ -745,6 +806,10 @@ def fetch_or_generate_prompt_results(
                             prompt_version=prompt_config.version,
                             creation_meta=cm,
                         )
+                    if meta is not None:
+                        meta_for_record: dict[str, pydantic.JsonValue] = dict(meta)
+                    else:
+                        meta_for_record = typing.cast("dict[str, pydantic.JsonValue]", {})
                     new_records.append(
                         PromptResultRecord(
                             identifier=identifier,
@@ -754,7 +819,7 @@ def fetch_or_generate_prompt_results(
                             creation_meta=cm,
                             prompt=prompt_str,
                             result=result_str,
-                            meta=meta or {},
+                            meta=meta_for_record,
                             tags=tags_to_store,
                         )
                     )
@@ -802,27 +867,29 @@ class TypedPromptResultFetcher[T]:
     def _decode(self, text: str) -> T:
         if self._decoder is not None:
             return self._decoder(text)
-        if self._type is None:
-            return typing.cast("typing.Any", text)
-        if self._type is str:
+        if self._type is None or self._type is str:
             return typing.cast("T", text)
-        if isinstance(self._type, type) and issubclass(self._type, pydantic.BaseModel):
+        if issubclass(self._type, pydantic.BaseModel):
             return typing.cast("T", self._type.model_validate_json(text))
-        if isinstance(self._type, type) and dataclasses.is_dataclass(self._type):
-            data = orjson.loads(text)
-            assert isinstance(data, dict)
-            return typing.cast(T, self._type(**data))  # noqa
+        if dataclasses.is_dataclass(self._type):
+            data: pydantic.JsonValue = orjson.loads(text)
+            if not isinstance(data, dict):
+                raise TypeError("expected JSON object to decode dataclass result")
+            return typing.cast("T", self._type(**data))  # noqa
         if self._type in (dict, list, tuple, set):
-            data = orjson.loads(text)
+            data: pydantic.JsonValue = orjson.loads(text)
+            assert isinstance(data, (dict, list, tuple, set))
             if self._type is set:
                 return typing.cast("T", set(data))
             if self._type is tuple:
                 return typing.cast("T", tuple(data))
             return typing.cast("T", data)
-        if isinstance(self._type, type) and hasattr(self._type, "from_json") and callable(self._type.from_json):
-            return typing.cast("T", self._type.from_json(text))
+        from_json_attr = getattr(self._type, "from_json", None)
+        if callable(from_json_attr):
+            deserializer = typing.cast("typing.Callable[[str], T]", from_json_attr)
+            return deserializer(text)
         # ultimate fallback: just load via json as-is
-        data = orjson.loads(text)
+        data: pydantic.JsonValue = orjson.loads(text)
         if isinstance(data, self._type):
             return typing.cast("T", data)
         raise ValueError(

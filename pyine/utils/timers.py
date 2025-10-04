@@ -1,28 +1,33 @@
+from __future__ import annotations
+
 import contextlib
 import datetime
 import functools
-import logging
 import re
 import signal
 import time
-import types
 import typing
 
-FuncP = typing.ParamSpec("FuncP")
-FuncR = typing.TypeVar("FuncR")
+if typing.TYPE_CHECKING:
+    import logging
+    import types
+
+FuncParamsType = typing.ParamSpec("FuncParamsType")
+FuncResultType = typing.TypeVar("FuncResultType")
 
 
-@typing.overload  # noqa: UP047
-def timeit(  # noqa: UP047
-    _func: typing.Callable[FuncP, FuncR],  # noqa: UP047
+@typing.overload
+def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
+    _func: typing.Callable[P, R],  # noqa
     *,
     name: str | None = None,
     logger: logging.Logger | None = None,
-) -> typing.Callable[FuncP, FuncR]: ...
+) -> typing.Callable[P, R]:  # noqa
+    ...
 
 
-@typing.overload  # noqa: UP047
-def timeit(  # noqa: UP047
+@typing.overload
+def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
     _func: None = None,
     *,
     name: str | None = None,
@@ -30,12 +35,12 @@ def timeit(  # noqa: UP047
 ) -> typing.ContextManager[None]: ...
 
 
-def timeit(  # noqa: UP047
-    _func: typing.Callable[FuncP, FuncR] | None = None,  # noqa: UP047
+def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
+    _func: typing.Callable[P, R] | None = None,  # noqa
     *,
     name: str | None = None,
     logger: logging.Logger | None = None,
-) -> typing.Callable[FuncP, FuncR] | typing.ContextManager[None]:
+) -> typing.Callable[P, R] | typing.ContextManager[None]:  # noqa
     """Measures execution time of a function (via decoration) or block (via context-manager).
 
     For blocks, use as a context manager:
@@ -68,11 +73,13 @@ def timeit(  # noqa: UP047
             else:
                 print(msg)
 
-    def _decorate(fn: typing.Callable[FuncP, FuncR]) -> typing.Callable[FuncP, FuncR]:
+    def _decorate(
+        fn: typing.Callable[FuncParamsType, FuncResultType],
+    ) -> typing.Callable[FuncParamsType, FuncResultType]:
         lbl = name or fn.__name__
 
         @functools.wraps(fn)
-        def _wrapped(*args: FuncP.args, **kwargs: FuncP.kwargs) -> FuncR:
+        def _wrapped(*args: FuncParamsType.args, **kwargs: FuncParamsType.kwargs) -> FuncResultType:
             with _ctx(lbl):
                 return fn(*args, **kwargs)
 
@@ -151,7 +158,7 @@ class TimeLimit:
             raise TimeoutError(f"{self.timeout_message} (actual time: {elapsed:.3f}s)")
         raise TimeoutError(self.timeout_message)
 
-    def __enter__(self) -> "TimeLimit":
+    def __enter__(self) -> TimeLimit:
         """
         Enters the context and starts the timer.
 

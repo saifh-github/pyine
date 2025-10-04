@@ -1,15 +1,16 @@
+import contextlib
 import importlib.resources
+import importlib.resources.abc
 import logging
 import pathlib
 import typing
 
 import langchain_core.language_models
-import langchain_core.prompts
 import langchain_core.runnables
 import pydantic
 import yaml
 
-from pyine.prompts.types import PromptNameType, PromptVersionType
+from pyine.prompts.types import PromptNameType, PromptTemplate, PromptVersionType
 from pyine.prompts.utils import PromptConfig, VersionedPromptConfig
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,13 @@ class PromptManager:
         prompt_module_path = str(prompt_name).replace("/", ".")
         return importlib.import_module(f"{self.package_name}.configs.{prompt_module_path}")
 
+    def get_prompt_module(
+        self,
+        prompt_name: PromptNameType,
+    ) -> typing.Any:
+        """Public accessor for prompt modules that exposes overrides safely."""
+        return self._get_prompt_module(prompt_name)
+
     def _load_prompt_config(
         self,
         prompt_name: PromptNameType,
@@ -102,7 +110,9 @@ class PromptManager:
             prompt_file = package_files.joinpath(*prompt_path.parts)
             if not prompt_file.is_file():
                 raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-            versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)  # noqa
+            with contextlib.ExitStack() as resource_stack:
+                yaml_path = resource_stack.enter_context(importlib.resources.as_file(prompt_file))
+                versioned_config = prompt_utils.VersionedPromptConfig.from_yaml(yaml_path)
             if version is not None:
                 if version not in versioned_config.versions:
                     available_versions = ", ".join(versioned_config.versions.keys())
@@ -158,7 +168,8 @@ class PromptManager:
         prompt_file = package_files.joinpath(*prompt_path.parts)
         if not prompt_file.is_file():
             raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-        return prompt_utils.VersionedPromptConfig.from_yaml(prompt_file)
+        with importlib.resources.as_file(prompt_file) as yaml_path:
+            return prompt_utils.VersionedPromptConfig.from_yaml(yaml_path)
 
     def list_prompts(self) -> list[PromptNameType]:
         """Returns a list of all available prompts in the package (as names without extension)."""
@@ -166,8 +177,10 @@ class PromptManager:
         prompts_dir = package_files.joinpath(self.prompts_subdir)
         if not prompts_dir.is_dir():
             return []
-        prompt_names = []
-        stack: list[tuple[typing.Any, pathlib.PurePosixPath]] = [(prompts_dir, pathlib.PurePosixPath())]
+        prompt_names: list[PromptNameType] = []
+        stack: list[tuple[importlib.resources.abc.Traversable, pathlib.PurePosixPath]] = [
+            (prompts_dir, pathlib.PurePosixPath())
+        ]
         while stack:
             current_dir, rel_root = stack.pop()
             for entry in current_dir.iterdir():
@@ -255,7 +268,7 @@ def get_prompt_template(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> langchain_core.prompts.BasePromptTemplate[typing.Any]:
+) -> PromptTemplate:
     """Convenience function to get a prompt template using the default manager.
 
     Note: if the prompt is known and registered, we will check its corresponding module to see if
@@ -276,10 +289,10 @@ def get_prompt_template(
         examples_block_variables: Optional variables for rendering the examples block template.
     """
     manager = get_framework_prompt_manager()
-    prompt_module = None
+    prompt_module: typing.Any | None = None
     try:
         # if a getter override exists for this specific prompt in its parent module, use it
-        prompt_module = manager._get_prompt_module(prompt_name)  # noqa
+        prompt_module = manager.get_prompt_module(prompt_name)
     except ModuleNotFoundError:
         logger.debug(f"could not find module for {prompt_name}, using default template constructor")
     if prompt_module is not None and hasattr(prompt_module, "get_prompt_template"):
@@ -294,17 +307,15 @@ def get_prompt_template(
             examples_block_variables=examples_block_variables,
         )
     prompt_config = manager.get_prompt_config(prompt_name=prompt_name, version=version)
-    template = prompt_config.create_prompt_template(
+    return prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
+        partial_vars=partial_vars,
         role_variables=role_variables,
         context_variables=context_variables,
         examples_block_variables=examples_block_variables,
     )
-    if partial_vars:
-        template = template.partial(**partial_vars)
-    return template
 
 
 def get_prompt_chain(
@@ -342,10 +353,10 @@ def get_prompt_chain(
         examples_block_variables: Optional variables for rendering the examples block template.
     """
     manager = get_framework_prompt_manager()
-    prompt_module = None
+    prompt_module: typing.Any | None = None
     try:
         # if a getter override exists for this specific prompt in its parent module, use it
-        prompt_module = manager._get_prompt_module(prompt_name)  # noqa
+        prompt_module = manager.get_prompt_module(prompt_name)
     except ModuleNotFoundError:
         logger.debug(f"could not find module for {prompt_name}, will not use any overrides")
     if prompt_module is not None and hasattr(prompt_module, "get_prompt_chain"):

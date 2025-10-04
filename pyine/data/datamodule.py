@@ -7,7 +7,6 @@ import typing
 
 import datasets as hf_datasets
 import langchain_core.language_models
-import langchain_core.prompts
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
@@ -562,7 +561,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     def get_prompt_template(
         self,
         **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
-    ) -> langchain_core.prompts.BasePromptTemplate[typing.Any]:
+    ) -> pyine.prompts.types.PromptTemplate:
         """Returns the prompt template used for preparing training/evaluation conversations."""
         prompt_kwargs = self.prompt_config.model_dump()
         prompt_kwargs.update(kwargs)

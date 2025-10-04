@@ -5,6 +5,7 @@ import typing
 
 import langchain_core.messages
 import langchain_core.prompts
+import langchain_core.prompts.string
 import pydantic
 
 import pyine.utils.pydantic
@@ -48,10 +49,11 @@ class PromptTemplate(pydantic.BaseModel):
         **kwargs: typing.Any,  # extra partial variables (if any are needed)
     ) -> langchain_core.prompts.PromptTemplate:
         """Return a LangChain prompt template with partial variables filled in."""
+        merged_partials: dict[str, typing.Any] = {**(self.partial_variables or {}), **kwargs}
         return langchain_core.prompts.PromptTemplate.from_template(
             template=self.template,
             template_format=self.format,
-            partial_variables=dict(**(self.partial_variables or {}), **kwargs),
+            partial_variables=merged_partials,
         )
 
     def render_prompt(self, **kwargs: typing.Any) -> str:
@@ -159,23 +161,23 @@ class PromptConfig(pydantic.BaseModel):
         """
         if not self.examples:
             return ""
+        examples: list[PromptExample]
         if target_examples is not None:
             if isinstance(target_examples, int):
                 examples = random.sample(self.examples, min(target_examples, len(self.examples)))
-            elif isinstance(target_examples, list):
-                examples = [self.examples[idx] for idx in target_examples]
             else:
-                raise NotImplementedError(f"invalid target_examples: {target_examples}")
+                assert isinstance(target_examples, list)
+                examples = [self.examples[idx] for idx in target_examples]
         else:
             examples = self.examples
         assert self.example_template is not None, "example template must be specified to format examples"
-        formatted_examples = []
+        formatted_examples: list[str] = []
         for idx, example in enumerate(examples, 1):
             prompt_template = self.example_template.get_partially_rendered_prompt(**(extra_variables or {}))
             assert EXAMPLE_OUTPUT_KEY in prompt_template.input_variables, (
                 f"example template must include '{EXAMPLE_OUTPUT_KEY}' variable"
             )
-            example_vars = example.input_variables.copy()
+            example_vars: dict[str, typing.Any] = dict(example.input_variables)
             if EXAMPLE_OUTPUT_KEY in example_vars:
                 assert example_vars[EXAMPLE_OUTPUT_KEY] == example.output, "unexpected output value in example"
             else:
@@ -222,7 +224,7 @@ class PromptConfig(pydantic.BaseModel):
         Returns:
             The fully rendered system message as a string, or as a list of text blocks.
         """
-        rendered_template_parts = []
+        rendered_template_parts: list[str] = []
         if self.role is not None:
             role_prompt = self.role.render_prompt(**(role_variables or {}))
             rendered_template_parts.append(role_prompt)
@@ -248,15 +250,40 @@ class PromptConfig(pydantic.BaseModel):
             return rendered_template_parts
         return self.template_block_separator.join(rendered_template_parts)
 
+    @typing.overload
+    def create_prompt_template(
+        self,
+        use_chat_template: typing.Literal[False] = False,
+        include_examples: bool = True,
+        target_examples: int | list[int] | None = None,
+        partial_vars: dict[str, typing.Any] | None = None,
+        role_variables: dict[str, typing.Any] | None = None,
+        context_variables: dict[str, typing.Any] | None = None,
+        examples_block_variables: dict[str, typing.Any] | None = None,
+    ) -> langchain_core.prompts.PromptTemplate: ...
+
+    @typing.overload
+    def create_prompt_template(
+        self,
+        use_chat_template: typing.Literal[True],
+        include_examples: bool = True,
+        target_examples: int | list[int] | None = None,
+        partial_vars: dict[str, typing.Any] | None = None,
+        role_variables: dict[str, typing.Any] | None = None,
+        context_variables: dict[str, typing.Any] | None = None,
+        examples_block_variables: dict[str, typing.Any] | None = None,
+    ) -> langchain_core.prompts.ChatPromptTemplate: ...
+
     def create_prompt_template(
         self,
         use_chat_template: bool = False,
         include_examples: bool = True,
         target_examples: int | list[int] | None = None,
+        partial_vars: dict[str, typing.Any] | None = None,
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
         examples_block_variables: dict[str, typing.Any] | None = None,
-    ) -> langchain_core.prompts.BasePromptTemplate:
+    ) -> langchain_core.prompts.PromptTemplate | langchain_core.prompts.ChatPromptTemplate:
         """Create a LangChain prompt template from role, context, examples, and question templates.
 
         This function will try to fully render the system message along with the question, so all
@@ -268,6 +295,7 @@ class PromptConfig(pydantic.BaseModel):
             target_examples: List of examples to target when rendering the prompt. Can pass in
                 a list of example indices, or an integer that specifies the number of samples to
                 pick randomly. If `None` is provided instead, all examples are included.
+            partial_vars: Partial variables to substitute in the final (output) prompt template.
             role_variables: Variables to substitute in the role template.
             context_variables: Variables to substitute in the context template.
             examples_block_variables: Variables to substitute in the examples block template. Should
@@ -301,14 +329,14 @@ class PromptConfig(pydantic.BaseModel):
                     optional_variables=self.question.optional_variables or [],
                 ),
             ]
-            output_template = langchain_core.prompts.ChatPromptTemplate(
+            output_template: langchain_core.prompts.ChatPromptTemplate = langchain_core.prompts.ChatPromptTemplate(
                 messages=messages,
                 input_variables=question_input_vars,
                 partial_variables=self.question.partial_variables or {},
                 optional_variables=self.question.optional_variables or [],
             )
         else:
-            output_template = langchain_core.prompts.PromptTemplate(
+            output_template: langchain_core.prompts.PromptTemplate = langchain_core.prompts.PromptTemplate(
                 template=self.template_block_separator.join([*system_msg, self.question.template]),
                 template_format=self.question.format,
                 input_variables=question_input_vars,
@@ -323,6 +351,13 @@ class PromptConfig(pydantic.BaseModel):
             }
             if optional_defaults:
                 output_template = output_template.partial(**optional_defaults)
+        if partial_vars:
+            if isinstance(output_template, langchain_core.prompts.ChatPromptTemplate):
+                output_template: langchain_core.prompts.ChatPromptTemplate = output_template.partial(**partial_vars)
+            elif isinstance(output_template, langchain_core.prompts.PromptTemplate):
+                output_template: langchain_core.prompts.PromptTemplate = output_template.partial(**partial_vars)
+            else:
+                raise TypeError(f"unexpected prompt template type: {type(output_template)}")
         return output_template
 
     def render_prompt(
