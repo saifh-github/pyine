@@ -1,3 +1,4 @@
+import collections.abc
 import typing
 
 
@@ -33,15 +34,21 @@ class StdStreamCapture:
             self._buf = bytearray()
             self._closed = False
 
-        def write(self, b: typing.Any) -> int:
-            if isinstance(b, (bytes, bytearray, memoryview)):
-                data = bytes(b)
+        def write(
+            self,
+            data: bytes | bytearray | memoryview | collections.abc.Buffer,
+        ) -> int:
+            if isinstance(data, memoryview):
+                chunk = data.tobytes()
             else:
-                raise TypeError(f"a bytes-like object is required, not '{type(b).__name__}'")
-            self._buf.extend(data)
-            return len(data)
+                try:
+                    chunk = bytes(data)
+                except TypeError as error:
+                    raise TypeError(f"a bytes-like object is required, not '{type(data).__name__}'") from error
+            self._buf.extend(chunk)
+            return len(chunk)
 
-        def writelines(self, lines: typing.Iterable[typing.Any]) -> int:
+        def writelines(self, lines: typing.Iterable[collections.abc.Buffer | bytes | bytearray | memoryview]) -> int:
             total = 0
             for line in lines:
                 total += self.write(line)
@@ -81,6 +88,15 @@ class StdStreamCapture:
         def seekable(self) -> bool:
             return False
 
+        def append(self, data: bytes) -> None:
+            self._buf.extend(data)
+
+        def to_bytes(self) -> bytes:
+            return bytes(self._buf)
+
+        def clear(self) -> None:
+            self._buf.clear()
+
     def write(self, s: typing.Any) -> int:
         text = s if isinstance(s, str) else str(s)
         # mirror to the bytes buffer
@@ -88,7 +104,7 @@ class StdStreamCapture:
             data = text.encode(self.encoding, errors=self.errors)
         except Exception:
             data = text.encode("utf-8", errors="replace")
-        self.buffer._buf.extend(data)  # noqa
+        self.buffer.append(data)
         return len(text)
 
     def writelines(self, lines: typing.Iterable[typing.Any]) -> int:
@@ -102,10 +118,11 @@ class StdStreamCapture:
         return None
 
     def getvalue(self) -> str:
+        raw = self.buffer.to_bytes()
         try:
-            return bytes(self.buffer._buf).decode(self.encoding, errors=self.errors)
+            return raw.decode(self.encoding, errors=self.errors)
         except Exception:
-            return bytes(self.buffer._buf).decode("utf-8", errors="replace")
+            return raw.decode("utf-8", errors="replace")
 
     def seek(self, offset: int, whence: int = 0) -> int:
         # our caller uses seek(0) just before truncate(0); we accept it as a no-op

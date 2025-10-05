@@ -80,14 +80,19 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     environment variables (those will be checked in that order). If none of these variables are
     the OS-specified temp dir specified via `tempfile.gettempdir()` will be used.
     """
-    if os.getenv("TMP_DIR") is not None:
-        tmpdir_base = pathlib.Path(os.getenv("TMP_DIR"))
-    elif os.getenv("TMPDIR") is not None:
-        tmpdir_base = pathlib.Path(os.getenv("TMPDIR"))
-    elif os.getenv("SLURM_TMPDIR") is not None:
-        tmpdir_base = pathlib.Path(os.getenv("SLURM_TMPDIR"))
+    tmp_dir_env = os.getenv("TMP_DIR")
+    if tmp_dir_env is not None:
+        tmpdir_base = pathlib.Path(tmp_dir_env)
     else:
-        tmpdir_base = pathlib.Path(tempfile.gettempdir())
+        tmpdir_env = os.getenv("TMPDIR")
+        if tmpdir_env is not None:
+            tmpdir_base = pathlib.Path(tmpdir_env)
+        else:
+            slurm_tmpdir_env = os.getenv("SLURM_TMPDIR")
+            if slurm_tmpdir_env is not None:
+                tmpdir_base = pathlib.Path(slurm_tmpdir_env)
+            else:
+                tmpdir_base = pathlib.Path(tempfile.gettempdir())
     if not tmpdir_base.is_dir():
         tmpdir_base.mkdir(parents=True, exist_ok=True)
     if not os.access(str(tmpdir_base), os.W_OK):
@@ -187,11 +192,12 @@ def get_path_size(path: str | pathlib.Path) -> int:
 
 def get_human_readable_size(num_bytes: int, suffix: str = "B") -> str:
     """Convert bytes to human-readable string, e.g. 1.2MiB."""
+    value = float(num_bytes)
     for unit in ["", "Ki", "Mi", "Gi", "Ti", "Pi"]:
-        if abs(num_bytes) < 1024.0:
-            return f"{num_bytes:3.1f}{unit}{suffix}"
-        num_bytes /= 1024.0
-    return f"{num_bytes:.1f}Ei{suffix}"
+        if abs(value) < 1024.0:
+            return f"{value:3.1f}{unit}{suffix}"
+        value /= 1024.0
+    return f"{value:.1f}Ei{suffix}"
 
 
 def check_output_path_overwrite(

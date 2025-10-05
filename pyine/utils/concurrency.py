@@ -7,6 +7,7 @@ import threading
 import typing
 import warnings
 
+_mp: typing.Any | None
 try:  # pragma: no cover - optional dependency when datasets not installed
     import multiprocess as _mp
 except ModuleNotFoundError:  # pragma: no cover - fallback path
@@ -36,7 +37,7 @@ def ensure_spawn_start_method(
     *,
     force: bool = True,
 ) -> bool:
-    """Ensure multiprocess-based pools use the safe 'spawn' start method on macOS.
+    """Ensure multiprocess-based pools use the safe 'spawn' start method.
 
     HuggingFace datasets rely on :mod:`multiprocess` when running `Dataset.map` with
     ``num_proc > 1``. The default start method on POSIX platforms is ``fork``, which
@@ -55,25 +56,22 @@ def ensure_spawn_start_method(
     Returns:
         ``True`` if the "spawn" method is confirmed active, ``False`` otherwise.
     """
-
     if _mp is None:  # dependency missing; nothing to enforce
         return False
-
+    mp_module: typing.Any = _mp
     try:
-        current = _mp.get_start_method(allow_none=True)  # type: ignore[arg-type]
+        current = mp_module.get_start_method(allow_none=True)
     except TypeError:  # pragma: no cover - older multiprocess
         try:
-            current = _mp.get_start_method()
+            current = mp_module.get_start_method()
         except RuntimeError:
             current = None
     except RuntimeError:
         current = None
-
     if current == "spawn":
         return True
-
     try:
-        _mp.set_start_method("spawn", force=force)
+        mp_module.set_start_method("spawn", force=force)
         return True
     except (RuntimeError, ValueError) as exc:
         warnings.warn(
@@ -82,7 +80,7 @@ def ensure_spawn_start_method(
             stacklevel=2,
         )
         try:
-            return _mp.get_start_method(allow_none=True) == "spawn"  # type: ignore[arg-type]
+            return mp_module.get_start_method(allow_none=True) == "spawn"
         except (TypeError, RuntimeError):  # pragma: no cover - defensive fallback
             return False
 
@@ -154,7 +152,6 @@ def run_in_parallel(
     """
     results: list[typing.Any | None] = [None] * len(callables)
     errors: list[BaseException | None] = [None] * len(callables)
-
     # pick an executor according to options
     local_executor: concurrent.futures.Executor | None = None
     if executor is not None:
@@ -165,7 +162,6 @@ def run_in_parallel(
         exec_cls = concurrent.futures.ProcessPoolExecutor if use_processes else concurrent.futures.ThreadPoolExecutor
         local_executor = exec_cls(max_workers=max_workers)
         exec_inst = local_executor
-
     try:
         future_to_idx: dict[concurrent.futures.Future[typing.Any], int] = {}
         for idx, fn in enumerate(callables):
@@ -181,17 +177,7 @@ def run_in_parallel(
         # only shut down if we created a local executor here
         if local_executor is not None:
             # cancel_futures ensures pending tasks are canceled on shutdown if exceptions occur upstream
-            if isinstance(
-                local_executor,
-                (
-                    concurrent.futures.ThreadPoolExecutor,
-                    concurrent.futures.ProcessPoolExecutor,
-                ),
-            ):
-                local_executor.shutdown(cancel_futures=True)
-            else:
-                local_executor.shutdown()  # generic fallback
-
+            local_executor.shutdown(cancel_futures=True)
     return results, errors
 
 
@@ -329,7 +315,7 @@ async def run_with_sliding_window[OutputItemType](
         max_workers: Maximum number of workers in the thread pool executor. IF None, uses the number of CPUs.
         max_in_flight_jobs: Maximum number of in-flight jobs.
     """
-    in_flight: dict[concurrent.futures.Future, InputItemType] = {}
+    in_flight: dict[concurrent.futures.Future[OutputItemType], InputItemType] = {}
     completed: list[InputItemType] = []
     iter_items = iter(input_items)
     progress_callback = progress_callback or (lambda x, y: None)
@@ -353,7 +339,7 @@ async def run_with_sliding_window[OutputItemType](
 
         # initially fill the window to its max size
         iterator_is_dry = False
-        while len(in_flight) < max_in_flight_jobs:
+        while max_in_flight_jobs is None or len(in_flight) < max_in_flight_jobs:
             try:
                 item = next(iter_items)
             except StopIteration:
@@ -364,7 +350,7 @@ async def run_with_sliding_window[OutputItemType](
         # report outputs and continue filling window as long as the iterator is not dry
         while in_flight or not iterator_is_dry:
             # fill window to max size until iterator is dry
-            while not iterator_is_dry and len(in_flight) < max_in_flight_jobs:
+            while not iterator_is_dry and (max_in_flight_jobs is None or len(in_flight) < max_in_flight_jobs):
                 try:
                     item = next(iter_items)
                 except StopIteration:
@@ -375,11 +361,11 @@ async def run_with_sliding_window[OutputItemType](
             # if we have jobs in flight and we get here, the iterator is dry, or the window is full
             if in_flight:
                 # block until at least one job gets completed
-                done = next(concurrent.futures.as_completed(in_flight))
+                done: concurrent.futures.Future[OutputItemType] = next(concurrent.futures.as_completed(in_flight))
                 assert done in in_flight
                 item = in_flight.pop(done)
                 try:
-                    result_value = done.result()
+                    result_value = typing.cast("OutputItemType", done.result())
                 except BaseException as exc:  # capture failures and keep draining the queue
                     failures.append((item, exc))
                 else:

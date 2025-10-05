@@ -16,12 +16,18 @@ def get_hf_tokenizer(
     Also optionally sets the tokenizer's padding token to the EOS token if missing, and sets
     the padding token to the right side if needed.
     """
-    tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_model_name_or_path, **kwargs)
+    auto_tokenizer_cls = typing.cast("typing.Any", transformers.AutoTokenizer)
+    tokenizer = typing.cast(
+        "transformers.PreTrainedTokenizerBase",
+        auto_tokenizer_cls.from_pretrained(pretrained_model_name_or_path, **kwargs),
+    )
     pad_token = typing.cast("str | None", getattr(tokenizer, "pad_token", None))
     if set_padding_to_eos_if_needed and pad_token is None:
         # many causal LMs don't define a PAD token, but the hf Trainer expects one for padding batches
         # (reuse EOS as PAD so padding uses a benign but already-known token id)
-        tokenizer.pad_token = tokenizer.eos_token
+        eos_token = typing.cast("str | None", getattr(tokenizer, "eos_token", None))
+        if eos_token is not None:
+            tokenizer.pad_token = eos_token
     if override_padding_to_right_side:
         tokenizer.padding_side = "right"
     return typing.cast("transformers.PreTrainedTokenizer", tokenizer)

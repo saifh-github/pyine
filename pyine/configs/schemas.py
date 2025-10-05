@@ -5,9 +5,9 @@ import typing
 import hydra_zen.typing
 import omegaconf
 import pydantic
+import wandb
 
 import pyine.utils.reprod
-import wandb
 
 logger = logging.getLogger(__name__)
 

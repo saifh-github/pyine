@@ -1,8 +1,10 @@
+import importlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import typing
 import uuid
 
 _DEFAULT_LINE_LENGTH = 120
@@ -71,21 +73,21 @@ def format_code_with_black(
     """
     if use_black_api:
         try:
-            import black
+            black_module = typing.cast("typing.Any", importlib.import_module("black"))
         except Exception as error:
             raise FormatterUnavailableError(
                 "black Python API unavailable; call with `use_black_api=False` instead"
             ) from error
-        mode = black.Mode(
+        mode = black_module.Mode(
             line_length=line_length,
             is_pyi=is_pyi,
             string_normalization=string_normalization,
         )
         try:
-            return black.format_str(code_string, mode=mode)
-        except black.NothingChanged:
+            return typing.cast("str", black_module.format_str(code_string, mode=mode))
+        except black_module.NothingChanged:
             return code_string
-        except black.InvalidInput as error:
+        except black_module.InvalidInput as error:
             raise ValueError(f"error formatting code: {error}") from error
     suffix = ".pyi" if is_pyi else ".py"
     return _run_cli_formatter(

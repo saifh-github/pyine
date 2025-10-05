@@ -2,9 +2,7 @@ import os
 import typing
 
 import langchain_core.language_models
-import langchain_core.prompts
 import langchain_core.rate_limiters
-import langchain_core.runnables
 import langchain_deepseek
 import langchain_openai
 import pydantic
@@ -40,7 +38,7 @@ class LLMProviderConfig(pydantic.BaseModel):
         config_without_top_keys = {k: v for k, v in config.items() if k not in cls.model_fields}
         return cls(**config_top_fields, model_kwargs=config_without_top_keys)
 
-    def get_model(self) -> langchain_core.language_models.BaseLanguageModel:
+    def get_model(self) -> langchain_core.language_models.BaseLanguageModel[typing.Any]:
         """Returns a LangChain LLM instance based on the provider config."""
         return get_model_from_provider_config(self)
 
@@ -62,7 +60,7 @@ def get_model_from_provider(
     Returns:
         The LangChain LLM instance that can be used for chain invocations.
     """
-    rate_limiter = None
+    rate_limiter: langchain_core.rate_limiters.InMemoryRateLimiter | None = None
     if rate_limiter_config is not None:
         rate_limiter = langchain_core.rate_limiters.InMemoryRateLimiter(
             **rate_limiter_config,
@@ -78,7 +76,10 @@ def get_model_from_provider(
                 model_kwargs.update(
                     {"base_url": os.environ.get("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/v1")}
                 )
-        llm = langchain_deepseek.ChatDeepSeek(rate_limiter=rate_limiter, **model_kwargs)
+        llm = typing.cast(
+            "langchain_core.language_models.BaseLanguageModel[typing.Any]",
+            langchain_deepseek.ChatDeepSeek(rate_limiter=rate_limiter, **model_kwargs),
+        )
     elif provider == "openai":
         if not got_client_obj:
             if "api_key" not in model_kwargs:
@@ -87,11 +88,17 @@ def get_model_from_provider(
                     model_kwargs["api_key"] = env_api_key
             if "base_url" not in model_kwargs:
                 model_kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
-        llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
+        llm = typing.cast(
+            "langchain_core.language_models.BaseLanguageModel[typing.Any]",
+            langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs),
+        )
     else:
         raise NotImplementedError(f"Invalid provider: {provider}")
     if with_retry_config is not None:
-        llm = llm.with_retries(**with_retry_config)  # if you want to e.g. customize the retry backoff
+        llm = typing.cast(
+            "langchain_core.language_models.BaseLanguageModel[typing.Any]",
+            typing.cast("typing.Any", llm).with_retries(**with_retry_config),
+        )
     return llm
 
 

@@ -3,11 +3,11 @@ import typing
 
 import pydantic
 import transformers
+import wandb
 
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.transformers
-import wandb
 
 
 class EvalType(enum.StrEnum):

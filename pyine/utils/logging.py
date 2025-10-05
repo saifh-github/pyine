@@ -1,6 +1,7 @@
 import logging
 import logging.config
 import pathlib
+import typing
 
 PROJECT_LOGGER_NAME = "pyine"
 """The name of the root logger for the entire PyINE framework."""
@@ -31,7 +32,7 @@ def setup_logging(
         log_to_file: If True, logs will also be written to a file.
         log_path: The path to write log files to; if `None` and required, we will use a default path.
     """
-    logging_config = {
+    logging_config: dict[str, typing.Any] = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
@@ -76,8 +77,10 @@ def setup_logging(
             "backupCount": 3,
             "encoding": "utf-8",
         }
-        logging_config["loggers"][PROJECT_LOGGER_NAME]["handlers"].append("file")  # noqa
-        logging_config["root"]["handlers"].append("file")  # noqa
+        project_handlers = typing.cast("list[str]", logging_config["loggers"][PROJECT_LOGGER_NAME]["handlers"])
+        project_handlers.append("file")
+        root_handlers = typing.cast("list[str]", logging_config["root"]["handlers"])
+        root_handlers.append("file")
 
     logging.config.dictConfig(logging_config)
     logger = logging.getLogger(f"{PROJECT_LOGGER_NAME}.utils.logging")

@@ -17,7 +17,7 @@ class CapturedEvent(pydantic.BaseModel):
     """Pydantic model configuration (frozen)."""
     type: CapturedEventType
     """Type of the captured event."""
-    serialized: dict | None = None
+    serialized: dict[str, typing.Any] | None = None
     """Serialized runnable (class path, name, etc.); only captured captured on LLM start."""
     prompts: list[str] | None = None
     """List of prompts; only captured captured on LLM start."""
@@ -44,7 +44,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
 
     def on_llm_start(
         self,
-        serialized: dict,
+        serialized: dict[str, typing.Any],
         prompts: list[str],
         **kwargs: typing.Any,
     ) -> None:

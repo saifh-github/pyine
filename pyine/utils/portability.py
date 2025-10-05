@@ -20,7 +20,6 @@ import rich
 import rich.box
 import rich.console
 import rich.panel
-import rich.rule
 import rich.segment
 import rich.style
 import rich.table
@@ -70,11 +69,16 @@ def get_portable_representation(
     if isinstance(obj, base_types) or obj is None:
         return _truncate(repr(obj))  # all these base types need no special handling
     if isinstance(obj, np.ndarray):
-        return _truncate(f"numpy.{repr(obj)}")  # prefix numpy package name before 'array'
+        array_repr = repr(obj)
+        return _truncate(f"numpy.{array_repr}")  # prefix numpy package name before 'array'
     if isinstance(obj, pd.DataFrame):
-        return _truncate(f"pandas.DataFrame({obj.to_json()})")  # get a serializable output
+        df_obj: typing.Any = obj
+        df_json = typing.cast("str", df_obj.to_json())
+        return _truncate(f"pandas.DataFrame({df_json})")  # get a serializable output
     if isinstance(obj, pd.Series):
-        return _truncate(f"pandas.Series({obj.to_json()})")  # get a serializable output
+        series_obj: typing.Any = obj
+        series_json = typing.cast("str", series_obj.to_json())
+        return _truncate(f"pandas.Series({series_json})")  # get a serializable output
     if inspect.ismodule(obj):
         return _truncate(f"<module '{obj.__name__}'>")
     if callable(obj):
@@ -125,58 +129,66 @@ def format_object_changes(
     """
     if type(past_obj) is not type(current_obj):
         return None  # different objects, nothing to do here
-    changes = []
+    changes: list[str] = []
     if isinstance(current_obj, np.ndarray):
-        if past_obj.shape != current_obj.shape:
+        past_array: typing.Any = past_obj
+        current_array: typing.Any = current_obj
+        if past_array.shape != current_array.shape:
             return None  # different shapes, too complex to track
-        diff_indices = np.where(past_obj != current_obj)
+        diff_indices = typing.cast("tuple[typing.Any, ...]", np.where(past_array != current_array))
         change_count = len(diff_indices[0])
         if change_count > max_count:
             return None  # too many changes
         for index_tuple in zip(*diff_indices, strict=False):
             index_str = ",".join(str(index_component) for index_component in index_tuple)
-            value = current_obj[index_tuple]
-            metadata = f"shape={current_obj.shape},dtype={current_obj.dtype}"
+            value = current_array[index_tuple]
+            metadata = f"shape={current_array.shape},dtype={current_array.dtype}"
             changes.append(f"numpy.ndarray:{metadata}:{index_str}:{value}")
     elif isinstance(current_obj, pd.DataFrame):
-        if past_obj.shape != current_obj.shape:
+        past_df: typing.Any = past_obj
+        current_df: typing.Any = current_obj
+        if past_df.shape != current_df.shape:
             return None  # different shapes, too complex to track
-        diff_df = ~past_obj.eq(current_obj)
+        diff_df = ~(past_df.eq(current_df))
         if diff_df.sum().sum() > max_count:
             return None  # too many changes
         for column in diff_df.columns:
             for row in diff_df.index[diff_df[column]]:
-                value = current_obj.loc[row, column]
-                metadata = f"shape={current_obj.shape}"
+                value = current_df.loc[row, column]
+                metadata = f"shape={current_df.shape}"
                 changes.append(f"dataframe:{metadata}:({row},{column}):{value}")
     elif isinstance(current_obj, pd.Series):
-        if len(past_obj) != len(current_obj):
+        past_series: typing.Any = past_obj
+        current_series: typing.Any = current_obj
+        if len(past_series) != len(current_series):
             return None  # different lengths, too complex to track
-        diff_series = ~past_obj.eq(current_obj)
+        diff_series = ~(past_series.eq(current_series))
         if diff_series.sum() > max_count:
             return None  # too many changes
         for index in diff_series.index[diff_series]:
-            value = current_obj[index]
-            metadata = f"len={len(current_obj)}"
+            value = current_series[index]
+            metadata = f"len={len(current_series)}"
             changes.append(f"series:{metadata}:{index}:{value}")
     elif isinstance(current_obj, dict):
         # check for added, removed, or changed keys
-        past_keys = set(past_obj.keys())
-        current_keys = set(current_obj.keys())
+        past_dict = typing.cast("dict[typing.Any, typing.Any]", past_obj)
+        current_dict = typing.cast("dict[typing.Any, typing.Any]", current_obj)
+        past_keys: set[typing.Any] = set(past_dict.keys())
+        current_keys: set[typing.Any] = set(current_dict.keys())
         added = current_keys - past_keys
         removed = past_keys - current_keys
         common = past_keys & current_keys
-        changed = {key for key in common if past_obj[key] != current_obj[key]}
+        changed = {key for key in common if past_dict[key] != current_dict[key]}
         total_changes = len(added) + len(removed) + len(changed)
         if total_changes > max_count:
             return None  # too many changes
-        metadata = f"len={len(current_obj)}"
+        metadata = f"len={len(current_dict)}"
         for key in added:
-            changes.append(f"dict:{metadata}:added({key}):{current_obj[key]}")
+            changes.append(f"dict:{metadata}:added({key}):{current_dict[key]}")
         for key in removed:
             changes.append(f"dict:{metadata}:removed({key}):None")
         for key in changed:
-            changes.append(f"dict:{metadata}:changed({key}):{current_obj[key]}")
+            changes.append(f"dict:{metadata}:changed({key}):{current_dict[key]}")
     elif isinstance(current_obj, (list, tuple)):
         if len(past_obj) != len(current_obj):
             return None  # different lengths, too complex to track
@@ -238,7 +250,7 @@ def get_portable_filename(filename: str) -> str:
     return filename
 
 
-def get_portable_function_name(callabl: typing.Callable) -> str:
+def get_portable_function_name(callabl: typing.Callable[..., typing.Any]) -> str:
     """Return a stable, address-free string for a callable."""
 
     def _qual(module: str | None, qualname: str) -> str:

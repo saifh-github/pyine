@@ -130,7 +130,12 @@ class _DefinitionCounter(ast.NodeVisitor):
         self._add_target(node.target)
         self.generic_visit(node)
 
-    visit_AsyncFor = visit_For  # noqa: N815 (async variant mirrors visit_For)
+    def visit_AsyncFor(
+        self,
+        node: ast.AsyncFor,
+    ) -> None:
+        self._add_target(node.target)
+        self.generic_visit(node)
 
     def visit_With(
         self,
@@ -141,7 +146,14 @@ class _DefinitionCounter(ast.NodeVisitor):
                 self._add_target(item.optional_vars)
         self.generic_visit(node)
 
-    visit_AsyncWith = visit_With  # noqa: N815 (async variant mirrors visit_With)
+    def visit_AsyncWith(
+        self,
+        node: ast.AsyncWith,
+    ) -> None:
+        for item in node.items:
+            if item.optional_vars:
+                self._add_target(item.optional_vars)
+        self.generic_visit(node)
 
     def visit_ExceptHandler(
         self,
@@ -207,7 +219,18 @@ class _DefinitionCounter(ast.NodeVisitor):
         self.generic_visit(node)
         self._nesting -= 1
 
-    visit_AsyncFunctionDef = visit_FunctionDef  # noqa: N815 (async variant mirrors visit_FunctionDef)
+    def visit_AsyncFunctionDef(
+        self,
+        node: ast.AsyncFunctionDef,
+    ) -> None:
+        self.func_defs_all += 1
+        if self._nesting == 0:
+            self.func_defs_toplevel += 1
+        self.bound_names.add(node.name)
+        self._add_params(node.args)
+        self._nesting += 1
+        self.generic_visit(node)
+        self._nesting -= 1
 
     def visit_ClassDef(
         self,
@@ -324,7 +347,7 @@ def cluster_code_snippets_by_keyword(
             return keyword_transform(keyword)
         return keyword
 
-    normalized_banned = set()
+    normalized_banned: set[str] = set()
     if banned_keywords:
         normalized_banned = {normalize_keyword(keyword) for keyword in banned_keywords}
     normalized_allowed: set[str] | None = None

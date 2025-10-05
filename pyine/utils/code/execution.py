@@ -319,9 +319,13 @@ class TraceResult(pydantic.BaseModel):
         return len([s for s in self.traced_steps if s is not None])
 
 
+type TraceFunctionType = typing.Callable[[types.FrameType, str, typing.Any], "TraceFunctionType" | None]
+"""Type used for tracing callback functions."""
+
+
 @contextlib.contextmanager
 def trace_context(
-    trace_callback: typing.Callable,
+    trace_callback: TraceFunctionType,
 ) -> typing.Iterator[None]:
     """
     Context manager for sys.settrace.
@@ -342,7 +346,7 @@ def trace_context(
 
 def _execute_in_subprocess(
     *args: typing.Any,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
-    result_queue: multiprocessing.Queue,
+    result_queue: multiprocessing.Queue[tuple[str, typing.Any]],
     identifier: str | None = None,
     timeout_seconds: float = 60,
     **kwargs: typing.Any,
@@ -391,7 +395,7 @@ def _safe_execute_and_trace_code(
     Returns:
         A `TraceResult` instance containing the execution results.
     """
-    result_queue = multiprocessing.Queue()
+    result_queue: multiprocessing.Queue[tuple[str, typing.Any]] = multiprocessing.Queue()
     logger.debug(f"launching subprocess for tracing (name={identifier})")
     process = multiprocessing.Process(
         target=_execute_in_subprocess,
@@ -504,7 +508,7 @@ def _unsafe_execute_and_trace_code(
     traced_steps: list[TraceEvent | None] = []
     traced_steps_map: dict[TraceKeyReprType, list[int]] = {}
     last_trace_step_idx = 0  # will be incremented each time the callback is called
-    trace_tags = []  # will be used to store the interesting outcome-related tags for this trace
+    trace_tags: list[str] = []  # will be used to store the interesting outcome-related tags for this trace
     stdout_buffer, stderr_buffer = "", ""
     stdout_capture = pyine.utils.code.output_capture.StdStreamCapture(
         stream_name="stdout",
@@ -537,7 +541,7 @@ def _unsafe_execute_and_trace_code(
         frame: types.FrameType,  # noqa
         event: str,
         arg: typing.Any,
-    ) -> typing.Callable | None:
+    ) -> TraceFunctionType | None:
         """Callback function for sys.settrace that records execution state at each line."""
         nonlocal last_trace_step_idx
 
@@ -546,13 +550,13 @@ def _unsafe_execute_and_trace_code(
             object=frame.f_code.co_name,
             line=frame.f_lineno,
         )
-        return_trace_callback = _trace_callback  # any non-blacklisted object will be traced
+        return_trace_callback: TraceFunctionType | None = _trace_callback  # any non-blacklisted object will be traced
         # now, determine if we want to keep the event or not
         is_blacklisted = (blacklisted_objects and trace_key.object in blacklisted_objects) or (
             blacklisted_modules and trace_key.file.startswith(tuple(blacklisted_modules))
         )
-        if is_blacklisted and TraceTagType.HAS_EVENT_BLACKLISTED not in trace_tags:
-            trace_tags.append(TraceTagType.HAS_EVENT_BLACKLISTED)
+        if is_blacklisted and TraceTagType.HAS_EVENT_BLACKLISTED.value not in trace_tags:
+            trace_tags.append(TraceTagType.HAS_EVENT_BLACKLISTED.value)
         is_internal = any(str(trace_key).startswith(prefix) for prefix in INTERNAL_EVENT_KEY_PREFIXES)
         is_inside_code_string = trace_key.file == EXEC_TRACE_FILE_NAME
         must_skip = is_blacklisted or is_internal or (not is_inside_code_string and trace_only_inside_code_string)
@@ -572,8 +576,8 @@ def _unsafe_execute_and_trace_code(
         else:
             # gather the actual event data and create the corresponding object
             new_stdout, new_stderr = _capture_buffers()
-            stack_trace = []
-            current_frame = frame
+            stack_trace: list[TraceKey] = []
+            current_frame: types.FrameType | None = frame
             while current_frame:
                 clean_filename = pyine.utils.portability.get_portable_filename(current_frame.f_code.co_filename)
                 if clean_filename == REL_PATH_FROM_ROOT:
@@ -611,7 +615,9 @@ def _unsafe_execute_and_trace_code(
                         f"max globals repr len exceeded for trace at key {trace_key_repr} "
                         f"(found max len: {max_globals_var_repr_len}, cap: {max_var_repr_length})"
                     )
-            arguments, exec_return_value, exception = None, None, None
+            arguments: dict[str, str] | None = None
+            exec_return_value: str | None = None
+            exception: TraceException | None = None
             if event == "call":
                 arguments = {
                     name: pyine.utils.portability.get_portable_representation(value)
@@ -633,10 +639,17 @@ def _unsafe_execute_and_trace_code(
                         f"(found len: {len(exec_return_value)}, cap: {max_var_repr_length})"
                     )
             elif event == "exception":
-                exc_type, exc_value, exc_traceback = arg
-                exception = TraceException.from_exception(exc_type, exc_value, exc_traceback)
-                if TraceTagType.HAS_EVENT_EXCEPTION not in trace_tags:
-                    trace_tags.append(TraceTagType.HAS_EVENT_EXCEPTION)
+                exc_type_raw, exc_value_raw, exc_traceback_raw = typing.cast(
+                    "tuple[type[BaseException], BaseException, types.TracebackType | None]",
+                    arg,
+                )
+                exception = TraceException.from_exception(
+                    exc_type_raw,
+                    exc_value_raw,
+                    exc_traceback_raw,
+                )
+                if TraceTagType.HAS_EVENT_EXCEPTION.value not in trace_tags:
+                    trace_tags.append(TraceTagType.HAS_EVENT_EXCEPTION.value)
             trace_event = TraceEvent(
                 event_type=TraceEventType(event),
                 stack_trace=stack_trace,
@@ -660,17 +673,18 @@ def _unsafe_execute_and_trace_code(
             )
         return return_trace_callback
 
-    return_value, caught_exception = None, None
-    entrypoint_step_idx = None  # only used if we call an entrypoint after exec
+    return_value: typing.Any | None = None
+    caught_exception: BaseException | None = None
+    entrypoint_step_idx: int | None = None  # only used if we call an entrypoint after exec
     pyine.utils.reprod.set_seed(seed)
-    exec_namespace = {}
+    exec_namespace: dict[str, typing.Any] = {}
     if inputs is None or (isinstance(inputs, collections.abc.Sized) and not inputs):
-        trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY)
+        trace_tags.append(TraceTagType.HAS_INPUTS_EMPTY.value)
     try:
         with (
             pyine.utils.timers.TimeLimit(timeout_seconds),
-            contextlib.redirect_stdout(stdout_capture),
-            contextlib.redirect_stderr(stderr_capture),
+            contextlib.redirect_stdout(typing.cast("typing.TextIO", stdout_capture)),
+            contextlib.redirect_stderr(typing.cast("typing.TextIO", stderr_capture)),
         ):  # noqa
             if entrypoint_name is not None:
                 with trace_context(_trace_callback):
@@ -678,13 +692,16 @@ def _unsafe_execute_and_trace_code(
                 if entrypoint_name and entrypoint_name in exec_namespace:
                     # note for later: if this is buggy/annoying, could add call inside code string itself
                     entrypoint_step_idx = last_trace_step_idx
-                    entrypoint = exec_namespace[entrypoint_name]
+                    entrypoint = typing.cast(
+                        "collections.abc.Callable[..., typing.Any]",
+                        exec_namespace[entrypoint_name],
+                    )
                     entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
                         entrypoint, inputs
                     )
                     with trace_context(_trace_callback):
                         return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
-                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
+                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT.value)
             else:
                 with pyine.utils.code.input_mock.MockInputContext(str(inputs)), trace_context(_trace_callback):
                     exec(compiled_code, exec_namespace)  # noqa: S102
@@ -699,11 +716,14 @@ def _unsafe_execute_and_trace_code(
         # some crazy people return their outputs via sys.exit, so catch those correctly...
         caught_exception = e
         return_value = e.code
-        trace_tags.append(TraceTagType.HAS_EXEC_SYSEXIT)
+        trace_tags.append(TraceTagType.HAS_EXEC_SYSEXIT.value)
     except Exception as e:
         # otherwise, if it's not a timeout/dontcatch/sysexit, store the exception as part of the results
         caught_exception = e
-    reprod_metadata = pyine.utils.reprod.get_reprod_metadata()
+    reprod_metadata = typing.cast(
+        "dict[str, pydantic.JsonValue]",
+        pyine.utils.reprod.get_reprod_metadata(),
+    )
     reprod_metadata["entrypoint_name"] = str(entrypoint_name)
     reprod_metadata["blacklisted_modules"] = str(list(blacklisted_modules or []))
     reprod_metadata["blacklisted_objects"] = str(list(blacklisted_objects or []))
@@ -714,27 +734,29 @@ def _unsafe_execute_and_trace_code(
     reprod_metadata["timeout_seconds"] = str(timeout_seconds)
     reprod_metadata["seed"] = str(seed)
     if return_value is not None:
-        trace_tags.append(TraceTagType.HAS_RETURN_VALUE)
+        trace_tags.append(TraceTagType.HAS_RETURN_VALUE.value)
     if caught_exception is not None:
-        trace_tags.append(TraceTagType.HAS_RETURN_EXCEPTION)
+        trace_tags.append(TraceTagType.HAS_RETURN_EXCEPTION.value)
     if stdout_buffer:
-        trace_tags.append(TraceTagType.HAS_RETURN_STDOUT)
+        trace_tags.append(TraceTagType.HAS_RETURN_STDOUT.value)
     if stderr_buffer:
-        trace_tags.append(TraceTagType.HAS_RETURN_STDERR)
+        trace_tags.append(TraceTagType.HAS_RETURN_STDERR.value)
     trace_tags.extend(TraceTagType.get_step_count_tags(traced_steps))
     if inputs is not None and not pyine.utils.pydantic.is_jsonvalue(inputs):
-        inputs = repr(inputs)
-    if expected_output is not None and not pyine.utils.pydantic.is_jsonvalue(expected_output):
-        expected_output = repr(expected_output)
+        serialized_inputs: pydantic.JsonValue | None = repr(inputs)
     else:
-        expected_output = expected_output
+        serialized_inputs = typing.cast("pydantic.JsonValue | None", inputs)
+    if expected_output is not None and not pyine.utils.pydantic.is_jsonvalue(expected_output):
+        serialized_expected_output: pydantic.JsonValue | None = repr(expected_output)
+    else:
+        serialized_expected_output = typing.cast("pydantic.JsonValue | None", expected_output)
     try:
         trace_result = TraceResult(
             identifier=identifier,
             code_string=code_string,
             code_blocks={str(block_key): block for block_key, block in code_blocks.items()},
-            inputs=inputs,
-            expected_output=expected_output,
+            inputs=serialized_inputs,
+            expected_output=serialized_expected_output,
             max_valid_events=max_valid_events,
             max_events_per_line=max_events_per_line,
             max_var_repr_length=max_var_repr_length,
@@ -745,7 +767,7 @@ def _unsafe_execute_and_trace_code(
             return_value=return_value,
             exception=(
                 TraceException.from_exception(
-                    caught_exception.__class__,
+                    typing.cast("type[BaseException]", caught_exception.__class__),
                     caught_exception,
                     caught_exception.__traceback__,
                 )
@@ -803,18 +825,20 @@ def format_traced_code_execution(
         A formatted string showing the code execution with variable states.
     """
     code_lines = trace_result.code_string.splitlines()
-    result = ["Code Execution Trace:", "=====================", ""]
+    traced_steps: list[TraceEvent | None] = trace_result.traced_steps
+    traced_steps_map: dict[str, list[int]] = trace_result.traced_steps_map
+    result: list[str] = ["Code Execution Trace:", "=====================", ""]
     for line_number, line in enumerate(code_lines, 1):
         result.append(f"Line {line_number}: {line}")
-        relevant_events = []
-        for trace_key_repr, step in trace_result.traced_steps_map.items():
+        relevant_events: list[tuple[TraceKey, list[int]]] = []
+        for trace_key_repr, event_indices in traced_steps_map.items():
             trace_key = TraceKey.from_string(trace_key_repr)
             if trace_key.line == line_number:
-                relevant_events.append((trace_key, step))
+                relevant_events.append((trace_key, event_indices))
         for trace_key, event_indices in relevant_events:
             result.append(f"  {trace_key}")
             for event_number, trace_step_idx in enumerate(event_indices, 1):
-                trace_event = trace_result.traced_steps[trace_step_idx]
+                trace_event = traced_steps[trace_step_idx]
                 if trace_event is None:
                     result.append("  [Event skipped due to out-of-tracing-scope]")
                     continue

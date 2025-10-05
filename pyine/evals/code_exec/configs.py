@@ -11,6 +11,7 @@ import langchain_core.runnables
 import torch
 import tqdm
 import transformers
+import wandb
 
 import pyine.configs.schemas
 import pyine.configs.utils
@@ -23,7 +24,6 @@ import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
 import pyine.utils.llm_providers
 import pyine.utils.transformers
-import wandb
 
 logger = logging.getLogger(__name__)
 

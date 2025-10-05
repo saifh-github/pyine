@@ -17,14 +17,14 @@ def validate_code(code_string: str, max_size: int = 100_000) -> None:
 
     # check for imbalanced braces and delimiters
     brackets = {"(": ")", "[": "]", "{": "}"}
-    stack = []
+    stack: list[str] = []
     for char in code_string:
         if char in brackets:
             stack.append(char)
         elif char in brackets.values():
             if not stack:
                 raise AssertionError("code possesses imbalanced delimiters")
-            opening = stack.pop()
+            opening: str = stack.pop()
             if brackets[opening] != char:
                 raise AssertionError("code possesses imbalanced delimiters")
     assert len(stack) == 0, "code possesses imbalanced delimiters"
@@ -97,7 +97,7 @@ def find_near_duplicate_code(
         assert 0.0 <= threshold <= 1.0, "relative threshold must be in [0.0, 1.0]"
     else:
         assert threshold > 0, "absolute threshold must be non-negative"
-    processed_snippets = []
+    processed_snippets: list[str] = []
     for snippet in code_strings:
         processed = snippet
         if ignore_comments:
@@ -111,7 +111,8 @@ def find_near_duplicate_code(
             processed = preprocess_fn(processed)
         processed_snippets.append(processed)
     for i, j in itertools.combinations(range(len(code_strings)), 2):
-        code1, code2 = processed_snippets[i], processed_snippets[j]
+        code1: str = processed_snippets[i]
+        code2: str = processed_snippets[j]
         if use_relative_threshold:
             max_len = max(len(code1), len(code2))
             if max_len == 0:
@@ -155,9 +156,9 @@ def find_near_duplicate_code_clusters(
     for i in range(len(code_strings)):
         if i in clustered:
             continue
-        cluster = [i]
+        cluster: list[int] = [i]
         clustered.add(i)
-        queue = [matched_idx for matched_idx, _ in match_results[i]]
+        queue: list[int] = [matched_idx for matched_idx, _ in match_results[i]]
         while queue:
             related = queue.pop(0)
             if related not in clustered:

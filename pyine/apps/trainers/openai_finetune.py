@@ -5,6 +5,7 @@ import sys
 import typing
 
 import openai
+import wandb
 import wandb.integration.openai.fine_tuning
 
 import pyine.apps.trainers.common
@@ -15,7 +16,6 @@ import pyine.utils.llm_providers
 import pyine.utils.openai
 import pyine.utils.reprod
 import pyine.utils.tokenizers
-import wandb
 
 logger = logging.getLogger(__name__)
 

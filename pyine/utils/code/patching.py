@@ -1,6 +1,7 @@
 import difflib
 import html
 import logging
+import typing
 
 import IPython.display
 import unidiff
@@ -39,8 +40,8 @@ def apply_patch(
         - The resulting text (which may be unchanged if patching failed)
         - A boolean indicating whether the patch was applied successfully
     """
-    original_lines = text.splitlines(keepends=True)
-    patched_lines = []
+    original_lines: list[str] = text.splitlines(keepends=True)
+    patched_lines: list[str] = []
     original_line_idx = 0
     try:
         patch_set = unidiff.PatchSet.from_string(patch_text)
@@ -106,4 +107,5 @@ def show_colored_diff(
             color = "#6a737d"  # grey
         styled_lines.append(f'<span style="color:{color}; white-space:pre">{escaped}</span>')
     html_content = "<br>".join(styled_lines)
-    IPython.display.display(IPython.display.HTML(html_content))
+    display_fn = typing.cast("typing.Any", IPython.display.display)
+    display_fn(IPython.display.HTML(html_content))

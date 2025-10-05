@@ -1,5 +1,6 @@
 import functools
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import logging
@@ -18,13 +19,12 @@ import pydantic
 import rich
 import torch
 import transformers
-
-import pyine.utils.portability  # for yaml path dump fixer
 import wandb
 
-if typing.TYPE_CHECKING:
-    import pyine.configs.schemas
+import pyine.configs.schemas
+import pyine.utils.portability
 
+_ = pyine.utils.portability  # for yaml path dump fixer
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +115,22 @@ def get_installed_packages() -> list[str]:
     packages may not be properly detected by this approach, and it is pretty hacky, so use it with a
     grain of salt (i.e. just for logging is fine).
     """
+    pkgs: list[str] = []
     try:
-        import importlib.metadata
-
-        pkgs = [f"{pkg.name}=={pkg.version}" for pkg in importlib.metadata.distributions()]
+        distributions = importlib.metadata.distributions()
+        pkgs = [f"{pkg.name}=={pkg.version}" for pkg in distributions]
     except (ImportError, AttributeError):
         try:
-            import pip  # noqa
-
-            # noinspection PyUnresolvedReferences
-            pkgs = [f"{pkg.key}=={pkg.version}" for pkg in pip.get_installed_distributions()]
+            pip_module = typing.cast("typing.Any", importlib.import_module("pip"))
+            get_distributions = getattr(pip_module, "get_installed_distributions", None)
+            if callable(get_distributions):
+                pkgs = []
+                for distribution in typing.cast("typing.Iterable[typing.Any]", get_distributions()):
+                    key = getattr(distribution, "key", None) or getattr(distribution, "project_name", None)
+                    version = getattr(distribution, "version", None)
+                    if key is None or version is None:
+                        continue
+                    pkgs.append(f"{key}=={version}")
         except (ImportError, AttributeError):
             pkgs = []
     return sorted(pkgs, key=str.casefold)  # noqa
@@ -176,14 +182,17 @@ def compute_hash(
     if path_obj.is_file():
         # file case - direct hash of contents
         h = hashlib.new(algorithm)
-        with path_obj.open("rb") as f:
-            for chunk in iter(lambda: f.read(chunk_size), b""):
+        with path_obj.open("rb") as file_obj:
+            while True:
+                chunk = file_obj.read(chunk_size)
+                if not chunk:
+                    break
                 h.update(chunk)
         return h.hexdigest()
     if path_obj.is_dir():
         # directory case - combine hashes of all files
         dir_hash = hashlib.new(algorithm)
-        all_files = []
+        all_files: list[tuple[str, pathlib.Path]] = []
         for file_path in sorted(path_obj.glob("**/*")):
             if file_path.is_file():
                 rel_path = file_path.relative_to(path_obj)
@@ -193,8 +202,11 @@ def compute_hash(
             path_hash = hashlib.new(algorithm, rel_path.encode()).hexdigest()
             file_hash = hashlib.new(algorithm)
             try:
-                with file_path.open("rb") as f:
-                    for chunk in iter(lambda: f.read(chunk_size), b""):
+                with file_path.open("rb") as file_obj:
+                    while True:
+                        chunk = file_obj.read(chunk_size)
+                        if not chunk:
+                            break
                         file_hash.update(chunk)
             except (OSError, PermissionError) as e:
                 if raise_on_error:
@@ -224,7 +236,8 @@ def set_seed(
         workers=workers,
         verbose=verbose,
     )
-    transformers.set_seed(seed)
+    if seed is not None:
+        transformers.set_seed(seed)
 
 
 def get_reprod_metadata(
@@ -306,7 +319,8 @@ def entrypoint_setup(
     """
     load_dotenv()
     # use a sentinel object to track first execution of things that should only be executed once
-    if not hasattr(entrypoint_setup, "_executed"):
+    setup_fn = typing.cast("typing.Any", entrypoint_setup)
+    if not hasattr(setup_fn, "_executed"):
         import pyine.prompts
         import pyine.utils.logging
 
@@ -328,12 +342,11 @@ def entrypoint_setup(
         # initialize the prompt-related utilities
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()
-        entrypoint_setup._executed = True
+        setup_fn._executed = True
     # if a runtime config is provided, log all configs to the output directory
     parent_app_name = runtime_config.app_name if runtime_config else "<missing runtime config>"
     if runtime_config is not None:
-        if runtime_config.seed is not None:
-            set_seed(seed=runtime_config.seed, workers=runtime_config.seed_workers)
+        set_seed(seed=runtime_config.seed, workers=runtime_config.seed_workers)
         app_config_dict: dict[str, typing.Any] = {}
         for config_name, config in extra_configs.items():
             assert isinstance(config, pydantic.BaseModel), "extra configs must be pydantic models"

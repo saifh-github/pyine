@@ -1,8 +1,11 @@
+import collections.abc
 import contextlib
 import functools
 import sys
 import types
 import typing
+
+InputValues = str | collections.abc.Iterable[typing.Any] | None
 
 _orig_stdin = sys.stdin
 
@@ -42,7 +45,11 @@ class MockInput:
                 raise StopIteration
             return line
 
-    def __init__(self, inputs: str = "", encoding: str = "utf-8") -> None:
+    def __init__(
+        self,
+        inputs: InputValues = "",
+        encoding: str = "utf-8",
+    ) -> None:
         """Initialize the MockInput instance with an input string to be read from.
 
         If the input string contains newlines, each line will be read separately. If it does not
@@ -50,11 +57,15 @@ class MockInput:
         """
         self._orig_inputs = inputs
         self._encoding = encoding
-        if not isinstance(inputs, str):
-            inputs = "\n".join(inputs) if isinstance(inputs, list) else str(inputs)
-        if inputs and not inputs.endswith("\n"):
-            inputs += "\n"
-        self._input_iter = iter(inputs.splitlines())
+        if isinstance(inputs, str):
+            normalized_inputs = inputs
+        elif isinstance(inputs, collections.abc.Iterable):
+            normalized_inputs = "\n".join(str(item) for item in inputs)
+        else:
+            normalized_inputs = str(inputs)
+        if normalized_inputs and not normalized_inputs.endswith("\n"):
+            normalized_inputs += "\n"
+        self._input_iter = iter(normalized_inputs.splitlines())
         # provide a bytes-oriented buffer view compatible with sys.stdin.buffer
         self.buffer = MockInput._BufferView(self, encoding=self._encoding)
 
@@ -112,18 +123,20 @@ class MockInput:
         return line
 
 
-class MockInputContext(contextlib.AbstractContextManager):
+class MockInputContext(contextlib.AbstractContextManager[None]):
     """Context manager for replacing sys.stdin.readline() and input() with MockInput."""
 
-    def __init__(self, inputs: str = "") -> None:
+    def __init__(self, inputs: InputValues = "") -> None:
         """Initialize the MockInput instance with an input string to be read from.
 
         If the input string contains newlines, each line will be read separately. If it does not
         possess a final newline, one will be added automatically.
         """
         self.mocker = MockInput(inputs)
+        self.original_stdin: typing.TextIO
+        self.original_input: typing.Any
 
-    def __enter__(self, inputs: str = "") -> None:
+    def __enter__(self, inputs: InputValues = "") -> None:
         """Replaces sys.stdin.readline() and input() with MockInput."""
         self.original_stdin = sys.stdin
         if isinstance(__builtins__, dict):
@@ -132,7 +145,8 @@ class MockInputContext(contextlib.AbstractContextManager):
         else:
             self.original_input = __builtins__.input  # type: ignore
             __builtins__.input = functools.partial(MockInput.mock_input, self.mocker)  # type: ignore
-        sys.stdin = self.mocker  # type: ignore
+        sys.stdin = typing.cast("typing.TextIO", self.mocker)
+        return
 
     def __exit__(
         self,

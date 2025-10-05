@@ -1,4 +1,4 @@
-import collections
+import collections.abc
 import datetime
 import logging
 import pathlib
@@ -10,13 +10,11 @@ import typing
 import backoff
 import datasets
 import langchain_core.messages
-import langchain_core.prompts
 import openai
 import openai.types.chat
 import openai.types.fine_tuning
 import openai.types.fine_tuning.fine_tuning_job
 import openai.types.fine_tuning.fine_tuning_job_wandb_integration
-import openai.types.graders
 import orjson
 import pydantic
 
@@ -53,11 +51,12 @@ def write_dataset_to_jsonl(
     If `enforce_openai_min_dataset_size` is True, will enforce the minimum size required by OpenAI
     (i.e. 10 samples). If the dataset is smaller than this, an exception will be raised.
     """
-    samples_str = []
+    samples_str: list[str] = []
     for sample in dataset:
         if isinstance(sample, collections.abc.Mapping):
-            assert "messages" in sample
-            msgs = convert_messages_to_openai(sample["messages"])  # drop every other field except messages
+            mapping_sample = typing.cast("collections.abc.Mapping[str, typing.Any]", sample)
+            assert "messages" in mapping_sample
+            msgs = convert_messages_to_openai(mapping_sample["messages"])  # drop other fields
         else:
             msgs = convert_messages_to_openai(sample)
         assert all(isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs)

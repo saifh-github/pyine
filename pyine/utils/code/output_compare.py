@@ -17,9 +17,9 @@ import re
 import typing
 
 import langchain_core.language_models
-import langchain_core.runnables
 import pydantic
 
+import pyine.prompts.types
 import pyine.utils.portability
 from pyine.prompts.configs.pred_grader import (
     GradingResult,
@@ -312,16 +312,44 @@ def _compare_objects(
             order_a = opt.list_order_matters if isinstance(a, list) else opt.tuple_order_matters
             order_b = opt.list_order_matters if isinstance(b, list) else opt.tuple_order_matters
             order_matters = order_a and order_b
-            return _compare_sequences(a, b, opt, path, order_matters=order_matters)
+            return _compare_sequences(
+                typing.cast("typing.Sequence[typing.Any]", a),
+                typing.cast("typing.Sequence[typing.Any]", b),
+                opt,
+                path,
+                order_matters=order_matters,
+            )
         return _fail_path(path, f"Type differs: {type(a).__name__} != {type(b).__name__}")
     if isinstance(a, list):
-        return _compare_sequences(a, b, opt, path, order_matters=opt.list_order_matters)
+        return _compare_sequences(
+            typing.cast("typing.Sequence[typing.Any]", a),
+            typing.cast("typing.Sequence[typing.Any]", b),
+            opt,
+            path,
+            order_matters=opt.list_order_matters,
+        )
     if isinstance(a, tuple):
-        return _compare_sequences(a, b, opt, path, order_matters=opt.tuple_order_matters)
+        return _compare_sequences(
+            typing.cast("typing.Sequence[typing.Any]", a),
+            typing.cast("typing.Sequence[typing.Any]", b),
+            opt,
+            path,
+            order_matters=opt.tuple_order_matters,
+        )
     if isinstance(a, set):
-        return _compare_sets(a, b, opt, path)
+        return _compare_sets(
+            typing.cast("set[typing.Any]", a),
+            typing.cast("set[typing.Any]", b),
+            opt,
+            path,
+        )
     if isinstance(a, dict):
-        return _compare_dicts(a, b, opt, path)
+        return _compare_dicts(
+            typing.cast("typing.Mapping[typing.Any, typing.Any]", a),
+            typing.cast("typing.Mapping[typing.Any, typing.Any]", b),
+            opt,
+            path,
+        )
     # fallback: direct equality
     return _ok() if a == b else _fail_path(path, f"Values differ: {a!r} != {b!r}")
 
@@ -350,8 +378,8 @@ def _compare_numbers(a: int | float, b: int | float, opt: CompareOptions) -> Com
 
 
 def _compare_sequences(
-    a: typing.Iterable[typing.Any],
-    b: typing.Iterable[typing.Any],
+    a: typing.Sequence[typing.Any],
+    b: typing.Sequence[typing.Any],
     opt: CompareOptions,
     path: str,
     order_matters: bool,
@@ -384,7 +412,12 @@ def _compare_sequences(
     return _ok()
 
 
-def _compare_sets(a: set, b: set, opt: CompareOptions, path: str) -> CompareResult:
+def _compare_sets(
+    a: set[typing.Any],
+    b: set[typing.Any],
+    opt: CompareOptions,
+    path: str,
+) -> CompareResult:
     """Compare two sets."""
     if len(a) != len(b):
         return _fail_path(path, f"Set size differs: {len(a)} != {len(b)}")
@@ -463,7 +496,7 @@ def compare_exec_output_with_llm(
     predicted: typing.Any,
     expected: typing.Any,
     execution_type: str,
-    llm: langchain_core.language_models.BaseLanguageModel,
+    llm: langchain_core.language_models.BaseLanguageModel[typing.Any],
     runnable_name: str | None = None,
     options: LLMCompareOptions | None = None,
 ) -> GradingResult | GradingResultWithReasoning:
@@ -482,7 +515,7 @@ def compare_exec_output_with_llm(
     """
     if options is None:
         options = get_options_for_llm_grading()
-    chain = options.get_chain(llm, runnable_name)
+    chain = typing.cast("typing.Any", options.get_chain(llm, runnable_name))
     return chain.invoke(
         {
             "expected_output": expected,
