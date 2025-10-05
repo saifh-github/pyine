@@ -55,10 +55,12 @@ def map_inputs_to_callable(
         elif param.kind == inspect.Parameter.VAR_KEYWORD:
             has_var_kw = True
 
-    def _mapping_can_bind_as_kwargs(mapping: collections.abc.Mapping) -> bool:
+    def _mapping_can_bind_as_kwargs(
+        mapping: collections.abc.Mapping[str, typing.Any],
+    ) -> bool:
         try:
-            temp_args = [mapping[name] for name in pos_only if name in mapping]
-            temp_kwargs = {k: v for k, v in mapping.items() if k not in pos_only}
+            temp_args: list[typing.Any] = [mapping[name] for name in pos_only if name in mapping]
+            temp_kwargs: dict[str, typing.Any] = {k: v for k, v in mapping.items() if k not in pos_only}
             sig.bind(*temp_args, **temp_kwargs)
             return True
         except TypeError:
@@ -71,7 +73,7 @@ def map_inputs_to_callable(
         required_missing = [
             p.name
             for p in params.values()
-            if p.default is inspect._empty
+            if p.default is inspect.Parameter.empty
             and p.kind
             in (
                 inspect.Parameter.POSITIONAL_ONLY,
@@ -87,9 +89,11 @@ def map_inputs_to_callable(
         # try to interpret the entire string as a single value first
         value = _parse_value(inputs)
         if isinstance(value, collections.abc.Mapping):
-            # try binding mapping as kwargs (with pos-only relocation)
-            if _mapping_can_bind_as_kwargs(value):
-                kwargs = dict(value)
+            typed_mapping = _ensure_string_key_mapping(
+                typing.cast("collections.abc.Mapping[typing.Any, typing.Any]", value)
+            )
+            if typed_mapping is not None and _mapping_can_bind_as_kwargs(typed_mapping):
+                kwargs = dict(typed_mapping)
             else:
                 # otherwise, try passing the mapping itself as a single positional arg
                 try:
@@ -111,21 +115,29 @@ def map_inputs_to_callable(
                 kwargs = parsed_kwargs
     elif isinstance(inputs, collections.abc.Mapping):
         # Prefer binding the mapping as kwargs (with pos-only relocation), then as a single positional arg.
-        if _mapping_can_bind_as_kwargs(inputs):
-            kwargs = dict(inputs)  # shallow copy; relocation happens later
+        typed_inputs = _ensure_string_key_mapping(
+            typing.cast("collections.abc.Mapping[typing.Any, typing.Any]", inputs)
+        )
+        if typed_inputs is not None and _mapping_can_bind_as_kwargs(typed_inputs):
+            kwargs = dict(typed_inputs)  # shallow copy; relocation happens later
         else:
             try:
                 sig.bind(inputs)
                 args = [inputs]
             except TypeError:
                 # Fall back to kwargs path; downstream validation will raise if truly incompatible
-                kwargs = dict(inputs)
+                fallback_mapping: dict[str, typing.Any]
+                if typed_inputs is None:
+                    fallback_mapping = dict(typing.cast("collections.abc.Mapping[str, typing.Any]", inputs))
+                else:
+                    fallback_mapping = dict(typed_inputs)
+                kwargs = fallback_mapping
     elif isinstance(inputs, collections.abc.Sequence):
         try:
             sig.bind(inputs)
             args = [inputs]
         except TypeError:
-            args = list(inputs)
+            args = list(typing.cast("collections.abc.Sequence[typing.Any]", inputs))
     else:
         try:
             sig.bind(inputs)
@@ -198,6 +210,18 @@ def map_inputs_to_callable(
     return tuple(args), kwargs
 
 
+def _ensure_string_key_mapping(
+    mapping: collections.abc.Mapping[typing.Any, typing.Any],
+) -> dict[str, typing.Any] | None:
+    """Return a dict with str keys if all mapping keys are strings; otherwise None."""
+    typed_mapping: dict[str, typing.Any] = {}
+    for key, value in mapping.items():
+        if not isinstance(key, str):
+            return None
+        typed_mapping[key] = value
+    return typed_mapping
+
+
 def _coerce_to_mapping_if_object(obj: typing.Any) -> dict[str, typing.Any] | None:
     """Coerce an object's attributes to a mapping if reasonable.
 
@@ -208,9 +232,11 @@ def _coerce_to_mapping_if_object(obj: typing.Any) -> dict[str, typing.Any] | Non
         return None
     # if it has a __dict__ or vars returns something
     try:
-        obj_dict = vars(obj)
-        if isinstance(obj_dict, dict) and obj_dict:
-            return {k: v for k, v in obj_dict.items() if not k.startswith("_")}
+        obj_dict_raw = typing.cast("typing.Any", vars(obj))
+        if isinstance(obj_dict_raw, dict) and obj_dict_raw:
+            obj_dict = typing.cast("dict[typing.Any, typing.Any]", obj_dict_raw)
+            typed_obj_dict = typing.cast("dict[str, typing.Any]", obj_dict)
+            return {k: v for k, v in typed_obj_dict.items() if not k.startswith("_")}
     except TypeError:
         pass
     return None
@@ -235,15 +261,20 @@ def _parse_args_string(
         text = text[1:-1].strip()
     # try JSON first for robustness with quoted strings and nested structures
     if text and text[0] in "[{":
-        parsed: typing.Any | None = None
+        parsed: typing.Any | None
         try:
             parsed = orjson.loads(text)
         except (orjson.JSONDecodeError, TypeError):
             parsed = None
         if isinstance(parsed, collections.abc.Mapping):
-            return [], dict(parsed)
+            typed_parsed = _ensure_string_key_mapping(
+                typing.cast("collections.abc.Mapping[typing.Any, typing.Any]", parsed)
+            )
+            if typed_parsed is not None:
+                return [], dict(typed_parsed)
         if isinstance(parsed, collections.abc.Sequence):
-            return list(parsed), {}
+            parsed_sequence = typing.cast("collections.abc.Sequence[typing.Any]", parsed)
+            return list(parsed_sequence), {}
     tokens = _split_top_level(text, delimiters={","})
     pos_args: list[typing.Any] = []
     kwargs: dict[str, typing.Any] = {}

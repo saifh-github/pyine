@@ -29,6 +29,19 @@ EXAMPLE_OPT_COUNT_KEY = "example_count"
 logger = logging.getLogger(__name__)
 
 
+def _apply_partial[
+    TemplateType: langchain_core.prompts.BasePromptTemplate[typing.Any],
+](
+    template: TemplateType,
+    values: dict[str, typing.Any],
+) -> TemplateType:
+    """Apply partial variables while preserving the concrete prompt template type."""
+    if not values:
+        return template
+    partial_method = typing.cast("typing.Callable[..., TemplateType]", template.partial)  # type: ignore[reportUnknownMemberType]
+    return partial_method(**values)
+
+
 class PromptTemplate(pydantic.BaseModel):
     """Model for prompt templates (simpler version of the LangChain PromptTemplate class)."""
 
@@ -304,14 +317,6 @@ class PromptConfig(pydantic.BaseModel):
         Returns:
             A prompt template instance ready for use with LangChain.
         """
-        system_msg = self.get_system_message(
-            return_as_blocks=not use_chat_template,
-            include_examples=include_examples,
-            target_examples=target_examples,
-            role_variables=role_variables,
-            context_variables=context_variables,
-            examples_block_variables=examples_block_variables,
-        )
         # for proper escaping of anything in the system message, pre-determine input vars
         question_input_vars = langchain_core.prompts.string.get_template_variables(
             template=self.question.template,
@@ -320,8 +325,19 @@ class PromptConfig(pydantic.BaseModel):
         if self.question.partial_variables:
             question_input_vars = [var for var in question_input_vars if var not in self.question.partial_variables]
         if use_chat_template:
+            system_message_text = typing.cast(
+                "str",
+                self.get_system_message(
+                    return_as_blocks=False,
+                    include_examples=include_examples,
+                    target_examples=target_examples,
+                    role_variables=role_variables,
+                    context_variables=context_variables,
+                    examples_block_variables=examples_block_variables,
+                ),
+            )
             messages = [
-                langchain_core.messages.SystemMessage(content=system_msg),
+                langchain_core.messages.SystemMessage(content=system_message_text),
                 langchain_core.prompts.HumanMessagePromptTemplate.from_template(
                     self.question.template,
                     template_format=self.question.format,
@@ -329,36 +345,51 @@ class PromptConfig(pydantic.BaseModel):
                     optional_variables=self.question.optional_variables or [],
                 ),
             ]
-            output_template: langchain_core.prompts.ChatPromptTemplate = langchain_core.prompts.ChatPromptTemplate(
+            chat_template = langchain_core.prompts.ChatPromptTemplate(
                 messages=messages,
                 input_variables=question_input_vars,
                 partial_variables=self.question.partial_variables or {},
                 optional_variables=self.question.optional_variables or [],
             )
-        else:
-            output_template: langchain_core.prompts.PromptTemplate = langchain_core.prompts.PromptTemplate(
-                template=self.template_block_separator.join([*system_msg, self.question.template]),
-                template_format=self.question.format,
-                input_variables=question_input_vars,
-                partial_variables=self.question.partial_variables or {},
-                optional_variables=self.question.optional_variables or [],
-            )
+            if self.question.optional_variables:
+                existing_partial = getattr(chat_template, "partial_variables", {}) or {}
+                optional_defaults = {
+                    opt_var: "" for opt_var in self.question.optional_variables if opt_var not in existing_partial
+                }
+                if optional_defaults:
+                    chat_template = _apply_partial(chat_template, optional_defaults)
+            if partial_vars:
+                chat_template = _apply_partial(chat_template, partial_vars)
+            return chat_template
+
+        system_message_blocks = typing.cast(
+            "list[str]",
+            self.get_system_message(
+                return_as_blocks=True,
+                include_examples=include_examples,
+                target_examples=target_examples,
+                role_variables=role_variables,
+                context_variables=context_variables,
+                examples_block_variables=examples_block_variables,
+            ),
+        )
+        prompt_template = langchain_core.prompts.PromptTemplate(
+            template=self.template_block_separator.join([*system_message_blocks, self.question.template]),
+            template_format=self.question.format,
+            input_variables=question_input_vars,
+            partial_variables=self.question.partial_variables or {},
+            optional_variables=self.question.optional_variables or [],
+        )
         if self.question.optional_variables:
-            # set defaults only for optional variables that do not already have partial values
-            existing_partial = getattr(output_template, "partial_variables", {}) or {}
+            existing_partial = getattr(prompt_template, "partial_variables", {}) or {}
             optional_defaults = {
                 opt_var: "" for opt_var in self.question.optional_variables if opt_var not in existing_partial
             }
             if optional_defaults:
-                output_template = output_template.partial(**optional_defaults)
+                prompt_template = _apply_partial(prompt_template, optional_defaults)
         if partial_vars:
-            if isinstance(output_template, langchain_core.prompts.ChatPromptTemplate):
-                output_template: langchain_core.prompts.ChatPromptTemplate = output_template.partial(**partial_vars)
-            elif isinstance(output_template, langchain_core.prompts.PromptTemplate):
-                output_template: langchain_core.prompts.PromptTemplate = output_template.partial(**partial_vars)
-            else:
-                raise TypeError(f"unexpected prompt template type: {type(output_template)}")
-        return output_template
+            prompt_template = _apply_partial(prompt_template, partial_vars)
+        return prompt_template
 
     def render_prompt(
         self,
@@ -433,27 +464,35 @@ class VersionedPromptConfig(pydantic.BaseModel):
     def from_yaml(cls, yaml_file_path: pathlib.Path | str) -> "VersionedPromptConfig":
         """Parse YAML file content into a VersionedPromptConfig object."""
         raw_data = pyine.utils.pydantic.load_yaml_with_pydantic_support(yaml_file_path)
-        versions = {}
+        if not isinstance(raw_data, dict):
+            raise ValueError("prompt configuration YAML must contain a mapping at the top level")
+        typed_raw_data = typing.cast("dict[str, typing.Any]", raw_data)
+        versions: dict[PromptVersionType, PromptConfig] = {}
         # note: we do not enforce a version pattern since versions might be named after targeted LLMs/APIs
-        for version, config_data in raw_data.items():
-            if version == DEFAULT_PROMPT_VERSION_KEY:
+        for version_key, config_data in typed_raw_data.items():
+            if version_key == DEFAULT_PROMPT_VERSION_KEY:
                 continue  # we'll take care of this one below
-            if version == INTERNAL_DEFINES_KEY:
+            if version_key == INTERNAL_DEFINES_KEY:
                 continue  # this block contains variable definitions (aliases), skip it
             if not isinstance(config_data, dict):
                 raise ValueError("each prompt version must be mapped to a config dictionary")
+            typed_config_data = typing.cast("dict[str, typing.Any]", config_data)
+            version: PromptVersionType = version_key
             # if the version information is not already in the config data, add it here before validation
-            if "metadata" not in config_data:
-                config_data["metadata"] = {"version": version}
+            if "metadata" not in typed_config_data:
+                typed_config_data["metadata"] = {"version": version}
             else:
-                if "version" in config_data["metadata"]:
+                if "version" in typed_config_data["metadata"]:
                     raise ValueError("version cannot be specified in metadata directly")
-                config_data["metadata"]["version"] = version
-            versions[version] = PromptConfig.model_validate(config_data)
+                typed_config_data["metadata"]["version"] = version
+            versions[version] = PromptConfig.model_validate(typed_config_data)
         if not versions:
             raise ValueError("no valid prompt versions found in YAML file")
-        if DEFAULT_PROMPT_VERSION_KEY in raw_data:
-            default_version = raw_data[DEFAULT_PROMPT_VERSION_KEY]
+        if DEFAULT_PROMPT_VERSION_KEY in typed_raw_data:
+            default_version_value = typed_raw_data[DEFAULT_PROMPT_VERSION_KEY]
+            if not isinstance(default_version_value, str):
+                raise ValueError("default version must be a string")
+            default_version: PromptVersionType = default_version_value
             if default_version not in versions:
                 raise ValueError("default version does not exist")
         else:

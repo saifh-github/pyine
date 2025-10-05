@@ -1,7 +1,6 @@
 import ast
 import dataclasses
 import enum
-import typing
 
 
 class BlockType(enum.StrEnum):
@@ -23,7 +22,7 @@ class BlockType(enum.StrEnum):
     ASYNC_FUNCTION = "asyncfunction"
 
 
-_ast_node_type_mapping = {
+_ast_node_type_mapping: dict[type[ast.AST], BlockType] = {
     ast.If: BlockType.IF,
     ast.For: BlockType.FOR,
     ast.While: BlockType.WHILE,
@@ -67,7 +66,7 @@ def identify_code_blocks(
     the blocks at those lines, including block type and nesting depth.
     """
     code_blocks = _capture_child_nodes(ast.parse(code_string))
-    blocks_map = {}
+    blocks_map: dict[int, CodeBlock] = {}
     for block in code_blocks:
         assert block.start_line not in blocks_map, (
             f"found multiple blocks on same line! see L{block.start_line} in:\n{code_string}"
@@ -78,25 +77,28 @@ def identify_code_blocks(
 
 def _capture_child_nodes(
     node: ast.AST,
-    results: list[dict[str, typing.Any]] | None = None,
+    results: list[CodeBlock] | None = None,
     parent_line: int | None = None,
     next_depth: int | None = None,
 ) -> list[CodeBlock]:
     if results is None:
         results = []
     node_type = _ast_node_type_mapping.get(type(node))
-    if node_type and node_type in {t.value for t in BlockType}:
+    if node_type is not None:
         if next_depth is None:
             next_depth = 0
-        node_info = CodeBlock(
-            type=node_type,
-            name=getattr(node, "name", None),
-            depth=next_depth,
-            parent_line=parent_line,
-            start_line=getattr(node, "lineno", None),
-            end_line=getattr(node, "end_lineno", None),
-        )
-        results.append(node_info)
+        start_line = getattr(node, "lineno", None)
+        end_line = getattr(node, "end_lineno", None)
+        if isinstance(start_line, int) and isinstance(end_line, int):
+            node_info = CodeBlock(
+                type=node_type,
+                name=getattr(node, "name", None),
+                depth=next_depth,
+                parent_line=parent_line,
+                start_line=start_line,
+                end_line=end_line,
+            )
+            results.append(node_info)
     for child in ast.iter_child_nodes(node):
         _capture_child_nodes(
             node=child,

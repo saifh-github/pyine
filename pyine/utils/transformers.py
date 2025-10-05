@@ -2,7 +2,7 @@ import collections.abc
 import contextlib
 import typing
 
-import datasets
+import datasets as hf_datasets
 import pydantic
 import torch
 import tqdm
@@ -143,12 +143,12 @@ def _build_example_ids_from_conversation_parts(
 
 
 def prepare_examples_from_conversations(
-    convo_ds: datasets.Dataset,
+    convo_ds: hf_datasets.Dataset,
     tokenizer: transformers.PreTrainedTokenizer,
     max_seq_len: int | None,
     num_proc: int,
     messages_key: str = "messages",
-) -> datasets.Dataset:
+) -> hf_datasets.Dataset:
     """Flattens conversations into (history -> assistant) training examples.
 
     The input dataset should have a column of messages where each row is an entire conversation:
@@ -185,7 +185,7 @@ def prepare_examples_from_conversations(
 
     # TODO: if this map becomes a bottleneck, add batching w/ fast tokenizer, tune num_proc, use cache
     # (worse case scenario, we can switch to a streaming/iterable dataset?)
-    dataset = convo_ds.map(
+    dataset: hf_datasets.Dataset = convo_ds.map(  # type: ignore[reportUnknownMemberType]
         _split_to_examples,
         batched=False,  # process one conversation at a time for clarity
         # drop original columns so the resulting dataset only has "input_ids" and "prompt_len"
@@ -204,7 +204,8 @@ def prepare_examples_from_conversations(
         typed_input_ids = typing.cast("list[typing.Any]", input_ids)
         return len(typed_input_ids) > 0
 
-    return dataset.filter(_has_input_ids)
+    filtered_dataset: hf_datasets.Dataset = dataset.filter(_has_input_ids)  # type: ignore[reportUnknownMemberType]
+    return filtered_dataset
 
 
 class FixedSizePaddingCollatorWithPromptMask:

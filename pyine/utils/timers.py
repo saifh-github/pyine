@@ -6,41 +6,37 @@ import functools
 import re
 import signal
 import time
+import types
 import typing
 
-if typing.TYPE_CHECKING:
-    import logging
-    import types
-
-FuncParamsType = typing.ParamSpec("FuncParamsType")
-FuncResultType = typing.TypeVar("FuncResultType")
+SignalHandlerType = typing.Callable[[int, types.FrameType | None], typing.Any]
+OldSignalHandlerType = signal.Handlers | SignalHandlerType | int | None
 
 
 @typing.overload
-def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
-    _func: typing.Callable[P, R],  # noqa
+def timeit[**P, R](
+    _func: typing.Callable[P, R],
     *,
     name: str | None = None,
-    logger: logging.Logger | None = None,
-) -> typing.Callable[P, R]:  # noqa
-    ...
+    logger: typing.Callable[[str], None] | None = None,
+) -> typing.Callable[P, R]: ...
 
 
 @typing.overload
-def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
+def timeit[**P, R](
     _func: None = None,
     *,
     name: str | None = None,
-    logger: logging.Logger | None = None,
+    logger: typing.Callable[[str], None] | None = None,
 ) -> typing.ContextManager[None]: ...
 
 
-def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
-    _func: typing.Callable[P, R] | None = None,  # noqa
+def timeit[**P, R](
+    _func: typing.Callable[P, R] | None = None,
     *,
     name: str | None = None,
-    logger: logging.Logger | None = None,
-) -> typing.Callable[P, R] | typing.ContextManager[None]:  # noqa
+    logger: typing.Callable[[str], None] | None = None,
+) -> typing.Callable[P, R] | typing.ContextManager[None]:
     """Measures execution time of a function (via decoration) or block (via context-manager).
 
     For blocks, use as a context manager:
@@ -69,29 +65,28 @@ def timeit[P: FuncParamsType, R: FuncResultType](  # noqa
             time_str = get_human_readable_time(elapsed)
             msg = f"Time [{label}]: {time_str}"
             if logger:
-                logger.info(msg)
+                logger(msg)
             else:
                 print(msg)
 
     def _decorate(
-        fn: typing.Callable[FuncParamsType, FuncResultType],
-    ) -> typing.Callable[FuncParamsType, FuncResultType]:
+        fn: typing.Callable[P, R],
+    ) -> typing.Callable[P, R]:
         lbl = name or fn.__name__
 
         @functools.wraps(fn)
-        def _wrapped(*args: FuncParamsType.args, **kwargs: FuncParamsType.kwargs) -> FuncResultType:
+        def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
             with _ctx(lbl):
                 return fn(*args, **kwargs)
 
         return _wrapped
 
-    if callable(_func):
+    if _func is not None:
+        if not callable(_func):
+            raise TypeError(f"invalid func argument: {_func!r}")
         return _decorate(_func)
 
-    if _func is None:
-        return _ctx(name or "block")
-
-    raise TypeError(f"invalid func argument: {_func}")
+    return _ctx(name or "block")
 
 
 class TimeLimit:
@@ -133,7 +128,7 @@ class TimeLimit:
         self.seconds = seconds
         self.timeout_message = timeout_message or f"timed out after {seconds:.3f} seconds"
         self.on_timeout = on_timeout
-        self._old_handler: typing.Callable | None = None
+        self._old_handler: OldSignalHandlerType = None
         self._start_time: float = 0
 
     def _timeout_handler(
@@ -198,7 +193,7 @@ class TimeLimit:
             False to propagate exceptions, True to suppress them.
         """
         signal.setitimer(signal.ITIMER_REAL, 0)  # cancels the alarm
-        if self._old_handler:
+        if self._old_handler is not None:
             signal.signal(signal.SIGALRM, self._old_handler)
         return False
 

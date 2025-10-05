@@ -185,7 +185,7 @@ class TraceException(typing.NamedTuple):
     @classmethod
     def from_exception(
         cls,
-        exc_type: type[BaseException],  # noqa
+        exc_type: type[BaseException],
         exc_value: BaseException,
         exc_tb: types.TracebackType | None,
     ) -> "TraceException":
@@ -198,7 +198,7 @@ class TraceException(typing.NamedTuple):
                 origin = TraceKey(
                     file=pyine.utils.portability.get_portable_filename(last.filename),
                     object=last.name,
-                    line=last.lineno,
+                    line=-1 if last.lineno is None else last.lineno,
                 )
         tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb)) if exc_tb is not None else None
         return cls(exc_type.__name__, str(exc_value), origin, tb_str)

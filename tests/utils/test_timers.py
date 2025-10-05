@@ -24,7 +24,7 @@ def test_timeit_function() -> None:
             self.messages.append(message)
 
     local_logger = LocalLogger()
-    with timers.timeit(name="test-block", logger=local_logger):  # noqa
+    with timers.timeit(name="test-block", logger=local_logger.info):
         assert sample_function() == 42
     assert len(local_logger.messages) == 1
     expected_message_prefix = "Time [test-block]: "
@@ -118,7 +118,7 @@ def test_timeit_decorator_with_name_and_logger() -> None:
 
     local_logger = LocalLogger()
 
-    @timers.timeit(name="custom", logger=local_logger)
+    @timers.timeit(name="custom", logger=local_logger.info)
     def f() -> int:
         time.sleep(0.01)
         return 7
