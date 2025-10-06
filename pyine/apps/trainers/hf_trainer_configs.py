@@ -4,7 +4,6 @@ If you execute this script directly, it will print all available experiment conf
 """
 
 import asyncio
-import functools
 import itertools
 import logging
 import typing
@@ -16,7 +15,6 @@ import torch
 import transformers
 
 import pyine.apps.trainers.common
-import pyine.apps.trainers.hf_trainer
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
@@ -188,13 +186,14 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     return model
 
 
-@functools.wraps(pyine.apps.trainers.hf_trainer.main)
 def _async_main_wrapper(
     *args: typing.Any,
     **kwargs: typing.Any,
 ) -> None:
     """Wrapper for async main function."""
-    asyncio.run(pyine.apps.trainers.hf_trainer.main(*args, **kwargs))
+    import pyine.apps.trainers.hf_trainer as hf_trainer_app
+
+    asyncio.run(hf_trainer_app.main(*args, **kwargs))
 
 
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:

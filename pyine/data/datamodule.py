@@ -60,7 +60,7 @@ if typing.TYPE_CHECKING:
 
 else:
     BaseDataLoaderParamsConfig = pyine.utils.pydantic.model_from_callable(
-        fn=BaseDataLoaderClass[typing.Any],
+        fn=torch.utils.data.DataLoader,
         name="BaseDataLoaderParamsConfig",
         model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
         exclude={"dataset"},  # will be provided at derived class instantiation time

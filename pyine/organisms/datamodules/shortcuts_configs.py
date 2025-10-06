@@ -23,12 +23,10 @@ import pyine.prompts.types
 
 def _get_datamodule_fully_qualified_name() -> str:
     """Returns the fully qualified name of the `ShortcutBiasDataModule` class."""
-    import pyine.organisms.datamodules.shortcuts
-    import pyine.utils.portability
+    from pyine.organisms.datamodules.shortcuts import ShortcutBiasDataModule
+    from pyine.utils.portability import get_fully_qualified_name
 
-    return pyine.utils.portability.get_fully_qualified_name(
-        pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule
-    )
+    return get_fully_qualified_name(ShortcutBiasDataModule)
 
 
 def _get_default_top_level_subsets() -> tuple[str, ...]:
@@ -131,7 +129,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     Note: we override the base data module config class to add additional fields.
     """
 
-    datamodule_class_path: str = pydantic.Field(default=_get_datamodule_fully_qualified_name(), frozen=True)
+    datamodule_class_path: str = pydantic.Field(default_factory=_get_datamodule_fully_qualified_name, frozen=True)
     """Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'."""
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------

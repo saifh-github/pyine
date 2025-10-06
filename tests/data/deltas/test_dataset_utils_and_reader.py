@@ -15,7 +15,7 @@ import tests.env_checks
 
 
 def _check_deltas_ok(
-    deltas: list[pyine.data.deltas.dataset_utils.Delta],
+    deltas: list[pyine.data.deltas.dataset_utils.TraceDelta],
 ) -> None:
     """Utility function that checks that all provided deltas are valid."""
     # first delta should be parent calling -> entrypoint

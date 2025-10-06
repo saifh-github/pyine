@@ -18,7 +18,6 @@ import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.code_exec.utils
 import pyine.evals.common
-import pyine.evals.configs
 import pyine.evals.utils
 import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
@@ -528,7 +527,9 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
             ],
         },
     )
-    llm_grader_provider_configs = pyine.evals.configs.get_grader_provider_configs(
+    import pyine.evals.configs as evals_configs
+
+    llm_grader_provider_configs = evals_configs.get_grader_provider_configs(
         group=f"{group}/llm_grader_provider_config",
     )
     return [base_config, *llm_grader_provider_configs]

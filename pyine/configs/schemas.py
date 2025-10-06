@@ -39,7 +39,9 @@ class RuntimeConfig(pydantic.BaseModel):
     """Seed to use for random number generation."""
     seed_workers: bool = pydantic.Field(False, frozen=True)
     """Whether to seed the workers for parallel execution."""
-    metadata: dict[str, str] = pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
+    metadata: dict[str, str] = pydantic.Field(
+        default_factory=lambda: pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
+    )
     """Reproducibility metadata."""
     dry_run: bool = pydantic.Field(False, frozen=True)
     """Whether to skip the actual execution of the application (dry run for hydra setup)."""

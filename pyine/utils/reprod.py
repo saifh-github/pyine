@@ -21,10 +21,12 @@ import torch
 import transformers
 import wandb
 
-import pyine.configs.schemas
 import pyine.utils.portability
 
 _ = pyine.utils.portability  # for yaml path dump fixer
+
+if typing.TYPE_CHECKING:
+    import pyine.configs.schemas  # noqa
 
 logger = logging.getLogger(__name__)
 

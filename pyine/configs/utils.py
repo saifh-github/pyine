@@ -7,7 +7,6 @@ import hydra_zen.typing
 
 import pyine.configs.schemas
 import pyine.utils.portability
-from pyine.configs.base import target_hydra_version
 
 CallableReturningAny = collections.abc.Callable[..., typing.Any]
 HydraZenBuild = hydra_zen.typing.Builds[typing.Any]
@@ -39,6 +38,8 @@ def print_experiment_configs(
         if config_desc.group != "experiment":
             continue
         # all experiment configs should be fully specified (and thus instantiable as-is)
+        from pyine.configs.base import target_hydra_version
+
         with hydra.initialize(config_path=None, version_base=target_hydra_version):
             config_dict = hydra.compose(config_name="entrypoint", overrides=[f"+experiment={config_desc.name}"])
         pyine.utils.portability.render_config(config_desc.config, config_dict)

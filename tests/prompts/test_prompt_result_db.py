@@ -12,12 +12,14 @@ import pytest
 
 from pyine.prompts.result_db import (
     CreationMeta,
-    PromptBuildConfig,
     PromptResultDB,
     PromptResultRecord,
     TypedPromptResultFetcher,
     ValidationFailedError,
     fetch_or_generate_prompt_results,
+)
+from pyine.prompts.types import (
+    PromptBuildConfig,
 )
 
 

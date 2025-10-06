@@ -27,7 +27,9 @@ import pyine.utils.code.validation
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
-from pyine.prompts.configs.code_analysis import CodeAnalysisResponse
+
+if typing.TYPE_CHECKING:
+    from pyine.prompts.configs.code_analysis import CodeAnalysisResponse
 
 __all__ = [
     "CodingProblemIdentifier",
@@ -982,6 +984,8 @@ class CodingProblemIterator:
                         raise ValueError(f"invalid analysis outputs for: {solution_id}")
                     analysis_outputs_list = list(typing.cast("list[typing.Any]", analysis_outputs_value))
                     try:
+                        from pyine.prompts.configs.code_analysis import CodeAnalysisResponse
+
                         analysis_results = CodeAnalysisResponse.model_validate(
                             analysis_outputs_list[-1],
                         )
