@@ -1,3 +1,4 @@
+import collections.abc
 import copy
 import dataclasses
 import importlib
@@ -33,7 +34,7 @@ class PydanticYAMLLoader(yaml.SafeLoader):
     def register_model(
         cls,
         tag_name: str,
-        model_class: type[pydantic.BaseModel],
+        model_class: type[pydantic.BaseModel] | type,
     ) -> None:
         """Register a Pydantic model for YAML loading.
 
@@ -171,10 +172,11 @@ def _generic_pydantic_constructor(
     Raises:
         ValueError: If the tag is not registered or validation fails
     """
-    if tag_suffix not in loader._model_registry:
-        available_tags = list(loader._model_registry.keys())
+    registry = type(loader).get_registered_models()
+    if tag_suffix not in registry:
+        available_tags = list(registry.keys())
         raise ValueError(f"unknown Pydantic model tag: '{tag_suffix}'. available tags: {available_tags}")
-    model_class = loader._model_registry[tag_suffix]
+    model_class = registry[tag_suffix]
     try:
         data = loader.construct_mapping(node, deep=True)  # will load data as a dictionary
     except Exception as error:
@@ -186,7 +188,7 @@ def _generic_pydantic_constructor(
 
 
 # register the generic constructor for all tags starting with '!'
-PydanticYAMLLoader.add_multi_constructor("!", _generic_pydantic_constructor)
+typing.cast("typing.Any", PydanticYAMLLoader).add_multi_constructor("!", _generic_pydantic_constructor)
 
 
 def load_yaml_with_pydantic_support(
@@ -250,12 +252,12 @@ def merge_configs(
     def _to_primitives(obj: typing.Any) -> typing.Any:
         if isinstance(obj, pydantic.BaseModel):
             return _to_primitives(obj.model_dump())
-        if dataclasses.is_dataclass(obj):
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             return _to_primitives(dataclasses.asdict(obj))
-        if isinstance(obj, typing.Mapping):
-            return {k: _to_primitives(v) for k, v in obj.items()}
-        if isinstance(obj, typing.Sequence) and not isinstance(obj, (str, bytes, bytearray)):
-            return [_to_primitives(v) for v in obj]
+        if isinstance(obj, collections.abc.Mapping):
+            return {k: _to_primitives(v) for k, v in obj.items()}  # type: ignore[reportUnknownVariableType]
+        if isinstance(obj, collections.abc.Sequence) and not isinstance(obj, (str, bytes, bytearray)):  # type: ignore[reportUnknownVariableType]
+            return [_to_primitives(v) for v in obj]  # type: ignore[reportUnknownVariableType]
         return obj
 
     assert len(configs) > 0, "at least one config must be provided"
@@ -263,7 +265,8 @@ def merge_configs(
     for overrides in configs[1:]:
         overrides = omegaconf.OmegaConf.create(_to_primitives(overrides))
         output_config = omegaconf.OmegaConf.merge(output_config, overrides)
-    return omegaconf.OmegaConf.to_container(output_config, resolve=False)
+    container = omegaconf.OmegaConf.to_container(output_config, resolve=False)
+    return typing.cast("dict[str, typing.Any]", container)
 
 
 class ClassImportSpec(pydantic.BaseModel):
@@ -401,7 +404,7 @@ def model_from_callable(
     exclude: set[str] | None = None,
     include_kwargs: bool = True,
     base: type[pydantic.BaseModel] = pydantic.BaseModel,
-    model_config: pydantic.ConfigDict | dict | None = None,
+    model_config: pydantic.ConfigDict | dict[str, typing.Any] | None = None,
     default_overrides: dict[str, typing.Any] | None = None,
     resolve_annotations: bool = True,
     module_for_created_model: str | None = None,
@@ -429,6 +432,7 @@ def model_from_callable(
     """
     sig = inspect.signature(fn)
     globalns = vars(sys.modules[getattr(fn, "__module__", "__name__")])
+    hints: dict[str, typing.Any] = {}
     if resolve_annotations:
         try:
             hints = typing.get_type_hints(fn, globalns=globalns, include_extras=True)
@@ -439,7 +443,7 @@ def model_from_callable(
         anns = inspect.get_annotations(fn, eval_str=False) or {}
         hints = {k: (typing.Any if isinstance(v, str) else v) for k, v in anns.items()}
     default_overrides = default_overrides or {}
-    fields: dict[str, tuple[type[typing.Any] | typing.Any, typing.Any]] = {}
+    field_definitions: dict[str, tuple[typing.Any, typing.Any]] = {}
     for p in sig.parameters.values():
         if include and p.name not in include:
             continue
@@ -457,16 +461,26 @@ def model_from_callable(
             default = {}
         else:
             anno = hints.get(p.name, typing.Any)
-            default = ... if p.default is inspect._empty else default_overrides.get(p.name, p.default)
-        fields[p.name] = (anno, default)
+            default = ... if p.default is inspect.Signature.empty else default_overrides.get(p.name, p.default)
+        field_definitions[p.name] = (anno, default)
     model_name = name or f"{getattr(fn, '__name__', fn.__class__.__name__)}ParamsConfig"
     if module_for_created_model is None:
         # default to the caller’s module if not provided
-        module_for_created_model = sys._getframe(1).f_globals.get("__name__", __name__)
-    return pydantic.create_model(
+        frame = inspect.currentframe()
+        try:
+            caller_globals = frame.f_back.f_globals if frame and frame.f_back else globals()
+        finally:
+            del frame
+        module_for_created_model = str(caller_globals.get("__name__", __name__))
+    module_name = module_for_created_model or __name__
+    create_model_fn = typing.cast(
+        "typing.Callable[..., type[pydantic.BaseModel]]",
+        pydantic.create_model,
+    )
+    return create_model_fn(
         model_name,
-        __config__=model_config,
+        __config__=typing.cast("typing.Any", model_config),
         __base__=base,
-        __module__=module_for_created_model,
-        **fields,
+        __module__=module_name,
+        **typing.cast("dict[str, typing.Any]", field_definitions),
     )

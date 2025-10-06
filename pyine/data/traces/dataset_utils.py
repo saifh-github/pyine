@@ -21,13 +21,13 @@ import tqdm
 import yaml
 
 import pyine.data.common
-import pyine.prompts.configs.code_analysis
 import pyine.utils.code.execution
 import pyine.utils.code.formatting
 import pyine.utils.code.validation
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
+from pyine.prompts.configs.code_analysis import CodeAnalysisResponse
 
 __all__ = [
     "CodingProblemIdentifier",
@@ -351,7 +351,7 @@ class Solution(pydantic.BaseModel):
     """Code string for this solution."""
     analysis_errors: list[str] | None
     """Errors (if any) that were encountered during analysis of this solution."""
-    analysis_results: pyine.prompts.configs.code_analysis.CodeAnalysisResponse
+    analysis_results: CodeAnalysisResponse
     """Advanced code analysis results for this solution's code."""
     is_banned: bool
     """Whether this solution is banned from being traced (due to a data/processing issue)."""
@@ -982,7 +982,7 @@ class CodingProblemIterator:
                         raise ValueError(f"invalid analysis outputs for: {solution_id}")
                     analysis_outputs_list = list(typing.cast("list[typing.Any]", analysis_outputs_value))
                     try:
-                        analysis_results = pyine.prompts.configs.code_analysis.CodeAnalysisResponse.model_validate(
+                        analysis_results = CodeAnalysisResponse.model_validate(
                             analysis_outputs_list[-1],
                         )
                     except Exception as e:

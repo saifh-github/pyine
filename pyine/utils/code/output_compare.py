@@ -306,50 +306,40 @@ def _compare_objects(
         return _ok() if a is b else _fail_path(path, f"Bool differs: {a} != {b}")
     if a is None or b is None:
         return _ok() if a is b else _fail_path(path, f"None differs: {a} != {b}")
-    if type(a) is not type(b):
-        # allow comparing lists and tuples when configured to ignore array type differences.
-        if not opt.array_type_matters and isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        if isinstance(a, list) and isinstance(b, list):
+            order_matters = opt.list_order_matters
+        elif isinstance(a, tuple) and isinstance(b, tuple):
+            order_matters = opt.tuple_order_matters
+        elif opt.array_type_matters:
+            return _fail_path(path, f"Type differs: {type(a).__name__} != {type(b).__name__}")  # type: ignore[reportUnknownArgumentType]
+        else:
             order_a = opt.list_order_matters if isinstance(a, list) else opt.tuple_order_matters
             order_b = opt.list_order_matters if isinstance(b, list) else opt.tuple_order_matters
             order_matters = order_a and order_b
-            return _compare_sequences(
-                typing.cast("typing.Sequence[typing.Any]", a),
-                typing.cast("typing.Sequence[typing.Any]", b),
-                opt,
-                path,
-                order_matters=order_matters,
-            )
-        return _fail_path(path, f"Type differs: {type(a).__name__} != {type(b).__name__}")
-    if isinstance(a, list):
+        seq_a_iter = typing.cast("typing.Iterable[typing.Any]", a)
+        seq_b_iter = typing.cast("typing.Iterable[typing.Any]", b)
+        seq_a = list(seq_a_iter)
+        seq_b = list(seq_b_iter)
         return _compare_sequences(
-            typing.cast("typing.Sequence[typing.Any]", a),
-            typing.cast("typing.Sequence[typing.Any]", b),
+            seq_a,
+            seq_b,
             opt,
             path,
-            order_matters=opt.list_order_matters,
+            order_matters=order_matters,
         )
-    if isinstance(a, tuple):
-        return _compare_sequences(
-            typing.cast("typing.Sequence[typing.Any]", a),
-            typing.cast("typing.Sequence[typing.Any]", b),
-            opt,
-            path,
-            order_matters=opt.tuple_order_matters,
-        )
-    if isinstance(a, set):
-        return _compare_sets(
-            typing.cast("set[typing.Any]", a),
-            typing.cast("set[typing.Any]", b),
-            opt,
-            path,
-        )
-    if isinstance(a, dict):
-        return _compare_dicts(
-            typing.cast("typing.Mapping[typing.Any, typing.Any]", a),
-            typing.cast("typing.Mapping[typing.Any, typing.Any]", b),
-            opt,
-            path,
-        )
+    if isinstance(a, set) and isinstance(b, set):
+        set_a = set(typing.cast("typing.Iterable[typing.Any]", a))
+        set_b = set(typing.cast("typing.Iterable[typing.Any]", b))
+        return _compare_sets(set_a, set_b, opt, path)
+    if isinstance(a, dict) and isinstance(b, dict):
+        mapping_a = typing.cast("typing.Mapping[typing.Any, typing.Any]", a)
+        mapping_b = typing.cast("typing.Mapping[typing.Any, typing.Any]", b)
+        dict_a = dict(mapping_a)
+        dict_b = dict(mapping_b)
+        return _compare_dicts(dict_a, dict_b, opt, path)
+    if type(a) is not type(b):  # type: ignore[reportUnknownArgumentType]
+        return _fail_path(path, f"Type differs: {type(a).__name__} != {type(b).__name__}")  # type: ignore[reportUnknownArgumentType]
     # fallback: direct equality
     return _ok() if a == b else _fail_path(path, f"Values differ: {a!r} != {b!r}")
 
@@ -481,7 +471,7 @@ class LLMCompareOptions(pyine.prompts.types.PromptBuildConfig):
 
     prompt_name: pyine.prompts.types.PromptNameType = "pred_grader"
     """Name of the comparison prompt chain."""
-    version: pyine.prompts.types.PromptVersionType = "score_only"
+    version: pyine.prompts.types.PromptVersionType | None = "score_only"
     """Version of the comparison prompt chain (differs based on reasoning)."""
 
 
@@ -515,7 +505,7 @@ def compare_exec_output_with_llm(
     """
     if options is None:
         options = get_options_for_llm_grading()
-    chain = typing.cast("typing.Any", options.get_chain(llm, runnable_name))
+    chain = typing.cast("typing.Any", options.get_chain(typing.cast("typing.Any", llm), runnable_name))
     return chain.invoke(
         {
             "expected_output": expected,

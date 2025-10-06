@@ -605,7 +605,7 @@ def run_text_generation(
     forward_all_keys = forward_batch_keys is True
     selected_forward_keys: list[str] = list(forward_batch_keys) if isinstance(forward_batch_keys, list) else []
     generate_fn = typing.cast("typing.Callable[..., typing.Any]", model.generate)
-    decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)
+    decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)  # type: ignore[reportUnknownMemberType]
     with torch.no_grad():
         prog_bar = tqdm.tqdm(dataloader, desc="generating predictions", smoothing=0.1, disable=not verbose)
         for batch in prog_bar:
@@ -635,6 +635,7 @@ def run_text_generation(
                     skip_special_tokens=True,
                     # clean_up_tokenization_spaces=False,
                 )
+                assert isinstance(new_text, str), f"unexpected decoder output type: {type(new_text)}"
                 curr_output: dict[str, typing.Any] = {
                     generated_tokens_key: new_tokens_ids,
                     generated_text_key: new_text,

@@ -365,7 +365,7 @@ async def run_with_sliding_window[OutputItemType](
                 assert done in in_flight
                 item = in_flight.pop(done)
                 try:
-                    result_value = typing.cast("OutputItemType", done.result())
+                    result_value = done.result()
                 except BaseException as exc:  # capture failures and keep draining the queue
                     failures.append((item, exc))
                 else:

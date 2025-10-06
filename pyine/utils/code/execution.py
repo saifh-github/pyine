@@ -185,7 +185,7 @@ class TraceException(typing.NamedTuple):
     @classmethod
     def from_exception(
         cls,
-        exc_type: type[BaseException],
+        exc_type: typing.Any,
         exc_value: BaseException,
         exc_tb: types.TracebackType | None,
     ) -> "TraceException":
@@ -201,7 +201,8 @@ class TraceException(typing.NamedTuple):
                     line=-1 if last.lineno is None else last.lineno,
                 )
         tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb)) if exc_tb is not None else None
-        return cls(exc_type.__name__, str(exc_value), origin, tb_str)
+        exc_type_name = getattr(exc_type, "__name__", type(exc_value).__name__)
+        return cls(exc_type_name, str(exc_value), origin, tb_str)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -319,8 +320,8 @@ class TraceResult(pydantic.BaseModel):
         return len([s for s in self.traced_steps if s is not None])
 
 
-type TraceFunctionType = typing.Callable[[types.FrameType, str, typing.Any], "TraceFunctionType" | None]
-"""Type used for tracing callback functions."""
+TraceFunctionType = typing.Callable[[types.FrameType, str, typing.Any], typing.Any]
+"""Type used for tracing callback functions (return value ignored by sys.settrace)."""
 
 
 @contextlib.contextmanager
@@ -346,14 +347,14 @@ def trace_context(
 
 def _execute_in_subprocess(
     *args: typing.Any,  # we will forward all args + kwargs to `_unsafe_execute_and_trace_code`
-    result_queue: multiprocessing.Queue[tuple[str, typing.Any]],
+    result_queue: multiprocessing.Queue,  # type: ignore[reportUnknownParameterType, reportMissingTypeArgument]
     identifier: str | None = None,
     timeout_seconds: float = 60,
     **kwargs: typing.Any,
 ) -> None:
     """Execute 'unsafe' tracing in a separate process (where unsafe means it could crash the main process)."""
     # note: this could not be a local define because it gets pickled for multiprocessing
-    result_queue.put(("started", os.getpid()))
+    result_queue.put(("started", os.getpid()))  # type: ignore[reportUnknownMemberType]
     try:
         result = _unsafe_execute_and_trace_code(
             *args,
@@ -361,9 +362,9 @@ def _execute_in_subprocess(
             timeout_seconds=timeout_seconds,
             **kwargs,
         )
-        result_queue.put(("returned", result))
+        result_queue.put(("returned", result))  # type: ignore[reportUnknownMemberType]
     except BaseException as e:  # catch all potential exception types to provide them to the parent
-        result_queue.put(("raised", e))
+        result_queue.put(("raised", e))  # type: ignore[reportUnknownMemberType]
 
 
 def _safe_execute_and_trace_code(
@@ -395,13 +396,13 @@ def _safe_execute_and_trace_code(
     Returns:
         A `TraceResult` instance containing the execution results.
     """
-    result_queue: multiprocessing.Queue[tuple[str, typing.Any]] = multiprocessing.Queue()
+    result_queue: multiprocessing.Queue = multiprocessing.Queue()  # type: ignore[reportUnknownVariableType]
     logger.debug(f"launching subprocess for tracing (name={identifier})")
     process = multiprocessing.Process(
-        target=_execute_in_subprocess,
+        target=_execute_in_subprocess,  # type: ignore[reportUnknownArgumentType]
         args=args,
         kwargs=dict(
-            result_queue=result_queue,
+            result_queue=result_queue,  # type: ignore[reportUnknownArgumentType]
             identifier=identifier,
             timeout_seconds=timeout_seconds,
             **kwargs,
@@ -412,7 +413,9 @@ def _safe_execute_and_trace_code(
     process_timeout = timeout_seconds + timeout_external_buffer_seconds
     start_time = time.time()
     latest_time_delta = 0
-    child_pid, status, returned_val = None, None, None
+    child_pid: typing.Any | None = None
+    status: str | None = None
+    returned_val = None
     # wait until we get the child pid from the queue
     while latest_time_delta < process_timeout and returned_val is None:
         while result_queue.empty():
@@ -422,10 +425,12 @@ def _safe_execute_and_trace_code(
             time.sleep(sleep_duration_seconds)
         if not result_queue.empty():
             if child_pid is None:
-                status, child_pid = result_queue.get_nowait()
+                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                status, child_pid = result_tuple
                 assert status == "started"
             else:
-                status, returned_val = result_queue.get_nowait()
+                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                status, returned_val = result_tuple
                 assert status in ("returned", "raised")
     if status not in ("returned", "raised") and process.is_alive():
         logger.debug(f"killing hanging subprocess for tracing (name={identifier})")

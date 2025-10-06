@@ -67,17 +67,15 @@ def get_portable_representation(
 
     base_types = (int, float, bool, str, bytes, list, tuple, set, dict, BaseException)
     if isinstance(obj, base_types) or obj is None:
-        return _truncate(repr(obj))  # all these base types need no special handling
+        return _truncate(repr(typing.cast("typing.Any", obj)))  # all these base types need no special handling
     if isinstance(obj, np.ndarray):
-        array_repr = repr(obj)
+        array_repr = repr(typing.cast("typing.Any", obj))
         return _truncate(f"numpy.{array_repr}")  # prefix numpy package name before 'array'
     if isinstance(obj, pd.DataFrame):
-        df_obj: typing.Any = obj
-        df_json = typing.cast("str", df_obj.to_json())
+        df_json = str(typing.cast("typing.Any", obj.to_json()))  # type: ignore[reportUnknownMemberType]
         return _truncate(f"pandas.DataFrame({df_json})")  # get a serializable output
     if isinstance(obj, pd.Series):
-        series_obj: typing.Any = obj
-        series_json = typing.cast("str", series_obj.to_json())
+        series_json = str(typing.cast("typing.Any", obj.to_json()))  # type: ignore[reportUnknownMemberType]
         return _truncate(f"pandas.Series({series_json})")  # get a serializable output
     if inspect.ismodule(obj):
         return _truncate(f"<module '{obj.__name__}'>")
@@ -130,47 +128,54 @@ def format_object_changes(
     if type(past_obj) is not type(current_obj):
         return None  # different objects, nothing to do here
     changes: list[str] = []
-    if isinstance(current_obj, np.ndarray):
-        past_array: typing.Any = past_obj
-        current_array: typing.Any = current_obj
+    if isinstance(current_obj, np.ndarray) and isinstance(past_obj, np.ndarray):
+        past_array: np.ndarray = past_obj  # type: ignore[reportUnknownMemberType]
+        current_array: np.ndarray = current_obj  # type: ignore[reportUnknownMemberType]
         if past_array.shape != current_array.shape:
             return None  # different shapes, too complex to track
-        diff_indices = typing.cast("tuple[typing.Any, ...]", np.where(past_array != current_array))
-        change_count = len(diff_indices[0])
+        diff_coords = np.argwhere(past_array != current_array)
+        change_count = int(diff_coords.shape[0])
         if change_count > max_count:
             return None  # too many changes
-        for index_tuple in zip(*diff_indices, strict=False):
-            index_str = ",".join(str(index_component) for index_component in index_tuple)
-            value = current_array[index_tuple]
-            metadata = f"shape={current_array.shape},dtype={current_array.dtype}"
+        metadata = f"shape={current_array.shape},dtype={current_array.dtype}"
+        for coord_array in diff_coords:
+            coord_tuple = tuple(int(component) for component in coord_array.tolist())
+            index_str = ",".join(str(component) for component in coord_tuple)
+            value = current_array[coord_tuple]
             changes.append(f"numpy.ndarray:{metadata}:{index_str}:{value}")
-    elif isinstance(current_obj, pd.DataFrame):
-        past_df: typing.Any = past_obj
-        current_df: typing.Any = current_obj
+
+    elif isinstance(current_obj, pd.DataFrame) and isinstance(past_obj, pd.DataFrame):
+        past_df: pd.DataFrame = past_obj
+        current_df: pd.DataFrame = current_obj
         if past_df.shape != current_df.shape:
             return None  # different shapes, too complex to track
-        diff_df = ~(past_df.eq(current_df))
-        if diff_df.sum().sum() > max_count:
+        diff_df = past_df.ne(current_df)  # type: ignore[reportUnknownMemberType]
+        change_count = int(diff_df.to_numpy().sum())
+        if change_count > max_count:
             return None  # too many changes
-        for column in diff_df.columns:
-            for row in diff_df.index[diff_df[column]]:
-                value = current_df.loc[row, column]
-                metadata = f"shape={current_df.shape}"
-                changes.append(f"dataframe:{metadata}:({row},{column}):{value}")
-    elif isinstance(current_obj, pd.Series):
-        past_series: typing.Any = past_obj
-        current_series: typing.Any = current_obj
+        metadata = f"shape={current_df.shape}"
+        for row_index, row_diff in diff_df.iterrows():
+            for column, changed in row_diff.items():
+                if not bool(changed):
+                    continue
+                value: typing.Any = current_df.loc[row_index, column]  # type: ignore[reportUnknownVariableType, reportCallIssue, reportArgumentType]
+                changes.append(f"dataframe:{metadata}:({row_index},{column}):{str(value)}")  # type: ignore[reportUnknownArgumentType]
+    elif isinstance(current_obj, pd.Series) and isinstance(past_obj, pd.Series):
+        past_series: pd.Series[typing.Any] = past_obj  # type: ignore[reportUnknownVariableType]
+        current_series: pd.Series[typing.Any] = current_obj  # type: ignore[reportUnknownVariableType]
         if len(past_series) != len(current_series):
             return None  # different lengths, too complex to track
-        diff_series = ~(past_series.eq(current_series))
-        if diff_series.sum() > max_count:
+        diff_series = typing.cast("pd.Series", past_series.ne(current_series))
+        change_count = int(diff_series.sum())
+        if change_count > max_count:
             return None  # too many changes
-        for index in diff_series.index[diff_series]:
-            value = current_series[index]
-            metadata = f"len={len(current_series)}"
-            changes.append(f"series:{metadata}:{index}:{value}")
-    elif isinstance(current_obj, dict):
-        # check for added, removed, or changed keys
+        metadata = f"len={len(current_series)}"
+        for index, changed in diff_series.items():
+            if not bool(changed):
+                continue
+            value: typing.Any = current_series.loc[index]  # type: ignore[reportUnknownVariableType, reportCallIssue, reportArgumentType]
+            changes.append(f"series:{metadata}:{index}:{str(value)}")  # type: ignore[reportUnknownArgumentType]
+    elif isinstance(current_obj, dict) and isinstance(past_obj, dict):
         past_dict = typing.cast("dict[typing.Any, typing.Any]", past_obj)
         current_dict = typing.cast("dict[typing.Any, typing.Any]", current_obj)
         past_keys: set[typing.Any] = set(past_dict.keys())
@@ -189,41 +194,60 @@ def format_object_changes(
             changes.append(f"dict:{metadata}:removed({key}):None")
         for key in changed:
             changes.append(f"dict:{metadata}:changed({key}):{current_dict[key]}")
-    elif isinstance(current_obj, (list, tuple)):
-        if len(past_obj) != len(current_obj):
+    elif isinstance(current_obj, list) and isinstance(past_obj, list):
+        past_list = typing.cast("list[typing.Any]", past_obj)
+        current_list = typing.cast("list[typing.Any]", current_obj)
+        if len(past_list) != len(current_list):
             return None  # different lengths, too complex to track
         changed_indices = [
-            index for index, (past, current) in enumerate(zip(past_obj, current_obj, strict=False)) if past != current
+            index
+            for index, (past_value, current_value) in enumerate(zip(past_list, current_list, strict=False))
+            if past_value != current_value
         ]
         if len(changed_indices) > max_count:
             return None  # too many changes
-        metadata = f"len={len(current_obj)}"
-        type_name = type(current_obj).__name__
+        metadata = f"len={len(current_list)}"
         for index in changed_indices:
-            changes.append(f"{type_name}:{metadata}:{index}:{current_obj[index]}")
-    elif hasattr(current_obj, "__class__"):
-        past_attrs = {
-            attr: getattr(past_obj, attr)
-            for attr in dir(past_obj)
-            if not attr.startswith("_") and hasattr(past_obj, attr)
-        }
-        current_attrs = {
-            attr: getattr(current_obj, attr)
-            for attr in dir(current_obj)
-            if not attr.startswith("_") and hasattr(current_obj, attr)
-        }
-        changed_attrs = {
-            attr
-            for attr in set(past_attrs.keys()) | set(current_attrs.keys())
-            if past_attrs.get(attr) != current_attrs.get(attr)
-        }
-        total_changes = len(changed_attrs)
-        if total_changes > max_count:
+            changes.append(f"list:{metadata}:{index}:{current_list[index]}")
+    elif isinstance(current_obj, tuple) and isinstance(past_obj, tuple):
+        past_tuple = typing.cast("tuple[typing.Any, ...]", past_obj)
+        current_tuple = typing.cast("tuple[typing.Any, ...]", current_obj)
+        if len(past_tuple) != len(current_tuple):
+            return None  # different lengths, too complex to track
+        changed_indices = [
+            index
+            for index, (past_value, current_value) in enumerate(zip(past_tuple, current_tuple, strict=False))
+            if past_value != current_value
+        ]
+        if len(changed_indices) > max_count:
             return None  # too many changes
-        class_name = current_obj.__class__.__name__
-        module = current_obj.__class__.__module__
-        for attr in changed_attrs:
-            changes.append(f"instance:{module}.{class_name}:changed({attr}):{current_attrs.get(attr)}")
+        metadata = f"len={len(current_tuple)}"
+        for index in changed_indices:
+            changes.append(f"tuple:{metadata}:{index}:{current_tuple[index]}")
+    elif hasattr(current_obj, "__class__") and hasattr(past_obj, "__class__"):  # type: ignore[reportUnknownArgumentType]
+
+        def _collect_attrs(target: typing.Any) -> dict[str, typing.Any]:
+            attrs: dict[str, typing.Any] = {}
+            for attr_name in dir(target):
+                if attr_name.startswith("_"):
+                    continue
+                if hasattr(target, attr_name):
+                    attrs[attr_name] = getattr(target, attr_name)
+            return attrs
+
+        past_attrs = _collect_attrs(past_obj)
+        current_attrs = _collect_attrs(current_obj)
+        changed_attrs = {
+            attr_name
+            for attr_name in set(past_attrs.keys()) | set(current_attrs.keys())
+            if past_attrs.get(attr_name) != current_attrs.get(attr_name)
+        }
+        if len(changed_attrs) > max_count:
+            return None  # too many changes
+        class_name = current_obj.__class__.__name__  # type: ignore[reportUnknownMemberType]
+        module = current_obj.__class__.__module__  # type: ignore[reportUnknownMemberType]
+        for attr_name in changed_attrs:
+            changes.append(f"instance:{module}.{class_name}:changed({attr_name}):{current_attrs.get(attr_name)}")
     else:
         # unsupported type
         return None
@@ -301,7 +325,7 @@ def get_code_with_numbered_lines(
         str: The formatted code string with line numbers and tabs
     """
     tab_prefix = "\t" * prefixed_tabs
-    formatted_lines = []
+    formatted_lines: list[str] = []
     for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
         formatted_lines.append(f"{tab_prefix}L{line_idx:04d}:   {line_content}")
     return "\n".join(formatted_lines)
@@ -392,7 +416,7 @@ def import_from_dotted_path(
     Returns:
         Imported attribute.
     """
-    if not isinstance(dotted_path, str) or not dotted_path:
+    if not dotted_path:
         raise ValueError("dotted_path must be a non-empty string")
     module_path, _, attr_name = dotted_path.rpartition(".")
     if not module_path:
@@ -509,9 +533,13 @@ def parse_indices_spec(
     return sorted(indices)
 
 
-def _path_representer(dumper: yaml.Dumper, data: pathlib.Path) -> yaml.Node:
+def _path_representer(
+    dumper: yaml.Dumper | yaml.SafeDumper,
+    data: pathlib.Path,
+) -> yaml.Node:
     """Helper function for yaml.SafeDumper and yaml.Dumper to represent pathlib.Path objects."""
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data.as_posix())  # keeps OS-agnostic output
+    # keeps OS-agnostic output
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data.as_posix())  # type: ignore[reportUnknownMemberType]
 
 
 yaml.SafeDumper.add_multi_representer(pathlib.Path, _path_representer)
@@ -555,52 +583,51 @@ def render_config(
     table.box = rich.box.SIMPLE_HEAD
     table.pad_edge = False
     table.padding = (0, 1)
-    wrap_opts = {"no_wrap": True}  # we handle wrapping w/ a custom class when creating rows
     if show_field_descriptions:
-        table.add_column("FIELD", style="bold", ratio=10, min_width=10, **wrap_opts)
-        table.add_column("TYPE", ratio=20, min_width=10, **wrap_opts)
-        table.add_column("VALUE", ratio=35, min_width=40, **wrap_opts)
-        table.add_column("DESCRIPTION", ratio=35, min_width=40, **wrap_opts)
+        table.add_column("FIELD", style="bold", ratio=10, min_width=10, no_wrap=True)
+        table.add_column("TYPE", ratio=20, min_width=10, no_wrap=True)
+        table.add_column("VALUE", ratio=35, min_width=40, no_wrap=True)
+        table.add_column("DESCRIPTION", ratio=35, min_width=40, no_wrap=True)
     else:
-        table.add_column("FIELD", style="bold", ratio=10, min_width=10, **wrap_opts)
-        table.add_column("TYPE", ratio=20, min_width=10, **wrap_opts)
-        table.add_column("VALUE", ratio=70, min_width=40, **wrap_opts)
+        table.add_column("FIELD", style="bold", ratio=10, min_width=10, no_wrap=True)
+        table.add_column("TYPE", ratio=20, min_width=10, no_wrap=True)
+        table.add_column("VALUE", ratio=70, min_width=40, no_wrap=True)
 
     # --------------- helper functions ---------------
 
     def _table_add_row(*args: typing.Any) -> None:
-        args = [_RichFoldIndicator(arg) for arg in args]
-        table.add_row(*args)
+        indicators = tuple(_RichFoldIndicator(arg) for arg in args)
+        table.add_row(*indicators)
 
     def _format_type_and_val(
         tp: typing.Any,
         cfg_vals: typing.Any | None = None,
         cfg_name: str | None = None,
         default: typing.Any = "<MISSING>",
-    ) -> tuple[str, str]:  # type name, value
+    ) -> tuple[str, typing.Any]:  # type name, value
         # first, get the value itself
         if cfg_vals is None:
-            val = default
-            target = None
+            val: typing.Any = default
+            target: str | None = None
         else:
             assert cfg_name is not None, "cfg_name must be provided if cfg_vals is not None"
             if isinstance(cfg_vals, (omegaconf.DictConfig, typing.Mapping)):
-                val = cfg_vals.get(cfg_name, default)
-                target = cfg_vals.get("_zen_target", None) or cfg_vals.get("_target_", None)
+                val: typing.Any = cfg_vals.get(cfg_name, default)  # type: ignore[reportUnknownVariableType]
+                target: str | None = cfg_vals.get("_zen_target", None) or cfg_vals.get("_target_", None)  # type: ignore[reportUnknownVariableType]
             else:
-                val = getattr(cfg_vals, cfg_name, default)
-                target = cfg_vals.get("_zen_target", None) or getattr(cfg_vals, "_target_", None)
+                val: typing.Any = getattr(cfg_vals, cfg_name, default)  # type: ignore[reportUnknownVariableType]
+                target: str | None = cfg_vals.get("_zen_target", None) or getattr(cfg_vals, "_target_", None)  # type: ignore[reportUnknownVariableType]
         # for the type, try to be more specific than 'any' (if e.g. _target_ is specified)
         if tp is typing.Any:
             if target is not None:
-                return target, val
+                return target, val  # type: ignore[reportUnknownVariableType]
             if val is not ... and val != "<MISSING>":
-                return type(val).__name__, val
+                return type(val).__name__, val  # type: ignore[reportUnknownVariableType]
         origin = typing.get_origin(tp)
         if origin is None:
-            return getattr(tp, "__name__", str(tp)), val
+            return getattr(tp, "__name__", str(tp)), val  # type: ignore[reportUnknownVariableType]
         args = ", ".join(_format_type_and_val(a)[0] for a in typing.get_args(tp))
-        return f"{getattr(origin, '__name__', str(origin))}[{args}]", val
+        return f"{getattr(origin, '__name__', str(origin))}[{args}]", val  # type: ignore[reportUnknownVariableType]
 
     def _format_val(val: typing.Any) -> str:
         if isinstance(val, omegaconf.DictConfig):
@@ -619,9 +646,10 @@ def render_config(
         for f in dataclasses.fields(cfg_type):  # noqa
             if f.name in skipped_field_names:
                 continue
-            has_factory = getattr(f, "default_factory", dataclasses.MISSING) is not dataclasses.MISSING
-            if has_factory:
-                default = f.default_factory()
+            default_factory = getattr(f, "default_factory", dataclasses.MISSING)
+            if default_factory is not dataclasses.MISSING:
+                factory_callable = typing.cast("typing.Callable[[], typing.Any]", default_factory)
+                default = factory_callable()
             else:
                 default = f.default if f.default is not dataclasses.MISSING else "<MISSING>"
             ftype, val = _format_type_and_val(f.type, cfg_values, f.name, default)
@@ -634,7 +662,10 @@ def render_config(
                 _table_add_row(f.name, ftype, _format_val(val))
     # else, if the provided config is a pydantic model...
     elif isinstance(cfg_type, type) and issubclass(cfg_type, pydantic.BaseModel):
-        model_fields = getattr(cfg_type, "model_fields", None) or {}
+        model_fields = typing.cast(
+            "dict[str, typing.Any]",
+            getattr(cfg_type, "model_fields", {}) or {},
+        )
         for name, field in model_fields.items():
             if name in skipped_field_names:
                 continue

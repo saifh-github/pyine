@@ -28,8 +28,12 @@ def _compute_estimated_train_token_count(
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
 ) -> int:
     """Approximate the number of tokens used to train a model on the given dataset."""
+    finetuner_params = typing.cast(
+        "pyine.utils.openai.OpenAIFineTunerParamsConfig",
+        config.openai_finetuner_config.params,
+    )
     tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(
-        model_id=config.openai_finetuner_config.params.base_model,
+        model_id=finetuner_params.base_model,
         raise_if_not_found=False,
     )
     token_count = 0
@@ -140,7 +144,11 @@ async def main(
         )
     else:
         # use the base model directly as the target to evaluate
-        model_name = config.openai_finetuner_config.params.base_model
+        finetuner_params = typing.cast(
+            "pyine.utils.openai.OpenAIFineTunerParamsConfig",
+            config.openai_finetuner_config.params,
+        )
+        model_name = finetuner_params.base_model
         logger.info("skipping fine-tuning, evaluating base model directly")
 
     if config.use_wandb_logging:

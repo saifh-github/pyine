@@ -52,13 +52,20 @@ def write_dataset_to_jsonl(
     (i.e. 10 samples). If the dataset is smaller than this, an exception will be raised.
     """
     samples_str: list[str] = []
-    for sample in dataset:
+    iterable_dataset = typing.cast("collections.abc.Iterable[typing.Any]", dataset)
+    for sample in iterable_dataset:
         if isinstance(sample, collections.abc.Mapping):
             mapping_sample = typing.cast("collections.abc.Mapping[str, typing.Any]", sample)
-            assert "messages" in mapping_sample
-            msgs = convert_messages_to_openai(mapping_sample["messages"])  # drop other fields
+            if "messages" not in mapping_sample:
+                raise KeyError("dataset sample is missing 'messages'")
+            raw_messages = mapping_sample["messages"]
+            if not isinstance(raw_messages, collections.abc.Sequence):
+                raise TypeError("dataset sample 'messages' must be a sequence")
+            msgs = convert_messages_to_openai(typing.cast("typing.Sequence[typing.Any]", raw_messages))
+        elif isinstance(sample, collections.abc.Sequence):
+            msgs = convert_messages_to_openai(typing.cast("typing.Sequence[typing.Any]", sample))
         else:
-            msgs = convert_messages_to_openai(sample)
+            raise TypeError("dataset samples must be mappings or sequences")
         assert all(isinstance(m, dict) and all(f in m for f in ["role", "content"]) for m in msgs)
         samples_str.append(orjson.dumps({"messages": msgs}).decode("utf-8"))
     if enforce_openai_min_dataset_size and len(samples_str) < 10:
@@ -89,28 +96,33 @@ def read_dataset_from_jsonl(
                 obj = orjson.loads(line)
             except Exception as e:
                 raise ValueError(f"invalid JSON on line {lineno}: {e}") from e
+            raw_msgs: list[typing.Any]
             if isinstance(obj, list):
-                msgs = obj
+                raw_msgs = typing.cast("list[typing.Any]", obj)
             elif isinstance(obj, dict):
                 if "messages" in obj and isinstance(obj["messages"], list):
-                    msgs = obj["messages"]
+                    raw_msgs = typing.cast("list[typing.Any]", obj["messages"])
                 else:
                     raise ValueError(f"line {lineno}: expected list or a dict with 'messages'")
             else:
                 raise ValueError(f"line {lineno}: unsupported JSON type {type(obj).__name__}")
             curr_messages: list[dict[str, str]] = []
-            for idx, msg in enumerate(msgs, start=1):
+            for idx, msg in enumerate(raw_msgs, start=1):
                 if not isinstance(msg, dict):
                     raise ValueError(f"line {lineno}: message {idx} is not a dict")
-                if "role" not in msg or "content" not in msg:
+                msg_dict = typing.cast("dict[str, typing.Any]", msg)
+                if "role" not in msg_dict or "content" not in msg_dict:
                     raise ValueError(f"line {lineno}: message {idx} missing 'role' or 'content' keys")
-                role, content = msg["role"], msg["content"]
-                if not isinstance(role, str) or not isinstance(content, str):
+                role_value = msg_dict["role"]
+                content_value = msg_dict["content"]
+                if not isinstance(role_value, str) or not isinstance(content_value, str):
                     # coerce to strings to ensure consistent downstream handling
-                    msg = dict(msg)
-                    msg["role"] = str(role)
-                    msg["content"] = str(content)
-                curr_messages.append(msg)
+                    new_msg = dict(msg_dict)
+                    new_msg["role"] = str(role_value)
+                    new_msg["content"] = str(content_value)
+                    curr_messages.append(new_msg)
+                else:
+                    curr_messages.append(typing.cast("dict[str, str]", msg_dict))
             messages_dataset.append(curr_messages)
     return messages_dataset
 
@@ -191,33 +203,112 @@ def convert_messages_to_openai(
         # OpenAI supports either a string or a list of content parts (for multimodal).
         if isinstance(_content, str):
             return _content
-        if isinstance(_content, list):
+        if isinstance(_content, collections.abc.Sequence) and not isinstance(_content, (str, bytes, bytearray)):
             parts: list[dict[str, typing.Any]] = []
-            for p in _content:
-                if isinstance(p, dict):
-                    parts.append(p)
-                elif hasattr(p, "model_dump") and callable(p.model_dump):
-                    parts.append(typing.cast("dict", p.model_dump()))
-                else:
-                    parts.append({"type": "text", "text": str(p)})
+            for part in typing.cast("collections.abc.Sequence[typing.Any]", _content):
+                if isinstance(part, collections.abc.Mapping):
+                    mapped_part = typing.cast("collections.abc.Mapping[str, typing.Any]", part)
+                    parts.append(dict(mapped_part))
+                    continue
+                model_dump_fn = getattr(part, "model_dump", None)
+                if callable(model_dump_fn):
+                    dumped = model_dump_fn()
+                    parts.append(typing.cast("dict[str, typing.Any]", dumped))
+                    continue
+                parts.append({"type": "text", "text": str(part)})
             return parts
         return str(_content)
 
+    def _normalize_tool_calls(
+        tool_calls: collections.abc.Sequence[typing.Any],
+    ) -> list[dict[str, typing.Any]]:
+        normalized: list[dict[str, typing.Any]] = []
+        for tool_call in tool_calls:
+            if isinstance(tool_call, collections.abc.Mapping):
+                mapping_call = typing.cast("collections.abc.Mapping[str, typing.Any]", tool_call)
+                function_section = mapping_call.get("function")
+                function_mapping: collections.abc.Mapping[str, typing.Any] | None = None
+                if isinstance(function_section, collections.abc.Mapping):
+                    function_mapping = typing.cast(
+                        "collections.abc.Mapping[str, typing.Any]",
+                        function_section,
+                    )
+                name_value = mapping_call.get("name")
+                if name_value is None and function_mapping is not None:
+                    name_value = function_mapping.get("name")
+                args_value: typing.Any = (
+                    mapping_call.get("args")
+                    or mapping_call.get("arguments")
+                    or (function_mapping.get("arguments") if function_mapping else None)
+                )
+                if isinstance(args_value, str):
+                    args_payload = args_value
+                else:
+                    serialized_args = orjson.dumps({} if args_value is None else args_value)
+                    args_payload = serialized_args.decode("utf-8")
+                entry: dict[str, typing.Any] = {
+                    "type": "function",
+                    "function": {
+                        "name": str(name_value or "unknown"),
+                        "arguments": args_payload,
+                    },
+                }
+                tool_id = mapping_call.get("id")
+                if tool_id is not None:
+                    entry["id"] = str(tool_id)
+                normalized.append(entry)
+                continue
+            function_obj = getattr(tool_call, "function", None)
+            name_value = getattr(tool_call, "name", None) or getattr(function_obj, "name", None) or "unknown"
+            args_value: typing.Any = (
+                getattr(tool_call, "args", None)
+                or getattr(tool_call, "arguments", None)
+                or getattr(function_obj, "arguments", None)
+                or {}
+            )
+            if isinstance(args_value, str):
+                args_payload = args_value
+            else:
+                serialized_args = orjson.dumps(args_value)
+                args_payload = serialized_args.decode("utf-8")
+            entry = {
+                "type": "function",
+                "function": {
+                    "name": str(name_value),
+                    "arguments": args_payload,
+                },
+            }
+            tool_id = getattr(tool_call, "id", None)
+            if tool_id is not None:
+                entry["id"] = str(tool_id)
+            normalized.append(entry)
+        return normalized
+
     oai_messages: list[dict[str, typing.Any]] = []
     for orig_msg in messages:
-        if isinstance(orig_msg, dict):
-            role = str(orig_msg.get("role", "user"))
-            content = _normalize_content(orig_msg.get("content", ""))
+        if isinstance(orig_msg, collections.abc.Mapping):
+            mapping_msg = typing.cast("collections.abc.Mapping[str, typing.Any]", orig_msg)
+            role_value = mapping_msg.get("role", "user")
+            role = role_value if isinstance(role_value, str) else str(role_value)
+            content = _normalize_content(mapping_msg.get("content", ""))
             msg: dict[str, typing.Any] = {"role": role, "content": content}
-            name = orig_msg.get("name")
-            if name:
-                msg["name"] = str(name)
-            tool_call_id = orig_msg.get("tool_call_id")
-            if tool_call_id and role == "tool":
-                msg["tool_call_id"] = str(tool_call_id)
-            tool_calls = orig_msg.get("tool_calls")
-            if tool_calls and role == "assistant":
-                msg["tool_calls"] = tool_calls
+            name_value = mapping_msg.get("name")
+            if name_value is not None:
+                msg["name"] = str(name_value)
+            tool_call_id_value = mapping_msg.get("tool_call_id")
+            if tool_call_id_value is not None and role == "tool":
+                msg["tool_call_id"] = str(tool_call_id_value)
+            tool_calls_value = mapping_msg.get("tool_calls")
+            if (
+                isinstance(tool_calls_value, collections.abc.Sequence)
+                and not isinstance(tool_calls_value, (str, bytes, bytearray))
+                and role == "assistant"
+            ):
+                normalized_tool_calls = _normalize_tool_calls(
+                    typing.cast("collections.abc.Sequence[typing.Any]", tool_calls_value),
+                )
+                if normalized_tool_calls:
+                    msg["tool_calls"] = normalized_tool_calls
             oai_messages.append(msg)
             continue
         content = _normalize_content(getattr(orig_msg, "content", ""))
@@ -227,49 +318,16 @@ def convert_messages_to_openai(
             msg_dict = {"role": "user", "content": content}
         elif isinstance(orig_msg, langchain_core.messages.AIMessage):
             msg_dict = {"role": "assistant", "content": content}
-            tool_calls = getattr(orig_msg, "tool_calls", None)
-            if tool_calls:
-                tc_out: list[dict[str, typing.Any]] = []
-                for tc in tool_calls:
-                    if isinstance(tc, dict):
-                        name = tc.get("name") or (tc.get("function") or {}).get("name")
-                        args = (
-                            tc.get("args") or tc.get("arguments") or (tc.get("function") or {}).get("arguments") or {}
-                        )
-                        arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
-                        entry: dict[str, typing.Any] = {
-                            "type": "function",
-                            "function": {
-                                "name": name or "unknown",
-                                "arguments": arguments,
-                            },
-                        }
-                        if "id" in tc:
-                            entry["id"] = tc["id"]
-                        tc_out.append(entry)
-                    else:
-                        name = (
-                            getattr(tc, "name", None)
-                            or getattr(getattr(tc, "function", None), "name", None)
-                            or "unknown"
-                        )
-                        args = (
-                            getattr(tc, "args", None)
-                            or getattr(tc, "arguments", None)
-                            or getattr(getattr(tc, "function", None), "arguments", None)
-                            or {}
-                        )
-                        arguments = args if isinstance(args, str) else orjson.dumps(args).decode("utf-8")
-                        entry = {
-                            "type": "function",
-                            "function": {"name": name, "arguments": arguments},
-                        }
-                        tc_id = getattr(tc, "id", None)
-                        if tc_id:
-                            entry["id"] = tc_id
-                        tc_out.append(entry)
-                if tc_out:
-                    msg_dict["tool_calls"] = tc_out
+            tool_calls_attr = getattr(orig_msg, "tool_calls", None)
+            if isinstance(tool_calls_attr, collections.abc.Sequence) and not isinstance(
+                tool_calls_attr,
+                (str, bytes, bytearray),
+            ):
+                normalized_tool_calls = _normalize_tool_calls(
+                    typing.cast("collections.abc.Sequence[typing.Any]", tool_calls_attr),
+                )
+                if normalized_tool_calls:
+                    msg_dict["tool_calls"] = normalized_tool_calls
         elif isinstance(orig_msg, langchain_core.messages.ToolMessage):
             msg_dict = {"role": "tool", "content": content}
             tcid = getattr(orig_msg, "tool_call_id", None)
@@ -318,7 +376,10 @@ class OpenAIClientConfig(pyine.utils.pydantic.ClassImportSpec):
 
     class_path: str = "openai.OpenAI"
     base_class_path: str = "openai.OpenAI"  # not actually relevant/used
-    params: pydantic.SerializeAsAny[OpenAIClientParamsConfig] = OpenAIClientParamsConfig()
+    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = typing.cast(
+        "dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel]",
+        OpenAIClientParamsConfig(),
+    )
 
 
 OpenAIFineTunerHyperparamsConfig = openai.types.fine_tuning.fine_tuning_job.Hyperparameters
@@ -731,16 +792,19 @@ class OpenAIFineTuner:
         Returns:
             Assistant's message content, or an empty string if not present.
         """
-        messages = []
+        messages: list[typing.Any] = []
         if system_prompt:
             messages.append(SystemMessageType(content=system_prompt, role="system"))
         messages.append(UserMessageType(content=user_prompt, role="user"))
-        resp = self.client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            **kwargs,
+        chat_response = typing.cast(
+            "openai.types.chat.ChatCompletion",
+            self.client.chat.completions.create(
+                model=model_id,
+                messages=messages,
+                **kwargs,
+            ),
         )
-        return resp.choices[0].message.content or ""
+        return chat_response.choices[0].message.content or ""
 
 
 class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec):
@@ -748,9 +812,15 @@ class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec):
 
     class_path: str = pyine.utils.portability.get_fully_qualified_name(OpenAIFineTuner)
     base_class_path: str = pyine.utils.portability.get_fully_qualified_name(OpenAIFineTuner)
-    params: OpenAIFineTunerParamsConfig  # note: params need to be specified explicitly
+    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = typing.cast(
+        "dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel]",
+        OpenAIFineTunerParamsConfig(
+            base_model="",
+            method={"type": "supervised"},
+        ),
+    )
     """Configuration parameters for the OpenAI fine-tuning API helper."""
-    params_key: str = "config"
+    params_key: str | None = "config"
     """Key to use when passing the params configuration to the class constructor."""
 
 
@@ -775,7 +845,7 @@ def cleanup_finetuned_models(
     regex: typing.Pattern[str] = re.compile(pattern)
     cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
     models = client.models.list()
-    matched_models = []
+    matched_models: list[openai.types.model.Model] = []
     for model in models.data:
         creation_dt = datetime.datetime.fromtimestamp(model.created)
         if regex.match(model.id) and creation_dt < cutoff_time:
@@ -812,7 +882,7 @@ def cleanup_files(
     regex: typing.Pattern[str] = re.compile(pattern)
     cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
     file_page = client.files.list(purpose=purpose) if purpose is not None else client.files.list()
-    matched_files = []
+    matched_files: list[openai.types.file_object.FileObject] = []
     for file in file_page.data:
         creation_dt = datetime.datetime.fromtimestamp(file.created_at)
         if regex.match(file.filename) and creation_dt < cutoff_time:

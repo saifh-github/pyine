@@ -48,14 +48,21 @@ class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
 
     def needs_answers_in_train_dataset(self) -> bool:
         """Returns whether the model needs answers in its training dataset."""
-        return self.openai_finetuner_config.params.method.get("type", "") != "reinforcement"
+        finetuner_params = typing.cast(
+            "pyine.utils.openai.OpenAIFineTunerParamsConfig",
+            self.openai_finetuner_config.params,
+        )
+        return finetuner_params.method.get("type", "") != "reinforcement"
 
     def supports_system_prompt(self) -> bool:
         """Returns whether the model to be fine-tuned supports the use of system prompts."""
         models_without_system_prompts = ["o1", "o3", "o4"]
+        finetuner_params = typing.cast(
+            "pyine.utils.openai.OpenAIFineTunerParamsConfig",
+            self.openai_finetuner_config.params,
+        )
         return not any(
-            self.openai_finetuner_config.params.base_model.startswith(model_prefix)
-            for model_prefix in models_without_system_prompts
+            finetuner_params.base_model.startswith(model_prefix) for model_prefix in models_without_system_prompts
         )
 
 

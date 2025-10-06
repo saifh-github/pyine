@@ -107,5 +107,9 @@ def show_colored_diff(
             color = "#6a737d"  # grey
         styled_lines.append(f'<span style="color:{color}; white-space:pre">{escaped}</span>')
     html_content = "<br>".join(styled_lines)
-    display_fn = typing.cast("typing.Any", IPython.display.display)
-    display_fn(IPython.display.HTML(html_content))
+    display_module = typing.cast("typing.Any", IPython.display)
+    display_callable = typing.cast(
+        "typing.Callable[[typing.Any], IPython.display.DisplayHandle | None]",
+        display_module.display,
+    )
+    display_callable(display_module.HTML(html_content))
