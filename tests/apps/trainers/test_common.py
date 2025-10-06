@@ -4,6 +4,7 @@ import typing
 import pytest
 
 import pyine.apps.trainers.common as trainer_common
+import pyine.evals.common
 
 
 class DummyDatamodule:
@@ -44,10 +45,8 @@ class DummyDatamoduleConfig:
         return self.datamodule
 
 
-class FakeEvaluationResult:
-    def __init__(self, metrics: dict[str, float], artifacts: list[str]) -> None:
-        self.metrics = metrics
-        self.artifacts = artifacts
+class FakeEvaluationResult(pyine.evals.common.EvalResult):
+    artifacts: list[str]
 
 
 class DummyEvalsConfig:
@@ -59,13 +58,13 @@ class DummyEvalsConfig:
         self.log_metrics_calls: list[dict] = []
         self.log_predictions_calls: list[dict] = []
 
-    async def evaluate_runnable_model(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
+    async def evaluate_runnable_model(self, **kwargs: typing.Any) -> pyine.evals.common.EvalResult:
         self.eval_runnable_model_calls.append(kwargs)
-        return {}
+        return pyine.evals.common.EvalResult(metrics={})
 
-    async def evaluate_hf_model(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
+    async def evaluate_hf_model(self, **kwargs: typing.Any) -> pyine.evals.common.EvalResult:
         self.eval_hf_model_calls.append(kwargs)
-        return {}
+        return pyine.evals.common.EvalResult(metrics={})
 
     def define_metrics_for_wandb(self, **kwargs: typing.Any) -> None:
         self.define_metrics_calls.append(kwargs)
@@ -131,8 +130,8 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
         metrics_logged.append((metrics, subset))
 
     monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", fake_print_metrics)
-    synchronous_result = FakeEvaluationResult({"acc": 0.9}, ["art1"])
-    asynchronous_result = FakeEvaluationResult({"acc": 0.95}, ["art2"])
+    synchronous_result = FakeEvaluationResult(metrics={"acc": 0.9}, artifacts=["art1"])
+    asynchronous_result = FakeEvaluationResult(metrics={"acc": 0.95}, artifacts=["art2"])
 
     async def _async_wrapper() -> FakeEvaluationResult:
         return asynchronous_result

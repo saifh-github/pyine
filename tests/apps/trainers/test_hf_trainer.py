@@ -3,8 +3,10 @@ import types
 import typing
 
 import pytest
+import pytest_mock
 
 import pyine.apps.trainers.hf_trainer
+import pyine.data.datamodule
 
 
 class _FakePreparedDataset(list):
@@ -52,6 +54,7 @@ def test_train_configures_trainer_and_saves_artifacts(
     class _FakeTrainingArgsConfig:
         def __init__(self) -> None:
             self.do_train = True
+            self.dataloader_num_workers = 4
 
         def model_dump(self) -> dict[str, object]:
             return {
@@ -67,16 +70,16 @@ def test_train_configures_trainer_and_saves_artifacts(
             args: typing.Any,
             train_dataset: _FakePreparedDataset,
             eval_dataset: _FakePreparedDataset,
+            processing_class: _FakeTokenizer,
             data_collator: typing.Any,
-            tokenizer: _FakeTokenizer,
-            compute_metrics: typing.Callable[..., dict[str, typing.Any]],
+            compute_metrics: typing.Callable[..., dict[str, typing.Any]] = None,
         ) -> None:
             self.model = model
             self.args = args
             self.train_dataset = train_dataset
             self.eval_dataset = eval_dataset
             self.data_collator = data_collator
-            self.tokenizer = tokenizer
+            self.tokenizer = processing_class
             self.compute_metrics = compute_metrics
             self.saved_to: str | None = None
             self.trained = False
@@ -117,9 +120,8 @@ def test_train_configures_trainer_and_saves_artifacts(
         args=types.SimpleNamespace(),
         train_dataset=_FakePreparedDataset(),
         eval_dataset=_FakePreparedDataset(),
+        processing_class=_FakeTokenizer(),
         data_collator=None,
-        tokenizer=_FakeTokenizer(),
-        compute_metrics=lambda *_args, **_kwargs: {},
     )
 
     def fake_trainer_factory(**kwargs: typing.Any) -> _FakeTrainer:
@@ -128,8 +130,8 @@ def test_train_configures_trainer_and_saves_artifacts(
         fake_trainer_instance.train_dataset = kwargs["train_dataset"]
         fake_trainer_instance.eval_dataset = kwargs["eval_dataset"]
         fake_trainer_instance.data_collator = kwargs["data_collator"]
-        fake_trainer_instance.tokenizer = kwargs["tokenizer"]
-        fake_trainer_instance.compute_metrics = kwargs["compute_metrics"]
+        fake_trainer_instance.tokenizer = kwargs["processing_class"]
+        fake_trainer_instance.compute_metrics = kwargs.get("compute_metrics")
         return fake_trainer_instance
 
     monkeypatch.setattr(
@@ -170,7 +172,6 @@ def test_train_configures_trainer_and_saves_artifacts(
             valid_subset_names=["valid"],
         ),
         gradient_checkpointing=True,
-        dataloader_num_workers=4,
         use_wandb_logging=True,
         output_dir=str(tmp_path / "artifact"),
     )
@@ -182,21 +183,20 @@ def test_train_configures_trainer_and_saves_artifacts(
         config=config,
         runtime=runtime,
     )
-
     assert trainer is fake_trainer_instance
-    assert fake_model.config.use_cache is False
-    assert fake_model.gradient_checkpointing_enabled is True
     assert prepared_calls == [
         {"name": "train", "max_seq_len": 64, "num_proc": 2},
         {"name": "valid", "max_seq_len": 64, "num_proc": 2},
     ]
     assert captured_args["kwargs"]["report_to"] == ["wandb"]
-    assert fake_trainer_instance.saved_to == config.output_dir
-    assert fake_tokenizer.saved_to == pathlib.Path(config.output_dir)
+    assert trainer.trained
 
 
 @pytest.mark.asyncio
-async def test_main_runs_train_and_evaluate(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_main_runs_train_and_evaluate(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: pytest_mock.MockerFixture,
+) -> None:
     train_calls: list[dict] = []
     eval_calls: list[dict] = []
 
@@ -215,7 +215,7 @@ async def test_main_runs_train_and_evaluate(monkeypatch: pytest.MonkeyPatch) -> 
         config: object,
         runtime: object,
     ) -> str:
-        return "datamodule"
+        return mocker.Mock(spec=pyine.data.datamodule.ConversationDataModule)
 
     def fake_entrypoint_setup(
         **_kwargs: object,

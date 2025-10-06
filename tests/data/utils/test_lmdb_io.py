@@ -63,7 +63,7 @@ class TestLMDBWriteAndRead:
         assert writer.map_size == 10**6
         assert writer.env is not None
         writer.close()
-        assert writer.env is None
+        assert writer._env is None
 
     def test_put_simple(
         self,
@@ -101,7 +101,15 @@ class TestLMDBWriteAndRead:
         mock_lmdb_env: typing.Any,
         serialization_method: lmdb_io.SerializationMethod,
     ) -> None:
-        serialization_cfg = lmdb_io.SerializationConfig(method=serialization_method)
+        # pickle-based methods require explicit opt-in due to security risks
+        allow_insecure = serialization_method in {
+            lmdb_io.SerializationMethod.PICKLE,
+            lmdb_io.SerializationMethod.PICKLE_LZ4,
+        }
+        serialization_cfg = lmdb_io.SerializationConfig(
+            method=serialization_method,
+            allow_insecure_serialization=allow_insecure,
+        )
         writer = self._get_writer(path=mock_lmdb_env.path(), serialization=serialization_cfg)
         key, value = "key1", {"test": 1}
         inserted_key = writer.put(key=key, value=value)

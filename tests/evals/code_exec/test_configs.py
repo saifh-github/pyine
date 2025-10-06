@@ -2,8 +2,10 @@ import dataclasses
 import types
 import typing
 
+import datasets as hf_datasets
 import langchain_core.messages
 import pytest
+import torch
 
 import pyine.evals.code_exec.configs
 import pyine.evals.common
@@ -148,7 +150,7 @@ async def test_evaluate_runnable_model_sequential(
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec.configs,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )
@@ -296,7 +298,7 @@ async def test_evaluate_runnable_model_parallel(
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec.configs,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )
@@ -359,7 +361,7 @@ async def test_evaluate_hf_model_generates_results(
         },
     ]
 
-    class _FakeDataset(list):
+    class _FakeDataset(list, hf_datasets.Dataset):
         def map(
             self,
             fn: typing.Callable[[typing.Any], typing.Any],
@@ -400,11 +402,11 @@ async def test_evaluate_hf_model_generates_results(
     class _FakeModel:
         def __init__(self) -> None:
             self.config = types.SimpleNamespace()
-            self.generation_config = types.SimpleNamespace(
-                max_new_tokens=10,
-                max_length=32,
-                validate=lambda: None,
-            )
+            self.generation_config = {
+                "max_new_tokens": 10,
+                "max_length": 32,
+                "validate": lambda: None,
+            }
 
     @dataclasses.dataclass
     class _FakeSampleData:
@@ -443,7 +445,7 @@ async def test_evaluate_hf_model_generates_results(
                 {
                     "sample_idx": batch["sample_idx"],
                     "prediction": f"pred-{idx}",
-                    "generated_tokens": [0, 1],
+                    "generated_tokens": torch.as_tensor([0, 1]),
                 },
             )
         return outputs
@@ -512,7 +514,7 @@ async def test_evaluate_hf_model_generates_results(
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec.configs,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )

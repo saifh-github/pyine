@@ -3,6 +3,7 @@ import typing
 
 import langchain_core.language_models
 import langchain_core.prompts
+import langchain_core.prompts.chat
 import langchain_core.runnables
 import pydantic
 
@@ -14,7 +15,7 @@ type PromptInputMapping = collections.abc.Mapping[str, typing.Any]
 """Standard input mapping type expected by runnable prompt chains."""
 type PromptRunnable = langchain_core.runnables.Runnable[PromptInputMapping, typing.Any]
 """Runnable type alias with concrete input and output typing."""
-type PromptTemplate = langchain_core.prompts.PromptTemplate | langchain_core.prompts.ChatPromptTemplate
+type PromptTemplate = langchain_core.prompts.PromptTemplate | langchain_core.prompts.chat.ChatPromptTemplate
 """Prompt template alias with explicit format output typing."""
 type LanguageModel = langchain_core.language_models.BaseLanguageModel[typing.Any]
 """Language model alias with explicit generics for prompt building."""

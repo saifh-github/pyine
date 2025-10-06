@@ -79,10 +79,13 @@ print("all done")
     )
     assert trace_result.code_string == example_snippet
     assert trace_result.inputs == input_args
-    deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
+    deltas_result = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
         trace_res=trace_result,
         delta_generator=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE,
     )
+    assert deltas_result.identifier == trace_result.identifier
+    assert deltas_result.gen_type == pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE
+    deltas = deltas_result.deltas
     _check_deltas_ok(deltas)
     if input_val == 0:
         assert len(deltas) == 5
@@ -127,7 +130,7 @@ print(f"The result is: {int(res)}")
     deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
         trace_res=trace_result,
         delta_generator=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE,
-    )
+    ).deltas
     assert len(deltas) == 28
     _check_deltas_ok(deltas)
     assert trace_result.stdout == "The result is: 3156\n"
@@ -184,7 +187,7 @@ print("all done")
     deltas = pyine.data.deltas.dataset_utils.get_deltas_from_trace_steps(
         trace_res=trace_result,
         delta_generator=pyine.data.deltas.dataset_utils.DeltaGeneratorType.SIMPLE,
-    )
+    ).deltas
     assert len(deltas) == 12
     _check_deltas_ok(deltas)
     # last delta should be raise to parent
@@ -235,8 +238,8 @@ def test_mini_taco_deltas_dataset(
     assert delta_reader.metadata["delta_generator"] == delta_gen.value
     deltas_list_count = len(delta_reader)  # noqa
     assert deltas_list_count >= 10
-    for deltas in delta_reader:
-        _check_deltas_ok(deltas)
+    for delta_result in delta_reader:
+        _check_deltas_ok(delta_result.deltas)
     # deltas dataset should still be compatible with traces dataset reader
     trace_reader = pyine.data.traces.dataset_reader.DatasetReader(output_dataset_path)
     assert len(trace_reader) == deltas_list_count

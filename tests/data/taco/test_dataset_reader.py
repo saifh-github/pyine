@@ -1,12 +1,13 @@
 import json
 import typing
 
+import datasets as hf_datasets
 import pytest
 
 import pyine.data.taco.dataset_reader as taco_reader
 
 
-class FakeSubset:
+class FakeSubset(hf_datasets.Dataset):
     def __init__(
         self,
         samples: list[dict[str, str]],

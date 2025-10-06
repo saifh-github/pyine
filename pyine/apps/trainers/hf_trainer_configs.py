@@ -187,13 +187,13 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
 
 
 def _async_main_wrapper(
-    *args: typing.Any,
-    **kwargs: typing.Any,
+    config: HFTrainerAppMainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
 ) -> None:
     """Wrapper for async main function."""
     import pyine.apps.trainers.hf_trainer as hf_trainer_app
 
-    asyncio.run(hf_trainer_app.main(*args, **kwargs))
+    asyncio.run(hf_trainer_app.main(config=config, runtime=runtime))
 
 
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:

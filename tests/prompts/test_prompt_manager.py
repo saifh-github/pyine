@@ -28,6 +28,11 @@ class TestPromptManager:
         mock_prompt_file = mocker.MagicMock()
         mock_prompt_file.is_file.return_value = True
         mock_package_files.joinpath.return_value = mock_prompt_file
+        # mock as_file to work as a context manager that yields a pathlib.Path
+        mock_yaml_path = pathlib.Path("dummy_path.yaml")
+        mock_as_file = mocker.patch("importlib.resources.as_file")
+        mock_as_file.return_value.__enter__ = mocker.MagicMock(return_value=mock_yaml_path)
+        mock_as_file.return_value.__exit__ = mocker.MagicMock(return_value=None)
         mock_versioned_config = mocker.MagicMock()
         mock_versioned_config.versions = {"v1.0.0": "config1", "v2.0.0": "config2"}
         mocker.patch.object(

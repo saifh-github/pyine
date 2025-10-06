@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import typing
 
-import datasets
+import datasets as hf_datasets
 import langchain_core.messages
 import langchain_core.runnables
 import torch
@@ -96,7 +96,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 sample_data_store[sample.identifier] = sample
                 response = chain.invoke(sample._asdict())
                 assert isinstance(response, langchain_core.messages.AIMessage)
-                response_text = response.text
+                response_text: typing.Any = response.content  # type: ignore[reportUnknownMemberType]
                 if not isinstance(response_text, str):
                     raise TypeError("expected runnable response to expose text content as a string")
                 evaluator.add_sample(
@@ -137,7 +137,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 if response is None:
                     raise RuntimeError("runnable response was unexpectedly None")
                 assert isinstance(response, langchain_core.messages.AIMessage)
-                response_text = response.text
+                response_text: typing.Any = response.content  # type: ignore[reportUnknownMemberType]
                 if not isinstance(response_text, str):
                     raise TypeError("expected runnable response to expose text content as a string")
                 sample_data_store[sample.identifier] = sample
@@ -222,7 +222,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             tokenizer=tokenizer,
             apply_chat_template_eval_config=True,
         )
-        assert isinstance(text_prompts_ds, datasets.Dataset), "expected HuggingFace dataset"
+        assert isinstance(text_prompts_ds, hf_datasets.Dataset), "expected HuggingFace dataset"
         if self.eval_generation_config is None:
             raw_gen_config = getattr(model, "generation_config", None)
             if raw_gen_config is None:
@@ -267,7 +267,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         text_prompts_ds = text_prompts_ds.map(_prepare_model_inputs, desc="encoding eval prompts")  # type: ignore[reportUnknownMemberType]
         assert len(text_prompts_ds) == sample_idx
         prepared_eval_ds = text_prompts_ds.sort("input_len", reverse=True)
-        dataloader = torch.utils.data.DataLoader[dict[str, typing.Any]](
+        dataloader = torch.utils.data.DataLoader(
             typing.cast("torch.utils.data.Dataset[dict[str, typing.Any]]", prepared_eval_ds),
             batch_size=self.eval_batch_size,
             shuffle=False,

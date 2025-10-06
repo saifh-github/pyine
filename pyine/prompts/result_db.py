@@ -21,9 +21,7 @@ import pyine.data.utils.filter_rules
 import pyine.utils.filesystem
 import pyine.utils.langchain
 import pyine.utils.reprod
-
-if typing.TYPE_CHECKING:
-    from pyine.prompts.types import PromptBuildConfig, PromptNameType, PromptVersionType
+from pyine.prompts.types import PromptBuildConfig, PromptNameType, PromptVersionType  # noqa
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
@@ -246,8 +244,8 @@ class PromptResultDB:
         self,
         identifier: str,
         *,
-        prompt_name: pyine.prompts.types.PromptNameType | None = None,
-        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -288,8 +286,8 @@ class PromptResultDB:
         self,
         group: str,
         *,
-        prompt_name: pyine.prompts.types.PromptNameType | None = None,
-        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -328,7 +326,7 @@ class PromptResultDB:
         self,
         prompt_name: str,
         *,
-        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
+        prompt_version: PromptVersionType | None = None,
         tag_filter_rule: str | None = None,
         max_result_age: datetime.timedelta | None = None,
     ) -> list[PromptResultRecord]:
@@ -437,8 +435,8 @@ class PromptResultDB:
         *,
         identifier: str | None = None,
         group: str | None = None,
-        prompt_name: pyine.prompts.types.PromptNameType | None = None,
-        prompt_version: pyine.prompts.types.PromptVersionType | None = None,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
         older_than: datetime.timedelta | None = None,
     ) -> int:
         """Delete records matching the provided filters.

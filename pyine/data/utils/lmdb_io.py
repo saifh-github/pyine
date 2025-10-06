@@ -389,6 +389,8 @@ class LMDBWriter:
         with self.env.begin(write=True) as txn:  # type: ignore[reportUnknownMemberType]
             for key, value in items_iterator:
                 try:
+                    if key in self.key_map:
+                        raise ValueError(f"key '{key}' already exists in the database")
                     internal_key = _create_sample_key(self._next_internal_key)
                     if not (0 < len(internal_key) < self.env.max_key_size()):
                         raise RuntimeError("internal key length error")

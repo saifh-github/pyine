@@ -5,6 +5,7 @@ import typing
 
 import langchain_core.messages
 import langchain_core.prompts
+import langchain_core.prompts.chat
 import langchain_core.prompts.string
 import pydantic
 
@@ -285,7 +286,7 @@ class PromptConfig(pydantic.BaseModel):
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
         examples_block_variables: dict[str, typing.Any] | None = None,
-    ) -> langchain_core.prompts.ChatPromptTemplate: ...
+    ) -> langchain_core.prompts.chat.ChatPromptTemplate: ...
 
     def create_prompt_template(
         self,
@@ -296,7 +297,7 @@ class PromptConfig(pydantic.BaseModel):
         role_variables: dict[str, typing.Any] | None = None,
         context_variables: dict[str, typing.Any] | None = None,
         examples_block_variables: dict[str, typing.Any] | None = None,
-    ) -> langchain_core.prompts.PromptTemplate | langchain_core.prompts.ChatPromptTemplate:
+    ) -> langchain_core.prompts.PromptTemplate | langchain_core.prompts.chat.ChatPromptTemplate:
         """Create a LangChain prompt template from role, context, examples, and question templates.
 
         This function will try to fully render the system message along with the question, so all
@@ -345,7 +346,7 @@ class PromptConfig(pydantic.BaseModel):
                     optional_variables=self.question.optional_variables or [],
                 ),
             ]
-            chat_template = langchain_core.prompts.ChatPromptTemplate(
+            chat_template = langchain_core.prompts.chat.ChatPromptTemplate(
                 messages=messages,
                 input_variables=question_input_vars,
                 partial_variables=self.question.partial_variables or {},

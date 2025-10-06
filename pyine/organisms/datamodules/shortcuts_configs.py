@@ -241,6 +241,13 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         parser_config = self.default_dataparser_config
         if isinstance(parser_config, dict):
             parser_config = pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate(parser_config)
+        else:
+            assert isinstance(parser_config, pyine.data.datamodule.BaseDataParserConfig)
+            # convert BaseDataParserConfig to SampleBuilderConfig (may happen when instantiated via Hydra)
+            parser_config = pyine.organisms.datamodules.utils.samples.SampleBuilderConfig(
+                class_path=parser_config.class_path,
+                params=parser_config.params,
+            )
         assert isinstance(parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig), (
             f"unexpected type for default dataparser config: {type(parser_config)}"
         )
@@ -332,11 +339,15 @@ def get_datamodule_config(
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
+    from pyine.organisms.datamodules.utils.samples import SampleBuilder
+    from pyine.utils.portability import get_fully_qualified_name
+
     config_kwargs = {
         "lmdb_paths": lmdb_paths,
         "split_file_path": split_file_path,
         "split_seed": seed,
         "default_dataparser_config": {
+            "class_path": get_fully_qualified_name(SampleBuilder),
             "params": _get_default_sampler_builder_config(seed=seed),
         },
         "dataparser_config_overrides": {

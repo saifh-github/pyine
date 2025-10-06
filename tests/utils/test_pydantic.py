@@ -259,13 +259,13 @@ class TestClassImportSpec:
                 "pkg.module.DummyUnrelated": DummyUnrelated,
             },
         )
-        with pytest.raises(TypeError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             _ = pyd.ClassImportSpec(
                 class_path="pkg.module.DummySub",
                 base_class_path="pkg.module.DummyBase",
-                params={"a": 7, "b": {"k": "v"}},
+                params={"a": 7, "b": {"k": "v"}, "invalid_param": "value"},
             )
-        assert "not compatible with expected" in str(exc_info.value)
+        assert "invalid parameter(s)" in str(exc_info.value)
 
     def test_instantiate_success_with_params(
         self,

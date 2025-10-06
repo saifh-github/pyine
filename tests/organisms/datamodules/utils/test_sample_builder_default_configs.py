@@ -1,7 +1,9 @@
+import pathlib
 import typing
 
 import pytest
 
+import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
 import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
 import pyine.organisms.datamodules.utils.samples as sample_utils
@@ -10,7 +12,7 @@ import pyine.utils.code.execution as execution_utils
 import pyine.utils.pydantic
 
 
-class FakeDatasetReader:
+class FakeDatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
     def __init__(
         self,
         dataset_hash: str,
@@ -19,6 +21,7 @@ class FakeDatasetReader:
         self._dataset_hash = dataset_hash
         self._traces = traces
         self.trace_keys = [typing.cast("str", trace.identifier) for trace in traces]
+        self.path = pathlib.Path("dummy/path")
 
     @property
     def hash(self) -> str:

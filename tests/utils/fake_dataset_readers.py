@@ -38,12 +38,12 @@ Example usage (pytest + monkeypatch):
 import dataclasses
 import datetime
 import hashlib
+import pathlib
 import random
 import typing
 
-import torch.utils.data
-
 import pyine.data.deltas.dataset_utils as deltas_utils
+import pyine.data.traces.dataset_reader as traces_dr
 import pyine.data.traces.dataset_utils as traces_utils
 import pyine.utils.code.execution as exec_utils
 
@@ -99,7 +99,7 @@ class _FakeBase:
         return None
 
 
-class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
+class FakeTraceDatasetReader(_FakeBase, traces_dr.DatasetReader):
     """Fake replacement for pyine.data.traces.dataset_reader.DatasetReader.
 
     This class mimics the core interface of the real reader while generating realistic
@@ -116,7 +116,7 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         config: FakeTraceDataConfig | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        super().__init__()
+        self.path = pathlib.Path(lmdb_path) if lmdb_path is not None else pathlib.Path("dummy/path")
         # merge config from kwargs if provided
         self._cfg = config or FakeTraceDataConfig(
             **{k: v for k, v in kwargs.items() if k in {f.name for f in dataclasses.fields(FakeTraceDataConfig)}}
@@ -129,6 +129,7 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         self.trace_keys: list[str] = []
         self.trace_key_to_problem_key: dict[str, str] = {}
         self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        self.trace_metadata: list[traces_utils.TraceMetadata] = []
         # private attributes with INTERNAL indices
         self._problem_indices: list[int] = []
         self._trace_indices: list[int] = []
@@ -160,31 +161,15 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         self._problem_data_cache[cache_key] = problem
         return problem
 
-    def get_tags(self, index_or_key: int | str) -> list[str]:
-        idx = self._resolve_index(index_or_key)
-        problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
-        return self._problems[problem_idx].problem_tags
-
     def get_trace_metadata(self, index_or_key: int | str) -> traces_utils.TraceMetadata:
+        """Returns the metadata associated with a trace by external index or key."""
         idx = self._resolve_index(index_or_key)
-        problem_idx = self._trace_idx_to_problem_idx[self._trace_indices[idx]]
-        trace_data = self[idx]
-        return traces_utils.TraceMetadata(
-            identifier=trace_data.identifier,
-            parent_dataset_hash=self.hash,
-            index=idx,
-            internal_index=idx,
-            step_count=trace_data.valid_step_count,
-            code_string=trace_data.code_string,
-            inputs=trace_data.inputs,
-            expected_output=trace_data.expected_output,
-            return_value=trace_data.return_value,
-            exception=trace_data.exception,
-            stdout=trace_data.stdout,
-            stderr=trace_data.stderr,
-            metadata=trace_data.metadata,
-            tags=[*self._problems[problem_idx].problem_tags, *trace_data.tags],
-        )
+        return self.trace_metadata[idx]
+
+    def get_tags(self, index_or_key: int | str) -> list[str]:
+        """Returns a list of tags for a given trace so that we can decide whether to filter it."""
+        idx = self._resolve_index(index_or_key)
+        return self.trace_metadata[idx].tags.copy()
 
     # ---------------------------- internals ----------------------------
 
@@ -221,6 +206,14 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
                         self._append_trace(aug_trace, aug_key, p_idx, parent_key=base_key)
 
         assert len(self._trace_indices) == len(self.trace_keys) == len(self._traces)
+        self._finalize_metadata()
+
+    def _finalize_metadata(self) -> None:
+        """Updates all trace metadata with the final dataset hash after generation is complete."""
+        dataset_hash = self.hash
+        for meta in self.trace_metadata:
+            # TraceMetadata is immutable (uses pydantic), so we need to update via model_copy
+            object.__setattr__(meta, "parent_dataset_hash", dataset_hash)
 
     def _append_trace(
         self,
@@ -239,6 +232,32 @@ class FakeTraceDatasetReader(_FakeBase, torch.utils.data.Dataset):
         if parent_key is not None:
             self._augment_idx_to_parent_trace_idx[internal_idx] = self._trace_indices[self.trace_keys.index(parent_key)]
             self.augment_key_to_parent_trace_key[tkey] = parent_key
+        # create and append trace metadata (store with placeholder hash, will be updated after generation)
+        problem_data = self._problems[problem_idx]
+        trace_id = traces_utils.TraceIdentifier.from_string(tkey)
+        curr_trace_tags: list[str] = []
+        curr_trace_tags.extend(problem_data.problem_tags)
+        curr_trace_tags.extend(trace.tags)
+        if trace_id.is_augmented:
+            curr_trace_tags.append(f"augment:{trace_id.augment_category}")
+        self.trace_metadata.append(
+            traces_utils.TraceMetadata(
+                identifier=trace.identifier,
+                parent_dataset_hash="",  # placeholder, will be set in _finalize_metadata
+                index=len(self.trace_metadata),
+                internal_index=internal_idx,
+                step_count=trace.valid_step_count,
+                code_string=trace.code_string,
+                inputs=trace.inputs,
+                expected_output=trace.expected_output,
+                return_value=trace.return_value,
+                exception=trace.exception,
+                stdout=trace.stdout,
+                stderr=trace.stderr,
+                metadata=trace.metadata,
+                tags=curr_trace_tags,
+            )
+        )
 
     def _make_problem(self, p_idx: int) -> traces_utils.CodingProblem:
         pid = traces_utils.CodingProblemIdentifier(

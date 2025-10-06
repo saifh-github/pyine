@@ -5,6 +5,7 @@ import pytest
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
+import pyine.configs.utils
 
 
 def test_register_searchpath_plugin_registers_once(
@@ -65,7 +66,7 @@ def test_print_experiment_configs_lists_expected_sections(
     )
     experiment = types.SimpleNamespace(name="exp_a", group="experiment", config=types.SimpleNamespace())
     ignored = types.SimpleNamespace(name="other", group="misc", config=types.SimpleNamespace())
-    pyine.configs.base.print_experiment_configs([experiment, ignored], "app")
+    pyine.configs.utils.print_experiment_configs([experiment, ignored], "app")
     captured = capsys.readouterr().out
     assert "+experiment=exp_a" in captured
     assert calls["initialize"] == 1

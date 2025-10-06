@@ -310,7 +310,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
     assert report.total_samples == 1
     assert report.new_results_generated == 1
     assert report.skipped_samples == 0
-    assert report.errors == 0
+    assert report.errors == 0, report.error_messages
     assert captured["identifier"] == sid  # SolutionIdentifier for code_summary
     assert captured["group"] == pid  # grouped by CodingProblemIdentifier
     assert captured["prompt_name"] == "code_summary"
@@ -390,7 +390,7 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
     assert report.total_samples == 1
     assert report.new_results_generated == 0
     assert report.skipped_samples == 1
-    assert report.errors == 0
+    assert report.errors == 0, report.error_messages
 
 
 @pytest.mark.asyncio
@@ -463,7 +463,7 @@ async def test_bad_id_handling_increments_skips(
         show_progress=False,
     )
     assert report.total_samples == 2
-    assert report.errors == 0
+    assert report.errors == 0, report.error_messages
     assert report.new_results_generated + report.skipped_samples == 2
 
 
@@ -520,7 +520,7 @@ async def test_supported_prompts_prepare_input_variables(
     report = typing.cast("annotator.AnnotationReport", captured.pop("report"))
     assert report.total_samples == 1
     assert report.skipped_samples == 0
-    assert report.errors == 0
+    assert report.errors == 0, report.error_messages
     assert report.new_results_generated == 1
 
     trace = dataset[0]
@@ -657,7 +657,7 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
             **_: typing.Any,
         ) -> types.SimpleNamespace:
             return types.SimpleNamespace(
-                expected_output={"alt": "value"},
+                outputs={"alt": "value"},
                 test_idx=trace_id.test_idx + 1,
             )
 
@@ -702,6 +702,11 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
             }
         ],
     )
+    report = typing.cast("annotator.AnnotationReport", captured.pop("report"))
+    assert report.total_samples == 1
+    assert report.skipped_samples == 0
+    assert report.errors == 0, report.error_messages
+    assert report.new_results_generated == 1
 
     input_vars = captured["input_variables"]
     assert input_vars["code"] == buggy_code
@@ -747,7 +752,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
             **_: typing.Any,
         ) -> types.SimpleNamespace:
             return types.SimpleNamespace(
-                expected_output={"alt": "value"},
+                outputs={"alt": "value"},
                 test_idx=trace_id.test_idx + 1,
             )
 
@@ -764,7 +769,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
     report = typing.cast("annotator.AnnotationReport", captured.pop("report"))
     assert report.total_samples == 1
     assert report.skipped_samples == 0
-    assert report.errors == 0
+    assert report.errors == 0, report.error_messages
     assert report.new_results_generated == 1
 
     trace = dataset[0]

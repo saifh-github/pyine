@@ -65,13 +65,14 @@ class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
 
 
 def _async_main_wrapper(
-    *args: typing.Any,
-    **kwargs: typing.Any,
+    config: OpenAIFineTuneAppMainConfig,
+    runtime: (pyine.configs.schemas.RuntimeConfig | None) = None,
+    skip_fine_tuning: bool = False,
 ) -> None:
     """Wrapper for async main function."""
     import pyine.apps.trainers.openai_finetune as openai_finetune_app
 
-    asyncio.run(openai_finetune_app.main(*args, **kwargs))
+    asyncio.run(openai_finetune_app.main(config=config, runtime=runtime, skip_fine_tuning=skip_fine_tuning))
 
 
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:

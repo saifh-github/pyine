@@ -1,6 +1,7 @@
 import langchain_core.messages
 import langchain_core.output_parsers
 import langchain_core.prompts
+import langchain_core.prompts.chat
 import langchain_core.runnables
 import pytest
 import pytest_mock
@@ -66,7 +67,7 @@ def test_get_config_and_template() -> None:
     assert "Enter name: " in rendered_str
     # as a bonus here, test that the chat template is also OK
     chat_template = callable_analysis.get_prompt_template(use_chat_template=True)
-    assert isinstance(chat_template, langchain_core.prompts.ChatPromptTemplate)
+    assert isinstance(chat_template, langchain_core.prompts.chat.ChatPromptTemplate)
     assert len(chat_template.messages) == 2
     assert isinstance(chat_template.messages[0], langchain_core.messages.SystemMessage)
     assert "You are an expert at interpreting" in chat_template.messages[0].content

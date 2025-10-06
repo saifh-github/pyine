@@ -3,9 +3,11 @@ import pathlib
 import types
 
 import pytest
+import pytest_mock
 
 import pyine.apps.trainers.openai_finetune
 import pyine.apps.trainers.openai_finetune_configs
+import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.evals.code_exec.configs
@@ -53,9 +55,19 @@ def test_compute_estimated_train_token_count_handles_nested_messages(
         lambda **_kwargs: _FakeTokenizer(),
     )
 
-    def _read_dataset_from_jsonl(path: pathlib.Path) -> list[object]:
+    def _read_dataset_from_jsonl(path: pathlib.Path) -> list[list[dict[str, str]]]:
         with open(path, encoding="utf-8") as file_obj:
-            return [json.loads(line) for line in file_obj.read().splitlines()]
+            result: list[list[dict[str, str]]] = []
+            for line in file_obj.read().splitlines():
+                obj = json.loads(line)
+                # Normalize to match real implementation behavior
+                if isinstance(obj, list):
+                    result.append(obj)
+                elif isinstance(obj, dict):
+                    result.append([obj])  # Wrap single message in list
+                else:
+                    raise ValueError(f"unsupported type {type(obj)}")
+            return result
 
     monkeypatch.setattr(
         pyine.apps.trainers.openai_finetune.pyine.utils.openai,
@@ -141,6 +153,7 @@ def test_train_streams_events_and_returns_model(
 @pytest.mark.asyncio
 async def test_main_skip_fine_tuning_updates_wandb(
     monkeypatch: pytest.MonkeyPatch,
+    mocker: pytest_mock.MockerFixture,
 ) -> None:
     evaluate_calls: list[dict[str, object]] = []
     provider_calls: list[dict[str, object]] = []
@@ -156,7 +169,9 @@ async def test_main_skip_fine_tuning_updates_wandb(
         runtime: object,
     ) -> types.SimpleNamespace:
         dm_cfg = types.SimpleNamespace(get_prompt_chain=lambda model: model)
-        return types.SimpleNamespace(config=dm_cfg)
+        dm_mock = mocker.Mock(spec=pyine.data.datamodule.ConversationDataModule)
+        dm_mock.config = dm_cfg
+        return dm_mock
 
     def fake_entrypoint_setup(
         **_kwargs: object,

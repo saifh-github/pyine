@@ -26,7 +26,7 @@ class TestBaseEvalsConfig:
             datamodule=mock_datamodule,
             eval_subset_name="test",
         )
-        assert result == {}
+        assert result.metrics == {}
 
     @pytest.mark.asyncio
     async def test_evaluate_runnable_model_raises_when_eval_type_set(self) -> None:
@@ -54,7 +54,7 @@ class TestBaseEvalsConfig:
             datamodule=mock_datamodule,
             eval_subset_name="test",
         )
-        assert result == {}
+        assert result.metrics == {}
 
     @pytest.mark.asyncio
     async def test_evaluate_hf_model_raises_when_eval_type_set(self) -> None:

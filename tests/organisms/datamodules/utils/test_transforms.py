@@ -53,8 +53,12 @@ def transforms_with_fakes(
 
     lc_output_parsers.PydanticOutputParser = PydanticOutputParser
     lc_prompts = types.ModuleType("langchain_core.prompts")
+    lc_prompts_chat = types.ModuleType("langchain_core.prompts.chat")
     # provide minimal BasePromptTemplate to satisfy type annotations in imported modules
     lc_prompts.BasePromptTemplate = type("BasePromptTemplate", (), {})
+    # provide ChatPromptTemplate for chat template assertions
+    lc_prompts_chat.ChatPromptTemplate = type("ChatPromptTemplate", (lc_prompts.BasePromptTemplate,), {})
+    lc_prompts.chat = lc_prompts_chat
 
     # fake transformers with a minimal tokenizer class
     transformers_mod = types.ModuleType("transformers")
@@ -94,6 +98,7 @@ def transforms_with_fakes(
     monkeypatch.setitem(sys.modules, "langchain_core.messages", lc_messages)
     monkeypatch.setitem(sys.modules, "langchain_core.output_parsers", lc_output_parsers)
     monkeypatch.setitem(sys.modules, "langchain_core.prompts", lc_prompts)
+    monkeypatch.setitem(sys.modules, "langchain_core.prompts.chat", lc_prompts_chat)
     monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
     monkeypatch.setitem(sys.modules, "datasets", datasets_mod)
     sys.modules.pop("pyine.organisms.datamodules.utils.transforms", None)
@@ -160,8 +165,9 @@ def test_create_sample_transform_chat_to_hf_messages(
 ) -> None:
     transforms = transforms_with_fakes
     lc_msgs = sys.modules["langchain_core.messages"]
+    lc_prompts_chat = sys.modules["langchain_core.prompts.chat"]
 
-    class DummyTemplate:
+    class DummyTemplate(lc_prompts_chat.ChatPromptTemplate):
         def format_messages(
             self,
             **kwargs: typing.Any,
@@ -198,12 +204,12 @@ def test_apply_model_template_to_messages_basic(
 
         def apply_chat_template(
             self,
-            messages_batch: list[list[dict[str, str]]],
+            conversation: list[list[dict[str, str]]],
             **kwargs: typing.Any,
         ) -> list[str]:
-            # messages_batch is a list of list-of-dicts
+            # In batched mode, conversation is a list of conversations (each a list of message dicts)
             out = []
-            for msgs in messages_batch:
+            for msgs in conversation:
                 rendered = " | ".join(f"{m['role']}: {m['content']}" for m in msgs)
                 out.append(rendered)
             return out

@@ -239,7 +239,7 @@ def test_prepare_examples_from_conversations_flattens_assistant_turns(
         convo_ds=dataset,
         tokenizer=simple_tokenizer,
         max_seq_len=None,
-        num_proc=1,
+        num_proc=0,
     )
     expected: list[tuple[list[int], int]] = []
     for conversation in conversations:

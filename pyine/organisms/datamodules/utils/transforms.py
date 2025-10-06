@@ -6,6 +6,7 @@ import typing
 
 import langchain_core.messages
 import langchain_core.prompts
+import langchain_core.prompts.chat
 
 import pyine.organisms.datamodules.utils.samples
 import pyine.prompts.manager
@@ -57,7 +58,7 @@ def _apply_prompt_template_to_sample(
         sample_data = sample
         sample_args = sample_data._asdict()
     if use_chat_template:
-        assert isinstance(prompt_template, langchain_core.prompts.ChatPromptTemplate)
+        assert isinstance(prompt_template, langchain_core.prompts.chat.ChatPromptTemplate)
         messages = prompt_template.format_messages(**sample_args)
         assert isinstance(messages, list)
         # note: we currently only support single-turn interactions here, so one request per convo
