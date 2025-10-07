@@ -114,7 +114,7 @@ def get_base_store_and_configs(
                 },
                 "root": {
                     "level": "INFO",
-                }
+                },
             },
         )
     )

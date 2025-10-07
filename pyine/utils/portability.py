@@ -165,8 +165,8 @@ def format_object_changes(
         current_series: pd.Series[typing.Any] = current_obj  # type: ignore[reportUnknownVariableType]
         if len(past_series) != len(current_series):
             return None  # different lengths, too complex to track
-        diff_series = typing.cast("pd.Series", past_series.ne(current_series))
-        change_count = int(diff_series.sum())
+        diff_series = past_series.ne(current_series)  # type: ignore[reportUnknownMemberType]
+        change_count = int(diff_series.sum())  # type: ignore[reportUnknownMemberType]
         if change_count > max_count:
             return None  # too many changes
         metadata = f"len={len(current_series)}"
