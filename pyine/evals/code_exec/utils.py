@@ -473,5 +473,5 @@ async def get_metrics(
     """Compute and returns metrics associated with the current evaluation result."""
     output_metrics: pyine.evals.utils.MetricsDictType = await evaluator.compute_metrics()
     for key, value in token_usage.asdict().items():
-        output_metrics[f"token_usage/{key}"] = float(value)
+        output_metrics[f"token_usage/{key}"] = str(value)
     return output_metrics
