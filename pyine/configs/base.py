@@ -1,3 +1,4 @@
+import os
 import typing
 
 import hydra
@@ -107,6 +108,9 @@ def get_base_store_and_configs(
                         "formatter": "simple",
                         "filename": "${hydra:runtime.output_dir}/output.log",
                     },
+                },
+                "root": {
+                    "level": os.getenv("LOGLEVEL", "INFO"),
                 },
             },
         )
