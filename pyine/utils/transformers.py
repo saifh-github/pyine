@@ -160,52 +160,40 @@ def prepare_examples_from_conversations(
     We also keep "prompt_len" so the collator can later mask prompt tokens in labels.
     """
 
-    def _split_to_examples(example: dict[str, typing.Any]) -> dict[str, typing.Any]:
-        # called on a single conversation by Dataset.map; must return a dict of column->values
-        # (if returned values are lists of equal length, HF "explodes" them into multiple rows)
-        messages = typing.cast("ConversationHistory", example[messages_key])
+    def _split_to_examples(batch: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        # called on a batch of conversations by Dataset.map; must return dict of column->flat lists
+        conversations = typing.cast("list[ConversationHistory]", batch[messages_key])
         out_input_ids: list[list[int]] = []
         out_prompt_len: list[int] = []
-        for msg_idx, message in enumerate(messages):
-            # only model-authored turns are training targets
-            if message.get("role") != "assistant":
-                continue
-            # history is everything before the currently-targeted assistant message
-            history = messages[:msg_idx]
-            result = _build_example_ids_from_conversation_parts(tokenizer, history, message, max_seq_len)
-            if result is None:
-                # skip empty/invalid assistant messages
-                continue
-            # collect one example per assistant turn; HF will create as many rows as we return here
-            prompt_ids = result["prompt_ids"]
-            out_input_ids.append(result["input_ids"])
-            out_prompt_len.append(len(prompt_ids))
+        for messages in conversations:
+            for msg_idx, message in enumerate(messages):
+                # only model-authored turns are training targets
+                if message.get("role") != "assistant":
+                    continue
+                # history is everything before the currently-targeted assistant message
+                history = messages[:msg_idx]
+                result = _build_example_ids_from_conversation_parts(tokenizer, history, message, max_seq_len)
+                if result is None:
+                    # skip empty/invalid assistant messages
+                    continue
+                # collect one example per assistant turn; HF will create one row per appended item
+                prompt_ids = result["prompt_ids"]
+                out_input_ids.append(result["input_ids"])
+                out_prompt_len.append(len(prompt_ids))
         # only return columns needed for training; others are discarded via remove_columns below
         return {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
 
-    # TODO: if this map becomes a bottleneck, add batching w/ fast tokenizer, tune num_proc, use cache
+    # TODO: if this map becomes a bottleneck, tune num_proc, use cache
     # (worse case scenario, we can switch to a streaming/iterable dataset?)
     dataset: hf_datasets.Dataset = convo_ds.map(  # type: ignore[reportUnknownMemberType]
         _split_to_examples,
-        batched=False,  # process one conversation at a time for clarity
+        batched=True,  # explode list outputs into individual rows automatically
         # drop original columns so the resulting dataset only has "input_ids" and "prompt_len"
         remove_columns=convo_ds.column_names,
         num_proc=num_proc,  # parallelize if possible
         desc="preparing examples",
     )
-    # mapping with list outputs creates nested rows tied to original row; flatten to simple rows
-    dataset = dataset.flatten_indices()
-
-    # keep only rows that actually contain tokenized inputs
-    def _has_input_ids(row: dict[str, typing.Any]) -> bool:
-        input_ids = row.get("input_ids")
-        if not isinstance(input_ids, list):
-            return False
-        typed_input_ids = typing.cast("list[typing.Any]", input_ids)
-        return len(typed_input_ids) > 0
-
-    filtered_dataset: hf_datasets.Dataset = dataset.filter(_has_input_ids)  # type: ignore[reportUnknownMemberType]
-    return filtered_dataset
+    return dataset
 
 
 class FixedSizePaddingCollatorWithPromptMask:
@@ -219,7 +207,7 @@ class FixedSizePaddingCollatorWithPromptMask:
        - padding positions are set to `ignore_index` (ignored by loss)
     """
 
-    # @@@@@@ TODO: add support for packing? sort & min-pad batches?
+    # @@@@@@ TODO: add support for packing? sort & min-pad batches? (or just toggle group_by_length in trainer args?)
     # current approach w/ static max-length might be annoying for datasets w/ high len variance
 
     def __init__(
@@ -268,10 +256,8 @@ class FixedSizePaddingCollatorWithPromptMask:
             attention_mask = [1] * input_len + [0] * pad_len
             # labels mirror input ids but ignore loss on prompt and padding positions
             labels = input_ids.copy()
-            for position in range(min(prompt_len, self.max_length)):
-                labels[position] = self.ignore_index
-            for position in range(input_len, self.max_length):
-                labels[position] = self.ignore_index
+            labels[: min(prompt_len, self.max_length)] = [self.ignore_index] * min(prompt_len, self.max_length)
+            labels[input_len:] = [self.ignore_index] * pad_len
             input_ids_list.append(input_ids)
             labels_list.append(labels)
             attention_masks.append(attention_mask)

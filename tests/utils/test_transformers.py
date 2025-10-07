@@ -241,6 +241,7 @@ def test_prepare_examples_from_conversations_flattens_assistant_turns(
         max_seq_len=None,
         num_proc=0,
     )
+    assert len(prepared) == 3
     expected: list[tuple[list[int], int]] = []
     for conversation in conversations:
         messages = conversation["messages"]
@@ -257,10 +258,9 @@ def test_prepare_examples_from_conversations_flattens_assistant_turns(
                 continue
             expected.append((built["input_ids"], len(built["prompt_ids"])))
     actual: list[tuple[list[int], int]] = []
-    for row_idx in range(prepared.num_rows):
-        row = prepared[row_idx]
-        for input_ids, prompt_len in zip(row["input_ids"], row["prompt_len"], strict=False):
-            actual.append((input_ids, prompt_len))
+    for sample_idx in range(len(prepared)):
+        sample = prepared[sample_idx]
+        actual.append((sample["input_ids"], sample["prompt_len"]))
     assert actual == expected
 
 
