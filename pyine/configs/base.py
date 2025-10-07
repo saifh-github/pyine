@@ -109,9 +109,12 @@ def get_base_store_and_configs(
                         "filename": "${hydra:runtime.output_dir}/output.log",
                     },
                 },
-                "root": {
+                "pyine": {
                     "level": os.getenv("LOGLEVEL", "INFO"),
                 },
+                "root": {
+                    "level": "INFO",
+                }
             },
         )
     )
