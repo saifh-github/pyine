@@ -1,10 +1,10 @@
 # Project data / results directories
-/data/
-/datasets/
-/results/
-/output/
-/logs/
-/wandb/
+/data
+/datasets
+/results
+/output
+/logs
+/wandb
 
 # Byte-compiled / optimized / temp files
 __pycache__/
