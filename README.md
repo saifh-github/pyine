@@ -48,60 +48,57 @@ ______________________________________________________________________
 
 ## **Installation**
 
-This framework is designed for Python 3.12+.
+This framework is designed for Python 3.12+ and uses [uv](https://github.com/astral-sh/uv) for fast,
+reliable dependency management. The project includes a `uv.lock` file to ensure reproducible builds
+across all environments.
 
-To get started with the PyINE benchmark and dataset, we recommend using a virtual environment.
-Below are instructions for both the fast, modern `uv` tool and the standard `pip` with `venv`.
+### **Prerequisites**
 
-______________________________________________________________________
-
-### **Option 1: Using `uv` (Recommended for speed)**
-
-[uv](https://github.com/astral-sh/uv) is an extremely fast Python package installer and resolver,
-written in Rust. It can be used as a drop-in replacement for `pip` and `venv`.
-
-To create and activate a virtual environment, use:
+First, install `uv` if you haven't already:
 
 ```shell
-# (assuming you are in the project's root directory)
+# On macOS and Linux:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows:
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### **Quick Install**
+
+The simplest way to set up the project with all dependencies and pre-commit hooks:
+
+```shell
+make install
+```
+
+This will:
+
+- Create a virtual environment (`.venv`)
+- Install all dependencies from `uv.lock` (including dev dependencies)
+- Set up pre-commit hooks automatically
+
+### **Manual Installation**
+
+If you prefer to install manually or need more control:
+
+```shell
+# Create and activate virtual environment
 uv venv
 source .venv/bin/activate  # for MacOS/Linux
 .\.venv\Scripts\activate   # for Windows
+
+# Install dependencies from lockfile
+uv sync --extra dev  # includes dev tools (pytest, ruff, etc.)
+# or
+uv sync              # for base dependencies only
+
+# (Optional) Install pre-commit hooks
+uv run pre-commit install
 ```
 
-Then, to install the project and its dependencies, use:
-
-```shell
-# install base dependencies
-uv pip install -e .
-
-# to include development tools (flake8, pytest, etc.), instead use:
-uv pip install -e ".[dev]"
-```
-
-### **Option 2: Using `pip` and `venv`**
-
-If you prefer to use the standard tools bundled with Python, follow these steps.
-
-First, to create and activate a virtual environment, use:
-
-```shell
-# (assuming you are in the project's root directory)
-python -m venv .venv
-source .venv/bin/activate  # for MacOS/Linux
-.\.venv\Scripts\activate   # for Windows
-```
-
-Then, to install the project and its dependencies, use:
-
-```shell
-# install base dependencies
-pip install -e .
-
-# to include development tools (flake8, pytest, etc.), instead use:
-pip install -e ".[dev]"
-
-```
+**Note:** Always use `uv sync` rather than `uv pip install` when working with projects that have a
+`uv.lock` file. This ensures you get the exact dependency versions specified in the lockfile.
 
 ### Setting up environment variables
 
@@ -129,24 +126,32 @@ Noteworthy environment variables that you might want to define yourself:
   based on specific permissions.
 - `WANDB_API_KEY`, if you intend on running experiments while activating W&B tracking.
 
-### **For Contributors: Setting up Pre-commit Hooks**
+### **For Contributors**
 
-If you'd like to contribute to the project, you should install the optional **dev** dependencies,
-and also install `pre-commit` and its associated hooks in order to test changes to the
-codebase:
+If you'd like to contribute to the project, start by running `make install` to set up the
+development environment with all dev dependencies and pre-commit hooks.
 
-```shell script
-pre-commit install
+Once installed, you can use the following commands to verify your changes:
+
+```shell
+make check     # Runs linting (pre-commit, ruff, pyright) + quick tests
+make test      # Runs quick tests only (excludes slow and integration tests)
+make test-all  # Runs all tests including slow and integration tests
+make format    # Auto-formats code with ruff
+make coverage  # Runs tests with coverage report (saved to logs/coverage/)
 ```
 
-You will then be able to run various checks and tests to make sure your local changes do not
-introduce issues using:
+Additional useful commands:
 
-```shell script
-make check  # this actually runs `pre-commit run -a`
-make test  # this actually runs `pytest -k "not slow"`
-make test-all  # in case you have access to datasets, and are patient enough
+```shell
+make info      # Shows all available make targets
+make lock      # Updates uv.lock after changing dependencies in pyproject.toml
+make stats     # Shows git activity and repository statistics
+make clean     # Removes build artifacts and caches
 ```
+
+All test and lint commands use `uv run` to execute within the virtual environment, so you don't
+need to manually activate it first.
 
 ______________________________________________________________________
 

@@ -14,36 +14,36 @@ from contributions, and how to get your changes merged smoothly.
 ### Project prerequisites
 
 - Python: 3.12+ only.
-- Environment: use uv, or virtualenv and pip.
-- Tooling: pytest, pre-commit, pyflakes, coverage are used via Makefile shortcuts (described below).
+- Environment: use uv with the project's `uv.lock` file.
+- Tooling: pytest, pre-commit, ruff, and pyright are used via Makefile shortcuts (described below).
 
 For project setup instructions, refer to the top-level [README](./README.md).
 
 ### Developer workflow
 
-1. Pick or open an issue:
+1. Pick or open an issue related to what you want to work on:
 
    - Look for an existing issue. If none exists, open one describing the problem, rationale, and proposed approach.
    - For larger changes, propose an RFC/plan in the issue first.
 
 2. Create a feature branch:
 
-   - Use a descriptive name, e.g., `feat/prompt-manager-batching` or `fix/timeout-handling`.
+   - Use a descriptive name, e.g., `feature/prompt-manager-batching` or `fix/timeout-handling`.
 
 3. Keep PRs small and focused:
 
    - Submit incremental PRs where feasible (functional slices).
-   - Include tests and docs in the same PR.
+   - Include tests and docs in the same PR as your proposed changes.
 
 4. Ensure quality gates pass locally:
 
-   - Lint and style: `make check`
+   - Formatting and linting: `make lint`
    - Fast tests: `make test`
    - Full test suite (slow, includes heavy datasets or longer runs): `make test-all`
    - Run a single test file or pattern:
      - `pytest tests/path/to/test_file.py -q`
      - `pytest -k "token or expression" -q`
-   - Coverage (optional locally): `make cov` and `make cov-all`
+   - Coverage (optional, to make sure it stays adequate): `make cov-all`
 
 5. Open a PR:
 
@@ -53,20 +53,20 @@ For project setup instructions, refer to the top-level [README](./README.md).
 
 ### Coding conventions
 
-- Type hints are required for public functions/classes. Use typing and collections.abc for abstract types.
+- Type hints are required; use typing and collections.abc for abstract types, and prefer Python 3.12+ type annotations.
 - Docstrings use Google style. Keep them concise and helpful. Provide examples for important public APIs.
 - Imports:
-  - Prefer explicit imports (import x; x.y()).
+  - Prefer explicit imports (`import some_package; some_package.y()`); avoid `from some_package import y` when possible.
   - Group imports: standard library, third-party, local.
 - Strings: prefer double quotes.
 - Use f-strings for formatting.
 - Avoid excessive try/except; allow exceptions to propagate unless handling is required for control flow or context.
-- Functions with multiple args: put each argument and the return type on its own line for readability (consistency with our style).
+- Functions with multiple args: put each argument and the return type on its own line for readability.
 - Tests:
   - Use pytest, fixtures for shared setup, and keep tests isolated.
   - Aim for stable tests by seeding randomness and eliminating time/dependency flakiness.
   - Write separate tests per module/class/function as appropriate.
-  - Prefer small, synthetic inputs over large datasets; use temp dirs/files created at runtime.
+  - Prefer small, synthetic inputs over large datasets; use temp dirs/files created at runtime when possible.
 
 ### Testing and reliability
 
@@ -77,13 +77,12 @@ For project setup instructions, refer to the top-level [README](./README.md).
   - Seed all PRNGs used in tests.
   - Avoid relying on system time/timeouts unless strictly necessary; if you do, keep margins generous to reduce flakes and guard with clear assertions.
 - Marking tests: properly mark tests as 'slow' when they take more than a few seconds to run.
-- Skipping tests: if your tests depend on some environment resource (e.g. a dataset), allow the test to be skipped if that resource is unavailable.
+- Skipping tests: if your tests depend on some environment resource (e.g. a dataset), allow the test to be skipped if that resource is unavailable. See the `tests.env_checks` for examples.
 
 ### Error handling and logging
 
 - Fail fast with informative exceptions. Include context that helps a developer debug without reproducing the environment.
 - Logs should be actionable and not verbose by default. Use levels consistently (DEBUG for deep diagnostics, INFO for key milestones, WARNING/ERROR for actionable issues).
-- Make sure to never log secrets/tokens. Validate environment variable usage (via `.env`) and redact where necessary.
 
 ### Data, secrets, and reproducibility
 
