@@ -1,6 +1,5 @@
 import importlib.util
 import logging
-import os
 import pathlib
 import typing
 
@@ -12,9 +11,6 @@ import pyine.evals.common
 import pyine.utils.filesystem
 
 logger = logging.getLogger(__name__)
-
-CONFIGS_ROOT_ENV_VAR = "PYINE_CONFIGS_ROOT"
-"""Name of the environment variable used to override the default configs search path."""
 
 
 class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
@@ -65,9 +61,8 @@ class SearchPathPlugin(hydra.plugins.search_path_plugin.SearchPathPlugin):
             Tuples of (label, path) pointing to directories that contain the config tree.
         """
         # check for explicit env override (for e.g. CI/CD or forked/custom setups)
-        env_root = os.environ.get(CONFIGS_ROOT_ENV_VAR)
-        if env_root:
-            env_path = pathlib.Path(env_root).expanduser().resolve()
+        env_path = pyine.utils.filesystem.get_configs_root_path()
+        if env_path:
             yield "pyine_env", env_path
         # check cwd local tree (e.g. for repo in dev mode)
         yield "pyine_cwd", pathlib.Path.cwd() / "pyine" / "configs"

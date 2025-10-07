@@ -133,7 +133,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     logger.info(f"setting up model: {config.base_model}")
     dtype, device_map = config.target_dtype, config.device_map
     model_kwargs: dict[str, typing.Any] = {
-        "torch_dtype": dtype,
+        "dtype": dtype,
         "device_map": device_map,
         **config.auto_model_config,
     }

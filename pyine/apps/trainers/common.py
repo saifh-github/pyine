@@ -94,7 +94,7 @@ async def evaluate_model(
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
         hf_model = typing.cast("transformers.PreTrainedModel", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
-            logger.info(f"running trained model evaluation on the {eval_subset_name} subset...")
+            logger.info(f"running model evaluation on the {eval_subset_name} subset...")
             evaluation_result = await config.evals_config.evaluate_hf_model(
                 model=hf_model,
                 tokenizer=tokenizer,

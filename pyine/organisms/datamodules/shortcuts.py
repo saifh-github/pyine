@@ -184,6 +184,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         """
         if not self._is_metadata_prepared():
             raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
+        logger.debug(f"loading shortcuts datamodule metadata from: {self._get_prepared_metadata_file_path()}")
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers since they should be read-only and never pickled
         self._readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]

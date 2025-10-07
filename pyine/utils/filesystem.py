@@ -17,6 +17,10 @@ PROJECT_ROOT_ENV_VAR = "PYINE_PROJECT_ROOT"
 """Name of the environment variable used to override the default project root path."""
 DATA_ROOT_ENV_VAR = "PYINE_DATA_ROOT"
 """Name of the environment variable used to override the default data root path."""
+CACHE_ROOT_ENV_VAR = "PYINE_CACHE_ROOT"
+"""Name of the environment variable used to override the default cache root path."""
+CONFIGS_ROOT_ENV_VAR = "PYINE_CONFIGS_ROOT"
+"""Name of the environment variable used to override the default configs search path."""
 LOGS_ROOT_ENV_VAR = "PYINE_LOGS_ROOT"
 """Name of the environment variable used to override the default logs root path."""
 
@@ -32,6 +36,7 @@ def get_project_root_path() -> pathlib.Path:
     """
     env_path = os.environ.get(PROJECT_ROOT_ENV_VAR, None)
     if env_path:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'pyine' root directory
     return pathlib.Path(pyine.__file__).parents[1].resolve()
@@ -48,6 +53,7 @@ def get_data_root_path() -> pathlib.Path:
     """
     env_path = os.environ.get(DATA_ROOT_ENV_VAR, None)
     if env_path:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'data' directory
     return get_project_root_path() / "data"
@@ -64,6 +70,7 @@ def get_logs_root_path() -> pathlib.Path:
     """
     env_path = os.environ.get(LOGS_ROOT_ENV_VAR, None)
     if env_path:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
         return pathlib.Path(env_path).resolve()
     # if the environment variable is not set, default to the 'logs' directory
     return get_project_root_path() / "logs"
@@ -80,17 +87,20 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
     environment variables (those will be checked in that order). If none of these variables are
     the OS-specified temp dir specified via `tempfile.gettempdir()` will be used.
     """
-    tmp_dir_env = os.getenv("TMP_DIR")
-    if tmp_dir_env is not None:
-        tmpdir_base = pathlib.Path(tmp_dir_env)
+    env_path = os.getenv("TMP_DIR")
+    if env_path is not None:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
+        tmpdir_base = pathlib.Path(env_path)
     else:
-        tmpdir_env = os.getenv("TMPDIR")
-        if tmpdir_env is not None:
-            tmpdir_base = pathlib.Path(tmpdir_env)
+        env_path = os.getenv("TMPDIR")
+        if env_path is not None:
+            env_path = os.path.expandvars(os.path.expanduser(env_path))
+            tmpdir_base = pathlib.Path(env_path)
         else:
-            slurm_tmpdir_env = os.getenv("SLURM_TMPDIR")
-            if slurm_tmpdir_env is not None:
-                tmpdir_base = pathlib.Path(slurm_tmpdir_env)
+            env_path = os.getenv("SLURM_TMPDIR")
+            if env_path is not None:
+                env_path = os.path.expandvars(os.path.expanduser(env_path))
+                tmpdir_base = pathlib.Path(env_path)
             else:
                 tmpdir_base = pathlib.Path(tempfile.gettempdir())
     if not tmpdir_base.is_dir():
@@ -109,10 +119,24 @@ def get_tmp_dir(mode: int = 0o700) -> pathlib.Path:
 
 
 def get_data_cache_path() -> pathlib.Path:
-    """Returns the path to the dataset cache directory (underneath the data root dir)."""
-    out_path = get_data_root_path() / "cache"
+    """Returns the path to the dataset cache directory."""
+    env_path = os.environ.get(CACHE_ROOT_ENV_VAR, None)
+    if env_path:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
+        out_path = pathlib.Path(env_path).resolve()
+    else:
+        out_path = get_data_root_path() / "cache"
     out_path.mkdir(parents=True, exist_ok=True)
     return out_path
+
+
+def get_configs_root_path() -> pathlib.Path | None:
+    """Returns the optional root path for storing configuration files (if defined; None otherwise)."""
+    env_path = os.environ.get(CONFIGS_ROOT_ENV_VAR, None)
+    if env_path:
+        env_path = os.path.expandvars(os.path.expanduser(env_path))
+        return pathlib.Path(env_path).resolve()
+    return None
 
 
 def get_username() -> str:
@@ -134,6 +158,7 @@ def find_dotenv_file(start: str | pathlib.Path | None = None) -> pathlib.Path | 
     # first, check explicit override (highest priority)
     override = os.getenv("DOTENV_PATH")
     if override:
+        override = os.path.expandvars(os.path.expanduser(override))
         p = pathlib.Path(override).expanduser().resolve()
         if p.is_file():
             return p
