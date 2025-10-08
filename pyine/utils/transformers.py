@@ -148,6 +148,7 @@ def prepare_examples_from_conversations(
     max_seq_len: int | None,
     num_proc: int,
     messages_key: str = "messages",
+    keep_extra_fields: list[str] | bool | None = None,
 ) -> hf_datasets.Dataset:
     """Flattens conversations into (history -> assistant) training examples.
 
@@ -158,14 +159,38 @@ def prepare_examples_from_conversations(
         [prompt tokens from conversation history] + [assistant response tokens]
 
     We also keep "prompt_len" so the collator can later mask prompt tokens in labels.
+
+    Args:
+        convo_ds: Input dataset with conversation messages.
+        tokenizer: Tokenizer to use for encoding text.
+        max_seq_len: Maximum sequence length for truncation.
+        num_proc: Number of processes for parallel processing.
+        messages_key: Key name for the messages column in the dataset.
+        keep_extra_fields: Additional fields to preserve from the input dataset. Can be:
+            - A list of field names to keep;
+            - True to keep all fields (except messages_key); or
+            - None/False to keep only input_ids and prompt_len.
     """
+    forward_all_fields, keep_extra_fields_list = _parse_keep_extra_fields_config(keep_extra_fields)
 
     def _split_to_examples(batch: dict[str, typing.Any]) -> dict[str, typing.Any]:
         # called on a batch of conversations by Dataset.map; must return dict of column->flat lists
         conversations = typing.cast("list[ConversationHistory]", batch[messages_key])
         out_input_ids: list[list[int]] = []
         out_prompt_len: list[int] = []
-        for messages in conversations:
+        # track extra fields to forward
+        extra_fields_data: dict[str, list[typing.Any]] = {}
+        if forward_all_fields:
+            # initialize lists for all fields except messages_key
+            for key in batch:
+                if key != messages_key:
+                    extra_fields_data[key] = []
+        elif keep_extra_fields_list:
+            # initialize lists for specified fields
+            for key in keep_extra_fields_list:
+                if key in batch and key != messages_key:
+                    extra_fields_data[key] = []
+        for convo_idx, messages in enumerate(conversations):
             for msg_idx, message in enumerate(messages):
                 # only model-authored turns are training targets
                 if message.get("role") != "assistant":
@@ -180,20 +205,98 @@ def prepare_examples_from_conversations(
                 prompt_ids = result["prompt_ids"]
                 out_input_ids.append(result["input_ids"])
                 out_prompt_len.append(len(prompt_ids))
-        # only return columns needed for training; others are discarded via remove_columns below
-        return {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
+                # replicate extra fields for this example
+                for key in extra_fields_data:
+                    extra_fields_data[key].append(batch[key][convo_idx])
+
+        # return columns needed for training plus any extra fields
+        output = {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
+        output.update(extra_fields_data)
+        return output
+
+    # determine which columns to remove (messages_key and any fields we're not keeping)
+    if forward_all_fields:
+        # keep all columns except messages_key (they'll be handled by _split_to_examples)
+        columns_to_remove = [messages_key]
+    elif keep_extra_fields_list:
+        # keep only specified fields plus input_ids/prompt_len
+        columns_to_remove = [
+            col for col in convo_ds.column_names if col not in keep_extra_fields_list and col != messages_key
+        ]
+        columns_to_remove.append(messages_key)
+    else:
+        # remove all original columns
+        columns_to_remove = convo_ds.column_names
 
     # TODO: if this map becomes a bottleneck, tune num_proc, use cache
     # (worse case scenario, we can switch to a streaming/iterable dataset?)
     dataset: hf_datasets.Dataset = convo_ds.map(  # type: ignore[reportUnknownMemberType]
         _split_to_examples,
         batched=True,  # explode list outputs into individual rows automatically
-        # drop original columns so the resulting dataset only has "input_ids" and "prompt_len"
-        remove_columns=convo_ds.column_names,
+        remove_columns=columns_to_remove,
         num_proc=num_proc,  # parallelize if possible
         desc="preparing examples",
     )
     return dataset
+
+
+def _parse_keep_extra_fields_config(
+    keep_extra_fields: list[str] | bool | None,
+) -> tuple[bool, list[str]]:
+    """Parse keep_extra_fields configuration into forward_all flag and explicit field list.
+
+    Args:
+        keep_extra_fields: Configuration specifying which extra fields to forward. Can be:
+            - A list of field names to forward;
+            - True to forward all fields; or
+            - None/False to forward no extra fields.
+
+    Returns:
+        A tuple of (forward_all_fields, keep_extra_fields_list)
+    """
+    if isinstance(keep_extra_fields, list):
+        return False, list(keep_extra_fields)
+    if keep_extra_fields:
+        assert keep_extra_fields is True
+        return True, []
+    return False, []
+
+
+def _collect_extra_fields_from_batch(
+    batch_data: list[dict[str, typing.Any]],
+    forward_all_fields: bool,
+    keep_extra_fields: list[str],
+    expected_field_names: list[str],
+) -> dict[str, list[typing.Any]]:
+    """Collect extra fields from batch data according to forwarding configuration.
+
+    Args:
+        batch_data: List of input data dictionaries.
+        forward_all_fields: If True, forward all fields not in expected_field_names.
+        keep_extra_fields: Explicit list of field names to forward (ignored if forward_all_fields is True).
+        expected_field_names: Field names that should not be forwarded (already handled by collator).
+
+    Returns:
+        Dictionary mapping field names to lists of values from the batch
+    """
+    if not forward_all_fields and not keep_extra_fields:
+        return {}
+    if forward_all_fields:
+        ordered_keys: list[str] = []
+        seen: set[str] = set()
+        for data in batch_data:
+            for key in data:
+                if key in expected_field_names or key in seen:
+                    continue
+                ordered_keys.append(key)
+                seen.add(key)
+        keys_to_forward = ordered_keys
+    else:
+        keys_to_forward = [key for key in keep_extra_fields if key not in expected_field_names]
+    extra_fields: dict[str, list[typing.Any]] = {}
+    for key in keys_to_forward:
+        extra_fields[key] = [data[key] for data in batch_data]
+    return extra_fields
 
 
 class FixedSizePaddingCollatorWithPromptMask:
@@ -205,6 +308,15 @@ class FixedSizePaddingCollatorWithPromptMask:
      - builds labels identical to inputs, except:
        - prompt token positions are set to `ignore_index` (ignored by loss)
        - padding positions are set to `ignore_index` (ignored by loss)
+
+    Args:
+        tokenizer: Tokenizer whose ``pad_token_id`` is used for right-padding.
+        max_length: Maximum sequence length to pad or truncate to.
+        keep_extra_fields: Additional keys to carry over from input examples to the output batch.
+            If a list, only those keys are forwarded. If True, forwards all fields present in
+            the inputs. If falsy/None, no extra fields are forwarded.
+        ignore_index: Label value used to mask prompt and padding positions in the returned
+            ``labels`` tensor.
     """
 
     # @@@@@@ TODO: add support for packing? sort & min-pad batches? (or just toggle group_by_length in trainer args?)
@@ -214,10 +326,12 @@ class FixedSizePaddingCollatorWithPromptMask:
         self,
         tokenizer: transformers.PreTrainedTokenizer,
         max_length: int,
+        keep_extra_fields: list[str] | bool | None = None,
         ignore_index: int = default_ignore_index,
     ) -> None:
         """Initializes the collator."""
         self.max_length = max_length
+        self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
         pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
@@ -227,21 +341,21 @@ class FixedSizePaddingCollatorWithPromptMask:
 
     def __call__(
         self,
-        features: list[dict[str, typing.Any]],
+        to_batch: list[dict[str, typing.Any]],
     ) -> ExampleBatchTensors:
         """Turns a list of examples into a batch of tensors."""
+        expected_field_names = ["input_ids", "prompt_len"]
         input_ids_list: list[list[int]] = []
         labels_list: list[list[int]] = []
         attention_masks: list[list[int]] = []
         prompt_lengths: list[int] = []
         input_lengths: list[int] = []
-        for feature in features:
-            assert isinstance(feature, collections.abc.Mapping), "unexpected feature type, must be a dict"
-            assert "input_ids" in feature, "missing expected input_ids column in feature dict"
-            assert "prompt_len" in feature, "missing expected prompt_len column in feature dict"
+        for data in to_batch:
+            assert isinstance(data, collections.abc.Mapping), "unexpected feature type, must be a dict"
+            assert all(k in data for k in expected_field_names), "missing expected key in data dict"
             # left-truncate if necessary to keep the tail (usually contains the answer)
-            orig_ids = typing.cast("list[int]", feature["input_ids"])
-            prompt_len = int(feature["prompt_len"])
+            orig_ids = typing.cast("list[int]", data["input_ids"])
+            prompt_len = int(data["prompt_len"])
             if len(orig_ids) > self.max_length:
                 overflow = len(orig_ids) - self.max_length
                 token_ids = orig_ids[-self.max_length :]
@@ -263,13 +377,22 @@ class FixedSizePaddingCollatorWithPromptMask:
             attention_masks.append(attention_mask)
             prompt_lengths.append(prompt_len)
             input_lengths.append(input_len)
-        return ExampleBatchTensors(
-            input_ids=torch.tensor(input_ids_list, dtype=torch.long),
-            attention_mask=torch.tensor(attention_masks, dtype=torch.long),
-            labels=torch.tensor(labels_list, dtype=torch.long),
-            prompt_len=prompt_lengths,
-            input_len=input_lengths,
+        batch_dict: dict[str, typing.Any] = {
+            "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
+            "labels": torch.tensor(labels_list, dtype=torch.long),
+            "prompt_len": prompt_lengths,
+            "input_len": input_lengths,
+        }
+        # carry over targeted (or all) metadata fields with the input batch order
+        extra_fields = _collect_extra_fields_from_batch(
+            to_batch,
+            self._forward_all_fields,
+            self._keep_extra_fields,
+            expected_field_names,
         )
+        batch_dict.update(extra_fields)
+        return typing.cast("ExampleBatchTensors", batch_dict)
 
 
 class BatchwisePaddingCollator:
@@ -301,16 +424,7 @@ class BatchwisePaddingCollator:
     ) -> None:
         """Initializes the collator."""
         self.max_allowed_length = max_allowed_length
-        if isinstance(keep_extra_fields, list):
-            self._forward_all_fields = False
-            self._keep_extra_fields = list(keep_extra_fields)
-        elif keep_extra_fields:
-            assert keep_extra_fields is True
-            self._forward_all_fields = True
-            self._keep_extra_fields = []
-        else:
-            self._forward_all_fields = False
-            self._keep_extra_fields = []
+        self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
         self.tokenizer = tokenizer
         pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
@@ -379,21 +493,13 @@ class BatchwisePaddingCollator:
             "input_len": input_lengths,
         }
         # carry over targeted (or all) metadata fields with the input batch order
-        if self._forward_all_fields or self._keep_extra_fields:
-            if self._forward_all_fields:
-                ordered_keys: list[str] = []
-                seen: set[str] = set()
-                for data in to_batch:
-                    for key in data:
-                        if key in expected_field_names or key in seen:
-                            continue
-                        ordered_keys.append(key)
-                        seen.add(key)
-                keys_to_forward = ordered_keys
-            else:
-                keys_to_forward = [key for key in self._keep_extra_fields if key not in expected_field_names]
-            for key in keys_to_forward:
-                batch_dict[key] = [data[key] for data in to_batch]
+        extra_fields = _collect_extra_fields_from_batch(
+            to_batch,
+            self._forward_all_fields,
+            self._keep_extra_fields,
+            expected_field_names,
+        )
+        batch_dict.update(extra_fields)
         return typing.cast("ExampleBatchTensors", batch_dict)
 
 
