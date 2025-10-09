@@ -24,6 +24,7 @@ venv/
 # IDE specific files
 .aiassistant/
 .idea/
+.run/
 .junie/
 .vscode/
 *.swp
