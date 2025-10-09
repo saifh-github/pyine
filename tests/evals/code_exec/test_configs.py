@@ -495,7 +495,7 @@ async def test_evaluate_hf_model_generates_results(
     )
     monkeypatch.setattr(
         pyine.evals.code_exec.configs.pyine.utils.transformers,
-        "BatchwisePaddingCollator",
+        "PaddingCollatorWithPromptMask",
         fake_batchwise_padding_collator,
     )
     monkeypatch.setattr(

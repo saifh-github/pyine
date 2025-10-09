@@ -274,9 +274,9 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             shuffle=False,
             num_workers=1,
             pin_memory=True,
-            collate_fn=pyine.utils.transformers.BatchwisePaddingCollator(
+            collate_fn=pyine.utils.transformers.PaddingCollatorWithPromptMask(
                 tokenizer=tokenizer,
-                max_allowed_length=model_max_seq_len,
+                max_length=model_max_seq_len,
                 keep_extra_fields=True,
             ),
         )

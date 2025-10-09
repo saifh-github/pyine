@@ -218,7 +218,7 @@ def test_shortcuts_datamodule_examples_round_trip(
         keep_extra_fields=True,
     )
     assert len(examples_ds) >= max_samples, "fewer examples than samples??"
-    collator = pyine.utils.transformers.FixedSizePaddingCollatorWithPromptMask(
+    collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
         tokenizer=tokenizer,
         max_length=model_max_seq_len,
         keep_extra_fields=True,

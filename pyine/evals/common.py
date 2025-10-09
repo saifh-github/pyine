@@ -70,6 +70,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
         default=1,
         description="Batch size to use when generating predictions in evals.",
     )
+    eval_padding_side: typing.Literal["left", "right"] = pydantic.Field(
+        default="left",
+        description="Padding side to use when generating predictions in evals.",
+    )
     eval_runnable_config: RunnableEvalConfig = pydantic.Field(
         default=RunnableEvalConfig(),
         description="Configuration for runnable code execution evaluations.",

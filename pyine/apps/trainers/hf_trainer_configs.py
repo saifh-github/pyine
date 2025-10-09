@@ -73,6 +73,16 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         default=True,
         description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
     )
+    tokenizer_override_padding_to_right_side: bool = pydantic.Field(
+        default=True,  # useful default for most collate functions during training (may be overridden in eval config)
+        description="Override whichever the tokenizer's default padding side is to 'right'.",
+    )
+    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
+        default=True,  # useful default for datasets with long system prompts that end with specific instructions
+        description="Override whichever the tokenizer's default truncation side is to 'left'.",
+    )
+
+    # --------------- utility/helper method ---------------
 
     @pydantic.model_validator(mode="before")
     @classmethod
@@ -120,6 +130,8 @@ def instantiate_tokenizer(
     tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
         pretrained_model_name_or_path=config.base_model,
         set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
+        override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
+        override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
         **config.auto_tokenizer_config,
     )
     logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")

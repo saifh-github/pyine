@@ -146,7 +146,7 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "FixedSizePaddingCollatorWithPromptMask",
+        "PaddingCollatorWithPromptMask",
         lambda *_args, **_kwargs: "collator",
     )
     monkeypatch.setattr(

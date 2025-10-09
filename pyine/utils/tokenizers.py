@@ -9,6 +9,7 @@ def get_hf_tokenizer(
     pretrained_model_name_or_path: str,
     set_padding_to_eos_if_needed: bool = False,
     override_padding_to_right_side: bool = False,
+    override_truncation_to_left_side: bool = False,
     **kwargs: typing.Any,
 ) -> transformers.PreTrainedTokenizer:
     """Get a hf tokenizer from a pretrained model name or path and additional kwargs.
@@ -30,6 +31,8 @@ def get_hf_tokenizer(
             tokenizer.pad_token = eos_token
     if override_padding_to_right_side:
         tokenizer.padding_side = "right"
+    if override_truncation_to_left_side:
+        tokenizer.truncation_side = "left"
     return typing.cast("transformers.PreTrainedTokenizer", tokenizer)
 
 

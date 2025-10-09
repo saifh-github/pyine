@@ -92,6 +92,10 @@ async def evaluate_model(
     if pyine.utils.transformers.is_hf_model(model):
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
+        if config.evals_config.eval_padding_side != tokenizer.padding_side:
+            new_padding_side = config.evals_config.eval_padding_side
+            logger.debug(f"overriding tokenizer padding side to '{new_padding_side}' for evals")
+            tokenizer.padding_side = new_padding_side
         hf_model = typing.cast("transformers.PreTrainedModel", model)
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             logger.info(f"running model evaluation on the {eval_subset_name} subset...")

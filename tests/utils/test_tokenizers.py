@@ -19,9 +19,11 @@ def test_get_hf_tokenizer() -> None:
         model_name,
         set_padding_to_eos_if_needed=True,
         override_padding_to_right_side=True,
+        override_truncation_to_left_side=True,
     )
     assert tokenizer.pad_token == tokenizer.eos_token
     assert tokenizer.padding_side == "right"
+    assert tokenizer.truncation_side == "left"
 
 
 def test_get_openai_tokenizer() -> None:

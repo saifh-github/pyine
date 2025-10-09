@@ -127,7 +127,11 @@ def train(
         num_proc=num_proc,
     )
     # the collator pads to fixed length and masks labels for prompt tokens
-    collator = pyine.utils.transformers.FixedSizePaddingCollatorWithPromptMask(tokenizer, max_length=model_max_seq_len)
+    collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
+        tokenizer,
+        max_length=model_max_seq_len,
+        # pad_to_multiple_of=32,  # @@@@ TODO test speed with and without?
+    )
 
     training_args_dict = config.training_args_config.model_dump()
     if config.use_wandb_logging:
