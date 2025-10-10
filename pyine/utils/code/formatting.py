@@ -1,4 +1,3 @@
-import importlib
 import os
 import shutil
 import subprocess
@@ -73,7 +72,7 @@ def format_code_with_black(
     """
     if use_black_api:
         try:
-            black_module = typing.cast("typing.Any", importlib.import_module("black"))
+            import black as black_module  # type: ignore
         except Exception as error:
             raise FormatterUnavailableError(
                 "black Python API unavailable; call with `use_black_api=False` instead"
