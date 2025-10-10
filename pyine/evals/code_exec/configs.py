@@ -215,15 +215,6 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             )
         _log = logger.info if verbose else logger.debug
         evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(llm_provider_config=self.llm_grader_provider_config)
-        _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
-        text_prompts_ds = datamodule.get_hf_messages_dataset(
-            subset_name=eval_subset_name,
-            append_answer=False,
-            keep_original_data=True,
-            tokenizer=tokenizer,
-            apply_chat_template_eval_config=True,
-        )
-        assert isinstance(text_prompts_ds, hf_datasets.Dataset), "expected HuggingFace dataset"
         if self.eval_generation_config is None:
             raw_gen_config = getattr(model, "generation_config", None)
             if raw_gen_config is None:
@@ -243,33 +234,23 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         )
         max_prompt_len: int = model_max_seq_len - max_generation_tokens
         assert max_prompt_len > 0, "invalid max prompt length"
-        sample_idx = 0
-
-        def _prepare_model_inputs(
-            sample: collections.abc.Mapping[str, typing.Any],
-        ) -> dict[str, typing.Any]:
-            nonlocal sample_idx
-            assert isinstance(sample, collections.abc.Mapping), f"unexpected sample data type: {type(sample)}"
-            assert "text" in sample, "missing 'text' key from chat template application in sample data?"
-            assert isinstance(sample['text'], str), "expected chat template application to yield string prompts"
-            encoded_inputs = tokenizer(sample["text"], truncation=True, max_length=max_prompt_len)
-            input_ids = typing.cast("list[int]", encoded_inputs["input_ids"])
-            attention_mask = typing.cast("list[int]", encoded_inputs["attention_mask"])
-            output = {
-                "sample_idx": sample_idx,
-                **sample,
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "input_len": len(input_ids),
-            }
-            sample_idx += 1
-            return output
-
-        text_prompts_ds = text_prompts_ds.map(_prepare_model_inputs, desc="encoding eval prompts")  # type: ignore[reportUnknownMemberType]
-        assert len(text_prompts_ds) == sample_idx
-        prepared_eval_ds = text_prompts_ds.sort("input_len", reverse=True)
+        _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
+        prompts_ds = datamodule.get_hf_messages_dataset(
+            subset_name=eval_subset_name,
+            append_answer=False,
+            keep_original_data=True,
+        )
+        assert isinstance(prompts_ds, hf_datasets.Dataset), "expected HuggingFace dataset"
+        prompts_ds = pyine.utils.transformers.prepare_generation_prompts_from_dataset(
+            prompts_ds=prompts_ds,
+            tokenizer=tokenizer,
+            max_seq_len=max_prompt_len,
+            keep_extra_fields=True,
+            keep_in_memory=datamodule.config.keep_generated_datasets_in_memory,
+        )
+        sorted_prompts_ds = prompts_ds.sort("input_len", reverse=True)
         dataloader = torch.utils.data.DataLoader(
-            typing.cast("torch.utils.data.Dataset[dict[str, typing.Any]]", prepared_eval_ds),
+            typing.cast("torch.utils.data.Dataset[dict[str, typing.Any]]", sorted_prompts_ds),
             batch_size=self.eval_batch_size,
             shuffle=False,
             num_workers=1,
@@ -289,7 +270,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             forward_batch_keys=True,
             verbose=verbose,
         )
-        assert len(generation_results) == len(prepared_eval_ds)
+        assert len(generation_results) == len(sorted_prompts_ds)
         token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
         sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData] = {}
         _log("launching generation results analysis")
@@ -302,7 +283,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         for gen_result in wrapped_generation_results:
             assert "sample_idx" in gen_result and isinstance(gen_result["sample_idx"], int)
             orig_sample_idx = gen_result["sample_idx"]
-            orig_sample = typing.cast("dict[str, typing.Any]", text_prompts_ds[orig_sample_idx])
+            orig_sample = typing.cast("dict[str, typing.Any]", prompts_ds[orig_sample_idx])
             assert orig_sample["sample_idx"] == orig_sample_idx
             assert "sample_data" in orig_sample, "we asked to get the original data earlier"
             orig_sample_data = orig_sample["sample_data"]

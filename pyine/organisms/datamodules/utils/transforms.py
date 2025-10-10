@@ -11,11 +11,6 @@ import langchain_core.prompts.chat
 import pyine.organisms.datamodules.utils.samples
 import pyine.prompts.manager
 
-if typing.TYPE_CHECKING:
-    import datasets as hf_datasets
-    import transformers
-
-
 SampleTransformInputType = pyine.organisms.datamodules.utils.samples.SampleData | dict[str, typing.Any]
 SampleTransformOutputType = str | list[langchain_core.messages.BaseMessage] | dict[str, typing.Any]
 SampleTransformType = typing.Callable[[SampleTransformInputType], SampleTransformOutputType]
@@ -146,80 +141,3 @@ def create_sample_transform(
         orig_sample_key=orig_sample_key,
         merge_system_with_user=merge_system_with_user,
     )
-
-
-def _batch_apply_model_template_to_messages(
-    batch: collections.abc.Mapping[str, typing.Any],
-    tokenizer: transformers.PreTrainedTokenizer,
-    append_eos_token: bool,
-    strip_output: bool,
-    messages_key: str,
-    output_key: str,
-    keep_original_data: bool,
-    apply_chat_template_kwargs: dict[str, typing.Any] | None,
-) -> dict[str, typing.Any]:
-    """Applies a model template to a batch of messages.
-
-    See `apply_model_template_to_messages` for information on arguments.
-
-    Kept static/top-level-friendly for to keep pickling happy.
-    """
-    assert isinstance(batch, collections.abc.Mapping), f"unexpected input batch type: {type(batch)}"
-    assert messages_key in batch, f"missing expected messages key: {messages_key}"
-    messages = typing.cast("list[dict[str, str]]", batch[messages_key])
-    text_result = tokenizer.apply_chat_template(  # type: ignore[reportUnknownMemberType]
-        conversation=messages,
-        **(apply_chat_template_kwargs or {}),
-    )
-    if not isinstance(text_result, list):
-        raise TypeError(
-            f"expected tokenizer chat template output to be a list of strings, got {type(text_result)}",
-        )
-    assert all(isinstance(s, str) for s in text_result), "expected output to be a list of strings"
-    assert len(text_result) == len(messages), "length mismatch between input messages and output text"
-    text_result = typing.cast("list[str]", text_result)
-    if strip_output:
-        text_result = [item.strip() for item in text_result]
-    if append_eos_token:
-        assert hasattr(tokenizer, "eos_token"), "tokenizer missing eos token"
-        eos_token = typing.cast("str | list[str] | None", tokenizer.eos_token)  # type: ignore[reportUnknownMemberType]
-        if eos_token is None:
-            raise ValueError("tokenizer has no EOS token configured")
-        eos_suffix = "".join(eos_token) if isinstance(eos_token, list) else str(eos_token)
-        text_result = [item + eos_suffix for item in text_result]
-    output: dict[str, typing.Any] = dict(batch) if keep_original_data else {}
-    output[output_key] = text_result
-    return output
-
-
-def apply_model_template_to_messages(
-    hf_messages_dataset: hf_datasets.Dataset,
-    tokenizer: transformers.PreTrainedTokenizer,
-    append_eos_token: bool = False,
-    strip_output: bool = False,
-    messages_key: str = "messages",
-    output_key: str = "text",
-    keep_original_data: bool = False,
-    apply_chat_template_kwargs: dict[str, typing.Any] | None = None,
-    keep_in_memory: bool = False,
-) -> hf_datasets.Dataset:
-    """Map a HuggingFace messages dataset to a new dataset with text-only samples."""
-    transform_batch: typing.Callable[[collections.abc.Mapping[str, typing.Any]], dict[str, typing.Any]] = (
-        functools.partial(
-            _batch_apply_model_template_to_messages,
-            tokenizer=tokenizer,
-            append_eos_token=append_eos_token,
-            strip_output=strip_output,
-            messages_key=messages_key,
-            output_key=output_key,
-            keep_original_data=keep_original_data,
-            apply_chat_template_kwargs=apply_chat_template_kwargs,
-        )
-    )
-    mapped_dataset: hf_datasets.Dataset = hf_messages_dataset.map(  # type: ignore[reportUnknownMemberType]
-        function=transform_batch,
-        batched=True,
-        desc="applying tokenizer chat template",
-        keep_in_memory=keep_in_memory,
-    )
-    return mapped_dataset

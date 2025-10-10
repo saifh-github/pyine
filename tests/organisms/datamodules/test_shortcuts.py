@@ -101,17 +101,17 @@ def test_shortcuts_datamodule_integration(
     assert isinstance(transformed_sample_msgs, list)
     assert all(hasattr(m, "type") and hasattr(m, "content") for m in transformed_sample_msgs)
     print("sample transform works")
-    hf_msgs_dataset = dm.get_hf_messages_dataset(subset_name="train")
-    assert isinstance(hf_msgs_dataset, hf_datasets.Dataset)
-    assert len(hf_msgs_dataset) == len(parser)  # noqa
-    hf_msgs_sample = hf_msgs_dataset[0]
+    hf_msgs_ds = dm.get_hf_messages_dataset(subset_name="train")
+    assert isinstance(hf_msgs_ds, hf_datasets.Dataset)
+    assert len(hf_msgs_ds) == len(parser)  # noqa
+    hf_msgs_sample = hf_msgs_ds[0]
     assert isinstance(hf_msgs_sample, dict)
     assert "messages" in hf_msgs_sample and isinstance(hf_msgs_sample["messages"], list)
     print("hf dataset works")
     model_id = "meta-llama/Llama-3.2-1B-Instruct"
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, use_fast=True)
-    hf_batch_dataset = pyine.organisms.datamodules.utils.transforms.apply_model_template_to_messages(
-        hf_messages_dataset=hf_msgs_dataset,
+    hf_batch_dataset = pyine.utils.transformers.apply_model_template_to_messages(
+        hf_messages_ds=hf_msgs_ds,
         tokenizer=tokenizer,
         apply_chat_template_kwargs={
             "tokenize": False,
@@ -194,24 +194,24 @@ def test_shortcuts_datamodule_examples_round_trip(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model_max_seq_len = 2048  # pretend the model is actually limited to this
-    hf_dataset = dm.get_hf_messages_dataset(
+    hf_msgs_ds = dm.get_hf_messages_dataset(
         subset_name="train",
         keep_original_data=True,
     )
-    max_samples = min(len(hf_dataset), 10)
+    max_samples = min(len(hf_msgs_ds), 10)
     if max_samples == 0:
         pytest.skip("dataset contains no samples to verify")
-    hf_dataset = hf_dataset.select(list(range(max_samples)))
+    hf_msgs_ds = hf_msgs_ds.select(list(range(max_samples)))
     cached_samples: dict[str, dict[str, typing.Any]] = {}
     expected_sample_keys = ["messages", "identifier", "code", "inputs", "expected_output"]
-    for sample in hf_dataset:
+    for sample in hf_msgs_ds:
         assert isinstance(sample, dict)
         assert all(k in sample for k in expected_sample_keys)
         identifier = sample["identifier"]
         assert isinstance(identifier, str) and identifier not in cached_samples
         cached_samples[identifier] = sample
     examples_ds = pyine.utils.transformers.prepare_examples_from_conversations(
-        convo_ds=hf_dataset,
+        convo_ds=hf_msgs_ds,
         tokenizer=tokenizer,
         max_seq_len=model_max_seq_len,
         num_proc=2,

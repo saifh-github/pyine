@@ -24,7 +24,6 @@ if typing.TYPE_CHECKING:
     import pathlib
 
     import langchain_core.runnables
-    import transformers
 
 logger = logging.getLogger(__name__)
 
@@ -527,34 +526,10 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     prompt_config: pydantic.SerializeAsAny[pyine.prompts.types.PromptBuildConfig]
     """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
-    keep_message_datasets_in_memory: bool = True
-    """Defines whether generated message datasets should be kept in memory."""
+    keep_generated_datasets_in_memory: bool = True
+    """Defines whether generated datasets should be kept in memory."""
     message_generator_num_workers: int = 6
     """Defines the number of workers to use when generating message datasets."""
-    apply_chat_template_train_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast(
-            "dict[str, typing.Any]",
-            {
-                "tokenize": False,
-                "add_generation_prompt": False,
-            },
-        ),
-    )
-    """Configuration to use when applying a tokenizer's chat template onto a messages dataset for SFT training."""
-    apply_chat_template_eval_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast(
-            "dict[str, typing.Any]",
-            {
-                "tokenize": False,
-                "add_generation_prompt": True,
-            },
-        ),
-    )
-    """Configuration to use when applying a tokenizer's chat template onto a messages dataset for evaluations."""
-    apply_chat_template_batching_map_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
-    )
-    """Configuration to use for the batched map operation when applying a tokenizer's chat template."""
     use_local_dataset_cache: bool = True
     """Whether to always try to save/load datasets from the local cache or not."""
 
@@ -640,7 +615,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
                 named_split=named_split,
                 raw_transform_fn=transf_fn,
                 instantiate_kwargs=parser_kwargs,
-                keep_in_memory=self.keep_message_datasets_in_memory,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
                 num_workers=self.message_generator_num_workers,
             )
             if self.use_local_dataset_cache:
@@ -650,7 +625,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         logger.info(f"loading already-generated dataset from cache: {dataset_path}")
         return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
             dataset_path=dataset_path,
-            keep_in_memory=self.keep_message_datasets_in_memory,
+            keep_in_memory=self.keep_generated_datasets_in_memory,
         )
 
     def instantiate_openai_messages_dataset(
@@ -767,8 +742,6 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         append_answer: bool = True,
         merge_system_with_user: bool = False,
         keep_original_data: bool = False,
-        tokenizer: transformers.PreTrainedTokenizer | None = None,
-        apply_chat_template_eval_config: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace messages dataset object for a given subset name.
 
@@ -784,13 +757,6 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
             keep_original_data: whether to keep the original data inside the output samples.
-            tokenizer: provided when we want to apply a chat model template; if None, no such
-                template will be applied, i.e. conversations (lists of messages) will be generated
-                by the dataset. Otherwise, the dataset will generate text blocks (instead of
-                conversations) formatted according to the tokenizer's chat template.
-            apply_chat_template_eval_config: whether to apply the evaluation chat template config
-                to conversation messages (instead of the training one). Has no effect if a tokenizer
-                is not provided.
 
         Returns:
              The HuggingFace dataset object.

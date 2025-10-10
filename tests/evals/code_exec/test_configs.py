@@ -9,6 +9,7 @@ import torch
 
 import pyine.evals.code_exec.configs
 import pyine.evals.common
+import tests.utils.test_transformers
 
 
 class _FakeSample:
@@ -344,7 +345,10 @@ async def test_evaluate_hf_model_generates_results(
 ) -> None:
     samples = [
         {
-            "text": "prompt-0",
+            "messages": [
+                {"role": "system", "content": "You are brief."},
+                {"role": "user", "content": "Tell me a long story!"},
+            ],
             "sample_data": {
                 "identifier": "h0",
                 "expected_output": "exp0",
@@ -352,7 +356,10 @@ async def test_evaluate_hf_model_generates_results(
             },
         },
         {
-            "text": "prompt-1",
+            "messages": [
+                {"role": "system", "content": "You are verbose."},
+                {"role": "user", "content": "Tell me a short story."},
+            ],
             "sample_data": {
                 "identifier": "h1",
                 "expected_output": "exp1",
@@ -361,43 +368,16 @@ async def test_evaluate_hf_model_generates_results(
         },
     ]
 
-    class _FakeDataset(list, hf_datasets.Dataset):
-        def map(
-            self,
-            fn: typing.Callable[[typing.Any], typing.Any],
-            desc: str,
-        ) -> "_FakeDataset":
-            return _FakeDataset([fn(item) for item in self])
-
-        def sort(
-            self,
-            key: str,
-            reverse: bool,
-        ) -> "_FakeDataset":
-            return _FakeDataset(sorted(self, key=lambda item: item[key], reverse=reverse))
-
     class _FakeConversationDataModule:
+        config = types.SimpleNamespace(keep_generated_datasets_in_memory=True)
+
         def get_hf_messages_dataset(
             self,
             subset_name: str,
             append_answer: bool,
             keep_original_data: bool,
-            tokenizer: typing.Any,
-            apply_chat_template_eval_config: bool,
-        ) -> _FakeDataset:
-            return _FakeDataset(samples)
-
-    class _FakeTokenizer:
-        def __call__(
-            self,
-            text: str,
-            truncation: bool,
-            max_length: int,
-        ) -> dict[str, list[int]]:
-            return {
-                "input_ids": list(range(len(text))),
-                "attention_mask": [1] * len(text),
-            }
+        ) -> hf_datasets.Dataset:
+            return hf_datasets.Dataset.from_list(samples)
 
     class _FakeModel:
         def __init__(self) -> None:
@@ -533,18 +513,16 @@ async def test_evaluate_hf_model_generates_results(
         "DataLoader",
         fake_data_loader,
     )
-
     config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
         eval_generation_max_new_tokens_override=5,
     )
     result = await config.evaluate_hf_model(
         model=_FakeModel(),
-        tokenizer=_FakeTokenizer(),
+        tokenizer=tests.utils.test_transformers.SimpleTokenizer(),
         datamodule=_FakeConversationDataModule(),
         eval_subset_name="subset",
         verbose=True,
     )
-
     assert isinstance(result, _FakeEvalResult)
     assert result.metrics["count"] == 2
 

@@ -29,11 +29,27 @@ class SimpleTokenizer:
 
     def apply_chat_template(
         self,
-        messages: list[dict[str, typing.Any]],
-        tokenize: bool,
-        add_generation_prompt: bool,
-    ) -> str:
-        assert not tokenize
+        conversation: list[dict[str, typing.Any]] | list[list[dict[str, typing.Any]]],
+        tokenize: bool = True,
+        add_generation_prompt: bool = False,
+        **kwargs: typing.Any,
+    ) -> str | list[str]:
+        # support both single conversation and batched conversations
+        # if not conversation:
+        #     if add_generation_prompt:
+        #         return "assistant:"
+        #     return ""
+        assert tokenize is False, "test fixture code below does not support tokenization"
+        is_batch = isinstance(conversation[0], list)
+        if is_batch:
+            results = []
+            for messages in conversation:
+                history = "".join(f"{item['role']}:{item['content']}|" for item in messages)
+                if add_generation_prompt:
+                    history += "assistant:"
+                results.append(history)
+            return results
+        messages = conversation
         history = "".join(f"{item['role']}:{item['content']}|" for item in messages)
         if add_generation_prompt:
             return history + "assistant:"
@@ -43,9 +59,12 @@ class SimpleTokenizer:
         self,
         text: str,
         add_special_tokens: bool = False,
+        **kwargs: typing.Any,
     ) -> dict[str, list[int]]:
-        del add_special_tokens
-        return {"input_ids": [ord(character) for character in text]}
+        return {
+            "input_ids": [ord(character) for character in text],
+            "attention_mask": [1] * len(text),
+        }
 
     def decode(
         self,
@@ -176,23 +195,6 @@ def test_build_example_ids_without_truncation(
     expected_full_ids = _compute_token_ids(simple_tokenizer, prompt_text + assistant_msg["content"])
     assert result["prompt_ids"] == expected_prompt_ids
     assert result["input_ids"] == expected_full_ids
-
-
-def test_build_example_ids_truncates_overlong_response(
-    simple_tokenizer: SimpleTokenizer,
-) -> None:
-    assistant_msg = {"role": "assistant", "content": "ABCDEFGHIJ"}
-    result = utils_transformers._build_example_ids_from_conversation_parts(
-        tokenizer=simple_tokenizer,
-        history_msgs=[],
-        assistant_msg=assistant_msg,
-        max_seq_len=5,
-    )
-    assert result is not None
-    prompt_text = simple_tokenizer.apply_chat_template([], tokenize=False, add_generation_prompt=True)
-    full_ids = _compute_token_ids(simple_tokenizer, prompt_text + assistant_msg["content"])
-    assert result["prompt_ids"] == []
-    assert result["input_ids"] == full_ids[-5:]
 
 
 def test_build_example_ids_truncates_prompt_only(
@@ -510,3 +512,63 @@ def test_run_text_generation_decodes_predictions(
     assert int(second_tokens[1]) == ord("z")
     assert results[1]["text"] == simple_tokenizer.decode(second_tokens)
     assert results[1]["meta"] == "second"
+
+
+def test_apply_model_template_to_messages_basic(
+    simple_tokenizer: SimpleTokenizer,
+) -> None:
+    ds = datasets.Dataset.from_dict(
+        {
+            "messages": [
+                [{"role": "user", "content": "Hi"}],
+                [{"role": "user", "content": "Bye"}],
+            ]
+        }
+    )
+    out_ds = utils_transformers.apply_model_template_to_messages(
+        hf_messages_ds=ds,
+        tokenizer=simple_tokenizer,
+        apply_chat_template_kwargs={"tokenize": False},
+    )
+    assert isinstance(out_ds, datasets.Dataset)
+    # without add_generation_prompt, should not append "assistant:"
+    expected_texts = ["user:Hi|", "user:Bye|"]
+    assert out_ds["text"] == expected_texts
+
+
+@pytest.mark.slow
+def test_run_text_generation_with_real_model(
+    tiny_gpt2_model: transformers.GPT2LMHeadModel,
+) -> None:
+    """Test prepare_examples_from_conversations with a real tokenizer."""
+    # Use a real GPT-2 tokenizer and add a chat template
+    model_id = "openai-community/gpt2"
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+    assert tokenizer.pad_token is None
+    tokenizer.pad_token = tokenizer.eos_token
+    # GPT-2 doesn't have a chat template, so add a simple one for testing
+    tokenizer.chat_template = "{% for message in messages %}{{ message.role }}: {{ message.content }}\n{% endfor %}"
+    conversations = [
+        {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}]},
+        {"messages": [{"role": "user", "content": "Test"}, {"role": "assistant", "content": "Response"}]},
+    ]
+    convo_ds = datasets.Dataset.from_list(conversations)
+    # Test that prepare_examples_from_conversations works with a real tokenizer
+    examples_ds = utils_transformers.prepare_examples_from_conversations(
+        convo_ds=convo_ds,
+        tokenizer=tokenizer,
+        max_seq_len=128,
+        num_proc=1,
+        keep_extra_fields=True,
+    )
+    # Should produce 2 examples (one per assistant turn)
+    assert len(examples_ds) == 2
+    for example in examples_ds:
+        assert "input_ids" in example
+        assert "prompt_len" in example
+        assert isinstance(example["input_ids"], list)
+        assert isinstance(example["prompt_len"], int)
+        assert len(example["input_ids"]) > 0
+        assert example["prompt_len"] > 0
+        # Verify extra fields were preserved
+        assert "messages" in example

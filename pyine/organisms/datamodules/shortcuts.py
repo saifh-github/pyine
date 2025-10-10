@@ -12,7 +12,6 @@ import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.utils.samples
-import pyine.organisms.datamodules.utils.transforms
 import pyine.utils.filesystem
 import pyine.utils.reprod
 from pyine.organisms.datamodules.shortcuts_configs import (
@@ -23,7 +22,6 @@ if typing.TYPE_CHECKING:
     import pathlib
 
     import datasets as hf_datasets
-    import transformers
 
 
 logger = logging.getLogger(__name__)
@@ -280,15 +278,13 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         append_answer: bool = True,
         merge_system_with_user: bool = False,
         keep_original_data: bool = False,
-        tokenizer: transformers.PreTrainedTokenizer | None = None,
-        apply_chat_template_eval_config: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset object for a given subset name."""
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
         assert subset_name is not None, "subset name must be specified"
         subset_traces = self._get_traces_meta_for_subset(subset_name)
-        hf_dataset = self.config.instantiate_hf_messages_dataset(
+        return self.config.instantiate_hf_messages_dataset(
             subset_name=subset_name,
             append_answer=append_answer,
             merge_system_with_user=merge_system_with_user,
@@ -298,19 +294,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
                 "traces": subset_traces,
             },
         )
-        if tokenizer is not None:
-            if apply_chat_template_eval_config:
-                chat_tmpl_config = self.config.apply_chat_template_eval_config
-            else:
-                chat_tmpl_config = self.config.apply_chat_template_train_config
-            hf_dataset = pyine.organisms.datamodules.utils.transforms.apply_model_template_to_messages(
-                hf_messages_dataset=hf_dataset,
-                tokenizer=tokenizer,
-                keep_original_data=keep_original_data,
-                apply_chat_template_kwargs=chat_tmpl_config,
-                keep_in_memory=self.config.keep_message_datasets_in_memory,
-            )
-        return hf_dataset
 
     @typing.override
     def get_openai_messages_dataset(

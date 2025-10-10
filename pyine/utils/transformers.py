@@ -1,5 +1,6 @@
 import collections.abc
 import contextlib
+import functools
 import math
 import typing
 
@@ -87,6 +88,165 @@ type ConversationHistory = list[ConversationMessage]
 """Alias for ordered conversation histories."""
 
 
+def _batch_apply_model_template_to_messages(
+    batch: collections.abc.Mapping[str, typing.Any],
+    tokenizer: transformers.PreTrainedTokenizer,
+    append_eos_token: bool,
+    strip_output: bool,
+    messages_key: str,
+    output_key: str,
+    keep_original_data: bool,
+    apply_chat_template_kwargs: dict[str, typing.Any] | None,
+) -> dict[str, typing.Any]:
+    """Applies a model template to a batch of (hf-formatted) message dictionaries.
+
+    See `apply_model_template_to_messages` for information on arguments.
+
+    Kept static/top-level-friendly to keep pickling happy.
+    """
+    assert isinstance(batch, collections.abc.Mapping), f"unexpected input batch type: {type(batch)}"
+    assert messages_key in batch, f"missing expected messages key: {messages_key}"
+    messages = typing.cast("list[dict[str, str]]", batch[messages_key])
+    text_result = tokenizer.apply_chat_template(  # type: ignore[reportUnknownMemberType]
+        conversation=messages,
+        **(apply_chat_template_kwargs or {}),
+    )
+    if not isinstance(text_result, list):
+        raise TypeError(
+            f"expected tokenizer chat template output to be a list of strings, got {type(text_result)}",
+        )
+    assert all(isinstance(s, str) for s in text_result), "expected output to be a list of strings"
+    assert len(text_result) == len(messages), "length mismatch between input messages and output text"
+    text_result = typing.cast("list[str]", text_result)
+    if strip_output:
+        text_result = [item.strip() for item in text_result]
+    if append_eos_token:
+        assert hasattr(tokenizer, "eos_token"), "tokenizer missing eos token"
+        eos_token = typing.cast("str | list[str] | None", tokenizer.eos_token)  # type: ignore[reportUnknownMemberType]
+        if eos_token is None:
+            raise ValueError("tokenizer has no EOS token configured")
+        eos_suffix = "".join(eos_token) if isinstance(eos_token, list) else str(eos_token)
+        text_result = [item + eos_suffix for item in text_result]
+    output: dict[str, typing.Any] = dict(batch) if keep_original_data else {}
+    output[output_key] = text_result
+    return output
+
+
+def apply_model_template_to_messages(
+    hf_messages_ds: hf_datasets.Dataset,
+    tokenizer: transformers.PreTrainedTokenizer,
+    append_eos_token: bool = False,
+    strip_output: bool = False,
+    messages_key: str = "messages",
+    output_key: str = "text",
+    keep_original_data: bool = False,
+    apply_chat_template_kwargs: dict[str, typing.Any] | None = None,
+    keep_in_memory: bool = False,
+) -> hf_datasets.Dataset:
+    """Map a HuggingFace messages dataset to a new dataset with text-only samples."""
+    transform_batch: typing.Callable[[collections.abc.Mapping[str, typing.Any]], dict[str, typing.Any]] = (
+        functools.partial(
+            _batch_apply_model_template_to_messages,
+            tokenizer=tokenizer,
+            append_eos_token=append_eos_token,
+            strip_output=strip_output,
+            messages_key=messages_key,
+            output_key=output_key,
+            keep_original_data=keep_original_data,
+            apply_chat_template_kwargs=apply_chat_template_kwargs,
+        )
+    )
+    mapped_dataset: hf_datasets.Dataset = hf_messages_ds.map(  # type: ignore[reportUnknownMemberType]
+        function=transform_batch,
+        batched=True,
+        desc="applying tokenizer chat template",
+        keep_in_memory=keep_in_memory,
+    )
+    return mapped_dataset
+
+
+def prepare_generation_prompts_from_dataset(
+    prompts_ds: hf_datasets.Dataset,
+    tokenizer: transformers.PreTrainedTokenizer,
+    max_seq_len: int | None,
+    prompt_text_key: str = "text",
+    keep_extra_fields: list[str] | bool | None = None,
+    keep_in_memory: bool = True,
+) -> hf_datasets.Dataset:
+    """Prepares and returns a dataset of encoded and generation-ready prompts.
+
+    Args:
+        prompts_ds: Input dataset containing message prompts to encode.
+        tokenizer: Tokenizer to use for encoding text.
+        max_seq_len: Maximum sequence length for truncation.
+        prompt_text_key: Key name for the prompt text column (with chat formatting already applied).
+        keep_extra_fields: Additional fields to preserve from the input dataset. Can be:
+            - A list of field names to keep;
+            - True to keep all fields (except messages_key); or
+            - None/False to keep only essential fields.
+        keep_in_memory: Whether to keep the datasets in memory.
+
+    Returns:
+        A HuggingFace Dataset containing encoded prompts ready for generation, with fields:
+            - input_ids: List of token ids for the encoded prompts
+            - attention_mask: Attention masks for the encoded prompts
+            - input_len: Length of each prompt before padding
+            - sample_idx: Sequential index for each prompt
+            - Any additional fields specified by keep_extra_fields
+    """
+    # TODO: if the map calls in here become a bottleneck, tune num_proc, use cache
+    # (worse case scenario, we can switch to a streaming/iterable dataset?)
+    forward_all_fields, keep_extra_fields_list = _parse_keep_extra_fields_config(keep_extra_fields)
+    templated_prompts_ds: hf_datasets.Dataset = apply_model_template_to_messages(
+        hf_messages_ds=prompts_ds,
+        tokenizer=tokenizer,
+        keep_original_data=bool(forward_all_fields or keep_extra_fields_list),
+        apply_chat_template_kwargs={
+            "tokenize": False,
+            "add_generation_prompt": True,
+        },
+        keep_in_memory=keep_in_memory,
+    )
+    sample_idx = 0
+
+    def _encode_prompts(
+        sample: collections.abc.Mapping[str, typing.Any],
+    ) -> dict[str, typing.Any]:
+        nonlocal sample_idx
+        assert isinstance(sample, collections.abc.Mapping), f"unexpected sample data type: {type(sample)}"
+        assert prompt_text_key in sample, f"missing '{prompt_text_key}' key for chat-templated text in sample data?"
+        assert isinstance(sample[prompt_text_key], str), "expected chat template application to yield string prompts"
+        encoded_inputs = tokenizer(sample[prompt_text_key], truncation=True, max_length=max_seq_len)
+        input_ids = typing.cast("list[int]", encoded_inputs["input_ids"])
+        attention_mask = typing.cast("list[int]", encoded_inputs["attention_mask"])
+        output = {
+            "sample_idx": sample_idx,
+            **sample,
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "input_len": len(input_ids),
+        }
+        sample_idx += 1
+        return output
+
+    if forward_all_fields:
+        columns_to_remove: list[str] = []
+    elif keep_extra_fields_list:
+        columns_to_remove = [col for col in templated_prompts_ds.column_names if col not in keep_extra_fields_list]
+    else:
+        columns_to_remove = templated_prompts_ds.column_names
+
+    dataset: hf_datasets.Dataset = templated_prompts_ds.map(  # type: ignore[reportUnknownMemberType]
+        _encode_prompts,
+        batched=False,  # not parallelized since we're adding a nonlocal index above
+        remove_columns=columns_to_remove,
+        desc="encoding prompts",
+        keep_in_memory=keep_in_memory,
+    )
+    assert len(dataset) == sample_idx
+    return dataset
+
+
 def _build_example_ids_from_conversation_parts(
     tokenizer: transformers.PreTrainedTokenizer,
     history_msgs: ConversationHistory,
@@ -150,8 +310,9 @@ def prepare_examples_from_conversations(
     num_proc: int,
     messages_key: str = "messages",
     keep_extra_fields: list[str] | bool | None = None,
+    keep_in_memory: bool = True,
 ) -> hf_datasets.Dataset:
-    """Flattens conversations into (history -> assistant) training examples.
+    """Flattens conversations into tokenizer-encoded (history -> assistant) training examples.
 
     The input dataset should have a column of messages where each row is an entire conversation:
         [{"role": "system"/"user"/"assistant", "content": "..."}, ...]
@@ -171,8 +332,21 @@ def prepare_examples_from_conversations(
             - A list of field names to keep;
             - True to keep all fields (except messages_key); or
             - None/False to keep only input_ids and prompt_len.
+        keep_in_memory: Whether to keep the datasets in memory.
     """
+    # TODO: if the map calls in here become a bottleneck, tune num_proc, use cache
+    # (worse case scenario, we can switch to a streaming/iterable dataset?)
     forward_all_fields, keep_extra_fields_list = _parse_keep_extra_fields_config(keep_extra_fields)
+    templated_convo_ds: hf_datasets.Dataset = apply_model_template_to_messages(
+        hf_messages_ds=convo_ds,
+        tokenizer=tokenizer,
+        keep_original_data=bool(forward_all_fields or keep_extra_fields_list),
+        apply_chat_template_kwargs={
+            "tokenize": False,
+            "add_generation_prompt": False,
+        },
+        keep_in_memory=keep_in_memory,
+    )
 
     def _split_to_examples(batch: dict[str, typing.Any]) -> dict[str, typing.Any]:
         # called on a batch of conversations by Dataset.map; must return dict of column->flat lists
@@ -215,28 +389,20 @@ def prepare_examples_from_conversations(
         output.update(extra_fields_data)
         return output
 
-    # determine which columns to remove (messages_key and any fields we're not keeping)
     if forward_all_fields:
-        # keep all columns except messages_key (they'll be handled by _split_to_examples)
-        columns_to_remove = [messages_key]
+        columns_to_remove: list[str] = []
     elif keep_extra_fields_list:
-        # keep only specified fields plus input_ids/prompt_len
-        columns_to_remove = [
-            col for col in convo_ds.column_names if col not in keep_extra_fields_list and col != messages_key
-        ]
-        columns_to_remove.append(messages_key)
+        columns_to_remove = [col for col in templated_convo_ds.column_names if col not in keep_extra_fields_list]
     else:
-        # remove all original columns
-        columns_to_remove = convo_ds.column_names
+        columns_to_remove = templated_convo_ds.column_names
 
-    # TODO: if this map becomes a bottleneck, tune num_proc, use cache
-    # (worse case scenario, we can switch to a streaming/iterable dataset?)
-    dataset: hf_datasets.Dataset = convo_ds.map(  # type: ignore[reportUnknownMemberType]
+    dataset: hf_datasets.Dataset = templated_convo_ds.map(  # type: ignore[reportUnknownMemberType]
         _split_to_examples,
         batched=True,  # explode list outputs into individual rows automatically
         remove_columns=columns_to_remove,
         num_proc=num_proc,  # parallelize if possible
         desc="preparing examples",
+        keep_in_memory=keep_in_memory,
     )
     return dataset
 
@@ -631,9 +797,18 @@ def _get_generated_text(
     """Helper that returns decoded text and generated tokens given output and input token ids tensors."""
     assert output_ids.ndim == 1 and input_ids.ndim == 1, "unexpected tensor dimensionality"
     assert input_len <= len(input_ids), "unexpected input (prompt) length greater than input tensor length??"
-    assert (output_ids[: len(input_ids)] == input_ids).all().item(), "unexpected output ids not overlapping w/ input"
+    # extract the non-padded portion of input_ids based on padding side
+    padding_side = tokenizer.padding_side
+    if padding_side == "left":
+        pad_len = len(input_ids) - input_len
+        input_prompt_ids = input_ids[pad_len:]
+    else:
+        assert padding_side == "right", f"unexpected padding side: {padding_side}"
+        input_prompt_ids = input_ids[:input_len]
+    # Compare the prompt portion of output with the non-padded input
+    assert (output_ids[:input_len] == input_prompt_ids).all().item(), "unexpected output ids not overlapping w/ input"
     decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)  # type: ignore[reportUnknownMemberType]
-    generated_ids = output_ids[len(input_ids) :]
+    generated_ids = output_ids[input_len:]
     generated_text = decode_fn(
         generated_ids,
         skip_special_tokens=True,
