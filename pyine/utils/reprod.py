@@ -326,6 +326,7 @@ def entrypoint_setup(
     setup_fn = typing.cast("typing.Any", entrypoint_setup)
     if not hasattr(setup_fn, "_executed"):
         import pyine.prompts
+        import pyine.utils.concurrency
         import pyine.utils.logging
 
         if runtime_config is None:
@@ -346,6 +347,8 @@ def entrypoint_setup(
         # initialize the prompt-related utilities
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()
+        # enforce the spawn start method for multiprocessing functions/pools
+        pyine.utils.concurrency.ensure_spawn_start_method()
         setup_fn._executed = True
     # if a runtime config is provided, log all configs to the output directory
     parent_app_name = runtime_config.app_name if runtime_config else "<missing runtime config>"

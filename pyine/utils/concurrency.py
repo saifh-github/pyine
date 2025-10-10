@@ -3,12 +3,12 @@ import atexit
 import concurrent.futures
 import dataclasses
 import inspect
+import multiprocessing
 import threading
 import typing
-import warnings
 
 _mp: typing.Any | None
-try:  # pragma: no cover - optional dependency when datasets not installed
+try:  # pragma: no cover - optional dependency when hf datasets not installed
     import multiprocess as _mp
 except ModuleNotFoundError:  # pragma: no cover - fallback path
     _mp = None
@@ -36,32 +36,30 @@ _shared_lock = threading.Lock()
 def ensure_spawn_start_method(
     *,
     force: bool = True,
-) -> bool:
-    """Ensure multiprocess-based pools use the safe 'spawn' start method.
+) -> None:
+    """Ensure multiprocess- and multiprocessing-based pools use the safe 'spawn' start method.
 
-    HuggingFace datasets rely on :mod:`multiprocess` when running `Dataset.map` with
-    ``num_proc > 1``. The default start method on POSIX platforms is ``fork``, which
-    triggers runtime warnings (and can deadlock) when used from multi-threaded
-    processes—exactly the scenario we hit in our datamodule integration tests.
+    HuggingFace datasets rely on `multiprocess` when running `Dataset.map` with `num_proc > 1`. The
+    default start method on POSIX platforms is ``fork``, which triggers runtime warnings (and can
+    deadlock) when used from multithreaded processes.
 
-    This helper requests the "spawn" context before any pools are created. If the
-    dependency is unavailable or the start method cannot be changed, the caller can
-    inspect the returned boolean and downgrade to a single-process fallback.
+    This helper requests the "spawn" context before any pools are created for both the multiprocess
+    and multiprocessing modules. If the `multiprocess` dependency is unavailable or the start
+    method cannot be changed, the caller can inspect the returned boolean and downgrade to a
+    single-process fallback.
 
     Args:
-        force: Whether to force-reset the start method when one was already
-            configured. The default (True) mirrors the behaviour we need during
-            tests where no pools have been spawned yet.
-
-    Returns:
-        ``True`` if the "spawn" method is confirmed active, ``False`` otherwise.
+        force: Whether to force-reset the start method when one was already configured.
     """
-    if _mp is None:  # dependency missing; nothing to enforce
-        return False
+    # first, set the spawn method for multiprocessing
+    multiprocessing.set_start_method("spawn", force=force)
+    # now, try to also set it for the optional multiprocess module
+    if _mp is None:  # dependency missing; nothing more to enforce
+        return
     mp_module: typing.Any = _mp
     try:
         current = mp_module.get_start_method(allow_none=True)
-    except TypeError:  # pragma: no cover - older multiprocess
+    except TypeError:  # pragma: no cover --- older multiprocess
         try:
             current = mp_module.get_start_method()
         except RuntimeError:
@@ -69,20 +67,8 @@ def ensure_spawn_start_method(
     except RuntimeError:
         current = None
     if current == "spawn":
-        return True
-    try:
-        mp_module.set_start_method("spawn", force=force)
-        return True
-    except (RuntimeError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to set multiprocess start method to 'spawn' ({exc!s}); falling back to already configured method.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        try:
-            return mp_module.get_start_method(allow_none=True) == "spawn"
-        except (TypeError, RuntimeError):  # pragma: no cover - defensive fallback
-            return False
+        return
+    mp_module.set_start_method("spawn", force=force)
 
 
 def get_shared_executor(

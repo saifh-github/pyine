@@ -17,7 +17,6 @@ import pyine.data.traces.dataset_utils
 import pyine.prompts
 import pyine.prompts.manager
 import pyine.utils.code.execution
-import pyine.utils.concurrency
 import pyine.utils.portability
 from pyine.utils.code.execution import (
     TraceEvent,
@@ -1192,18 +1191,11 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             split=named_split,
             keep_in_memory=keep_in_memory,
         )
-        num_proc = num_workers
-        if num_proc is not None and num_proc > 0 and not pyine.utils.concurrency.ensure_spawn_start_method():
-            logger.warning(
-                "Falling back to single-process HF dataset mapping because the 'spawn' start method"
-                " could not be configured."
-            )
-            num_proc = None
         if raw_transform_fn is not None:
             dataset: hf_datasets.Dataset = dataset.map(  # type: ignore[reportUnknownMemberType]
                 function=raw_transform_fn,
                 keep_in_memory=keep_in_memory,
-                num_proc=num_proc,
+                num_proc=num_workers,
             )
         return dataset
 
