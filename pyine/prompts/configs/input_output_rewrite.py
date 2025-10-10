@@ -1,3 +1,29 @@
+"""Utilities for reformatting problem I/O samples into executable test payloads.
+
+This module defines the structured schema and LangChain prompt plumbing used by the
+input/output rewrite flow (see `pyine.apps.traces.trace_failure_analyzer`). The
+pipeline targets legacy TACO problems whose `input_output` blocks were captured as
+loose prose like "L = 0, R = 1" or who never recorded the callable entry point.
+Such payloads cannot drive the trace replay tooling, which requires machine-
+read-able JSON arguments aligned with the actual solver signature.
+
+Key responsibilities:
+
+- constrain LLM responses with a frozen `InputOutputRewriteResponse` model so
+  every candidate patch carries the entrypoint name, JSON-encoded argument lists,
+  and deserializable outputs aligned by index;
+- expose `get_output_parser()`, handing callers the Pydantic-backed parser whose
+  format instructions are embedded in the rewrite prompt; and
+- build the rewrite prompt template via `get_prompt_template()`, injecting the
+  parser guidance and wiring through optional template knobs (chat mode, example
+  selection, role/context overrides).
+
+Together these helpers let higher-level tools iterate on malformed dataset I/O
+automatically: an LLM proposes canonicalized samples, the response is validated
+here, and downstream consumers can immediately rerun solutions against the
+patched tests.
+"""
+
 import typing
 
 import pydantic
@@ -24,9 +50,11 @@ class InputOutputRewriteResponse(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
     inputs: list[pydantic.StrictStr] = pydantic.Field(
-        description=("List of JSON-encoded input argument payloads; each entry must be a valid JSON string."),
+        description=(
+            "List of JSON-encoded argument payloads preserved as strings (the dataset stores inputs as text).",
+        ),
     )
-    outputs: list[typing.Any] = pydantic.Field(
+    outputs: list[pydantic.JsonValue] = pydantic.Field(
         description=("List of outputs aligned by index with inputs. Values must be serializable via JSON."),
     )
     fn_name: PythonCallName = pydantic.Field(

@@ -346,14 +346,12 @@ def trace_context(
         sys.settrace(old_trace)
 
 
-_MISSING = object()
-
-
 def _resolve_entrypoint_from_namespace(
     namespace: dict[str, typing.Any],
     entrypoint_name: str,
 ) -> typing.Any:
     """Resolve dotted entrypoint names against an execution namespace."""
+    sentinel = object()  # sentinel used to detect when lookups fail
 
     if not entrypoint_name:
         return None
@@ -364,25 +362,25 @@ def _resolve_entrypoint_from_namespace(
 
     for idx, segment in enumerate(segments):
         parent = current
-        candidate = current.get(segment, _MISSING) if isinstance(current, dict) else getattr(current, segment, _MISSING)
-        if candidate is _MISSING:
+        candidate = current.get(segment, sentinel) if isinstance(current, dict) else getattr(current, segment, sentinel)
+        if candidate is sentinel:  # stop immediately when a segment cannot be resolved
             return None
-        current = candidate
-        if inspect.isclass(current) and idx < len(segments) - 1:
+        current = candidate  # advance traversal to the resolved object
+        if inspect.isclass(current) and idx < len(segments) - 1:  # instantiate classes when more path remains
             try:
-                current = current()
-            except Exception:
-                logging.debug(
+                current = current()  # create a fresh instance to expose nested attributes
+            except Exception:  # instantiation can fail for classes requiring args or having side effects
+                logging.debug(  # log the failure without interrupting resolution
                     "failed to instantiate %s while resolving entrypoint %s",
                     candidate,
                     entrypoint_name,
                     exc_info=True,
                 )
-    if inspect.isfunction(current) and isinstance(parent, type):
+    if inspect.isfunction(current) and isinstance(parent, type):  # detect unbound functions retrieved from classes
         try:
-            instance = parent()
-            return getattr(instance, segments[-1])
-        except Exception:
+            instance = parent()  # instantiate the class again to obtain a bound method
+            return getattr(instance, segments[-1])  # fetch the attribute so python binds self automatically
+        except Exception:  # instantiation may fail, in which case fall back to the raw function
             logging.debug(
                 "failed to bind method %s on %s while resolving entrypoint %s",
                 segments[-1],
@@ -788,6 +786,34 @@ def _unsafe_execute_and_trace_code(
                     exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
             _capture_buffers()
     except (TimeoutError, TracingCapError):  # noqa: B025 - re-raise after fallback attempt
+        with (
+            pyine.utils.timers.TimeLimit(timeout_seconds),
+            contextlib.redirect_stdout(stdout_capture),
+            contextlib.redirect_stderr(stderr_capture),
+        ):  # noqa
+            if entrypoint_name is not None:
+                with trace_context(_trace_callback):
+                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
+                entrypoint = _resolve_entrypoint_from_namespace(exec_namespace, entrypoint_name)
+                if callable(entrypoint):
+                    entrypoint_step_idx = last_trace_step_idx
+                    entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
+                        entrypoint, inputs
+                    )
+                    with trace_context(_trace_callback):
+                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
+                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
+                else:
+                    raise TypeError(f"entry point {entrypoint_name} resolved to non-callable {entrypoint!r}") from None
+            else:
+                mock_inputs = "" if inputs is None else inputs
+                with (
+                    pyine.utils.code.input_mock.MockInputContext(mock_inputs),
+                    trace_context(_trace_callback),
+                ):
+                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
+            _capture_buffers()
+    except (TimeoutError, TracingCapError):  # noqa: B025 - re-raising fallback timeout/cap breach indicators
         # we'll let callers handle what happens when code tracing times out or caps are exceeded
         raise
     except DONT_CATCH_EXCEPTIONS:

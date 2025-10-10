@@ -176,6 +176,23 @@ def test_nested_sequences_with_order_option() -> None:
     assert eq(a, b, list_order_matters=False)
 
 
+def test_singleton_sequence_matches_scalar() -> None:
+    assert eq([5], 5)
+    assert eq((5,), 5)
+    assert eq(5, [5])
+    assert eq(5, (5,))
+
+
+def test_singleton_sequence_matches_plain_string() -> None:
+    assert eq(["value"], "value")
+    assert eq("value", ["value"])
+
+
+def test_sequences_allow_single_wrapper() -> None:
+    assert eq([1, 2], [[1, 2]])
+    assert eq([[1, 2]], [1, 2])
+
+
 # ---------------- dicts and sets deep compare ----------------
 
 

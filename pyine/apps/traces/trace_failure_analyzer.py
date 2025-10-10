@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROBLEM_DIR = pyine.utils.filesystem.get_data_root_path() / "TACO" / "repackaged" / "2025-03-31-v01"
-CACHE_OVERRIDE_BASENAME = "taco_input_output_overrides.json"
+CACHE_OVERRIDE_BASENAME = "taco_problem_data_overrides.json"
 DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / CACHE_OVERRIDE_BASENAME
 
 PROBLEM_SOURCES_PATH = Path("data/TACO/overrides/problem_sources.json")
@@ -309,11 +309,15 @@ def run_input_output_rewrite(
     override_entries = _load_override_log(override_log_path)
     logger.info("using override log: %s", override_log_path)
 
+    overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
+
     problem_iterator = CodingProblemIterator(
         dataset_name="TACO",
         root_data_path=problem_dir,
-        input_output_overrides_path=override_log_path,
+        problem_data_overrides_path=overrides_path_for_iterator,
     )
+    if override_entries:
+        problem_iterator._problem_data_overrides.update(override_entries)
 
     source_mapping = _load_problem_sources(problem_dir)
     problem_paths = _collect_problem_paths(problem_dir, problem_filenames, override_log_path)
@@ -401,7 +405,7 @@ def run_input_output_rewrite(
                     "fn_name": response.fn_name,
                 }
                 _upsert_override_entry(override_entries, problem_identifier, new_io)
-                problem_iterator._input_output_overrides[problem_identifier] = new_io
+                problem_iterator._problem_data_overrides[problem_identifier] = new_io
                 _save_override_log(override_log_path, override_entries)
                 success = True
                 logger.info("updated %s on attempt %s", problem_filename, attempt_idx + 1)

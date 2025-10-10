@@ -15,6 +15,7 @@ from pyine.utils.code.execution import (
     TraceResult,
     TraceTagType,
     TracingCapError,
+    _resolve_entrypoint_from_namespace,
     _safe_execute_and_trace_code,
     _unsafe_execute_and_trace_code,
     execute_and_trace_code,
@@ -723,3 +724,55 @@ def test_trace_context_sets_and_restores_trace() -> None:
         _ = sum(range(3))
     assert events
     assert sys.gettrace() is original_trace
+
+
+def test_resolve_entrypoint_root_function() -> None:
+    def run() -> str:
+        return "ok"
+
+    namespace = {"run": run}
+    resolved = _resolve_entrypoint_from_namespace(namespace, "run")
+    assert resolved is run
+
+
+def test_resolve_entrypoint_class_method_binds_instance() -> None:
+    class Solver:
+        def solve(self, value: int) -> int:
+            return value + 1
+
+    namespace = {"Solver": Solver}
+    resolved = _resolve_entrypoint_from_namespace(namespace, "Solver.solve")
+    assert callable(resolved)
+    bound_instance = getattr(resolved, "__self__", None)
+    assert bound_instance is not None
+    assert bound_instance.__class__ is Solver
+    assert resolved(1) == 2
+
+
+def test_resolve_entrypoint_nested_attributes() -> None:
+    class Solver:
+        def solve(self) -> str:
+            return "nested"
+
+    class Container:
+        def __init__(self) -> None:
+            self.engine = Solver()
+
+    namespace = {"container": Container()}
+    resolved = _resolve_entrypoint_from_namespace(namespace, "container.engine.solve")
+    assert callable(resolved)
+    assert resolved() == "nested"
+
+
+def test_resolve_entrypoint_missing_returns_none() -> None:
+    namespace = {"value": 1}
+    resolved = _resolve_entrypoint_from_namespace(namespace, "value.call")
+    assert resolved is None
+
+
+def test_entrypoint_resolves_to_non_callable_raises_typeerror() -> None:
+    code = "value = 123"
+    result = _unsafe_execute_and_trace_code(code, entrypoint_name="value")
+    assert result.exception is not None
+    assert result.exception.type == "TypeError"
+    assert "non-callable" in result.exception.message
