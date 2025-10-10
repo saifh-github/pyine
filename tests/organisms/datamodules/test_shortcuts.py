@@ -266,7 +266,9 @@ def test_shortcuts_datamodule_examples_round_trip(
             assert output_txt == example_batch["expected_output"][iter_idx].strip()
             non_ignore_attn_mask = attn != 0
             padding_mask = ~non_ignore_attn_mask
-            assert torch.unique(ids[padding_mask]).tolist() == [tokenizer.pad_token_id], "unexpected padding tokens"
+            # Note: when always_pad_to_max_length=False, some examples may have no padding
+            if padding_mask.any():
+                assert torch.unique(ids[padding_mask]).tolist() == [tokenizer.pad_token_id], "unexpected padding tokens"
             inputs_mask = non_ignore_attn_mask & ~non_ignore_labels_mask
             assert inputs_mask.sum().item() > 0, "no input tokens in prepared tensors??"
             prompt_ids = ids[inputs_mask]
