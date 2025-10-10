@@ -73,7 +73,7 @@ class ExampleBatchTensors(typing.TypedDict):
     attention_mask: torch.Tensor
     """Attention mask for the full example (prompt + potential response), with padding."""
     labels: torch.Tensor
-    """labels mirror input ids but ignore loss on prompt and padding positions."""
+    """Target labels (token ids) that mirror input ids but ignore loss on prompt and padding positions."""
     prompt_len: list[int]
     """Length of the prompt (in number of tokens), prior to padding."""
     input_len: list[int]
@@ -363,8 +363,22 @@ class PaddingCollatorWithPromptMask:
         self,
         to_batch: list[dict[str, typing.Any]],
     ) -> ExampleBatchTensors:
-        """Turns a list of examples into a batch of tensors."""
-        expected_field_names = ["input_ids", "prompt_len"]
+        """Turns a list of examples into a batch of tensors.
+
+        The provided list of examples should be a list of dictionaries, where each dictionary should contain at least
+        the key "input_ids" with a list of integers representing the input sequence. An optional key "prompt_len"
+        can also be provided to indicate the length of the prompt sequence (if not provided, it is assumed to be the
+        entire input sequence).
+
+        The output dictionaries will contain the following keys:
+            input_ids: the list of token ids for the full example (prompt + potential response).
+            attention_mask: mask for the full example (prompt + potential response).
+            labels: target labels that mirror input ids but ignore loss on prompt and padding positions.
+            prompt_len: length of the prompt (in number of tokens), prior to padding.
+            input_len: length of the full example (prompt + potential response), prior to padding.
+
+        The returned dictionary will also carry over any extra fields specified in the initialization.
+        """
         input_ids_list: list[list[int]] = []
         labels_list: list[list[int]] = []
         attention_masks: list[list[int]] = []
@@ -391,10 +405,11 @@ class PaddingCollatorWithPromptMask:
                 )
         for data in to_batch:
             assert isinstance(data, collections.abc.Mapping), "unexpected feature type, must be a dict"
-            assert all(k in data for k in expected_field_names), "missing expected key in data dict"
+            assert "input_ids" in data, "missing expected key 'input_ids' in data dict"
+            assert isinstance(data["input_ids"], list), "expected 'input_ids' to be a list of integers"
             # truncate if necessary according to tokenizer's truncation_side
             orig_ids = typing.cast("list[int]", data["input_ids"])
-            prompt_len = int(data["prompt_len"])
+            prompt_len = int(data["prompt_len"]) if "prompt_len" in data else len(orig_ids)
             response_len = len(orig_ids) - prompt_len
             if len(orig_ids) > effective_max_length:
                 overflow = len(orig_ids) - effective_max_length
@@ -453,10 +468,10 @@ class PaddingCollatorWithPromptMask:
         }
         # carry over targeted (or all) metadata fields with the input batch order
         extra_fields = _collect_extra_fields_from_batch(
-            to_batch,
-            self._forward_all_fields,
-            self._keep_extra_fields,
-            expected_field_names,
+            batch_data=to_batch,
+            forward_all_fields=self._forward_all_fields,
+            keep_extra_fields=self._keep_extra_fields,
+            expected_field_names=["input_ids", "attention_mask", "labels", "prompt_len", "input_len"],
         )
         batch_dict.update(extra_fields)
         return typing.cast("ExampleBatchTensors", batch_dict)
@@ -607,6 +622,27 @@ def resolve_hf_generation_config(
     return transformers.GenerationConfig(**dict(config))
 
 
+def _get_generated_text(
+    output_ids: torch.Tensor,  # 1-d array of output token ids produced by the model (combines prompt + generation)
+    input_ids: torch.Tensor,  # likely includes padding, so input (prompt) len might be smaller than this tensor's len
+    input_len: int,  # length of the input prompt, without counting padding tokens
+    tokenizer: transformers.PreTrainedTokenizer,  # to figure out padding side and token ids
+) -> tuple[str, torch.Tensor]:  # tuple of (decoded text, generated tokens)
+    """Helper that returns decoded text and generated tokens given output and input token ids tensors."""
+    assert output_ids.ndim == 1 and input_ids.ndim == 1, "unexpected tensor dimensionality"
+    assert input_len <= len(input_ids), "unexpected input (prompt) length greater than input tensor length??"
+    assert (output_ids[: len(input_ids)] == input_ids).all().item(), "unexpected output ids not overlapping w/ input"
+    decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)  # type: ignore[reportUnknownMemberType]
+    generated_ids = output_ids[len(input_ids) :]
+    generated_text = decode_fn(
+        generated_ids,
+        skip_special_tokens=True,
+        # clean_up_tokenization_spaces=False,
+    )
+    assert isinstance(generated_text, str), f"unexpected decoder output type: {type(generated_text)}"
+    return generated_text, generated_ids
+
+
 def run_text_generation(
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizer,
@@ -656,7 +692,6 @@ def run_text_generation(
     forward_all_keys = forward_batch_keys is True
     selected_forward_keys: list[str] = list(forward_batch_keys) if isinstance(forward_batch_keys, list) else []
     generate_fn = typing.cast("typing.Callable[..., typing.Any]", model.generate)
-    decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)  # type: ignore[reportUnknownMemberType]
     with torch.no_grad():
         prog_bar = tqdm.tqdm(dataloader, desc="generating predictions", smoothing=0.1, disable=not verbose)
         for batch in prog_bar:
@@ -675,21 +710,18 @@ def run_text_generation(
                     return_dict_in_generate=True,
                 )
             # note: generation_result.sequences includes the prompt + newly generated tokens
-            sequences = typing.cast("torch.Tensor", generation_result.sequences)
-            generated_output = sequences.to("cpu")  # [B, prompt+new]
+            generated_output = typing.cast("torch.Tensor", generation_result.sequences)  # [B, prompt+new]
             assert generated_output.ndim == 2 and generated_output.shape[0] == len(input_len)
             for sample_idx in range(generated_output.shape[0]):
-                sample_result = generated_output[sample_idx]
-                new_tokens_ids = sample_result[input_len[sample_idx] :]
-                new_text = decode_fn(
-                    new_tokens_ids,
-                    skip_special_tokens=True,
-                    # clean_up_tokenization_spaces=False,
+                generated_text, generated_ids = _get_generated_text(
+                    output_ids=generated_output[sample_idx],
+                    input_ids=input_ids[sample_idx],
+                    input_len=input_len[sample_idx],
+                    tokenizer=tokenizer,
                 )
-                assert isinstance(new_text, str), f"unexpected decoder output type: {type(new_text)}"
                 curr_output: dict[str, typing.Any] = {
-                    generated_tokens_key: new_tokens_ids,
-                    generated_text_key: new_text,
+                    generated_tokens_key: generated_ids.to("cpu", non_blocking=True),
+                    generated_text_key: generated_text,
                 }
                 # carry over targeted (or all) metadata fields with the input batch order
                 if forward_all_keys or selected_forward_keys:

@@ -189,7 +189,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         _get_supported_subset_names()
     )  # should never need to override this default
     """List of data subsets that the module supports; some subsets override sample selection strategy."""
-    eval_subset_names: tuple[str, ...] = ("valid", "valid_obfuscated")
+    eval_subset_names: tuple[str, ...] = ("train", "train_obfuscated", "valid", "valid_obfuscated")
     """Subset names that are meant for model evaluation.
 
     Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
