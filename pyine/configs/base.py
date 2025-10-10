@@ -10,6 +10,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.utils.filesystem
+import pyine.utils.logging
 import pyine.utils.openai
 
 target_hydra_version = "1.3"
@@ -109,8 +110,10 @@ def get_base_store_and_configs(
                         "filename": "${hydra:runtime.output_dir}/output.log",
                     },
                 },
-                "pyine": {
-                    "level": os.getenv("LOGLEVEL", "INFO"),
+                "loggers": {
+                    pyine.utils.logging.PROJECT_LOGGER_NAME: {
+                        "level": os.getenv("LOGLEVEL", "INFO"),
+                    },
                 },
                 "root": {
                     "level": "INFO",

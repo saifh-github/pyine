@@ -1,4 +1,5 @@
 import logging
+import time
 import typing
 
 import pydantic
@@ -10,6 +11,7 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.langchain
+import pyine.utils.timers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,7 @@ async def evaluate_model(
     evaluation_results: dict[str, pyine.evals.common.EvalResult] = {}
     if config.evals_config.eval_type is None:
         return evaluation_results
+    start_time = time.time()
     if pyine.utils.transformers.is_hf_model(model):
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
@@ -142,9 +145,14 @@ async def evaluate_model(
             results_by_subset=evaluation_results,
         )
         for subset_name, subset_result in evaluation_results.items():
+            logger.info(f"logging predictions for subset '{subset_name}' to wandb run id: {wandb_run_id}...")
             config.evals_config.log_predictions(
                 wandb_run=wandb_run,
                 subset_name=subset_name,
                 subset_results=subset_result,
             )
+    end_time = time.time()
+    time_delta_seconds = end_time - start_time
+    time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
+    logger.info(f"evaluations finished in {time_delta_str}")
     return evaluation_results

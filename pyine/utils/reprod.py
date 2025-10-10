@@ -319,6 +319,8 @@ def entrypoint_setup(
         use_wandb_logging: whether to initialize wandb logging (if using runtime) and not dry run.
         extra_configs: extra configs that are forwarded to this function (to be logged).
     """
+    import pyine.utils.filesystem
+
     load_dotenv()
     # use a sentinel object to track first execution of things that should only be executed once
     setup_fn = typing.cast("typing.Any", entrypoint_setup)
@@ -368,8 +370,11 @@ def entrypoint_setup(
         logged_config_file_paths = log_configs(runtime_config, app_config_dict)
         if use_wandb_logging:
             assert runtime_config.wandb_run_id is not None
+            artifact_name = pyine.utils.filesystem.slugify(
+                text=f"{runtime_config.app_name}-{runtime_config.wandb_run.name}-configs",
+            )
             configs_artifact = wandb.Artifact(
-                name=f"{runtime_config.app_name}-{runtime_config.wandb_run.name}-configs",
+                name=artifact_name,
                 type="configs",
                 metadata={"run_id": runtime_config.wandb_run_id},
             )
