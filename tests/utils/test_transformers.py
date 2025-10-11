@@ -514,6 +514,45 @@ def test_run_text_generation_decodes_predictions(
     assert results[1]["meta"] == "second"
 
 
+def test_run_text_generation_with_left_padding() -> None:
+    """Test run_text_generation with left-padded inputs (common for decoder-only models)."""
+    tokenizer = SimpleTokenizer(padding_side="left")
+    model = DummyGenerationModel()
+    dataloader = [
+        {
+            "input_ids": torch.tensor(
+                [[0, ord("A"), ord("B"), ord("C")], [0, 0, ord("D"), ord("E")]],
+                dtype=torch.long,
+            ),
+            "attention_mask": torch.tensor(
+                [[0, 1, 1, 1], [0, 0, 1, 1]],
+                dtype=torch.long,
+            ),
+            "input_len": [3, 2],
+            "meta": ["first", "second"],
+        }
+    ]
+    gen_config = utils_transformers.GenerationConfig()
+    results = utils_transformers.run_text_generation(
+        model=model,
+        tokenizer=tokenizer,
+        dataloader=dataloader,
+        gen_config=gen_config,
+        forward_batch_keys=["meta"],
+        generated_text_key="text",
+        generated_tokens_key="tokens",
+        verbose=False,
+    )
+    assert len(results) == 2
+    assert results[0]["text"] == tokenizer.decode([ord("x"), ord("y")])
+    assert results[0]["meta"] == "first"
+    second_tokens = results[1]["tokens"]
+    assert int(second_tokens[0]) == ord("y")
+    assert int(second_tokens[1]) == ord("z")
+    assert results[1]["text"] == tokenizer.decode(second_tokens)
+    assert results[1]["meta"] == "second"
+
+
 def test_apply_model_template_to_messages_basic(
     simple_tokenizer: SimpleTokenizer,
 ) -> None:

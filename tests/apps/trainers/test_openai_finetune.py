@@ -24,11 +24,11 @@ def test_compute_estimated_train_token_count_handles_nested_messages(
     train_path.write_text(
         "\n".join(
             [
-                json.dumps({"content": "hello world"}),
+                json.dumps([{"role": "user", "content": "hello world"}]),
                 json.dumps(
                     [
-                        {"content": "nested"},
-                        {"content": "message"},
+                        {"role": "user", "content": "nested"},
+                        {"role": "assistant", "content": "message"},
                     ],
                 ),
             ],
@@ -44,40 +44,34 @@ def test_compute_estimated_train_token_count_handles_nested_messages(
         def __init__(self) -> None:
             self.openai_finetuner_config = types.SimpleNamespace(params=types.SimpleNamespace(base_model="test"))
 
+        def needs_answers_in_train_dataset(self) -> bool:
+            return False
+
+        def supports_system_prompt(self) -> bool:
+            return True
+
     class _FakeDataModule:
-        def get_openai_messages_dataset(self, subset_name: str) -> str:
+        def get_openai_messages_dataset(
+            self,
+            subset_name: str,
+            append_answer: bool = False,
+            merge_system_with_user: bool = False,
+        ) -> pathlib.Path:
             assert subset_name == "train"
-            return str(train_path)
+            return train_path
 
     monkeypatch.setattr(
         pyine.apps.trainers.openai_finetune.pyine.utils.tokenizers,
         "get_openai_tokenizer",
         lambda **_kwargs: _FakeTokenizer(),
     )
-
-    def _read_dataset_from_jsonl(path: pathlib.Path) -> list[list[dict[str, str]]]:
-        with open(path, encoding="utf-8") as file_obj:
-            result: list[list[dict[str, str]]] = []
-            for line in file_obj.read().splitlines():
-                obj = json.loads(line)
-                # Normalize to match real implementation behavior
-                if isinstance(obj, list):
-                    result.append(obj)
-                elif isinstance(obj, dict):
-                    result.append([obj])  # Wrap single message in list
-                else:
-                    raise ValueError(f"unsupported type {type(obj)}")
-            return result
-
-    monkeypatch.setattr(
-        pyine.apps.trainers.openai_finetune.pyine.utils.openai,
-        "read_dataset_from_jsonl",
-        _read_dataset_from_jsonl,
-    )
     config = _FakeConfig()
     config.datamodule_config = types.SimpleNamespace(train_subset_names=["train"])
     dm = _FakeDataModule()
     count = pyine.apps.trainers.openai_finetune._compute_estimated_train_token_count(config, dm)
+    # line 1: "hello world" = 2 words = 2 tokens
+    # line 2: "nested" = 1 word = 1 token, "message" = 1 word = 1 token
+    # total = 4 tokens
     assert count == 4
 
 
