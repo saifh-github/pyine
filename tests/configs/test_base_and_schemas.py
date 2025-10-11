@@ -85,6 +85,9 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
             self.tags = ("tag",)
             self.notes = "note"
 
+        def finalize(self) -> None:
+            pass
+
     def fake_wandb_init(
         **kwargs: object,
     ) -> _FakeRun:

@@ -132,6 +132,11 @@ class RuntimeConfig(pydantic.BaseModel):
         wandb_run_obj.tags = tuple(sorted(set(existing_tags)))
         logger.info(f"added tag '{tag}' to wandb run id: {self.wandb_run_id}")
 
+    def finalize(self) -> None:
+        """Finalizes the run by e.g. closing the wandb run if one exists."""
+        if self.wandb_run is not None:
+            self.wandb_run.finish()  # type: ignore[reportUnknownMemberType]
+
 
 class ConfigDescription(pydantic.BaseModel):
     """Provides a description of a hydra-zen configuration object."""

@@ -164,7 +164,7 @@ def test_train_configures_trainer_and_saves_artifacts(
     fake_tokenizer = _FakeTokenizer()
     fake_dm = _FakeDataModule()
 
-    runtime = types.SimpleNamespace(wandb_run=object())
+    runtime = types.SimpleNamespace(wandb_run=object(), finalize=lambda: None)
     config = types.SimpleNamespace(
         training_args_config=_FakeTrainingArgsConfig(),
         datamodule_config=types.SimpleNamespace(
@@ -228,7 +228,7 @@ async def test_main_runs_train_and_evaluate(
         get_tokenizer=lambda: "tokenizer",
         use_wandb_logging=False,
     )
-    runtime = types.SimpleNamespace()
+    runtime = types.SimpleNamespace(finalize=lambda: None)
 
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.reprod,

@@ -112,6 +112,7 @@ def test_prepare_datamodule_with_wandb_logging() -> None:
     runtime = types.SimpleNamespace(
         wandb_run=types.SimpleNamespace(summary={}),
         wandb_run_id="run-123",
+        finalize=lambda: None,
     )
     result = trainer_common.prepare_datamodule(config, runtime=runtime)
     assert result is datamodule
@@ -192,6 +193,7 @@ async def test_evaluate_model_wandb_logging_reopens_run(
     runtime = types.SimpleNamespace(
         wandb_run=types.SimpleNamespace(summary={}),  # missing log attr triggers reopen
         wandb_run_id="run-42",
+        finalize=lambda: None,
     )
     config = _build_app_config(
         DummyDatamoduleConfig(DummyDatamodule(), eval_subset_names=["subset"]),
@@ -227,7 +229,11 @@ async def test_evaluate_model_requires_wandb_run_id() -> None:
     evals_config = DummyEvalsConfig("something")
     evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
 
-    runtime = types.SimpleNamespace(wandb_run=types.SimpleNamespace(summary={}), wandb_run_id=None)
+    runtime = types.SimpleNamespace(
+        wandb_run=types.SimpleNamespace(summary={}),
+        wandb_run_id=None,
+        finalize=lambda: None,
+    )
     config = _build_app_config(
         DummyDatamoduleConfig(DummyDatamodule()),
         use_wandb_logging=True,

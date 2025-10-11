@@ -189,6 +189,9 @@ async def test_main_skip_fine_tuning_updates_wandb(
             self.summary = types.SimpleNamespace(update=lambda data: wandb_updates.append(data))
             self._is_finished = True
 
+        def finalize(self) -> None:
+            pass
+
     class _FakeApi:
         def run(
             self,
@@ -209,6 +212,7 @@ async def test_main_skip_fine_tuning_updates_wandb(
     runtime = types.SimpleNamespace(
         wandb_run=_FakeRun(),
         wandb_run_id="run-1",
+        finalize=lambda: None,
     )
     monkeypatch.setattr(
         pyine.apps.trainers.openai_finetune.pyine.utils.reprod,

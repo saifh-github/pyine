@@ -212,6 +212,8 @@ async def main(
             config=config,
             runtime=runtime,
         )
+    if runtime is not None:
+        runtime.finalize()
 
 
 if __name__ == "__main__":
