@@ -103,18 +103,17 @@ class DummyGenerationModel(torch.nn.Module):
     ) -> DummyGenerationOutput:
         sequences: list[torch.Tensor] = []
         for idx in range(input_ids.size(0)):
-            prompt_length = int(attention_mask[idx].sum().item())
-            prompt_tokens = input_ids[idx, :prompt_length]
             new_tokens = torch.tensor(
                 [ord("x") + idx, ord("y") + idx],
                 dtype=torch.long,
                 device=input_ids.device,
             )
-            sequences.append(torch.cat((prompt_tokens, new_tokens), dim=0))
+            sequences.append(torch.cat((input_ids[idx], new_tokens), dim=0))
         padded = torch.nn.utils.rnn.pad_sequence(
             sequences,
             batch_first=True,
             padding_value=0,
+            padding_side="right",
         )
         return DummyGenerationOutput(padded)
 
@@ -478,15 +477,16 @@ def test_supports_text_generation_heuristics() -> None:
 def test_run_text_generation_decodes_predictions(
     simple_tokenizer: SimpleTokenizer,
 ) -> None:
+    simple_tokenizer.padding_side = "left"
     model = DummyGenerationModel()
     dataloader = [
         {
             "input_ids": torch.tensor(
-                [[ord("A"), ord("B"), ord("C"), 0], [ord("D"), ord("E"), 0, 0]],
+                [[0, ord("A"), ord("B"), ord("C")], [0, 0, ord("D"), ord("E")]],
                 dtype=torch.long,
             ),
             "attention_mask": torch.tensor(
-                [[1, 1, 1, 0], [1, 1, 0, 0]],
+                [[0, 1, 1, 1], [0, 0, 1, 1]],
                 dtype=torch.long,
             ),
             "input_len": [3, 2],

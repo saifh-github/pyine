@@ -800,15 +800,15 @@ def _get_generated_text(
     # extract the non-padded portion of input_ids based on padding side
     padding_side = tokenizer.padding_side
     if padding_side == "left":
-        pad_len = len(input_ids) - input_len
-        input_prompt_ids = input_ids[pad_len:]
+        assert (output_ids[: len(input_ids)] == input_ids).all().item(), (
+            "unexpected output ids not overlapping w/ input"
+        )
+        generated_ids = output_ids[len(input_ids) :]
     else:
         assert padding_side == "right", f"unexpected padding side: {padding_side}"
-        input_prompt_ids = input_ids[:input_len]
+        raise RuntimeError("text generation should always occur with left-side padding for optimal performance")
     # Compare the prompt portion of output with the non-padded input
-    assert (output_ids[:input_len] == input_prompt_ids).all().item(), "unexpected output ids not overlapping w/ input"
     decode_fn = typing.cast("typing.Callable[..., str]", tokenizer.decode)  # type: ignore[reportUnknownMemberType]
-    generated_ids = output_ids[input_len:]
     generated_text = decode_fn(
         generated_ids,
         skip_special_tokens=True,
