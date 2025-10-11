@@ -8,6 +8,7 @@ import typing
 import datasets as hf_datasets
 import langchain_core.messages
 import langchain_core.runnables
+import openai
 import torch
 import tqdm
 import transformers
@@ -497,14 +498,35 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
         CodeExecEvalsConfig,
         name="base",
         group=group,
-        description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader).",
+        description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader and tier4 limits).",
         config={
+            "llm_grader_provider_config": {
+                "max_tokens": 64,  # we really don't need much for grading results
+                "timeout": 60,  # gpt-5-nano requests should be pretty fast
+                "max_retries": 10,  # be generous here
+                # note: the GPT-5 series dropped support for customizing temperature, so we don't set anything here
+                "with_retry_config": {
+                    "retry_if_exception_type": (
+                        openai.APITimeoutError,  # stalled/timeout
+                        openai.APIConnectionError,  # network flake
+                        openai.RateLimitError,  # 429s
+                        openai.InternalServerError,  # 5xx
+                    ),
+                    "wait_exponential_jitter": True,  # backoff + jitter
+                    "stop_after_attempt": 3,  # on top of max_retries above
+                },
+                "rate_limiter_config": {
+                    "requests_per_second": 50,  # tier 4, with gpt-5-nano = 10K RPM, so this is a good/safe default
+                    "max_bucket_size": 50,
+                },
+            },
+            "add_idempotency_header": True,  # to mark all requests as unique and avoid retry issues
             # -------------
             "populate_full_signature": True,
             "hydra_convert": "object",
             "hydra_defaults": [
-                "_self_",
                 {"llm_grader_provider_config": "openai_gpt5nano"},  # provided by grader configs (called below)
+                "_self_",
             ],
         },
     )

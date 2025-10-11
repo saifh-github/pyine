@@ -3,6 +3,7 @@ import collections
 import dataclasses
 import logging
 import typing
+import uuid
 
 import langchain_core.runnables
 import pydantic
@@ -125,6 +126,7 @@ class OutcomeEvaluator:
         llm_grader_config: (pyine.utils.code.output_compare.LLMCompareOptions | None) = None,
         llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
         use_async_llm_grader: bool = True,
+        add_idempotency_header: bool = False,
         runnable_name: str | None = None,
     ) -> None:
         """Initialize the evaluator.
@@ -137,6 +139,7 @@ class OutcomeEvaluator:
             llm_grader_config: Optional LLM grader config override. If not provided, we will disable
                 the LLM grader and only use hard/soft matches.
             use_async_llm_grader: Optional flag to use futures instead of blocking during llm grading.
+            add_idempotency_header: Optional flag to add an idempotency header to the LLM grader.
             runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         """
         self.strip_hard_checks = strip_hard_checks
@@ -157,6 +160,7 @@ class OutcomeEvaluator:
         else:
             logger.debug("setting up code exec outcome evaluator WITHOUT llm grader")
         self.use_async_llm_grader = use_async_llm_grader
+        self.add_idempotency_header = add_idempotency_header
         self.results: list[SampleEval] = []
 
     def is_llm_grader_available(self) -> bool:
@@ -198,7 +202,11 @@ class OutcomeEvaluator:
             "expected_output": expected,
             "predicted_output": predicted,
         }
-        response = await self._llm_grader_chain.ainvoke(payload, config=config)
+        invoke_kwargs: dict[str, typing.Any] = {"config": config}
+        if self.add_idempotency_header:
+            # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
+            invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
+        response = await self._llm_grader_chain.ainvoke(payload, **invoke_kwargs)
         return _decode_response(typing.cast("LLMGraderResponse", response))
 
     def _invoke_llm_grader_sync(
@@ -213,7 +221,11 @@ class OutcomeEvaluator:
             "expected_output": expected,
             "predicted_output": predicted,
         }
-        response = self._llm_grader_chain.invoke(payload, config=config)
+        invoke_kwargs: dict[str, typing.Any] = {"config": config}
+        if self.add_idempotency_header:
+            # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
+            invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
+        response = self._llm_grader_chain.invoke(payload, **invoke_kwargs)
         return _decode_response(typing.cast("LLMGraderResponse", response))
 
     def add_sample(
