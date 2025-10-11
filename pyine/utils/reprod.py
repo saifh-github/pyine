@@ -420,7 +420,7 @@ def get_failsafe_rank(group: torch.distributed.ProcessGroup | None = None) -> in
 def get_failsafe_worldsize(group: torch.distributed.ProcessGroup | None = None) -> int:
     """Returns the result of torch.distributed.get_world_size, or -1 if not in a process group."""
     if torch.distributed.is_initialized():
-        torch.distributed.get_world_size(group)
+        return torch.distributed.get_world_size(group)
     return -1
 
 

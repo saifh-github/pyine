@@ -37,8 +37,15 @@ def _compute_estimated_train_token_count(
         raise_if_not_found=False,
     )
     token_count = 0
+    # use the same dataset preparation flags as actual training uploads
+    append_answer = config.needs_answers_in_train_dataset()
+    merge_system_with_user = not config.supports_system_prompt()
     for subset_name in config.datamodule_config.train_subset_names:
-        tr_file_path = datamodule.get_openai_messages_dataset(subset_name)
+        tr_file_path = datamodule.get_openai_messages_dataset(
+            subset_name=subset_name,
+            append_answer=append_answer,
+            merge_system_with_user=merge_system_with_user,
+        )
         conversations = pyine.utils.openai.read_dataset_from_jsonl(tr_file_path)
         for conversation in conversations:
             for message in conversation:
@@ -96,7 +103,7 @@ def train(
         )
     else:
         try:
-            finetuner.stream_job_events(job_id)  # streams events without blocking
+            finetuner.stream_job_events(job_id)  # streams events until interrupted (blocking)
         except KeyboardInterrupt:
             logger.info("stopped streaming events; continuing to poll status...")
     model_name = finetuner.wait_for_job(job_id)
