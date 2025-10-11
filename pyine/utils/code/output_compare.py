@@ -347,12 +347,16 @@ def _compare_objects(
 def _compare_numbers(a: int | float, b: int | float, opt: CompareOptions) -> CompareResult:
     """Compare two numbers."""
     if isinstance(a, float) or isinstance(b, float):  # noqa
-        if math.isnan(a) or math.isnan(b):
-            if opt.nan_equal and math.isnan(a) and math.isnan(b):
-                return _ok()
-            return _fail("NaN mismatch")
-        if math.isinf(a) or math.isinf(b):
-            return _ok() if (a == b) else _fail("Infinity differs")
+        try:
+            if math.isnan(a) or math.isnan(b):
+                if opt.nan_equal and math.isnan(a) and math.isnan(b):
+                    return _ok()
+                return _fail("NaN mismatch")
+            if math.isinf(a) or math.isinf(b):
+                return _ok() if (a == b) else _fail("Infinity differs")
+        except OverflowError:
+            # if int is too large to convert to float for nan/inf checks, it's definitely not nan/inf
+            pass
     abs_tol, rel_tol = opt.abs_tol, opt.rel_tol
     with contextlib.suppress(Exception):
         if abs_tol == "auto" or rel_tol == "auto":
