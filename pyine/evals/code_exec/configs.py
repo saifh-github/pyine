@@ -8,7 +8,6 @@ import typing
 import datasets as hf_datasets
 import langchain_core.messages
 import langchain_core.runnables
-import openai
 import torch
 import tqdm
 import transformers
@@ -47,9 +46,8 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
     eval_type: pyine.evals.common.EvalType | None = pyine.evals.common.EvalType.CODE_EXEC
     """Type of evaluation to be conducted."""
-
-    llm_grader_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
-    """Configuration for the LLM code execution output grader provider (if needed)."""
+    evaluator_kwargs: dict[str, typing.Any] | None = None
+    """Keyword arguments to be passed to the code exec outcome evaluator constructor."""
 
     # ---------------- public overridable evaluation methods ----------------
 
@@ -84,7 +82,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             "this code execution evaluator only supports sample builder-based parsers"
         )
         _log = logger.info if verbose else logger.debug
-        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(llm_provider_config=self.llm_grader_provider_config)
+        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**(self.evaluator_kwargs or {}))
         token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
         sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData] = {}
         sample_idxs = list(range(len(sample_generator)))
@@ -215,7 +213,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 f"got: {type(model)}"
             )
         _log = logger.info if verbose else logger.debug
-        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(llm_provider_config=self.llm_grader_provider_config)
+        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**(self.evaluator_kwargs or {}))
         if self.eval_generation_config is None:
             raw_gen_config = getattr(model, "generation_config", None)
             if raw_gen_config is None:
@@ -500,39 +498,21 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
         group=group,
         description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader and tier4 limits).",
         config={
-            "llm_grader_provider_config": {
-                "max_tokens": 64,  # we really don't need much for grading results
-                "timeout": 60,  # gpt-5-nano requests should be pretty fast
-                "max_retries": 10,  # be generous here
-                # note: the GPT-5 series dropped support for customizing temperature, so we don't set anything here
-                "with_retry_config": {
-                    "retry_if_exception_type": (
-                        openai.APITimeoutError,  # stalled/timeout
-                        openai.APIConnectionError,  # network flake
-                        openai.RateLimitError,  # 429s
-                        openai.InternalServerError,  # 5xx
-                    ),
-                    "wait_exponential_jitter": True,  # backoff + jitter
-                    "stop_after_attempt": 3,  # on top of max_retries above
-                },
-                "rate_limiter_config": {
-                    "requests_per_second": 50,  # tier 4, with gpt-5-nano = 10K RPM, so this is a good/safe default
-                    "max_bucket_size": 50,
-                },
+            "evaluator_kwargs": {
+                "add_idempotency_header": True,  # to mark all requests as unique and avoid retry issues
             },
-            "add_idempotency_header": True,  # to mark all requests as unique and avoid retry issues
             # -------------
             "populate_full_signature": True,
             "hydra_convert": "object",
             "hydra_defaults": [
-                {"llm_grader_provider_config": "openai_gpt5nano"},  # provided by grader configs (called below)
                 "_self_",
+                {"evaluator_kwargs/llm_provider_config": "openai_gpt5nano_scoring"},  # imported below
             ],
         },
     )
     import pyine.evals.configs as evals_configs
 
     llm_grader_provider_configs = evals_configs.get_grader_provider_configs(
-        group=f"{group}/llm_grader_provider_config",
+        group=f"{group}/evaluator_kwargs/llm_provider_config",
     )
     return [base_config, *llm_grader_provider_configs]

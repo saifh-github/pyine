@@ -97,7 +97,7 @@ def get_model_from_provider(
     if with_retry_config is not None:
         llm = typing.cast(
             "langchain_core.language_models.BaseLanguageModel[typing.Any]",
-            typing.cast("typing.Any", llm).with_retries(**with_retry_config),
+            typing.cast("typing.Any", llm).with_retry(**with_retry_config),
         )
     return llm
 

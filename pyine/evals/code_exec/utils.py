@@ -123,8 +123,8 @@ class OutcomeEvaluator:
         self,
         strip_hard_checks: bool = True,
         soft_checks_config: (pyine.utils.code.output_compare.CompareOptions | None) = None,
-        llm_grader_config: (pyine.utils.code.output_compare.LLMCompareOptions | None) = None,
         llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
+        llm_grader_config: (pyine.utils.code.output_compare.LLMCompareOptions | None) = None,
         use_async_llm_grader: bool = True,
         add_idempotency_header: bool = False,
         runnable_name: str | None = None,
@@ -136,9 +136,13 @@ class OutcomeEvaluator:
                 exact (hard) matches.
             soft_checks_config: Optional soft match config override. If not provided, will use
                 a default config.
-            llm_grader_config: Optional LLM grader config override. If not provided, we will disable
-                the LLM grader and only use hard/soft matches.
-            use_async_llm_grader: Optional flag to use futures instead of blocking during llm grading.
+            llm_provider_config: Optional LLM provider config. If not provided, we will not be
+                using LLM grading at all, and will only compute hard/soft matches.
+            llm_grader_config: Optional LLM grader config override. If not provided, we will use
+                the default LLM grading options when a provider config is available. Has not effect
+                if no provider config is specified.
+            use_async_llm_grader: Optional flag to use futures instead of blocking during llm grading;
+                falls back to synchronous execution if no event loop is running in the current thread.
             add_idempotency_header: Optional flag to add an idempotency header to the LLM grader.
             runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         """
@@ -177,13 +181,18 @@ class OutcomeEvaluator:
             raise ValueError("LLM grader not configured, scoring is unavailable")
         assert self._llm_grader_chain is not None  # narrow type for pyright
         if self.use_async_llm_grader:
-            return asyncio.create_task(
-                self._invoke_llm_grader_async(
-                    expected=expected,
-                    predicted=predicted,
-                    config=config,
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                logger.debug("no running event loop detected; falling back to synchronous llm grading")
+            else:
+                return asyncio.create_task(
+                    self._invoke_llm_grader_async(
+                        expected=expected,
+                        predicted=predicted,
+                        config=config,
+                    )
                 )
-            )
         return self._invoke_llm_grader_sync(
             expected=expected,
             predicted=predicted,
