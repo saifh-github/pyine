@@ -33,7 +33,7 @@ class ChatDeepSeek:
         self.retry_config = None
         self.structured_model = None
 
-    def with_retries(
+    def with_retry(
         self,
         **cfg: typing.Any,
     ) -> "ChatDeepSeek":

@@ -1,6 +1,7 @@
 import collections.abc
 import dataclasses
 import datetime
+import enum
 import functools
 import importlib
 import inspect
@@ -767,3 +768,28 @@ class _RichFoldIndicator:
                 if (not is_last_overall) and self.suffix:
                     yield rich.segment.Segment(self.suffix, self.suffix_style)
                 yield rich.segment.Segment.line()
+
+
+def make_json_serializable(obj: typing.Any) -> typing.Any:
+    """Convert inputs that might include non-JSON-friendly values into JSON-serializable data."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, enum.Enum):
+        return obj.value
+    if isinstance(obj, pathlib.Path):
+        return str(obj)
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, type):
+        return get_fully_qualified_name(obj)
+    if isinstance(obj, collections.abc.Mapping):
+        obj = typing.cast("collections.abc.Mapping[typing.Any, typing.Any]", obj)
+        return {str(key): make_json_serializable(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        obj = typing.cast("collections.abc.Sequence[typing.Any]", obj)
+        return [make_json_serializable(value) for value in obj]
+    if dataclasses.is_dataclass(obj):
+        return make_json_serializable(dataclasses.asdict(obj))  # type: ignore[reportArgumentType]
+    if isinstance(obj, pydantic.BaseModel):
+        return make_json_serializable(obj.model_dump(mode="python"))
+    return str(obj)

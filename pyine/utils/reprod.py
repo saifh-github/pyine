@@ -16,6 +16,7 @@ import warnings
 import dotenv
 import lightning.fabric.utilities.seed
 import pydantic
+import pydantic_core
 import rich
 import torch
 import transformers
@@ -23,7 +24,7 @@ import wandb
 
 import pyine.utils.portability
 
-_ = pyine.utils.portability  # for yaml path dump fixer
+_ = pyine.utils.portability  # always used for yaml path dump fixer (triggered at import time)
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas  # noqa
@@ -357,7 +358,12 @@ def entrypoint_setup(
         app_config_dict: dict[str, typing.Any] = {}
         for config_name, config in extra_configs.items():
             assert isinstance(config, pydantic.BaseModel), "extra configs must be pydantic models"
-            curr_config = config.model_dump(mode="json")
+            try:
+                curr_config = config.model_dump(mode="json")
+            except (pydantic_core.PydanticSerializationError, TypeError, ValueError):
+                curr_config = pyine.utils.portability.make_json_serializable(config.model_dump(mode="python"))  # type: ignore[reportUnknownVariableType]
+            assert isinstance(curr_config, dict), "config must be serializable to a dict"
+            curr_config = typing.cast("dict[str, typing.Any]", curr_config)
             print(f"{config_name} config:")
             rich.print_json(data=curr_config, indent=2)
             app_config_dict[config_name] = curr_config
