@@ -21,7 +21,6 @@ import pyine.evals.common
 import pyine.evals.utils
 import pyine.organisms.datamodules.utils.samples
 import pyine.utils.concurrency
-import pyine.utils.llm_providers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)

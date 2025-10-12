@@ -4,9 +4,14 @@ import typing
 
 import pytest
 
+import pyine.evals.code_exec.configs
 import pyine.evals.code_exec.utils
+import pyine.evals.common
+import pyine.evals.configs
+import pyine.prompts.manager
 import pyine.utils.llm_providers
 import tests.env_checks
+import tests.hydra_test_utils
 
 
 class _DummyGraderChain:
@@ -122,6 +127,54 @@ def test_strip_hard_checks_behavior() -> None:
     evaluator_strip = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
     evaluator_strip.add_sample(identifier="s", expected="answer", predicted=" answer ")
     assert evaluator_strip.compute_hard_accuracy() == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
+)
+async def test_outcome_evaluator_large_batch_base_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        group="tests_evals",
+    )
+    target_config = next(cfg for cfg in configs if cfg.name == "base")
+    assert target_config is not None
+    with tests.hydra_test_utils.instantiate_from_defaults_with_launch(
+        base_configs=[c for c in configs if c is not target_config],
+        target_config=target_config,
+    ) as evals_config:
+        assert isinstance(evals_config, pyine.evals.code_exec.configs.CodeExecEvalsConfig)
+        assert evals_config.evaluator_kwargs is not None, "evaluator_kwargs should have been set"
+        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**evals_config.evaluator_kwargs)
+    sample_count = 500
+    for idx in range(sample_count):
+        expected = f"value-{idx}"
+        if idx % 10 == 0:
+            predicted = "something-irrelevant"
+        elif idx % 3 == 0:
+            predicted = f" {expected} "
+        else:
+            predicted = expected
+        evaluator.add_sample(
+            identifier=f"sample-{idx}",
+            expected=expected,
+            predicted=predicted,
+            tags=[f"bucket:{idx % 5}"],
+        )
+    assert len(evaluator.results) == sample_count
+    hard_acc = evaluator.compute_hard_accuracy()
+    soft_acc = evaluator.compute_soft_accuracy()
+    grader_acc = await evaluator.compute_grader_accuracy()
+    agreement = await evaluator.compute_agreement_table()
+    assert hard_acc == pytest.approx(0.9)
+    assert soft_acc == pytest.approx(0.9)
+    assert grader_acc > 0.85
+    assert agreement["hard_vs_soft"] == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
