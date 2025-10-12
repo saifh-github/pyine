@@ -329,6 +329,8 @@ class TestOpenAIIntegration:
                 validation_file_id=None,
             )
             assert isinstance(job_id, str) and len(job_id) > 0
+            finetuning_jobs = tuner.list_finetuning_jobs()
+            assert any(job.id == job_id for job in finetuning_jobs)
             model_id = tuner.wait_for_job(
                 job_id=job_id,
                 poll_seconds=10,
@@ -362,7 +364,7 @@ class TestOpenAIIntegration:
         matched_models = tuner.list_remote_models(pattern=f"ft:.*{test_tag}.*")
         if not matched_models:
             pytest.skip("No matching fine-tuned test models found")
-        model_id = matched_models[0].fine_tuned_model  # use first match
+        model_id = matched_models[0].id  # use first match
         reply = tuner.chat(
             model_id=model_id,
             system_prompt="You are brief.",

@@ -505,14 +505,31 @@ class OpenAIFineTuner:
     def list_remote_models(
         self,
         pattern: str | None = None,  # optional regex pattern for matching
-    ) -> list[openai.types.fine_tuning.fine_tuning_job.FineTuningJob]:
-        """Returns remote models that have been created via fine-tuning."""
-        page = self.client.fine_tuning.jobs.list()
-        models = list(page.data)
+    ) -> list[openai.types.model.Model]:
+        """Return fine-tuned models that are available for this account."""
+        page = self.client.models.list()
+        models = [model for model in page.data if model.id.startswith("ft:")]
         if pattern is not None:
             regex: typing.Pattern[str] = re.compile(pattern)
-            return [m for m in models if m.fine_tuned_model and regex.match(m.fine_tuned_model)]
+            return [model for model in models if regex.match(model.id)]
         return models
+
+    def list_finetuning_jobs(
+        self,
+        pattern: str | None = None,
+    ) -> list[openai.types.fine_tuning.fine_tuning_job.FineTuningJob]:
+        """Return fine-tuning jobs, optionally filtered by the resulting model id pattern."""
+        page = self.client.fine_tuning.jobs.list()
+        jobs = list(page.data)
+        if pattern is None:
+            return jobs
+        regex: typing.Pattern[str] = re.compile(pattern)
+        filtered_jobs: list[openai.types.fine_tuning.fine_tuning_job.FineTuningJob] = []
+        for job in jobs:
+            model_id = getattr(job, "fine_tuned_model", "") or ""
+            if model_id and regex.match(model_id):
+                filtered_jobs.append(job)
+        return filtered_jobs
 
     def is_file_already_uploaded(
         self,
