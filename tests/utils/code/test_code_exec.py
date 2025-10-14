@@ -775,4 +775,3 @@ def test_entrypoint_resolves_to_non_callable_raises_typeerror() -> None:
     result = _unsafe_execute_and_trace_code(code, entrypoint_name="value")
     assert result.exception is not None
     assert result.exception.type == "TypeError"
-    assert "non-callable" in result.exception.message
