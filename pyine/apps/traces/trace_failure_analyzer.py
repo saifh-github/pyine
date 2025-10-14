@@ -23,7 +23,7 @@ import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 from pyine.data.traces.dataset_utils import CodingProblem, CodingProblemIterator, Solution, TraceIdentifier
-from pyine.data.traces.dataset_writer import TraceDatasetWriterConfig, _CodeToTrace, _trace_code_snippet
+from pyine.data.traces.dataset_writer import TraceDatasetWriterConfig, TraceRequest, trace_code_snippet
 from pyine.prompts import PromptBuildConfig, TypedPromptResultFetcher
 from pyine.prompts.configs.input_output_rewrite import InputOutputRewriteResponse
 from pyine.prompts.result_db import ValidationFailedError
@@ -262,7 +262,7 @@ def output_compare(problem: CodingProblem, solutions: list[Solution]) -> bool:
                 augment_category="bug",
                 augment_idx=0,
             )
-            code_to_trace = _CodeToTrace(
+            code_to_trace = TraceRequest(
                 code_string=solution.code,
                 entrypoint_name=entrypoint_name,
                 trace_id=trace_id,
@@ -283,9 +283,12 @@ def output_compare(problem: CodingProblem, solutions: list[Solution]) -> bool:
 
 
 def get_code_output(
-    code: _CodeToTrace,
-) -> pyine.data.utils.lmdb_io.TraceDump:
-    return _trace_code_snippet(code, TRACE_WRITER_CONFIG)
+    code: TraceRequest,
+) -> tuple[
+    pyine.utils.code.execution.TraceResult,
+    pyine.utils.code.output_compare.CompareResult,
+]:
+    return trace_code_snippet(code_snippet=code, config=TRACE_WRITER_CONFIG)
 
 
 def run_input_output_rewrite(

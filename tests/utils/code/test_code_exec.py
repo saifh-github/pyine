@@ -388,6 +388,27 @@ def func(b: str) -> int:
         assert safe_step.local_variables == unsafe_step.local_variables
 
 
+def test_class_method_entrypoint_executes() -> None:
+    """Ensure dotted entrypoint names execute without requiring error fallbacks."""
+
+    code = """\
+class Solver:
+    def solve(self, value: int) -> int:
+        return value + 1
+"""
+
+    trace_result = execute_and_trace_code(
+        code_string=code,
+        inputs='{"value": 41}',
+        entrypoint_name="Solver.solve",
+        trace_only_inside_code_string=True,
+        use_safe_execution=True,
+    )
+
+    assert trace_result.exception is None
+    assert trace_result.return_value == 42
+
+
 def _build_dummy_trace_result() -> tuple[TraceResult, TraceEvent, TraceKey]:
     trace_key = TraceKey(file="snippet.py", object="fn", line=1)
     event = TraceEvent(

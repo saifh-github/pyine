@@ -740,50 +740,26 @@ def _unsafe_execute_and_trace_code(
             if entrypoint_name is not None:
                 with trace_context(_trace_callback):
                     exec(compiled_code, exec_namespace)  # noqa: S102
-                if entrypoint_name and entrypoint_name in exec_namespace:
+                entrypoint = _resolve_entrypoint_from_namespace(exec_namespace, entrypoint_name)
+                if callable(entrypoint):
                     # note for later: if this is buggy/annoying, could add call inside code string itself
                     entrypoint_step_idx = last_trace_step_idx
-                    entrypoint = typing.cast(
+                    entrypoint_callable = typing.cast(
                         "collections.abc.Callable[..., typing.Any]",
-                        exec_namespace[entrypoint_name],
+                        entrypoint,
                     )
                     entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
-                        entrypoint, inputs
+                        entrypoint_callable,
+                        inputs,
                     )
                     with trace_context(_trace_callback):
-                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
+                        return_value = entrypoint_callable(*entrypoint_args, **entrypoint_kwargs)
                     trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT.value)
+                else:
+                    raise TypeError(f"entry point {entrypoint_name} resolved to non-callable {entrypoint!r}")
             else:
                 with pyine.utils.code.input_mock.MockInputContext(str(inputs)), trace_context(_trace_callback):
                     exec(compiled_code, exec_namespace)  # noqa: S102
-            _capture_buffers()
-    except (TimeoutError, TracingCapError):
-        with (
-            pyine.utils.timers.TimeLimit(timeout_seconds),
-            contextlib.redirect_stdout(stdout_capture),
-            contextlib.redirect_stderr(stderr_capture),
-        ):  # noqa
-            if entrypoint_name is not None:
-                with trace_context(_trace_callback):
-                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
-                entrypoint = _resolve_entrypoint_from_namespace(exec_namespace, entrypoint_name)
-                if callable(entrypoint):
-                    entrypoint_step_idx = last_trace_step_idx
-                    entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
-                        entrypoint, inputs
-                    )
-                    with trace_context(_trace_callback):
-                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
-                    trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
-                else:
-                    logging.debug("Entry point %s resolved to non-callable %r", entrypoint_name, entrypoint)
-            else:
-                mock_inputs = "" if inputs is None else inputs
-                with (
-                    pyine.utils.code.input_mock.MockInputContext(mock_inputs),
-                    trace_context(_trace_callback),
-                ):
-                    exec(compiled_code, exec_namespace)  # noqa: S102 - required for dynamic code execution
             _capture_buffers()
     except (TimeoutError, TracingCapError):  # noqa: B025 - re-raise after fallback attempt
         with (
@@ -797,11 +773,16 @@ def _unsafe_execute_and_trace_code(
                 entrypoint = _resolve_entrypoint_from_namespace(exec_namespace, entrypoint_name)
                 if callable(entrypoint):
                     entrypoint_step_idx = last_trace_step_idx
+                    entrypoint_callable = typing.cast(
+                        "collections.abc.Callable[..., typing.Any]",
+                        entrypoint,
+                    )
                     entrypoint_args, entrypoint_kwargs = pyine.utils.code.args_mapper.map_inputs_to_callable(
-                        entrypoint, inputs
+                        entrypoint_callable,
+                        inputs,
                     )
                     with trace_context(_trace_callback):
-                        return_value = entrypoint(*entrypoint_args, **entrypoint_kwargs)
+                        return_value = entrypoint_callable(*entrypoint_args, **entrypoint_kwargs)
                     trace_tags.append(TraceTagType.HAS_EXEC_ENTRYPOINT)
                 else:
                     raise TypeError(f"entry point {entrypoint_name} resolved to non-callable {entrypoint!r}") from None
