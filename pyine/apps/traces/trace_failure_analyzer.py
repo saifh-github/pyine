@@ -51,7 +51,7 @@ except FileNotFoundError:
 
 def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfig:
     provider = os.environ.get("INPUT_OUTPUT_REWRITE_PROVIDER", "openai")
-    model_name = os.environ.get("INPUT_OUTPUT_REWRITE_MODEL", "gpt-5")
+    model_name = os.environ.get("INPUT_OUTPUT_REWRITE_MODEL", "gpt-5-nano")
     try:
         temperature = float(os.environ.get("INPUT_OUTPUT_REWRITE_TEMPERATURE", "0"))
     except ValueError:
