@@ -184,6 +184,17 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             ),
         ),
     ]
+    problem_data_overrides_path: typing.Annotated[
+        str | pathlib.Path | None,
+        pydantic.Field(
+            default=None,
+            description=(
+                "Optional path to a problem-data overrides file. Pass the string 'auto' to look for "
+                "the default overrides in the cache or dataset root. If None, the writer will use a "
+                "dataset-specific default when available."
+            ),
+        ),
+    ]
     reformat_code_strings: typing.Annotated[
         bool,
         pydantic.Field(
@@ -917,11 +928,31 @@ def write_dataset(
     """
     log = logger.info if verbose else logger.debug
     log(f"parsing problem metadata for {config.source_dataset_name} source dataset...")
+    overrides_setting: str | pathlib.Path | None = config.problem_data_overrides_path
+    allow_default_override = overrides_setting is None
+    if isinstance(overrides_setting, str):
+        stripped_value = overrides_setting.strip()
+        if stripped_value.lower() in {"", "none", "disable"}:
+            overrides_setting = None
+            allow_default_override = False
+        else:
+            overrides_setting = stripped_value
+            allow_default_override = False
+    elif overrides_setting is not None:
+        allow_default_override = False
+    if allow_default_override:
+        default_override_basename = pyine.data.traces.dataset_utils.DEFAULT_PROBLEM_DATA_OVERRIDE_BASENAMES.get(
+            config.source_dataset_name,
+        )
+        if default_override_basename is not None:
+            overrides_setting = "auto"
+
     problem_data_iter = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name=config.source_dataset_name,
         root_data_path=root_dataset_path,
         target_problem_pattern=config.target_problem_pattern,
         target_problem_ids=config.target_problem_ids,
+        problem_data_overrides_path=overrides_setting,
         reformat_code_strings=config.reformat_code_strings,
         allow_banned_samples=config.allow_banned_samples,
         show_progress=verbose,

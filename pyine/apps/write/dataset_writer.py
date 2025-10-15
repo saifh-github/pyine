@@ -204,6 +204,16 @@ def main() -> None:
     ),
 )
 @click.option(
+    "--problem-data-overrides",
+    "problem_data_overrides",
+    type=str,
+    default=None,
+    help=(
+        "Optional path to a problem-data overrides file. Use 'auto' to look in the cache and dataset "
+        "root for the default overrides, or 'none' to disable overrides explicitly."
+    ),
+)
+@click.option(
     "--reformat-code-strings/--no-reformat-code-strings",
     "reformat_code_strings",
     default=True,
@@ -269,6 +279,7 @@ def traces(
     execution_timeout_seconds: float,
     target_problem_pattern: str | None,
     target_problem_ids: str | list[str] | None,
+    problem_data_overrides: str | None,
     reformat_code_strings: bool,
     generate_obfuscated_solutions: bool,
     fetch_augmented_solutions: typing.Sequence[str],
@@ -320,6 +331,7 @@ def traces(
         execution_timeout_seconds=execution_timeout_seconds,
         target_problem_pattern=problem_id_pattern,
         target_problem_ids=target_problem_ids,
+        problem_data_overrides_path=problem_data_overrides,
         reformat_code_strings=reformat_code_strings,
         allow_banned_samples=False,
         allow_imperfect_solutions=True,
