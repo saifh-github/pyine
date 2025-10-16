@@ -1,6 +1,7 @@
 # TODO: this module is getting huge, it should probably be a package instead
 
 import collections
+import collections.abc
 import dataclasses
 import logging
 import pathlib
@@ -358,18 +359,6 @@ def _draw_type[OutputType](
     return default_fallback
 
 
-type LMDBDatasetReadersOrPathsType = (
-    pyine.data.traces.dataset_reader.DatasetReader
-    | list[pyine.data.traces.dataset_reader.DatasetReader]
-    | tuple[pyine.data.traces.dataset_reader.DatasetReader]
-    | str
-    | pathlib.Path
-    | list[str | pathlib.Path]
-    | tuple[str | pathlib.Path]
-)
-"""Type used to specify source dataset args in the sample builder."""
-
-
 @dataclasses.dataclass(frozen=True)
 class _TraceSampleSelectionResult:
     """Result of the sample selection process for a single trace."""
@@ -415,7 +404,7 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
 
     def __init__(
         self,
-        source_data: LMDBDatasetReadersOrPathsType,
+        source_data: pyine.data.traces.dataset_reader.DatasetOrDatasetPathObjectOrArray,
         traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None) = None,  # if none, targets all
         filtering_config: SampleFilteringConfig | dict[str, typing.Any] | None = None,
         selection_config: SampleSelectionConfig | dict[str, typing.Any] | None = None,
@@ -456,22 +445,31 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
 
     @staticmethod
     def _init_readers_and_trace_metadata(
-        source_data: LMDBDatasetReadersOrPathsType,
+        source_data: pyine.data.traces.dataset_reader.DatasetOrDatasetPathObjectOrArray,
         traces: (list[pyine.data.traces.dataset_utils.TraceMetadata] | None),  # if none, targets all
     ) -> tuple[
-        dict[str, pyine.data.traces.dataset_reader.DatasetReader],
+        dict[str, pyine.data.traces.dataset_reader.DatasetProtocol],
         list[pyine.data.traces.dataset_utils.TraceMetadata],
     ]:
         """Initializes a list of LMDB readers and a list of target traces."""
-        source_array = [source_data] if not isinstance(source_data, (list, tuple)) else list(source_data)
-        logger.debug(f"initializing readers and metadata for:\n\t{'\n\t'.join(str(source) for source in source_array)}")
-        for src_idx, src in enumerate(source_array):
-            if isinstance(src, (str, pathlib.Path)):
-                source_array[src_idx] = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(src))
-        readers_map: dict[str, pyine.data.traces.dataset_reader.DatasetReader] = {}
-        for reader in source_array:
-            assert isinstance(reader, pyine.data.traces.dataset_reader.DatasetReader)
-            readers_map[reader.hash] = reader
+        if isinstance(source_data, collections.abc.Sequence) and not isinstance(source_data, (str, pathlib.Path)):
+            raw_source_items: list[typing.Any] = list(source_data)
+        else:
+            raw_source_items = [source_data]
+        logger.debug(
+            f"initializing readers and metadata for:\n\t{'\n\t'.join(str(source) for source in raw_source_items)}"
+        )
+        readers_map: dict[str, pyine.data.traces.dataset_reader.DatasetProtocol] = {}
+        normalized_sources: list[pyine.data.traces.dataset_reader.DatasetProtocol] = []
+        for raw_item in raw_source_items:
+            if isinstance(raw_item, (str, pathlib.Path)):
+                reader_obj = pyine.data.traces.dataset_reader.DatasetReader(pathlib.Path(raw_item))
+            elif isinstance(raw_item, pyine.data.traces.dataset_reader.DatasetProtocol):
+                reader_obj = raw_item
+            else:
+                raise TypeError(f"unsupported dataset source type: {type(raw_item)}")
+            normalized_sources.append(reader_obj)
+            readers_map[reader_obj.hash] = reader_obj
         assert len(readers_map) > 0, "sample builder initialization expects at least one data source"
         if traces is None:
             logger.debug("(targeting all available traces)")

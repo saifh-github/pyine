@@ -11,6 +11,7 @@ import pyine.data.traces.dataset_writer as dataset_writer
 import pyine.utils.code.execution as exec_utils
 import pyine.utils.filesystem as fs_utils
 import tests.env_checks
+import tests.utils.fake_dataset_readers as fake_dataset_readers
 
 
 @pytest.mark.parametrize(
@@ -68,6 +69,51 @@ def test_dataset_paths(
     path_b.mkdir(parents=True)
     found_dataset_path = dataset_utils.get_latest_dataset_path("TACO")
     assert found_dataset_path == path_b
+
+
+def test_trace_dataset_collection_combines_parts() -> None:
+    """Verify DatasetCollection concatenates readers while preserving metadata."""
+    reader_a = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE_A",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=2,
+        )
+    )
+    reader_b = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE_B",
+            subset_name="valid",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    collection = dataset_reader.DatasetCollection([reader_a, reader_b])
+    assert len(collection) == len(reader_a) + len(reader_b)
+    assert collection.trace_keys[: len(reader_a.trace_keys)] == reader_a.trace_keys
+    assert collection.trace_keys[-len(reader_b.trace_keys) :] == reader_b.trace_keys
+    component_hashes = {reader_a.hash, reader_b.hash}
+    for idx in range(len(collection)):
+        trace = collection[idx]
+        meta = collection.get_trace_metadata(idx)
+        assert trace.identifier == meta.identifier
+        assert meta.index == idx
+        assert meta.parent_dataset_hash == collection.hash
+        assert meta.metadata["source_dataset_hash"] in component_hashes
+        problem = collection.get_problem_data(idx)
+        assert problem.problem_id == meta.problem_id
+        assert set(collection.get_tags(idx)) == set(meta.tags)
+    target_key = reader_b.trace_keys[0]
+    fetched_by_key = collection[target_key]
+    assert fetched_by_key.identifier == target_key
+    key_meta = collection.get_trace_metadata(target_key)
+    assert key_meta.identifier == target_key
+    combined_metadata = collection.metadata["parent_dataset"]
+    assert combined_metadata["trace_count"] == len(collection)
+    assert len(combined_metadata["components"]) == 2
 
 
 def _write_minimal_taco_problem(root_dir: pathlib.Path) -> pathlib.Path:

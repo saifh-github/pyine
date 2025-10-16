@@ -8,9 +8,10 @@ for an example of how to use this dataset reader.
 
 from __future__ import annotations
 
+import bisect
 import collections
+import dataclasses
 import fnmatch
-import functools
 import logging
 import pathlib
 import typing
@@ -27,6 +28,116 @@ import pyine.utils.reprod
 logger = logging.getLogger(__name__)
 
 
+@typing.runtime_checkable
+class DatasetProtocol(typing.Protocol):
+    """Protocol describing the interface expected from trace datasets.
+
+    This protocol defines the common interface that all trace dataset implementations must satisfy,
+    enabling structural subtyping and type checking without requiring explicit inheritance. Both
+    `DatasetReader` and `DatasetCollection` implement this protocol.
+    """
+
+    problem_keys: list[str]
+    """List of unique problem identifiers in the dataset."""
+    trace_keys: list[str]
+    """List of unique trace identifiers in the dataset."""
+    trace_key_to_problem_key: dict[str, str]
+    """Mapping from trace identifiers to their parent problem identifiers."""
+    augment_key_to_parent_trace_key: dict[str, str]
+    """Mapping from augmented trace identifiers to their original (non-augmented) parent trace identifiers."""
+    trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata]
+    """List of metadata objects for all traces, indexed by trace position."""
+
+    @property
+    def metadata(self) -> dict[str, typing.Any]:
+        """Returns a dictionary of all metadata stored in the database."""
+        ...
+
+    @property
+    def size_on_disk(self) -> int:
+        """Returns the total size of the LMDB dataset stored on disk (in bytes)."""
+        ...
+
+    @property
+    def hash(self) -> str:
+        """Returns the hash of this dataset (computed from relevant files on disk)."""
+        ...
+
+    @property
+    def parent_dataset_name(self) -> str:
+        """Returns the name of the parent dataset used to create this traces dataset."""
+        ...
+
+    def __len__(self) -> int:
+        """Returns the total number of traces in the dataset."""
+        ...
+
+    def __getitem__(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.utils.code.execution.TraceResult:
+        """Fetches a trace by its index in this dataset (int) or by its identifier (str).
+
+        Args:
+            index_or_key: Zero-based index or unique trace identifier.
+
+        Returns:
+            The requested trace result containing execution data.
+        """
+        ...
+
+    def get_problem_data(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.traces.dataset_utils.CodingProblem:
+        """Fetches the problem data associated with a trace.
+
+        Args:
+            index_or_key: Index or identifier of the trace for which to retrieve problem data.
+
+        Returns:
+            The coding problem that generated this trace.
+        """
+        ...
+
+    def get_trace_metadata(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.traces.dataset_utils.TraceMetadata:
+        """Returns the metadata associated with a trace.
+
+        Args:
+            index_or_key: Index or identifier of the trace.
+
+        Returns:
+            Metadata containing trace statistics, tags, and identification info.
+        """
+        ...
+
+    def get_tags(
+        self,
+        index_or_key: int | str,
+    ) -> list[str]:
+        """Returns the list of tags associated with a trace.
+
+        Tags are used for filtering and categorization, combining problem tags, execution tags,
+        and augmentation category tags.
+
+        Args:
+            index_or_key: Index or identifier of the trace.
+
+        Returns:
+            A copy of the tag list for the specified trace.
+        """
+        ...
+
+
+DatasetOrDatasetPath = pathlib.Path | str | DatasetProtocol
+"""Type used to represent a trace dataset or a path to a trace dataset."""
+DatasetOrDatasetPathObjectOrArray = DatasetOrDatasetPath | typing.Sequence[DatasetOrDatasetPath]
+"""Type used to represent a trace dataset or a path to a trace dataset or a list of such datasets/paths."""
+
+
 class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceResult]):
     """PyINE raw trace dataset reader.
 
@@ -39,7 +150,7 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
     Upon initialization, the reader attempts to load the prepared trace metadata from the dataset's
     LMDB directory. If the metadata is not found, it will prepare the metadata and save it there.
 
-    Note: this readers does NOT attempt to structure the trace steps into deltas, so they will be
+    Note: this reader does NOT attempt to structure the trace steps into deltas, so they will be
     quite verbose, likely too much so for most applications with reasoning models.
 
     Args:
@@ -67,6 +178,10 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
             pyine.data.traces.dataset_utils.CodingProblem,
         ] = collections.OrderedDict()
         self._problem_cache_max_size = 512
+        self._metadata_cache: dict[str, typing.Any] | None = None
+        self._size_on_disk_cache: int | None = None
+        self._hash_cache: str | None = None
+        self._parent_dataset_name_cache: str | None = None
         self._init_trace_metadata()
 
     def _is_metadata_prepared(self) -> bool:
@@ -231,29 +346,42 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
         """Returns the total number of traces in the dataset accessible via ``__getitem__``"""
         return len(self.trace_keys)
 
-    @functools.cached_property
+    @property
     def metadata(self) -> dict[str, typing.Any]:
         """Returns a dictionary of all metadata stored in the database."""
-        return self.reader.get_metadata()
+        if self._metadata_cache is None:
+            self._metadata_cache = self.reader.get_metadata()
+        return self._metadata_cache
 
-    @functools.cached_property
+    @property
     def size_on_disk(self) -> int:
         """Returns the total size of the LMDB dataset stored on disk (in bytes)."""
-        return self.reader.get_size_on_disk()
+        if self._size_on_disk_cache is None:
+            self._size_on_disk_cache = self.reader.get_size_on_disk()
+        return self._size_on_disk_cache
 
-    @functools.cached_property
+    @property
     def hash(self) -> str:
         """Returns the hash of this dataset (computed from relevant lmdb files on disk)."""
-        # note: we don't compute the hash over the entire lmdb dir, just over the file that matters
-        # (that folder will likely contain other stuff such as processing logs and metadata caches)
-        expected_data_mdb_file = self.reader.path / "data.mdb"
-        assert expected_data_mdb_file.is_file(), f"missing data.mdb file: {expected_data_mdb_file}"
-        return pyine.utils.reprod.compute_hash(expected_data_mdb_file)
+        if self._hash_cache is None:
+            # note: we don't compute the hash over the entire lmdb dir, just over the file that matters
+            # (that folder will likely contain other stuff such as processing logs and metadata caches)
+            expected_data_mdb_file = self.reader.path / "data.mdb"
+            assert expected_data_mdb_file.is_file(), f"missing data.mdb file: {expected_data_mdb_file}"
+            self._hash_cache = pyine.utils.reprod.compute_hash(expected_data_mdb_file)
+        return self._hash_cache
 
-    @functools.cached_property
+    @property
     def parent_dataset_name(self) -> str:
         """Returns the name of the parent dataset used to create this dataset."""
-        return self.metadata["parent_dataset"]["dataset_name"]
+        if self._parent_dataset_name_cache is None:
+            parent_info = self.metadata.get("parent_dataset", {})
+            assert isinstance(parent_info, dict), "unexpected parent dataset metadata format"
+            parent_info = typing.cast("dict[str, typing.Any]", parent_info)
+            dataset_name = parent_info.get("dataset_name")
+            assert isinstance(dataset_name, str), "missing parent dataset name in metadata"
+            self._parent_dataset_name_cache = dataset_name
+        return self._parent_dataset_name_cache
 
     def _resolve_trace_index_or_key(
         self,
@@ -329,7 +457,269 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
         return f"{self.__class__.__name__}({self.path}) with {len(self)} instances"
 
 
-DatasetOrDatasetPath = pathlib.Path | str | DatasetReader
+class DatasetCollection(torch.utils.data.Dataset[pyine.utils.code.execution.TraceResult]):
+    """Concatenates multiple trace datasets into a single reader-like view.
+
+    Args:
+        datasets: sequence of dataset paths or reader instances to combine. Each dataset must expose
+            unique trace identifiers so that lookups remain unambiguous.
+    """
+
+    def __init__(
+        self,
+        datasets: typing.Sequence[DatasetOrDatasetPath],
+    ) -> None:
+        if not datasets:
+            raise ValueError("at least one dataset must be provided")
+        readers: list[DatasetReader] = []
+        for item in datasets:
+            if isinstance(item, DatasetReader):
+                readers.append(item)
+            else:
+                if not isinstance(item, (str, pathlib.Path)):
+                    raise ValueError("dataset collections can only encapsulate dataset paths or readers")
+                readers.append(DatasetReader(item))
+        self._readers = tuple(readers)
+        self.paths: tuple[pathlib.Path, ...] = tuple(reader.path for reader in self._readers)
+        self._component_hashes: tuple[str, ...] = tuple(reader.hash for reader in self._readers)
+        self._combined_hash = pyine.utils.reprod.get_params_hash(
+            "trace_dataset_collection",
+            self._component_hashes,
+        )
+        self._component_info: list[dict[str, typing.Any]] = []
+        self.problem_keys: list[str] = []
+        self.trace_keys: list[str] = []
+        self.trace_key_to_problem_key: dict[str, str] = {}
+        self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        self.trace_metadata: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        self._trace_key_to_index: dict[str, int] = {}
+        self._reader_boundaries: list[int] = [0]
+        parent_names: set[str] = set()
+        cumulative_trace_count = 0
+        for reader in self._readers:
+            parent_meta: dict[str, typing.Any] = {}
+            reader_metadata = getattr(reader, "metadata", {})
+            if isinstance(reader_metadata, dict):
+                reader_metadata_dict = typing.cast("dict[str, typing.Any]", reader_metadata)
+                raw_parent_obj = reader_metadata_dict.get("parent_dataset", {})
+                if isinstance(raw_parent_obj, dict):
+                    parent_meta = dict(typing.cast("dict[str, typing.Any]", raw_parent_obj))
+            parent_name_value = typing.cast("str | None", parent_meta.get("dataset_name"))
+            parent_name = parent_name_value or reader.parent_dataset_name
+            parent_names.add(parent_name)
+            self._component_info.append(
+                {
+                    "parent_dataset": parent_meta,
+                    "hash": reader.hash,
+                    "path": str(getattr(reader, "path", "")),
+                    "trace_count": len(reader),
+                    "fallback_name": reader.parent_dataset_name,
+                }
+            )
+            self.problem_keys.extend(reader.problem_keys)
+            self.augment_key_to_parent_trace_key.update(reader.augment_key_to_parent_trace_key)
+            for local_idx, trace_key in enumerate(reader.trace_keys):
+                if trace_key in self.trace_key_to_problem_key:
+                    raise ValueError(f"duplicate trace key across dataset parts: {trace_key}")
+                global_idx = cumulative_trace_count + local_idx
+                self.trace_keys.append(trace_key)
+                self.trace_key_to_problem_key[trace_key] = reader.trace_key_to_problem_key[trace_key]
+                self._trace_key_to_index[trace_key] = global_idx
+                local_meta = reader.get_trace_metadata(local_idx)
+                metadata_payload = dict(local_meta.metadata)
+                metadata_payload.setdefault("source_dataset_hash", local_meta.parent_dataset_hash)
+                promoted_meta = dataclasses.replace(
+                    local_meta,
+                    index=global_idx,
+                    parent_dataset_hash=self._combined_hash,
+                    metadata=metadata_payload,
+                )
+                self.trace_metadata.append(promoted_meta)
+            cumulative_trace_count += len(reader)
+            self._reader_boundaries.append(cumulative_trace_count)
+        self._length = cumulative_trace_count
+        self._size_on_disk = sum(reader.size_on_disk for reader in self._readers)
+        self._parent_dataset_name = ",".join(sorted(parent_names)) if parent_names else ""
+        self._metadata_cache = self._build_metadata()
+
+    @property
+    def component_readers(self) -> tuple[DatasetReader, ...]:
+        """Returns the underlying dataset readers."""
+        return self._readers
+
+    @property
+    def component_hashes(self) -> tuple[str, ...]:
+        """Returns the hashes for each component dataset."""
+        return self._component_hashes
+
+    @property
+    def metadata(self) -> dict[str, typing.Any]:
+        """Returns aggregated metadata for the combined dataset."""
+        return self._metadata_cache
+
+    def _build_metadata(self) -> dict[str, typing.Any]:
+        component_entries: list[dict[str, typing.Any]] = []
+        dataset_names: list[str] = []
+        dataset_paths: list[str] = []
+        for info in self._component_info:
+            parent = typing.cast("dict[str, typing.Any]", info.get("parent_dataset", {}))
+            name = parent.get("dataset_name")
+            path_value = parent.get("dataset_path")
+            if isinstance(name, str):
+                dataset_names.append(name)
+            if isinstance(path_value, (str, pathlib.Path)):
+                dataset_paths.append(str(path_value))
+            component_entries.append(
+                {
+                    "dataset_name": name if isinstance(name, str) else info["fallback_name"],
+                    "dataset_path": (
+                        str(path_value) if isinstance(path_value, (str, pathlib.Path)) else info.get("path")
+                    ),
+                    "hash": info["hash"],
+                    "path": info.get("path"),
+                    "trace_count": info["trace_count"],
+                }
+            )
+        fallback_names = {info["fallback_name"] for info in self._component_info}
+        combined_name = ",".join(sorted(set(dataset_names) if dataset_names else fallback_names))
+        unique_paths = sorted({p for p in dataset_paths if p})
+        if not unique_paths:
+            dataset_path_value: str | list[str] | None = component_entries[0]["path"] if component_entries else None
+        elif len(unique_paths) == 1:
+            dataset_path_value = unique_paths[0]
+        else:
+            dataset_path_value = unique_paths
+        return {
+            "parent_dataset": {
+                "dataset_name": combined_name,
+                "dataset_path": dataset_path_value,
+                "trace_count": len(self),
+                "components": component_entries,
+            }
+        }
+
+    @property
+    def parent_dataset_name(self) -> str:
+        """Returns a descriptive parent dataset name for the combined dataset."""
+        if self._parent_dataset_name:
+            return self._parent_dataset_name
+        names = {
+            parent_name
+            for info in self._component_info
+            for parent_name in [info.get("parent_dataset", {}).get("dataset_name")]
+            if isinstance(parent_name, str)
+        }
+        if not names:
+            names = {info["fallback_name"] for info in self._component_info}
+        return ",".join(sorted(names))
+
+    @property
+    def size_on_disk(self) -> int:
+        """Returns the total disk footprint across all component datasets."""
+        return self._size_on_disk
+
+    @property
+    def hash(self) -> str:
+        """Returns the combined dataset hash."""
+        return self._combined_hash
+
+    def __len__(self) -> int:
+        """Returns the total number of traces across all component datasets."""
+        return self._length
+
+    def _resolve_index(
+        self,
+        index_or_key: int | str,
+    ) -> int:
+        """Resolves a user-facing index or key to a global dataset position."""
+        if isinstance(index_or_key, int):
+            if 0 <= index_or_key < self._length:
+                return index_or_key
+            raise IndexError(f"index {index_or_key} out of range")
+        key = index_or_key  # at this point, the input should be a str
+        if key in self._trace_key_to_index:
+            return self._trace_key_to_index[key]
+        raise KeyError(f"key {key} not found in dataset collection")
+
+    def _locate_reader(
+        self,
+        resolved_index: int,
+    ) -> tuple[DatasetReader, int]:
+        """Locates the component reader and local index for a given global index."""
+        reader_pos = bisect.bisect_right(self._reader_boundaries, resolved_index) - 1
+        if reader_pos < 0 or reader_pos >= len(self._readers):
+            raise IndexError(f"index {resolved_index} out of range")
+        reader = self._readers[reader_pos]
+        start = self._reader_boundaries[reader_pos]
+        return reader, resolved_index - start
+
+    @typing.override
+    def __getitem__(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.utils.code.execution.TraceResult:
+        """Fetches an individual trace data object by external index or key.
+
+        Args:
+            index_or_key: Index or key of the trace to retrieve.
+
+        Returns:
+            A `TraceResult` object containing the requested trace data.
+        """
+        resolved_index = self._resolve_index(index_or_key)
+        reader, local_idx = self._locate_reader(resolved_index)
+        return reader[local_idx]
+
+    def get_problem_data(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.traces.dataset_utils.CodingProblem:
+        """Fetches the problem data associated with a trace by external index or key.
+
+        Args:
+            index_or_key: Index or key of the trace for which to retrieve parent problem data.
+
+        Returns:
+            A `CodingProblem` object containing the problem data associated with the trace.
+        """
+        resolved_index = self._resolve_index(index_or_key)
+        reader, local_idx = self._locate_reader(resolved_index)
+        return reader.get_problem_data(local_idx)
+
+    def get_trace_metadata(
+        self,
+        index_or_key: int | str,
+    ) -> pyine.data.traces.dataset_utils.TraceMetadata:
+        """Returns the metadata associated with a trace by external index or key.
+
+        Args:
+            index_or_key: Index or key of the trace.
+
+        Returns:
+            A `TraceMetadata` object containing metadata for the specified trace.
+        """
+        resolved_index = self._resolve_index(index_or_key)
+        return self.trace_metadata[resolved_index]
+
+    def get_tags(
+        self,
+        index_or_key: int | str,
+    ) -> list[str]:
+        """Returns a list of tags for a given trace by external index or key.
+
+        Args:
+            index_or_key: Index or key of the trace.
+
+        Returns:
+            A copy of the tag list for the specified trace.
+        """
+        resolved_index = self._resolve_index(index_or_key)
+        return self.trace_metadata[resolved_index].tags.copy()
+
+    def __str__(self) -> str:
+        """Returns a string representation for debugging purposes."""
+        paths_repr = ", ".join(str(path) for path in self.paths)
+        return f"{self.__class__.__name__}([{paths_repr}]) with {len(self)} instances"
 
 
 def get_traces_metadata(
@@ -348,7 +738,12 @@ def get_traces_metadata(
     """
     if not isinstance(datasets, list):
         datasets = [datasets]
-    readers = [d if isinstance(d, torch.utils.data.Dataset) else DatasetReader(d) for d in datasets]
+    readers: list[DatasetProtocol] = []
+    for dataset in datasets:
+        if isinstance(dataset, DatasetProtocol):
+            readers.append(dataset)
+        else:
+            readers.append(DatasetReader(dataset))
     logger.info(f"preparing traces metadata for {len(readers)} dataset reader(s)...")
     all_trace_keys: list[str] = []
     for reader in readers:

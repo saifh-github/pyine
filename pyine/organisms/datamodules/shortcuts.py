@@ -45,7 +45,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     """
 
     _metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata | None
-    _readers: list[pyine.data.traces.dataset_reader.DatasetReader]
+    _readers: list[pyine.data.traces.dataset_reader.DatasetProtocol]
     _subset_parsers: dict[
         pyine.data.datamodule.SubsetNameType,
         pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
@@ -185,7 +185,10 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         logger.debug(f"loading shortcuts datamodule metadata from: {self._get_prepared_metadata_file_path()}")
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers since they should be read-only and never pickled
-        self._readers = [pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths]
+        readers: list[pyine.data.traces.dataset_reader.DatasetProtocol] = [
+            pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths
+        ]
+        self._readers = readers
         self._subset_parsers.clear()
         for subset_name in self.config.subset_names:
             if self.config.instantiate_parsers_at_setup:

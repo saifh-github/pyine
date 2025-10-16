@@ -22,6 +22,42 @@ class FakeDatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
         self._traces = traces
         self.trace_keys = [typing.cast("str", trace.identifier) for trace in traces]
         self.path = pathlib.Path("dummy/path")
+        self.problem_keys: list[str] = []
+        self.trace_key_to_problem_key: dict[str, str] = {}
+        self.augment_key_to_parent_trace_key: dict[str, str] = {}
+        self.trace_metadata: list[dataset_utils.TraceMetadata] = []
+        for idx, trace in enumerate(self._traces):
+            identifier = typing.cast("str", trace.identifier)
+            trace_id = dataset_utils.TraceIdentifier.from_string(identifier)
+            solution_id = trace_id.get_parent_identifier()
+            problem_id = solution_id.get_parent_identifier()
+            problem_key = str(problem_id)
+            if problem_key not in self.problem_keys:
+                self.problem_keys.append(problem_key)
+            self.trace_key_to_problem_key[identifier] = problem_key
+            if trace_id.is_augmented:
+                parent_id = trace_id.get_augmentless_identifier()
+                self.augment_key_to_parent_trace_key[identifier] = str(parent_id)
+            self.trace_metadata.append(
+                dataset_utils.TraceMetadata(
+                    identifier=identifier,
+                    parent_dataset_hash=self._dataset_hash,
+                    index=idx,
+                    internal_index=idx,
+                    step_count=trace.valid_step_count,
+                    code_string=trace.code_string,
+                    inputs=trace.inputs,
+                    expected_output=trace.expected_output,
+                    return_value=trace.return_value,
+                    exception=trace.exception,
+                    stdout=trace.stdout,
+                    stderr=trace.stderr,
+                    metadata=trace.metadata,
+                    tags=list(trace.tags),
+                )
+            )
+        self._tags_by_key = {trace.identifier: list(trace.tags) for trace in self._traces}
+        self._parent_dataset_name = dataset_hash
 
     @property
     def hash(self) -> str:
@@ -35,6 +71,49 @@ class FakeDatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
         trace_idx: int,
     ) -> execution_utils.TraceResult:
         return self._traces[trace_idx]
+
+    @property
+    def metadata(self) -> dict[str, typing.Any]:
+        return {
+            "parent_dataset": {
+                "dataset_name": self._parent_dataset_name,
+                "dataset_path": str(self.path),
+                "trace_count": len(self._traces),
+            }
+        }
+
+    @property
+    def size_on_disk(self) -> int:
+        return 0
+
+    @property
+    def parent_dataset_name(self) -> str:
+        return self._parent_dataset_name
+
+    def get_problem_data(
+        self,
+        index_or_key: int | str,
+    ) -> typing.Any:
+        raise NotImplementedError("FakeDatasetReader does not provide problem data")
+
+    def get_trace_metadata(
+        self,
+        index_or_key: int | str,
+    ) -> dataset_utils.TraceMetadata:
+        if isinstance(index_or_key, int):
+            return self.trace_metadata[index_or_key]
+        key = typing.cast("str", index_or_key)
+        for meta in self.trace_metadata:
+            if meta.identifier == key:
+                return meta
+        raise KeyError(key)
+
+    def get_tags(
+        self,
+        index_or_key: int | str,
+    ) -> list[str]:
+        key = self.trace_keys[index_or_key] if isinstance(index_or_key, int) else typing.cast("str", index_or_key)
+        return list(self._tags_by_key.get(key, []))
 
 
 class FakePromptResult:

@@ -94,3 +94,6 @@ class DatasetReader(pyine.data.traces.dataset_reader.DatasetReader):
             A `TraceResult` object containing the requested trace data.
         """
         return pyine.data.traces.dataset_reader.DatasetReader.__getitem__(self, index_or_key)
+
+
+# @@@@@@ TODO: add protocol + dataset collection impl like for regular trace datasets?

@@ -16,6 +16,25 @@ Examples:
             --llm-option model=gpt-4o-mini
     ```
 
+    Combine multiple dataset shards into a single run:
+    ```bash
+        python -m pyine.apps.annotate.trace_annot_generator \
+            --dataset /path/to/traces/dataset_part1 \
+            --dataset /path/to/traces/dataset_part2 \
+            --prompt-name hints/docs \
+            --llm-option provider=openai \
+            --llm-option model=gpt-4o
+    ```
+
+    Use a glob pattern to select multiple dataset shards:
+    ```bash
+        python -m pyine.apps.annotate.trace_annot_generator \
+            --dataset "/path/to/traces/dataset_part*" \
+            --prompt-name hints/docs \
+            --llm-option provider=openai \
+            --llm-option model=gpt-4o
+    ```
+
     Use the latest trace dataset available for a source dataset (e.g., "TACO"):
     ```bash
         python -m pyine.apps.annotate.trace_annot_generator \
@@ -69,13 +88,15 @@ Examples:
 
 Notes:
 - The dataset loader can be customized via --dataset-loader as a dotted path to a function or class
-  that returns a DatasetReader instance when called with the dataset path. If not provided, the CLI
-  will attempt to instantiate pyine.data.traces.dataset_reader.DatasetReader(dataset_path).
+  that returns a DatasetReader instance when called with either a single dataset path or a list of
+  paths (when combining shards). If not provided, the CLI will attempt to instantiate an object via
+  `pyine.data.traces.dataset_reader.DatasetReader(dataset_path)`.
 - Duration values support formats like "90m", "1h30m", "2d", or "3600s".
 """
 
 import asyncio
 import functools
+import glob
 import json
 import logging
 import pathlib
@@ -148,28 +169,53 @@ def _ensure_mapping_dict(
 
 
 def _build_dataset_reader(
-    dataset_path: pathlib.Path,
-    dataset_loader: str | None,
-) -> typing.Any:
-    """Instantiates a DatasetReader.
+    dataset_paths: list[pathlib.Path],
+    dataset_loader_name: str | None,
+) -> pyine.data.traces.dataset_reader.DatasetProtocol:
+    """Instantiates a trace dataset reader for one or multiple dataset directories.
 
-    If dataset_loader is provided, it must be a dotted path to either:
-      - a class that can be instantiated with (dataset_path), or
-      - a function that returns a reader when called as (dataset_path).
+    If `dataset_loader_name` is provided, it must be a dotted path to either:
+      - a class that can be instantiated with a dataset path (str/pathlib.Path),
+      - a function that returns a reader when called as (dataset_path),
+      - or a callable that accepts a list of dataset paths when multiple parts are provided.
 
     If not provided, attempt to instantiate:
-      pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
+      - `pyine.data.traces.dataset_reader.DatasetReader(path)` for single paths; or
+      - `pyine.data.traces.dataset_reader.DatasetCollection([...])` when multiple paths are provided.
     """
-    if dataset_loader:
+    if not dataset_paths:
+        raise click.BadParameter("no dataset paths were provided")
+    if dataset_loader_name:
         try:
-            loader = pyine.utils.portability.import_from_dotted_path(dataset_loader)
+            loader = pyine.utils.portability.import_from_dotted_path(dataset_loader_name)
         except Exception as exc:
-            raise click.ClickException(f"could not resolve dataset loader '{dataset_loader}': {exc}") from exc
+            raise click.ClickException(f"could not resolve dataset loader '{dataset_loader_name}': {exc}") from exc
         if not callable(loader):
-            raise click.BadParameter(f"dotted path '{dataset_loader}' does not resolve to a callable")
-        return loader(dataset_path)
+            raise click.BadParameter(f"dotted path '{dataset_loader_name}' does not resolve to a callable")
+        if len(dataset_paths) == 1:
+            return typing.cast(
+                "pyine.data.traces.dataset_reader.DatasetProtocol",
+                loader(dataset_paths[0]),
+            )
+        try:
+            return typing.cast(
+                "pyine.data.traces.dataset_reader.DatasetProtocol",
+                loader(dataset_paths),
+            )
+        except TypeError as exc:
+            raise click.BadParameter(
+                "dataset loader must accept a sequence of paths when --dataset is provided multiple times"
+            ) from exc
     try:
-        return pyine.data.traces.dataset_reader.DatasetReader(dataset_path)
+        if len(dataset_paths) == 1:
+            return typing.cast(
+                "pyine.data.traces.dataset_reader.DatasetProtocol",
+                pyine.data.traces.dataset_reader.DatasetReader(dataset_paths[0]),
+            )
+        return typing.cast(
+            "pyine.data.traces.dataset_reader.DatasetProtocol",
+            pyine.data.traces.dataset_reader.DatasetCollection(dataset_paths),
+        )
     except Exception as exc:
         raise click.ClickException(f"Failed to instantiate dataset reader; original error: {exc}") from exc
 
@@ -190,10 +236,15 @@ def _async_main_wrapper(
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--dataset",
-    "dataset_path",
-    type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
+    "dataset_paths",
+    type=str,
+    multiple=True,
     required=False,
-    help="Path to a traces dataset directory. Alternatively, use --dataset-latest-from to select by source name.",
+    help=(
+        "Path to a traces dataset directory. Repeat this option to combine dataset shards, or use "
+        "a glob pattern to select multiple dataset shards. Alternatively, use `--dataset-latest-from` "
+        "to select by source dataset name."
+    ),
 )
 @click.option(
     "--dataset-latest-from",
@@ -206,7 +257,10 @@ def _async_main_wrapper(
     "--dataset-loader",
     type=str,
     default=None,
-    help="Optional dotted path to a callable/class that returns a DatasetReader when called with (dataset_path).",
+    help=(
+        "Optional dotted path to a class that returns a DatasetReader when called with a dataset path "
+        "(or with a list of paths when --dataset is provided multiple times or as a glob pattern)."
+    ),
 )
 @click.option(
     "--prompt-name",
@@ -365,7 +419,7 @@ def _async_main_wrapper(
 )
 @_async_main_wrapper
 async def main(
-    dataset_path: pathlib.Path | None,
+    dataset_paths: tuple[str, ...],
     dataset_latest_from: str | None,
     dataset_loader: str | None,
     prompt_name: str,
@@ -401,8 +455,11 @@ async def main(
     # -------- prepare dataset-related stuff --------
 
     # resolve dataset path: exactly one of --dataset or --dataset-latest-from must be provided
-    if (dataset_path is None) == (dataset_latest_from is None):
+    has_explicit_paths = len(dataset_paths) > 0
+    has_latest = dataset_latest_from is not None
+    if has_explicit_paths == has_latest:
         raise click.BadParameter("exactly one of --dataset or --dataset-latest-from must be provided")
+    effective_dataset_paths: list[pathlib.Path]
     if dataset_latest_from is not None:
         try:
             resolved_path = pyine.data.traces.dataset_utils.get_latest_dataset_path(dataset_latest_from)
@@ -410,15 +467,37 @@ async def main(
             raise click.ClickException(
                 f"could not resolve latest trace dataset for source '{dataset_latest_from}': {exc}"
             ) from exc
-        effective_dataset_path = resolved_path
+        effective_dataset_paths = [resolved_path]
         logger.info(
             "resolved latest dataset for '%s' to: %s",
             dataset_latest_from,
-            effective_dataset_path,
+            resolved_path,
         )
     else:
-        effective_dataset_path = typing.cast("pathlib.Path", dataset_path)
-    dataset = _build_dataset_reader(effective_dataset_path, dataset_loader)
+        # expand glob patterns if present
+        expanded_paths: list[pathlib.Path] = []
+        for path_str in dataset_paths:
+            if any(char in path_str for char in ["*", "?", "[", "]"]):
+                # this is a glob pattern
+                matched_paths = glob.glob(path_str)
+                if not matched_paths:
+                    raise click.BadParameter(f"glob pattern '{path_str}' did not match any paths")
+                expanded_paths.extend(pathlib.Path(p) for p in sorted(matched_paths))
+            else:
+                # regular path
+                path = pathlib.Path(path_str)
+                if not path.exists():
+                    raise click.BadParameter(f"dataset path does not exist: {path}")
+                if not path.is_dir():
+                    raise click.BadParameter(f"dataset path is not a directory: {path}")
+                expanded_paths.append(path)
+        effective_dataset_paths = expanded_paths
+    dataset = _build_dataset_reader(effective_dataset_paths, dataset_loader)
+    dataset_location_desc = ", ".join(str(path) for path in effective_dataset_paths)
+    logger.info(
+        f"using {len(effective_dataset_paths)} dataset part(s): "
+        f"{dataset_location_desc} (total traces: {len(dataset):,})"
+    )
 
     # resolve target dataset indices: --target-indices and/or --target-split-file/--target-split-subset
     indices_list: list[int] | None = None
@@ -433,7 +512,8 @@ async def main(
                 f"available ones are: {list(subsets_to_problem_ids.keys())}"
             )
         subset_problem_ids = subsets_to_problem_ids[target_split_subset]
-        if not isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader):
+        required_attrs = ("problem_keys", "trace_keys", "trace_key_to_problem_key")
+        if not all(hasattr(dataset, attr) for attr in required_attrs):
             raise NotImplementedError("cannot use target split ids with non-standard traces datasets")
         target_problem_ids = list(set(subset_problem_ids) & set(dataset.problem_keys))
         indices_list = [
@@ -443,7 +523,7 @@ async def main(
         ]
         if not indices_list:
             raise click.BadParameter(
-                f"no traces found in subset '{target_split_subset}' for dataset at: {effective_dataset_path}"
+                f"no traces found in subset '{target_split_subset}' for dataset at: {dataset_location_desc}"
             )
         logger.info(f"found {len(indices_list)} indices for target split subset '{target_split_subset}'")
     if target_indices:

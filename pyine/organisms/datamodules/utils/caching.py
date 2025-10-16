@@ -163,8 +163,8 @@ class CodingProblemTestDataCache:
     @classmethod
     def build_from_dataset(
         cls,
-        dataset_reader: pyine.data.traces.dataset_reader.DatasetReader,
-    ) -> "CodingProblemTestDataCache | None":
+        dataset_reader: pyine.data.traces.dataset_reader.DatasetProtocol,
+    ) -> "CodingProblemTestDataCache":
         """Construct a cache of test case data from dataset metadata (if possible)."""
         assert isinstance(dataset_reader.metadata, dict), f"unexpected metadata type: {type(dataset_reader.metadata)}"
         parent_info = dataset_reader.metadata.get("parent_dataset", {})
@@ -172,9 +172,17 @@ class CodingProblemTestDataCache:
         parent_info = typing.cast("dict[str, typing.Any]", parent_info)
         dataset_name = parent_info.get("dataset_name")
         dataset_path = parent_info.get("dataset_path")
-        if not isinstance(dataset_name, str) or not isinstance(dataset_path, (str, pathlib.Path)):
+        if isinstance(dataset_path, list):
+            dataset_path_list = typing.cast("list[str | pathlib.Path]", dataset_path)
+            if len(dataset_path_list) == 0:
+                raise ValueError("dataset metadata missing parent dataset information required to build cache")
+            if len(dataset_path_list) > 1:
+                raise ValueError("dataset metadata has multiple parent datasets (ambiguous cache building op)")
+            dataset_path = dataset_path_list[0]
+        if isinstance(dataset_path, str):
+            dataset_path = pathlib.Path(dataset_path)
+        if not isinstance(dataset_name, str) or not isinstance(dataset_path, pathlib.Path):
             raise ValueError("dataset metadata missing parent dataset information required to build cache")
-        dataset_path = pathlib.Path(dataset_path)
         if not dataset_path.exists():
             raise ValueError(f"dataset path '{dataset_path}' does not exist, cannot build cache")
         return cls(dataset_name=dataset_name, dataset_path=dataset_path)
@@ -259,5 +267,5 @@ class CodingProblemTestDataCache:
 if __name__ == "__main__":
     import pyine.data.taco.dataset_utils
 
-    dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
-    assert CodingProblemTestDataCache(dataset_name="TACO", dataset_path=dataset_path).cache_size > 0
+    _dataset_path = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    assert CodingProblemTestDataCache(dataset_name="TACO", dataset_path=_dataset_path).cache_size > 0

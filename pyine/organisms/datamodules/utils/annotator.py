@@ -872,7 +872,7 @@ be, as that would require a ton more refactoring and special case handling.
 
 
 async def annotate_trace_dataset(
-    dataset: pyine.data.traces.dataset_reader.DatasetReader,
+    dataset: pyine.data.traces.dataset_reader.DatasetProtocol,
     config: AnnotationOptions,
     show_progress: bool = True,
     dry_run: bool = False,
@@ -884,13 +884,13 @@ async def annotate_trace_dataset(
 ) -> AnnotationReport:
     """Annotates a trace dataset by invoking LLM prompts per element and logging results.
 
-    This function iterates over a DatasetReader (traces) and, for each element, builds prompt
+    This function iterates over a trace dataset reader and, for each element, builds prompt
     inputs and calls into the framework prompt manager through the prompt result DB utility,
     so that results are persisted and can be reused across runs. Depending on configuration
     settings, if a result already exists for an element, it will be skipped.
 
     Args:
-        dataset: DatasetReader instance to iterate over.
+        dataset: trace dataset to iterate over (single or combined).
         config: configuration with behavior and prompt settings.
         show_progress: whether to show a progress bar.
         dry_run: whether to skip logging actual annotations and only report results and stats.
@@ -917,11 +917,11 @@ async def annotate_trace_dataset(
     if prompt_version is not None and prompt_version not in pyine.prompts.manager.list_prompt_versions(prompt_name):
         raise ValueError(f"unknown prompt version '{prompt_version}' for prompt '{prompt_name}'")
     if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and not config.has_test_data_cache():
-        assert isinstance(dataset, pyine.data.traces.dataset_reader.DatasetReader)
         logger.info("preparing or reloading coding problem test data cache for target dataset")
-        cache = pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(dataset)
-        if cache is None:
-            raise ValueError("failed to build coding problem test data cache from dataset metadata")
+        try:
+            cache = pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(dataset)
+        except ValueError as exc:
+            raise ValueError(f"failed to build coding problem test data cache from dataset metadata: {exc}") from exc
         config.set_test_data_cache(cache)
     base_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
         rule=(config.base_filter_rule or ""),
