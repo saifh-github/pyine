@@ -61,6 +61,16 @@ class InputOutputRewriteResponse(pydantic.BaseModel):
         description=("Fully qualified entrypoint name to execute (e.g. 'Solution.solve' or 'countSquares')."),
     )
 
+    def is_valid(
+        self,
+    ) -> bool:
+        """Validate input/output alignment and presence of entrypoint metadata.
+
+        Returns:
+            bool: Whether the response contains a callable name and balanced inputs/outputs.
+        """
+        return bool(self.fn_name) and len(self.inputs) == len(self.outputs)
+
 
 def get_output_parser(
     version: "pyine.prompts.types.PromptVersionType | None" = None,

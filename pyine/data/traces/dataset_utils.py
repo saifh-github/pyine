@@ -65,10 +65,6 @@ SUPPORTED_SOURCE_DATASETS = [
 ]
 """List of supported source datasets that provide coding problems with solutions to be traced."""
 
-DEFAULT_PROBLEM_DATA_OVERRIDE_BASENAMES: dict[str, str] = {
-    "TACO": "taco_problem_data_overrides.json",
-}
-"""Default override filenames per dataset for auto-detection."""
 BANNED_DATA_YAML_PATH = pkg_resources.files("pyine.data.traces") / "banned_data.yaml"
 """Path to the YAML file containing banned data information for each supported source dataset."""
 
@@ -627,7 +623,7 @@ class CodingProblemIterator:
         root_data_path: pathlib.Path | str,
         target_problem_pattern: ProblemIdPattern | None = None,
         target_problem_ids: str | pathlib.Path | list[str] | list[int] | None = None,
-        problem_data_overrides_path: pathlib.Path | str | None = None,
+        problem_data_overrides_setting: pathlib.Path | str | None = None,
         reformat_code_strings: bool = False,
         validate_code_strings: bool = True,
         allow_banned_samples: bool = False,
@@ -643,11 +639,10 @@ class CodingProblemIterator:
             root_data_path: Path to the root directory containing the source dataset files.
             target_problem_pattern: Optional pattern to filter problems by their metadata file names.
             target_problem_ids: Optional list or file containing problem IDs to target.
-            problem_data_overrides_path: Optional path to a JSON file containing enriched override
-                blocks keyed by problem identifier (e.g. "TACO/train/p004961"). When provided, these
-                entries are merged into each problem's metadata as it is loaded. Pass the literal
-                string "auto" to look for a cached override file (preferring the framework cache and
-                falling back to the dataset root directory).
+            problem_data_overrides_setting: Optional override selection. Provide a path to a JSON file
+                containing enriched override blocks keyed by problem identifier (e.g. "TACO/train/p004961").
+                When provided, these entries are merged into each problem's metadata as it is loaded.
+                Pass the literal string "auto" to load the dataset default overrides from the data cache.
             reformat_code_strings: Whether to apply code formatting to parsed solution code strings.
             validate_code_strings: Whether to validate solution code strings before using them.
             allow_banned_samples: Whether to allow loading of banned problems/solutions. Banned
@@ -676,32 +671,10 @@ class CodingProblemIterator:
         self.validate_code_strings = validate_code_strings
         self._problem_data_overrides: dict[str, dict[str, typing.Any]] = {}
         self._problem_data_override_source: pathlib.Path | None = None
-        overrides_path = None
-        auto_overrides_requested = (
-            isinstance(problem_data_overrides_path, str) and problem_data_overrides_path.lower() == "auto"
+        self._configure_problem_data_overrides(
+            dataset_name=dataset_name,
+            overrides_selector=problem_data_overrides_setting,
         )
-        if problem_data_overrides_path is not None and not auto_overrides_requested:
-            overrides_path = pathlib.Path(problem_data_overrides_path).expanduser()
-            if overrides_path.is_file():
-                self._problem_data_override_source = overrides_path
-            else:
-                raise ValueError(f"problem data overrides file not found: {overrides_path}")
-        elif auto_overrides_requested:
-            override_basename = DEFAULT_PROBLEM_DATA_OVERRIDE_BASENAMES.get(
-                dataset_name,
-                f"{dataset_name.lower()}_problem_data_overrides.json",
-            )
-            candidate_paths = [
-                pyine.utils.filesystem.get_data_cache_path() / override_basename,
-                root_data_path / override_basename,
-            ]
-            for candidate in candidate_paths:
-                if pathlib.Path(candidate).is_file():
-                    overrides_path = pathlib.Path(candidate)
-                    self._problem_data_override_source = overrides_path
-                    break
-        if overrides_path is not None:
-            self._problem_data_overrides = self._load_problem_data_overrides(overrides_path)
         if allow_banned_samples:
             logger.warning(f"loading banned data for '{dataset_name}' might cause problems later")
             self.banned = _BannedData()  # will be initialized w/ empty maps
@@ -721,6 +694,31 @@ class CodingProblemIterator:
         self._prefetch_thread: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
         self._prefetch_sentinel: object = object()
+
+    def _configure_problem_data_overrides(
+        self,
+        dataset_name: str,
+        overrides_selector: pathlib.Path | str | None,
+    ) -> None:
+        if overrides_selector is None:
+            return
+        if isinstance(overrides_selector, str):
+            normalized_selector = overrides_selector.strip()
+            if normalized_selector.lower() == "auto":
+                override_relative_path = pathlib.Path("overrides") / dataset_name / "problem_data_overrides.json"
+                overrides_path = pyine.utils.filesystem.get_data_cache_path() / override_relative_path
+                if not overrides_path.is_file():
+                    return
+            else:
+                overrides_path = pathlib.Path(normalized_selector)
+        else:
+            overrides_path = pathlib.Path(overrides_selector)
+
+        overrides_path = overrides_path.expanduser()
+        if not overrides_path.is_file():
+            raise ValueError(f"problem data overrides file not found: {overrides_path}")
+        self._problem_data_override_source = overrides_path
+        self._problem_data_overrides = self._load_problem_data_overrides(overrides_path)
 
     def _validate_target_problem_ids(
         self,
@@ -958,10 +956,7 @@ class CodingProblemIterator:
                 if isinstance(value, dict):
                     sanitized[str(key)] = value
             return sanitized
-        logger.warning(
-            "problem data overrides should be a mapping from problem identifier to block; got %s",
-            type(data),
-        )
+        logger.warning(f"problem data overrides should be a mapping from problem identifier to block; got {type(data)}")
         return {}
 
     def _load_problem_data(self, problem_metadata: typing.Any) -> dict[str, typing.Any]:

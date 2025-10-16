@@ -1,15 +1,16 @@
-"""High-level CLI helpers for rewriting failing trace I/O via LLMs.
+"""TACO-specific CLI helpers for rewriting failing trace I/O via LLMs.
 
 The commands defined here read TACO coding problems, call an LLM-powered
 rewrite pipeline to propose better input/output examples, and optionally write
 results back to the dataset cache. The module wires together prompt fetching,
 trace dataset writing, and override file persistence so the CLI can iterate on
-problem statements without hand-editing JSON blobs.
+problem statements without hand-editing JSON blobs. All file-system defaults,
+dataset iterators, and validation rules assume the repackaged TACO layout; adapt
+these paths and filters before reusing the tool on other corpora.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -34,65 +35,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROBLEM_DIR = pyine.utils.filesystem.get_data_root_path() / "TACO" / "repackaged" / "2025-03-31-v01"
-CACHE_OVERRIDE_BASENAME = "taco_problem_data_overrides.json"
-DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / CACHE_OVERRIDE_BASENAME
-
-PROBLEM_SOURCES_PATH = Path("data/TACO/overrides/problem_sources.json")
+CACHE_OVERRIDE_BASENAME = "problem_data_overrides.json"
+DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
 TARGET_SOURCES = {"leetcode", "geeksforgeeks"}
 
 MAX_LLM_ATTEMPTS = 1
 MAX_SOLUTIONS_TO_TRY = 3
-
-try:
-    pyine.utils.reprod.load_dotenv()
-except FileNotFoundError:
-    logger.debug("no .env file found while initializing trace analyzer; continuing with process env")
+MAX_LLM_TOKENS = 10_000
 
 
 def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfig:
+    """Build the rewrite LLM provider configuration from environment hints.
+
+    Returns:
+        pyine.utils.llm_providers.LLMProviderConfig: Provider configuration to instantiate the rewrite model.
+    """
     provider = os.environ.get("INPUT_OUTPUT_REWRITE_PROVIDER", "openai")
     model_name = os.environ.get("INPUT_OUTPUT_REWRITE_MODEL", "gpt-5-nano")
-    try:
-        temperature = float(os.environ.get("INPUT_OUTPUT_REWRITE_TEMPERATURE", "0"))
-    except ValueError:
-        temperature = 0.0
+    temperature = float(os.environ.get("INPUT_OUTPUT_REWRITE_TEMPERATURE", "0"))
     model_kwargs = {"model": model_name, "temperature": temperature}
     return pyine.utils.llm_providers.LLMProviderConfig(provider=provider, model_kwargs=model_kwargs)
 
 
-LLM_PROVIDER_CONFIG = _resolve_llm_provider_config()
-PROMPT_CONFIG = PromptBuildConfig(prompt_name="input_output_rewrite", version="v1.0")
-PROMPT_FETCHER = TypedPromptResultFetcher(result_type=InputOutputRewriteResponse)
-
-TRACE_WRITER_CONFIG = TraceDatasetWriterConfig(
-    source_dataset_name="TACO",
-    banned_problem_tags_rule=None,
-    max_output_traces=None,
-    max_solutions_per_problem=10,
-    max_tests_per_solution=10,
-    max_trace_events_per_line=None,
-    max_trace_var_repr_length=20_000,
-    max_trace_valid_events=20_000,
-    max_trace_results_blob_size=1024**3,
-    min_solution_line_count=3,
-    min_solution_dissimilarity=0.1,
-    execution_timeout_seconds=60,
-    generate_obfuscated_solutions=False,
-    prompt_result_db_path=None,
-    writer_serialization_config={
-        "method": pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
-        "compression_kwargs": {"level": 3},
-    },
-)
-
-_LLM_MODEL = None
-
-
 def _to_pretty_json(data: dict[str, Any]) -> str:
+    """Serialize a mapping into indented JSON for prompt readability.
+
+    Args:
+        data: Mapping to serialize.
+
+    Returns:
+        str: Human-readable JSON string.
+    """
     return orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")
 
 
 def _get_first_solution_code(problem_json: dict[str, Any]) -> str:
+    """Extract the first solution's code blob from a problem payload.
+
+    Args:
+        problem_json: Raw problem metadata containing solution entries.
+
+    Returns:
+        str: The first solution's code string, or an empty string when missing.
+    """
     solutions = problem_json.get("solutions") or []
     if not solutions:
         return ""
@@ -103,6 +88,14 @@ def _get_first_solution_code(problem_json: dict[str, Any]) -> str:
 
 
 def _load_override_log(path: Path) -> dict[str, dict[str, Any]]:
+    """Load problem override entries from disk if present.
+
+    Args:
+        path: Path to the override log JSON file.
+
+    Returns:
+        dict[str, dict[str, Any]]: Override entries keyed by problem identifier.
+    """
     if path is None or not path.exists():
         return {}
     try:
@@ -114,68 +107,37 @@ def _load_override_log(path: Path) -> dict[str, dict[str, Any]]:
     return {}
 
 
-def _load_problem_sources(problem_dir: Path) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    if not PROBLEM_SOURCES_PATH.exists():
-        logger.debug("problem_sources metadata not found at %s", PROBLEM_SOURCES_PATH)
-        return mapping
-    try:
-        metadata = json.loads(PROBLEM_SOURCES_PATH.read_text())
-    except json.JSONDecodeError as exc:
-        logger.warning("failed to parse problem_sources metadata: %s", exc)
-        return mapping
-    dataset_root = metadata.get("dataset_root")
-    if dataset_root:
-        try:
-            dataset_root = Path(dataset_root)
-        except TypeError:
-            dataset_root = None
-    problems = metadata.get("problems", [])
-    for entry in problems:
-        problem_name = entry.get("problem")
-        source = entry.get("source")
-        if not problem_name or not source:
-            continue
-        if dataset_root and (problem_dir.resolve() != Path(dataset_root).resolve()):
-            continue
-        mapping[str(problem_name)] = str(source)
-    return mapping
-
-
 def _save_override_log(path: Path, entries: dict[str, dict[str, Any]]) -> None:
+    """Persist override entries to disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(orjson.dumps(entries, option=orjson.OPT_INDENT_2))
 
 
-def _upsert_override_entry(
-    entries: dict[str, dict[str, Any]],
-    problem_id: str,
-    input_output: dict[str, Any],
-) -> None:
-    entries[problem_id] = input_output
-
-
-def _get_llm_model() -> pyine.utils.llm_providers.LLMProvider:
-    global _LLM_MODEL
-    max_tokens = 10_000
-    if _LLM_MODEL is None:
-        _LLM_MODEL = pyine.utils.llm_providers.get_model_from_provider(
-            provider=LLM_PROVIDER_CONFIG.provider,
-            model=LLM_PROVIDER_CONFIG.model_kwargs["model"],
-            temperature=LLM_PROVIDER_CONFIG.model_kwargs.get("temperature", 0.0),
-            max_tokens=max_tokens,
-        )
-    return _LLM_MODEL
-
-
 def _generate_candidate_input_output(
+    model: pyine.utils.llm_providers.LLMProvider,
+    prompt_fetcher: TypedPromptResultFetcher,
+    prompt_config: PromptBuildConfig,
     problem_identifier: str,
     question: str,
     starter_code: str,
     first_solution: str,
     current_input_output: dict[str, Any],
-    attempt_idx: int,
 ) -> InputOutputRewriteResponse | None:
+    """Generate a candidate input/output block for a problem.
+
+    Args:
+        model: LLM client used to execute the rewrite prompt.
+        prompt_fetcher: Fetcher used to retrieve or generate prompt results.
+        prompt_config: Prompt configuration for the rewrite flow.
+        problem_identifier: Stable problem identifier string.
+        question: Natural language description of the problem.
+        starter_code: Starter solution provided with the problem.
+        first_solution: Reference implementation for context.
+        current_input_output: Existing input/output sample to refine.
+
+    Returns:
+        InputOutputRewriteResponse | None: Candidate rewrite response, or None when generation fails.
+    """
     sanitized_input_output = current_input_output or {}
     prompt_inputs = {
         "question": question,
@@ -183,14 +145,13 @@ def _generate_candidate_input_output(
         "first_solution": first_solution,
         "input_output": _to_pretty_json(sanitized_input_output),
     }
-    model = _get_llm_model()
-    identifier = f"{problem_identifier}::attempt-{attempt_idx}"
+    identifier = problem_identifier
     try:
-        records = PROMPT_FETCHER.fetch_or_generate(
+        records = prompt_fetcher.fetch_or_generate(
             model=model,
             identifier=identifier,
             input_variables=prompt_inputs,
-            prompt_config=PROMPT_CONFIG,
+            prompt_config=prompt_config,
             force_generation=True,
             log_new_results=False,
         )
@@ -205,6 +166,15 @@ def _make_candidate_problem(
     problem: CodingProblem,
     response: InputOutputRewriteResponse,
 ) -> CodingProblem:
+    """Clone a coding problem with updated test cases from the LLM response.
+
+    Args:
+        problem: Original coding problem metadata.
+        response: Candidate input/output rewrite response.
+
+    Returns:
+        CodingProblem: Problem instance containing the rewritten tests.
+    """
     test_pairs = list(zip(response.inputs, response.outputs, strict=False))
     return problem.model_copy(
         update={
@@ -214,17 +184,21 @@ def _make_candidate_problem(
     )
 
 
-def _is_valid_response(response: InputOutputRewriteResponse) -> bool:
-    if not response.fn_name:
-        return False
-    return len(response.inputs) == len(response.outputs)
-
-
 def _collect_problem_paths(
     problem_dir: Path,
     filenames: Iterable[Path | str],
     override_log_path: Path | None,
 ) -> list[Path]:
+    """Discover problem files to process for the rewrite flow.
+
+    Args:
+        problem_dir: Root directory containing TACO problem files.
+        filenames: Optional explicit filenames to target.
+        override_log_path: Path to the overrides log to exclude from scanning.
+
+    Returns:
+        list[Path]: List of problem file paths to process.
+    """
     paths: list[Path] = []
     filenames = tuple(filenames)
     if filenames:
@@ -244,7 +218,21 @@ def _collect_problem_paths(
     return paths
 
 
-def output_compare(problem: CodingProblem, solutions: list[Solution]) -> bool:
+def output_compare(
+    problem: CodingProblem,
+    solutions: list[Solution],
+    trace_writer_config: TraceDatasetWriterConfig,
+) -> bool:
+    """Check whether a problem's tests validate against its reference solutions.
+
+    Args:
+        problem: Coding problem with proposed tests.
+        solutions: Reference solutions to validate against.
+        trace_writer_config: Configuration used for trace execution.
+
+    Returns:
+        bool: True if all tests pass for at least one reference solution.
+    """
     entrypoint_name = problem.entrypoint_name
     if not entrypoint_name:
         return False
@@ -270,7 +258,10 @@ def output_compare(problem: CodingProblem, solutions: list[Solution]) -> bool:
                 test_outputs=outputs,
             )
             try:
-                _, compare_result = get_code_output(code_to_trace)
+                _, compare_result = get_code_output(
+                    code_to_trace,
+                    trace_writer_config,
+                )
             except Exception:  # noqa: BLE001
                 break
             if compare_result:
@@ -284,11 +275,21 @@ def output_compare(problem: CodingProblem, solutions: list[Solution]) -> bool:
 
 def get_code_output(
     code: TraceRequest,
+    trace_writer_config: TraceDatasetWriterConfig,
 ) -> tuple[
     pyine.utils.code.execution.TraceResult,
     pyine.utils.code.output_compare.CompareResult,
 ]:
-    return trace_code_snippet(code_snippet=code, config=TRACE_WRITER_CONFIG)
+    """Execute solution code under tracing and capture comparison results.
+
+    Args:
+        code: Trace execution request payload.
+        trace_writer_config: Configuration used to control tracing behavior.
+
+    Returns:
+        tuple[TraceResult, CompareResult]: Execution and comparison artifacts.
+    """
+    return trace_code_snippet(code_snippet=code, config=trace_writer_config)
 
 
 def run_input_output_rewrite(
@@ -296,92 +297,124 @@ def run_input_output_rewrite(
     problem_filenames: Iterable[Path | str],
     override_log_path: Path | None,
 ) -> None:
-    problem_dir = problem_dir.expanduser()
-    if not problem_dir.is_absolute():
-        problem_dir = (Path.cwd() / problem_dir).resolve()
+    """Run the LLM-powered rewrite pass for TACO problem JSON files.
+
+    Args:
+        problem_dir: Root directory containing repackaged TACO problem metadata.
+        problem_filenames: Optional specific problem files to process.
+        override_log_path: Optional path to the override log used to persist fixes.
+    """
+    problem_dir = (Path.cwd() / problem_dir.expanduser()).resolve()
     if not problem_dir.exists():
         raise FileNotFoundError(f"Problem directory does not exist: {problem_dir}")
 
     if override_log_path is None:
         override_log_path = DEFAULT_OVERRIDE_PATH
     else:
-        override_log_path = override_log_path.expanduser()
-        if not override_log_path.is_absolute():
-            override_log_path = (Path.cwd() / override_log_path).resolve()
+        override_log_path = (Path.cwd() / override_log_path.expanduser()).resolve()
+
+    pyine.utils.reprod.load_dotenv()
 
     override_entries = _load_override_log(override_log_path)
-    logger.info("using override log: %s", override_log_path)
+    logger.info(f"using override log: {override_log_path}")
 
     overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
+
+    llm_provider_config = _resolve_llm_provider_config()
+    prompt_config = PromptBuildConfig(
+        prompt_name="input_output_rewrite",
+        version="v1.0",
+    )
+    prompt_fetcher = TypedPromptResultFetcher(result_type=InputOutputRewriteResponse)
+
+    trace_writer_config = TraceDatasetWriterConfig(
+        source_dataset_name="TACO",
+        banned_problem_tags_rule=None,
+        max_output_traces=None,
+        max_solutions_per_problem=10,
+        max_tests_per_solution=10,
+        max_trace_events_per_line=None,
+        max_trace_var_repr_length=20_000,
+        max_trace_valid_events=20_000,
+        max_trace_results_blob_size=1024**3,
+        min_solution_line_count=3,
+        min_solution_dissimilarity=0.1,
+        execution_timeout_seconds=60,
+        generate_obfuscated_solutions=False,
+        prompt_result_db_path=None,
+        writer_serialization_config={
+            "method": pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+            "compression_kwargs": {"level": 3},
+        },
+    )
 
     problem_iterator = CodingProblemIterator(
         dataset_name="TACO",
         root_data_path=problem_dir,
-        problem_data_overrides_path=overrides_path_for_iterator,
+        problem_data_overrides_setting=overrides_path_for_iterator,
     )
-    if override_entries:
-        problem_iterator._problem_data_overrides.update(override_entries)
 
-    source_mapping = _load_problem_sources(problem_dir)
     problem_paths = _collect_problem_paths(problem_dir, problem_filenames, override_log_path)
 
     if not problem_paths:
         logger.info("no problem files matched the given parameters")
         return
+    llm_model = pyine.utils.llm_providers.get_model_from_provider(
+        provider=llm_provider_config.provider,
+        model=llm_provider_config.model_kwargs["model"],
+        temperature=llm_provider_config.model_kwargs.get("temperature", 0.0),
+        max_tokens=MAX_LLM_TOKENS,
+    )
 
     for problem_path in problem_paths:
         problem_filename = problem_path.name
         if not problem_path.exists():
-            logger.info("skipping missing problem file: %s", problem_filename)
+            logger.info(f"skipping missing problem file: {problem_filename}")
             continue
         try:
             raw_problem_data = problem_iterator._load_problem_data(problem_path)
         except orjson.JSONDecodeError as exc:
-            logger.warning("Skipping %s: invalid JSON (%s)", problem_filename, exc)
+            logger.warning(f"Skipping {problem_filename}: invalid JSON ({exc})")
             continue
         except TypeError as exc:
-            logger.warning("Skipping %s: unexpected JSON structure (%s)", problem_filename, exc)
+            logger.warning(f"Skipping {problem_filename}: unexpected JSON structure ({exc})")
             continue
 
-        source_name = source_mapping.get(problem_filename)
-        if source_name is None and source_mapping:
-            logger.debug("skipping %s: no source metadata", problem_filename)
+        source_name = raw_problem_data.get("source")
+        if source_name is None:
+            logger.debug(f"skipping {problem_filename}: no source metadata")
             continue
         if source_name not in TARGET_SOURCES:
-            logger.debug("skipping %s: source '%s' not in target set", problem_filename, source_name)
+            logger.debug(f"skipping {problem_filename}: source '{source_name}' not in target set")
             continue
 
         if not isinstance(raw_problem_data, dict) or not raw_problem_data:
-            logger.debug("skipping %s: empty problem payload", problem_filename)
+            logger.debug(f"skipping {problem_filename}: empty problem payload")
             continue
 
         missing_keys = [key for key in ("subset", "input_output") if key not in raw_problem_data]
         if missing_keys:
-            logger.debug("skipping %s: missing keys %s", problem_filename, ", ".join(missing_keys))
+            logger.debug(f"skipping {problem_filename}: missing keys {", ".join(missing_keys)}")
             continue
 
         input_output_block = raw_problem_data.get("input_output")
         if not isinstance(input_output_block, dict):
-            logger.debug("skipping %s: malformed input_output block", problem_filename)
+            logger.debug(f"skipping {problem_filename}: malformed input_output block")
             continue
 
         io_missing = [key for key in ("inputs", "outputs") if key not in input_output_block]
         if io_missing:
-            logger.debug("skipping %s: input_output missing %s", problem_filename, ", ".join(io_missing))
+            logger.debug(f"skipping {problem_filename}: missing {", ".join(io_missing)}")
             continue
 
         coding_problem, solutions = problem_iterator._process_data(raw_problem_data)
 
         question = raw_problem_data.get("question") or ""
-        if not isinstance(question, str):
-            question = ""
         starter_code = raw_problem_data.get("starter_code") or ""
-        if not isinstance(starter_code, str):
-            starter_code = ""
         first_solution = _get_first_solution_code(raw_problem_data)
 
-        if output_compare(coding_problem, solutions):
-            logger.info("already valid: %s", problem_filename)
+        if output_compare(coding_problem, solutions, trace_writer_config):
+            logger.info(f"already valid: {problem_filename}")
             continue
 
         current_io = raw_problem_data.get("input_output", {}) or {}
@@ -390,28 +423,30 @@ def run_input_output_rewrite(
 
         for attempt_idx in range(MAX_LLM_ATTEMPTS):
             response = _generate_candidate_input_output(
+                model=llm_model,
+                prompt_fetcher=prompt_fetcher,
+                prompt_config=prompt_config,
                 problem_identifier=problem_identifier,
                 question=question,
                 starter_code=starter_code,
                 first_solution=first_solution,
                 current_input_output=current_io,
-                attempt_idx=attempt_idx,
             )
-            if response is None or not _is_valid_response(response):
+            if response is None or not response.is_valid():
                 continue
 
             candidate_problem = _make_candidate_problem(coding_problem, response)
-            if output_compare(candidate_problem, solutions):
+            if output_compare(candidate_problem, solutions, trace_writer_config):
                 new_io = {
                     "inputs": response.inputs,
                     "outputs": response.outputs,
                     "fn_name": response.fn_name,
                 }
-                _upsert_override_entry(override_entries, problem_identifier, new_io)
+                override_entries[problem_identifier] = new_io
                 problem_iterator._problem_data_overrides[problem_identifier] = new_io
                 _save_override_log(override_log_path, override_entries)
                 success = True
-                logger.info("updated %s on attempt %s", problem_filename, attempt_idx + 1)
+                logger.info(f"updated {problem_filename} on attempt {attempt_idx + 1}")
                 break
 
             current_io = {
@@ -421,7 +456,7 @@ def run_input_output_rewrite(
             }
 
         if not success:
-            logger.warning("failed to fix %s after %s attempts", problem_filename, MAX_LLM_ATTEMPTS)
+            logger.warning(f"failed to fix {problem_filename} after {MAX_LLM_ATTEMPTS} attempts")
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -449,7 +484,13 @@ def main(
     problem_filenames: tuple[Path, ...],
     override_log: Path | None,
 ) -> None:
-    """Rewrite malformed input/output blocks using LLM assistance."""
+    """CLI entry point for rewriting malformed TACO input/output blocks.
+
+    Args:
+        problem_dir: Root directory containing repackaged TACO problem metadata.
+        problem_filenames: Optional specific problem files to process.
+        override_log: Optional path to the override log used to persist fixes.
+    """
 
     logging.basicConfig(level=logging.INFO)
     run_input_output_rewrite(problem_dir, problem_filenames, override_log)

@@ -207,10 +207,10 @@ def main() -> None:
     "--problem-data-overrides",
     "problem_data_overrides",
     type=str,
-    default=None,
+    default="auto",
     help=(
-        "Optional path to a problem-data overrides file. Use 'auto' to look in the cache and dataset "
-        "root for the default overrides, or 'none' to disable overrides explicitly."
+        "Problem-data overrides selector. Use 'auto' to load the dataset default overrides from the "
+        "data cache; use 'none' to disable overrides."
     ),
 )
 @click.option(
@@ -331,7 +331,7 @@ def traces(
         execution_timeout_seconds=execution_timeout_seconds,
         target_problem_pattern=problem_id_pattern,
         target_problem_ids=target_problem_ids,
-        problem_data_overrides_path=problem_data_overrides,
+        problem_data_overrides_setting=problem_data_overrides,
         reformat_code_strings=reformat_code_strings,
         allow_banned_samples=False,
         allow_imperfect_solutions=True,
