@@ -1,7 +1,7 @@
 """Utilities for reformatting problem I/O samples into executable test payloads.
 
 This module defines the structured schema and LangChain prompt plumbing used by the
-input/output rewrite flow (see `pyine.apps.traces.trace_failure_analyzer`). The
+input/output rewrite flow (see `pyine.apps.traces.taco_trace_failure_analyzer`). The
 pipeline targets legacy TACO problems whose `input_output` blocks were captured as
 loose prose like "L = 0, R = 1" or who never recorded the callable entry point.
 Such payloads cannot drive the trace replay tooling, which requires machine-

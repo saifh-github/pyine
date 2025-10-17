@@ -185,7 +185,7 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         ),
     ]
     problem_data_overrides_setting: typing.Annotated[
-        str | None,
+        pathlib.Path | str | typing.Literal["auto"] | None,
         pydantic.Field(
             default="auto",
             description=(

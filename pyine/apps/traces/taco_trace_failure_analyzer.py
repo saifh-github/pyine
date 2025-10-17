@@ -13,24 +13,20 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+import pathlib
+import typing
 
 import click
 import orjson
 
-import pyine.data.utils.lmdb_io
+import pyine.data.traces.dataset_utils
+import pyine.data.traces.dataset_writer
+import pyine.prompts
+import pyine.prompts.configs.input_output_rewrite
+import pyine.prompts.result_db
 import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
-from pyine.data.traces.dataset_utils import CodingProblem, CodingProblemIterator, Solution, TraceIdentifier
-from pyine.data.traces.dataset_writer import TraceDatasetWriterConfig, TraceRequest, trace_code_snippet
-from pyine.prompts import PromptBuildConfig, TypedPromptResultFetcher
-from pyine.prompts.configs.input_output_rewrite import InputOutputRewriteResponse
-from pyine.prompts.result_db import ValidationFailedError
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +53,7 @@ def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfi
     return pyine.utils.llm_providers.LLMProviderConfig(provider=provider, model_kwargs=model_kwargs)
 
 
-def _to_pretty_json(data: dict[str, Any]) -> str:
+def _to_pretty_json(data: dict[str, typing.Any]) -> str:
     """Serialize a mapping into indented JSON for prompt readability.
 
     Args:
@@ -69,7 +65,7 @@ def _to_pretty_json(data: dict[str, Any]) -> str:
     return orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")
 
 
-def _get_first_solution_code(problem_json: dict[str, Any]) -> str:
+def _get_first_solution_code(problem_json: dict[str, typing.Any]) -> str:
     """Extract the first solution's code blob from a problem payload.
 
     Args:
@@ -87,7 +83,7 @@ def _get_first_solution_code(problem_json: dict[str, Any]) -> str:
     return first_solution.get("code") or first_solution.get("orig_code") or ""
 
 
-def _load_override_log(path: Path) -> dict[str, dict[str, Any]]:
+def _load_override_log(path: pathlib.Path) -> dict[str, dict[str, typing.Any]]:
     """Load problem override entries from disk if present.
 
     Args:
@@ -107,7 +103,7 @@ def _load_override_log(path: Path) -> dict[str, dict[str, Any]]:
     return {}
 
 
-def _save_override_log(path: Path, entries: dict[str, dict[str, Any]]) -> None:
+def _save_override_log(path: pathlib.Path, entries: dict[str, dict[str, typing.Any]]) -> None:
     """Persist override entries to disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(orjson.dumps(entries, option=orjson.OPT_INDENT_2))
@@ -115,14 +111,14 @@ def _save_override_log(path: Path, entries: dict[str, dict[str, Any]]) -> None:
 
 def _generate_candidate_input_output(
     model: pyine.utils.llm_providers.LLMProvider,
-    prompt_fetcher: TypedPromptResultFetcher,
-    prompt_config: PromptBuildConfig,
+    prompt_fetcher: pyine.prompts.TypedPromptResultFetcher,
+    prompt_config: pyine.prompts.PromptBuildConfig,
     problem_identifier: str,
     question: str,
     starter_code: str,
     first_solution: str,
-    current_input_output: dict[str, Any],
-) -> InputOutputRewriteResponse | None:
+    current_input_output: dict[str, typing.Any],
+) -> pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse | None:
     """Generate a candidate input/output block for a problem.
 
     Args:
@@ -136,7 +132,8 @@ def _generate_candidate_input_output(
         current_input_output: Existing input/output sample to refine.
 
     Returns:
-        InputOutputRewriteResponse | None: Candidate rewrite response, or None when generation fails.
+        pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse | None:
+        Candidate rewrite response, or None when generation fails.
     """
     sanitized_input_output = current_input_output or {}
     prompt_inputs = {
@@ -152,10 +149,10 @@ def _generate_candidate_input_output(
             identifier=identifier,
             input_variables=prompt_inputs,
             prompt_config=prompt_config,
-            force_generation=True,
-            log_new_results=False,
+            force_generation=False,
+            log_new_results=True,
         )
-    except ValidationFailedError:
+    except pyine.prompts.result_db.ValidationFailedError:
         return None
     if not records:
         return None
@@ -163,9 +160,9 @@ def _generate_candidate_input_output(
 
 
 def _make_candidate_problem(
-    problem: CodingProblem,
-    response: InputOutputRewriteResponse,
-) -> CodingProblem:
+    problem: pyine.data.traces.dataset_utils.CodingProblem,
+    response: pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
+) -> pyine.data.traces.dataset_utils.CodingProblem:
     """Clone a coding problem with updated test cases from the LLM response.
 
     Args:
@@ -173,7 +170,7 @@ def _make_candidate_problem(
         response: Candidate input/output rewrite response.
 
     Returns:
-        CodingProblem: Problem instance containing the rewritten tests.
+        pyine.data.traces.dataset_utils.CodingProblem: Problem instance containing the rewritten tests.
     """
     test_pairs = list(zip(response.inputs, response.outputs, strict=False))
     return problem.model_copy(
@@ -185,10 +182,10 @@ def _make_candidate_problem(
 
 
 def _collect_problem_paths(
-    problem_dir: Path,
-    filenames: Iterable[Path | str],
-    override_log_path: Path | None,
-) -> list[Path]:
+    problem_dir: pathlib.Path,
+    filenames: typing.Iterable[pathlib.Path | str],
+    override_log_path: pathlib.Path | None,
+) -> list[pathlib.Path]:
     """Discover problem files to process for the rewrite flow.
 
     Args:
@@ -199,13 +196,17 @@ def _collect_problem_paths(
     Returns:
         list[Path]: List of problem file paths to process.
     """
-    paths: list[Path] = []
+    paths: list[pathlib.Path] = []
     filenames = tuple(filenames)
     if filenames:
         for name in filenames:
-            candidate = Path(name)
+            candidate = pathlib.Path(name).expanduser()
             if not candidate.is_absolute():
                 candidate = problem_dir / candidate
+            candidate = candidate.resolve(strict=False)
+            if candidate.exists() and not candidate.is_file():
+                logger.warning(f"skipping {candidate}: path is not a file")
+                continue
             paths.append(candidate)
         return paths
 
@@ -219,9 +220,9 @@ def _collect_problem_paths(
 
 
 def output_compare(
-    problem: CodingProblem,
-    solutions: list[Solution],
-    trace_writer_config: TraceDatasetWriterConfig,
+    problem: pyine.data.traces.dataset_utils.CodingProblem,
+    solutions: list[pyine.data.traces.dataset_utils.Solution],
+    trace_writer_config: pyine.data.traces.dataset_writer.TraceDatasetWriterConfig,
 ) -> bool:
     """Check whether a problem's tests validate against its reference solutions.
 
@@ -241,16 +242,16 @@ def output_compare(
 
     total_tests = len(problem.test_inout_pairs)
 
-    for _solution_idx, solution in enumerate(solutions[:MAX_SOLUTIONS_TO_TRY]):
+    for solution in solutions[:MAX_SOLUTIONS_TO_TRY]:
         correct = 0
         for test_idx, (inputs, outputs) in enumerate(problem.test_inout_pairs):
-            trace_id = TraceIdentifier(
+            trace_id = pyine.data.traces.dataset_utils.TraceIdentifier(
                 **vars(solution.solution_id),
                 test_idx=test_idx,
                 augment_category="bug",
                 augment_idx=0,
             )
-            code_to_trace = TraceRequest(
+            code_to_trace = pyine.data.traces.dataset_writer.TraceRequest(
                 code_string=solution.code,
                 entrypoint_name=entrypoint_name,
                 trace_id=trace_id,
@@ -274,8 +275,8 @@ def output_compare(
 
 
 def get_code_output(
-    code: TraceRequest,
-    trace_writer_config: TraceDatasetWriterConfig,
+    code: pyine.data.traces.dataset_writer.TraceRequest,
+    trace_writer_config: pyine.data.traces.dataset_writer.TraceDatasetWriterConfig,
 ) -> tuple[
     pyine.utils.code.execution.TraceResult,
     pyine.utils.code.output_compare.CompareResult,
@@ -289,13 +290,16 @@ def get_code_output(
     Returns:
         tuple[TraceResult, CompareResult]: Execution and comparison artifacts.
     """
-    return trace_code_snippet(code_snippet=code, config=trace_writer_config)
+    return pyine.data.traces.dataset_writer.trace_code_snippet(
+        code_snippet=code,
+        config=trace_writer_config,
+    )
 
 
 def run_input_output_rewrite(
-    problem_dir: Path,
-    problem_filenames: Iterable[Path | str],
-    override_log_path: Path | None,
+    problem_dir: pathlib.Path,
+    problem_filenames: typing.Iterable[pathlib.Path | str],
+    override_log_path: pathlib.Path | None,
 ) -> None:
     """Run the LLM-powered rewrite pass for TACO problem JSON files.
 
@@ -304,14 +308,14 @@ def run_input_output_rewrite(
         problem_filenames: Optional specific problem files to process.
         override_log_path: Optional path to the override log used to persist fixes.
     """
-    problem_dir = (Path.cwd() / problem_dir.expanduser()).resolve()
+    problem_dir = (pathlib.Path.cwd() / problem_dir.expanduser()).resolve()
     if not problem_dir.exists():
         raise FileNotFoundError(f"Problem directory does not exist: {problem_dir}")
 
     if override_log_path is None:
         override_log_path = DEFAULT_OVERRIDE_PATH
     else:
-        override_log_path = (Path.cwd() / override_log_path.expanduser()).resolve()
+        override_log_path = (pathlib.Path.cwd() / override_log_path.expanduser()).resolve()
 
     pyine.utils.reprod.load_dotenv()
 
@@ -321,34 +325,17 @@ def run_input_output_rewrite(
     overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
 
     llm_provider_config = _resolve_llm_provider_config()
-    prompt_config = PromptBuildConfig(
+    prompt_config = pyine.prompts.PromptBuildConfig(
         prompt_name="input_output_rewrite",
         version="v1.0",
     )
-    prompt_fetcher = TypedPromptResultFetcher(result_type=InputOutputRewriteResponse)
-
-    trace_writer_config = TraceDatasetWriterConfig(
-        source_dataset_name="TACO",
-        banned_problem_tags_rule=None,
-        max_output_traces=None,
-        max_solutions_per_problem=10,
-        max_tests_per_solution=10,
-        max_trace_events_per_line=None,
-        max_trace_var_repr_length=20_000,
-        max_trace_valid_events=20_000,
-        max_trace_results_blob_size=1024**3,
-        min_solution_line_count=3,
-        min_solution_dissimilarity=0.1,
-        execution_timeout_seconds=60,
-        generate_obfuscated_solutions=False,
-        prompt_result_db_path=None,
-        writer_serialization_config={
-            "method": pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
-            "compression_kwargs": {"level": 3},
-        },
+    prompt_fetcher = pyine.prompts.TypedPromptResultFetcher(
+        result_type=pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
     )
 
-    problem_iterator = CodingProblemIterator(
+    trace_writer_config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig(source_dataset_name="TACO")
+
+    problem_iterator = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name="TACO",
         root_data_path=problem_dir,
         problem_data_overrides_setting=overrides_path_for_iterator,
@@ -462,7 +449,7 @@ def run_input_output_rewrite(
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--problem-dir",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=pathlib.Path),
     default=DEFAULT_PROBLEM_DIR,
     show_default=True,
     help="Directory containing problem JSON files.",
@@ -471,18 +458,18 @@ def run_input_output_rewrite(
     "--problem",
     "problem_filenames",
     multiple=True,
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=pathlib.Path, dir_okay=False),
     help="Specific problem file(s) to process. May be repeated.",
 )
 @click.option(
     "--override-log",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=pathlib.Path),
     help=(f"Optional override log path. Defaults to the framework cache at {DEFAULT_OVERRIDE_PATH}."),
 )
 def main(
-    problem_dir: Path,
-    problem_filenames: tuple[Path, ...],
-    override_log: Path | None,
+    problem_dir: pathlib.Path,
+    problem_filenames: tuple[pathlib.Path, ...],
+    override_log: pathlib.Path | None,
 ) -> None:
     """CLI entry point for rewriting malformed TACO input/output blocks.
 

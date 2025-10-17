@@ -22,7 +22,7 @@ Trace annotation:
 
 Trace analysis and repair:
 
-- Problem data (I/O) rewrite pipeline: [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+- Problem data (I/O) rewrite pipeline: [`pyine/apps/traces/taco_trace_failure_analyzer.py`](traces/taco_trace_failure_analyzer.py)
 
 Training/evaluation (Hydra-based apps):
 
@@ -174,11 +174,11 @@ python -m pyine.apps.annotate.trace_annot_generator \
 
 ______________________________________________________________________
 
-### Trace problem data (input/output) rewrite (LLM-assisted repair)
+### TACO trace problem data (input/output) rewrite (LLM-assisted repair)
 
-**Script:** [`pyine/apps/traces/trace_failure_analyzer.py`](./traces/trace_failure_analyzer.py)
+**Script:** [`pyine/apps/traces/taco_trace_failure_analyzer.py`](traces/taco_trace_failure_analyzer.py)
 
-**Main use:** iterates over coding problems in a dataset, invokes the `input_output_rewrite` prompt
+**Main use:** iterates over coding problems in the TACO dataset, invokes the `input_output_rewrite` prompt
 where necessary, validates the generated samples against bundled solutions, and stores successful
 repairs in a cache-backed JSON file (saved by default in `<PYINE_DATA_CACHE>`).
 
@@ -186,11 +186,11 @@ repairs in a cache-backed JSON file (saved by default in `<PYINE_DATA_CACHE>`).
 
 ```bash
 # rewrite every malformed problem under the repackaged dataset root
-python -m pyine.apps.traces.trace_failure_analyzer \
+python -m pyine.apps.traces.taco_trace_failure_analyzer \
     --problem-dir data/TACO/repackaged/2025-03-31-v01
 
 # target a handful of individual problems
-python -m pyine.apps.traces.trace_failure_analyzer \
+python -m pyine.apps.traces.taco_trace_failure_analyzer \
     --problem-dir data/TACO/repackaged/2025-03-31-v01 \
     --problem 014084.json \
     --problem 017304.json
