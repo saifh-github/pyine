@@ -43,10 +43,10 @@ jobs:
       run: make install
 
     - name: Run linting
-      run: make lint
+      run: uv run make lint
 
     - name: Run fast tests with coverage
-      run: make coverage
+      run: uv run make coverage
 
     - name: Upload coverage artifacts
       if: always() && hashFiles('logs/coverage/**') != ''
@@ -57,8 +57,8 @@ jobs:
 
     - name: Run integration tests
       if: contains(github.event.pull_request.labels.*.name, 'integration')
-      run: make test-integration
+      run: uv run make test-integration
 
     - name: Run slow tests
       if: contains(github.event.pull_request.labels.*.name, 'slow')
-      run: make test-slow
+      run: uv run make test-slow
