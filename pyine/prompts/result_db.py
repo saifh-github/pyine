@@ -10,6 +10,7 @@ import threading
 import typing
 
 import backoff
+import langchain_core.exceptions
 import langchain_core.language_models
 import langchain_core.messages
 import langchain_core.runnables
@@ -742,6 +743,11 @@ def fetch_or_generate_prompt_results(
         chain = prompt_config.get_chain(
             model=model,
             runnable_name=runnable_name,
+        )
+        chain.with_retry(
+            retry_if_exception_type=(langchain_core.exceptions.OutputParserException,),
+            wait_exponential_jitter=True,  # backoff + jitter
+            stop_after_attempt=5,
         )
         while len(new_records) < need_to_generate:
             retry_count = 0

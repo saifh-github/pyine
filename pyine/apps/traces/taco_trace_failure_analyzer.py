@@ -17,8 +17,10 @@ import pathlib
 import typing
 
 import click
+import langchain_core.exceptions
 import orjson
 
+import pyine.data.taco.dataset_utils
 import pyine.data.traces.dataset_utils
 import pyine.data.traces.dataset_writer
 import pyine.prompts
@@ -33,7 +35,7 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROBLEM_DIR = pyine.utils.filesystem.get_data_root_path() / "TACO" / "repackaged" / "2025-03-31-v01"
+DEFAULT_PROBLEM_DIR = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
 CACHE_OVERRIDE_BASENAME = "problem_data_overrides.json"
 DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
 TARGET_SOURCES = {"leetcode", "geeksforgeeks"}
@@ -178,6 +180,8 @@ def _generate_candidate_input_output(
             force_generation=False,
             log_new_results=True,
         )
+    except langchain_core.exceptions.OutputParserException:
+        return None
     except pyine.prompts.result_db.ValidationFailedError:
         return None
     if not records:
@@ -237,11 +241,13 @@ def _collect_problem_paths(
         return paths
 
     override_resolved = override_log_path.resolve() if override_log_path else None
-    for candidate in sorted(problem_dir.rglob("*.json")):
+    candidates = sorted(problem_dir.rglob("*.json"))
+    for candidate in candidates:
         if override_resolved and candidate.resolve() == override_resolved:
             continue
         if candidate.is_file():
-            paths.append(candidate)
+            if candidate.stem.isdigit() and int(candidate.stem) > 13_000:
+                paths.append(candidate)
     return paths
 
 
