@@ -24,13 +24,14 @@ here, and downstream consumers can immediately rerun solutions against the
 patched tests.
 """
 
+from __future__ import annotations
+
 import typing
 
 import pydantic
 
 if typing.TYPE_CHECKING:
     import langchain_core.output_parsers
-    import langchain_core.prompts
 
     import pyine.prompts.types
 
@@ -50,15 +51,13 @@ class InputOutputRewriteResponse(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
     inputs: list[pydantic.StrictStr] = pydantic.Field(
-        description=(
-            "List of JSON-encoded argument payloads preserved as strings (the dataset stores inputs as text).",
-        ),
+        description="List of JSON-encoded argument payloads preserved as strings (the dataset stores inputs as text).",
     )
     outputs: list[pydantic.JsonValue] = pydantic.Field(
-        description=("List of outputs aligned by index with inputs. Values must be serializable via JSON."),
+        description="List of outputs aligned by index with inputs. Values must be serializable via JSON.",
     )
     fn_name: PythonCallName = pydantic.Field(
-        description=("Fully qualified entrypoint name to execute (e.g. 'Solution.solve' or 'countSquares')."),
+        description="Fully qualified entrypoint name to execute (e.g. 'Solution.solve' or 'countSquares').",
     )
 
     def is_valid(
@@ -73,15 +72,15 @@ class InputOutputRewriteResponse(pydantic.BaseModel):
 
 
 def get_output_parser(
-    version: "pyine.prompts.types.PromptVersionType | None" = None,
-) -> "langchain_core.output_parsers.BaseOutputParser | None":  # noqa
+    version: pyine.prompts.types.PromptVersionType | None = None,
+) -> langchain_core.output_parsers.PydanticOutputParser[InputOutputRewriteResponse]:
     import langchain_core.output_parsers
 
     return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=InputOutputRewriteResponse)
 
 
 def get_prompt_template(
-    version: "pyine.prompts.types.PromptVersionType | None" = None,
+    version: pyine.prompts.types.PromptVersionType | None = None,
     use_chat_template: bool = False,
     include_examples: bool = True,
     target_examples: int | list[int] | None = None,
@@ -89,7 +88,7 @@ def get_prompt_template(
     role_variables: dict[str, typing.Any] | None = None,
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
-) -> "langchain_core.prompts.BasePromptTemplate":
+) -> pyine.prompts.types.PromptTemplate:
     """Return the prompt template configured for minimal problem metadata.
 
     The associated Jinja template now expects only four input variables:
@@ -100,20 +99,15 @@ def get_prompt_template(
     import pyine.prompts.manager
 
     prompt_config = pyine.prompts.manager.get_prompt_config("input_output_rewrite", version=version)
-    base_context_variables = {
-        "expected_output_format": get_output_parser(version).get_format_instructions(),
-    }
-    if context_variables:
-        base_context_variables.update(context_variables)
-
-    template = prompt_config.create_prompt_template(
+    merged_context: dict[str, typing.Any] = dict(context_variables) if context_variables else {}
+    parser = get_output_parser(version=version)
+    merged_context.setdefault("expected_output_format", parser.get_format_instructions())
+    return prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,
         target_examples=target_examples,
+        partial_vars=partial_vars,
         role_variables=role_variables,
-        context_variables=base_context_variables,
+        context_variables=merged_context or None,
         examples_block_variables=examples_block_variables,
     )
-    if partial_vars:
-        template = template.partial(**partial_vars)
-    return template

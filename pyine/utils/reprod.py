@@ -496,7 +496,7 @@ def load_logged_app_config(
     exist, the function will return an empty dict. If more than one config files exist, the first
     one in the sorted list of files will be loaded and returned.
     """
-    experiment_log_dir = pathlib.Path(experiment_log_dir).expanduser()
+    experiment_log_dir = pathlib.Path(experiment_log_dir).expanduser().resolve()
     assert experiment_log_dir.is_dir(), f"invalid experiment log dir: {experiment_log_dir}"
     potential_config_paths = sorted(experiment_log_dir.glob("config.*.rank*.json"))
     if not potential_config_paths:

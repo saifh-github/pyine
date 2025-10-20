@@ -308,11 +308,15 @@ def _compare_objects(
     if isinstance(a, str) and isinstance(b, str):
         res = _compare_text(a, b, opt)
         return res if res.equal else res.with_path(path or "str")
-    if isinstance(a, (list, tuple)) and len(a) == 1 and not isinstance(b, (list, tuple)):
-        # unwrap singleton sequences so [value] can match value
-        return _compare_objects(a[0], b, opt, path=f"{path}[0]" if path else "[0]")
-    if isinstance(b, (list, tuple)) and len(b) == 1 and not isinstance(a, (list, tuple)):
-        return _compare_objects(a, b[0], opt, path=f"{path}[0]" if path else "[0]")
+    if isinstance(a, (list, tuple)):
+        seq_a_single = typing.cast("typing.Sequence[typing.Any]", a)
+        if len(seq_a_single) == 1 and not isinstance(b, (list, tuple)):
+            # unwrap singleton sequences so [value] can match value
+            return _compare_objects(seq_a_single[0], b, opt, path=f"{path}[0]" if path else "[0]")
+    if isinstance(b, (list, tuple)):
+        seq_b_single = typing.cast("typing.Sequence[typing.Any]", b)
+        if len(seq_b_single) == 1 and not isinstance(a, (list, tuple)):
+            return _compare_objects(a, seq_b_single[0], opt, path=f"{path}[0]" if path else "[0]")
     if isinstance(a, bool) and isinstance(b, bool):
         return _ok() if a is b else _fail_path(path, f"Bool differs: {a} != {b}")
     if a is None or b is None:
@@ -328,8 +332,8 @@ def _compare_objects(
             order_a = opt.list_order_matters if isinstance(a, list) else opt.tuple_order_matters
             order_b = opt.list_order_matters if isinstance(b, list) else opt.tuple_order_matters
             order_matters = order_a and order_b
-        seq_a_iter = typing.cast("typing.Iterable[typing.Any]", a)
-        seq_b_iter = typing.cast("typing.Iterable[typing.Any]", b)
+        seq_a_iter = typing.cast("typing.Sequence[typing.Any]", a)
+        seq_b_iter = typing.cast("typing.Sequence[typing.Any]", b)
         seq_a = list(seq_a_iter)
         seq_b = list(seq_b_iter)
         return _compare_sequences(
@@ -395,9 +399,11 @@ def _compare_sequences(
     if len(a_list) != len(b_list):
         # allow a single level of wrapping/unwrapping, e.g. [a, b] vs [[a, b]]
         if len(a_list) == 1 and isinstance(a_list[0], (list, tuple)):
-            return _compare_sequences(a_list[0], b_list, opt, path, order_matters)
+            nested_a = typing.cast("typing.Sequence[typing.Any]", a_list[0])
+            return _compare_sequences(nested_a, b_list, opt, path, order_matters)
         if len(b_list) == 1 and isinstance(b_list[0], (list, tuple)):
-            return _compare_sequences(a_list, b_list[0], opt, path, order_matters)
+            nested_b = typing.cast("typing.Sequence[typing.Any]", b_list[0])
+            return _compare_sequences(a_list, nested_b, opt, path, order_matters)
         return _fail_path(path, f"Length differs: {len(a_list)} != {len(b_list)}")
     if order_matters:
         for i, (ai, bi) in enumerate(zip(a_list, b_list, strict=False)):

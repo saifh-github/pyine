@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import functools
 import json
 import logging
 import pathlib
@@ -900,12 +899,20 @@ class TypedPromptResultFetcher[T]:
         """Decode a single PromptResultRecord into a typed result."""
         return TypedPromptResult(record=record, result=self._decode(record.result))
 
-    @functools.wraps(fetch_or_generate_prompt_results)
     def fetch_or_generate(
         self,
-        *args: typing.Any,
+        model: langchain_core.language_models.BaseLanguageModel[typing.Any],
+        identifier: str,
+        input_variables: dict[str, typing.Any],
+        prompt_config: PromptBuildConfig,
         **kwargs: typing.Any,
     ) -> list[TypedPromptResult[T]]:
         """Fetch/generate records then decode each into the target type."""
-        records = fetch_or_generate_prompt_results(*args, **kwargs)
-        return [self.decode_record(r) for r in records]
+        records: list[PromptResultRecord] = fetch_or_generate_prompt_results(
+            model=model,
+            identifier=identifier,
+            input_variables=input_variables,
+            prompt_config=prompt_config,
+            **kwargs,
+        )
+        return [self.decode_record(record) for record in records]

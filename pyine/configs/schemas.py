@@ -56,7 +56,7 @@ class RuntimeConfig(pydantic.BaseModel):
     @property
     def output_dir_path(self) -> pathlib.Path:
         """Path to the run's output directory."""
-        output_dir_path = pathlib.Path(self.output_dir).expanduser()
+        output_dir_path = pathlib.Path(self.output_dir).expanduser().resolve()
         assert output_dir_path.is_dir(), "output run directory should have been auto-created?"
         return output_dir_path
 

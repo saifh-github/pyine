@@ -28,6 +28,9 @@ import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
+if typing.TYPE_CHECKING:
+    import langchain_core.language_models
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROBLEM_DIR = pyine.utils.filesystem.get_data_root_path() / "TACO" / "repackaged" / "2025-03-31-v01"
@@ -46,10 +49,18 @@ def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfi
     Returns:
         pyine.utils.llm_providers.LLMProviderConfig: Provider configuration to instantiate the rewrite model.
     """
-    provider = os.environ.get("INPUT_OUTPUT_REWRITE_PROVIDER", "openai")
+    provider_env = os.environ.get("INPUT_OUTPUT_REWRITE_PROVIDER", "openai")
+    supported_providers = typing.get_args(pyine.utils.llm_providers.SupportedProviderType)
+    provider_candidate = provider_env.lower()
+    provider_lookup = {value: value for value in supported_providers}
+    if provider_candidate not in provider_lookup:
+        raise ValueError(
+            f"unsupported provider '{provider_env}'. Expected one of: {', '.join(sorted(supported_providers))}",
+        )
+    provider = provider_lookup[provider_candidate]
     model_name = os.environ.get("INPUT_OUTPUT_REWRITE_MODEL", "gpt-5-nano")
     temperature = float(os.environ.get("INPUT_OUTPUT_REWRITE_TEMPERATURE", "0"))
-    model_kwargs = {"model": model_name, "temperature": temperature}
+    model_kwargs: dict[str, typing.Any] = {"model": model_name, "temperature": temperature}
     return pyine.utils.llm_providers.LLMProviderConfig(provider=provider, model_kwargs=model_kwargs)
 
 
@@ -74,16 +85,24 @@ def _get_first_solution_code(problem_json: dict[str, typing.Any]) -> str:
     Returns:
         str: The first solution's code string, or an empty string when missing.
     """
-    solutions = problem_json.get("solutions") or []
-    if not solutions:
+    solutions_value_raw = problem_json.get("solutions")
+    if not isinstance(solutions_value_raw, list) or not solutions_value_raw:
         return ""
-    first_solution = solutions[0]
-    if not isinstance(first_solution, dict):
+    solutions_value = typing.cast("list[typing.Any]", solutions_value_raw)
+    first_solution_raw = solutions_value[0]
+    if not isinstance(first_solution_raw, dict):
         return ""
-    return first_solution.get("code") or first_solution.get("orig_code") or ""
+    first_solution = typing.cast("dict[str, typing.Any]", first_solution_raw)
+    code_value = first_solution.get("code")
+    if isinstance(code_value, str):
+        return code_value
+    orig_code_value = first_solution.get("orig_code")
+    if isinstance(orig_code_value, str):
+        return orig_code_value
+    return ""
 
 
-def _load_override_log(path: pathlib.Path) -> dict[str, dict[str, typing.Any]]:
+def _load_override_log(path: pathlib.Path | None) -> dict[str, dict[str, typing.Any]]:
     """Load problem override entries from disk if present.
 
     Args:
@@ -99,7 +118,12 @@ def _load_override_log(path: pathlib.Path) -> dict[str, dict[str, typing.Any]]:
     except orjson.JSONDecodeError:
         return {}
     if isinstance(data, dict):
-        return {str(key): value for key, value in data.items() if isinstance(value, dict)}
+        entries: dict[str, dict[str, typing.Any]] = {}
+        for raw_key, raw_value in typing.cast("dict[typing.Any, typing.Any]", data).items():
+            if not isinstance(raw_key, str) or not isinstance(raw_value, dict):
+                continue
+            entries[str(raw_key)] = typing.cast("dict[str, typing.Any]", raw_value)
+        return entries
     return {}
 
 
@@ -110,8 +134,10 @@ def _save_override_log(path: pathlib.Path, entries: dict[str, dict[str, typing.A
 
 
 def _generate_candidate_input_output(
-    model: pyine.utils.llm_providers.LLMProvider,
-    prompt_fetcher: pyine.prompts.TypedPromptResultFetcher,
+    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
+    prompt_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
+        pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
+    ],
     prompt_config: pyine.prompts.PromptBuildConfig,
     problem_identifier: str,
     question: str,
@@ -135,8 +161,8 @@ def _generate_candidate_input_output(
         pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse | None:
         Candidate rewrite response, or None when generation fails.
     """
-    sanitized_input_output = current_input_output or {}
-    prompt_inputs = {
+    sanitized_input_output: dict[str, typing.Any] = current_input_output or {}
+    prompt_inputs: dict[str, str] = {
         "question": question,
         "starter_code": starter_code,
         "first_solution": first_solution,
@@ -259,11 +285,11 @@ def output_compare(
                 test_outputs=outputs,
             )
             try:
-                _, compare_result = get_code_output(
-                    code_to_trace,
-                    trace_writer_config,
+                _trace_result, compare_result = pyine.data.traces.dataset_writer.trace_code_snippet(
+                    code_snippet=code_to_trace,
+                    config=trace_writer_config,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 break
             if compare_result:
                 correct += 1
@@ -272,28 +298,6 @@ def output_compare(
         if correct == total_tests:
             return True
     return False
-
-
-def get_code_output(
-    code: pyine.data.traces.dataset_writer.TraceRequest,
-    trace_writer_config: pyine.data.traces.dataset_writer.TraceDatasetWriterConfig,
-) -> tuple[
-    pyine.utils.code.execution.TraceResult,
-    pyine.utils.code.output_compare.CompareResult,
-]:
-    """Execute solution code under tracing and capture comparison results.
-
-    Args:
-        code: Trace execution request payload.
-        trace_writer_config: Configuration used to control tracing behavior.
-
-    Returns:
-        tuple[TraceResult, CompareResult]: Execution and comparison artifacts.
-    """
-    return pyine.data.traces.dataset_writer.trace_code_snippet(
-        code_snippet=code,
-        config=trace_writer_config,
-    )
 
 
 def run_input_output_rewrite(
@@ -308,14 +312,14 @@ def run_input_output_rewrite(
         problem_filenames: Optional specific problem files to process.
         override_log_path: Optional path to the override log used to persist fixes.
     """
-    problem_dir = (pathlib.Path.cwd() / problem_dir.expanduser()).resolve()
+    problem_dir = (pathlib.Path.cwd() / problem_dir).resolve()
     if not problem_dir.exists():
         raise FileNotFoundError(f"Problem directory does not exist: {problem_dir}")
 
     if override_log_path is None:
         override_log_path = DEFAULT_OVERRIDE_PATH
     else:
-        override_log_path = (pathlib.Path.cwd() / override_log_path.expanduser()).resolve()
+        override_log_path = (pathlib.Path.cwd() / override_log_path).resolve()
 
     pyine.utils.reprod.load_dotenv()
 
@@ -329,12 +333,17 @@ def run_input_output_rewrite(
         prompt_name="input_output_rewrite",
         version="v1.0",
     )
-    prompt_fetcher = pyine.prompts.TypedPromptResultFetcher(
+    prompt_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
+        pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
+    ] = pyine.prompts.TypedPromptResultFetcher(
         result_type=pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
     )
 
-    trace_writer_config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig(source_dataset_name="TACO")
+    trace_writer_config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig.model_validate(
+        {"source_dataset_name": "TACO"}
+    )
 
+    problem_iterator: pyine.data.traces.dataset_utils.CodingProblemIterator
     problem_iterator = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name="TACO",
         root_data_path=problem_dir,
@@ -359,7 +368,7 @@ def run_input_output_rewrite(
             logger.info(f"skipping missing problem file: {problem_filename}")
             continue
         try:
-            raw_problem_data = problem_iterator._load_problem_data(problem_path)
+            raw_problem_data: dict[str, typing.Any] = problem_iterator._load_problem_data(problem_path)  # pyright: ignore[reportPrivateUsage]
         except orjson.JSONDecodeError as exc:
             logger.warning(f"Skipping {problem_filename}: invalid JSON ({exc})")
             continue
@@ -375,13 +384,14 @@ def run_input_output_rewrite(
             logger.debug(f"skipping {problem_filename}: source '{source_name}' not in target set")
             continue
 
-        if not isinstance(raw_problem_data, dict) or not raw_problem_data:
+        if not raw_problem_data:
             logger.debug(f"skipping {problem_filename}: empty problem payload")
             continue
 
         missing_keys = [key for key in ("subset", "input_output") if key not in raw_problem_data]
         if missing_keys:
-            logger.debug(f"skipping {problem_filename}: missing keys {", ".join(missing_keys)}")
+            missing_repr = ", ".join(missing_keys)
+            logger.debug(f"skipping {problem_filename}: missing keys {missing_repr}")
             continue
 
         input_output_block = raw_problem_data.get("input_output")
@@ -391,10 +401,11 @@ def run_input_output_rewrite(
 
         io_missing = [key for key in ("inputs", "outputs") if key not in input_output_block]
         if io_missing:
-            logger.debug(f"skipping {problem_filename}: missing {", ".join(io_missing)}")
+            io_missing_repr = ", ".join(io_missing)
+            logger.debug(f"skipping {problem_filename}: missing {io_missing_repr}")
             continue
 
-        coding_problem, solutions = problem_iterator._process_data(raw_problem_data)
+        coding_problem, solutions = problem_iterator._process_data(raw_problem_data)  # pyright: ignore[reportPrivateUsage]
 
         question = raw_problem_data.get("question") or ""
         starter_code = raw_problem_data.get("starter_code") or ""
@@ -404,7 +415,10 @@ def run_input_output_rewrite(
             logger.info(f"already valid: {problem_filename}")
             continue
 
-        current_io = raw_problem_data.get("input_output", {}) or {}
+        current_io_value = raw_problem_data.get("input_output")
+        current_io: dict[str, typing.Any] = (
+            typing.cast("dict[str, typing.Any]", current_io_value) if isinstance(current_io_value, dict) else {}
+        )
         problem_identifier = repr(coding_problem.problem_id)
         success = False
 
@@ -430,7 +444,7 @@ def run_input_output_rewrite(
                     "fn_name": response.fn_name,
                 }
                 override_entries[problem_identifier] = new_io
-                problem_iterator._problem_data_overrides[problem_identifier] = new_io
+                problem_iterator._problem_data_overrides[problem_identifier] = new_io  # pyright: ignore[reportPrivateUsage]
                 _save_override_log(override_log_path, override_entries)
                 success = True
                 logger.info(f"updated {problem_filename} on attempt {attempt_idx + 1}")
@@ -464,7 +478,7 @@ def run_input_output_rewrite(
 @click.option(
     "--override-log",
     type=click.Path(path_type=pathlib.Path),
-    help=(f"Optional override log path. Defaults to the framework cache at {DEFAULT_OVERRIDE_PATH}."),
+    help=f"Optional override log path. Defaults to the framework cache at {DEFAULT_OVERRIDE_PATH}.",
 )
 def main(
     problem_dir: pathlib.Path,
@@ -478,8 +492,7 @@ def main(
         problem_filenames: Optional specific problem files to process.
         override_log: Optional path to the override log used to persist fixes.
     """
-
-    logging.basicConfig(level=logging.INFO)
+    pyine.utils.reprod.entrypoint_setup()
     run_input_output_rewrite(problem_dir, problem_filenames, override_log)
 
 

@@ -362,7 +362,11 @@ def _resolve_entrypoint_from_namespace(
 
     for idx, segment in enumerate(segments):
         parent = current
-        candidate = current.get(segment, sentinel) if isinstance(current, dict) else getattr(current, segment, sentinel)
+        if isinstance(current, dict):
+            current_dict = typing.cast("dict[str, typing.Any]", current)
+            candidate: typing.Any = current_dict.get(segment, sentinel)
+        else:
+            candidate = getattr(current, segment, sentinel)
         if candidate is sentinel:  # stop immediately when a segment cannot be resolved
             return None
         current = candidate  # advance traversal to the resolved object

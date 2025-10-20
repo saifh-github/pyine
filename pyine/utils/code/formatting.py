@@ -72,22 +72,24 @@ def format_code_with_black(
     """
     if use_black_api:
         try:
-            import black as black_module  # type: ignore
+            import black as black_module  # type: ignore[import-not-found]
         except Exception as error:
             raise FormatterUnavailableError(
                 "black Python API unavailable; call with `use_black_api=False` instead"
             ) from error
-        mode = black_module.Mode(
+        black_dynamic = typing.cast("typing.Any", black_module)
+        mode = black_dynamic.Mode(
             line_length=line_length,
             is_pyi=is_pyi,
             string_normalization=string_normalization,
         )
         try:
-            return typing.cast("str", black_module.format_str(code_string, mode=mode))
-        except black_module.NothingChanged:
+            formatted_code = typing.cast("str", black_dynamic.format_str(code_string, mode=mode))
+        except black_dynamic.NothingChanged:
             return code_string
-        except black_module.InvalidInput as error:
-            raise ValueError(f"error formatting code: {error}") from error
+        except black_dynamic.InvalidInput as error:
+            raise ValueError(f"error formatting code: {error}") from typing.cast("Exception", error)
+        return formatted_code
     suffix = ".pyi" if is_pyi else ".py"
     return _run_cli_formatter(
         code_string=code_string,
