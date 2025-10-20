@@ -16,6 +16,7 @@ class _FakeSample:
     def __init__(self, identifier: str) -> None:
         self.identifier = identifier
         self.expected_output = f"expected-{identifier}"
+        self.output_type = "unknown"
         self._tags = ["tag"]
 
     def _asdict(self) -> dict[str, str]:
@@ -64,7 +65,8 @@ class _FakeOutcomeEvaluator:
         identifier: str,
         expected: str,
         predicted: str,
-        tags: list[str] | None,
+        execution_type: str = "unknown",
+        tags: list[str] | None = None,
     ) -> None:
         self.added.append((identifier, expected, predicted, tags or []))
         self.results.append(
@@ -393,6 +395,7 @@ async def test_evaluate_hf_model_generates_results(
         identifier: str
         expected_output: str
         comma_separated_tags: str
+        output_type: str = "unknown"
 
         def get_tag_list(self) -> list[str]:
             if not self.comma_separated_tags:

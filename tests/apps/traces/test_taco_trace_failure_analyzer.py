@@ -82,6 +82,7 @@ class TestGenerateCandidateInputOutput:
         ]
 
         result = pyine.apps.traces.taco_trace_failure_analyzer._generate_candidate_input_output(
+            # prompt_chain_config=???,
             model=object(),
             prompt_fetcher=prompt_fetcher,
             prompt_config=pyine.prompts.types.PromptBuildConfig(
@@ -109,6 +110,7 @@ class TestGenerateCandidateInputOutput:
         prompt_fetcher.fetch_or_generate.side_effect = pyine.prompts.result_db.ValidationFailedError("boom")
 
         result = pyine.apps.traces.taco_trace_failure_analyzer._generate_candidate_input_output(
+            # prompt_chain_config=???,
             model=object(),
             prompt_fetcher=prompt_fetcher,
             prompt_config=pyine.prompts.types.PromptBuildConfig(

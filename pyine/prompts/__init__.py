@@ -17,6 +17,7 @@ from .result_db import (
 )
 from .types import (
     PromptBuildConfig,
+    PromptChainBuildConfig,
     PromptNameType,
     PromptVersionType,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "PromptNameType",
     "PromptVersionType",
     "PromptBuildConfig",
+    "PromptChainBuildConfig",
     # manager
     "get_framework_prompt_manager",
     "list_prompts",

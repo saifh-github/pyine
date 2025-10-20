@@ -23,25 +23,31 @@ class _DummyGraderChain:
 
     def invoke(
         self,
-        data: dict[str, typing.Any],
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        predicted: typing.Any,
+        expected: typing.Any,
+        execution_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
     ) -> float:
-        expected = typing.cast("str", data["expected_output"])
-        predicted = typing.cast("str", data["predicted_output"])
         return float(self._scorer(expected, predicted))
 
     async def ainvoke(
         self,
-        data: dict[str, typing.Any],
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        predicted: typing.Any,
+        expected: typing.Any,
+        execution_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
     ) -> float:
-        return await asyncio.to_thread(self.invoke, data, *args, **kwargs)
+        return await asyncio.to_thread(
+            self.invoke,
+            predicted=predicted,
+            expected=expected,
+            execution_type=execution_type,
+            **invoke_kwargs,
+        )
 
 
 def test_add_sample_and_accuracies_no_grader() -> None:
-    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
     evaluator.add_sample(identifier="s1", expected="42", predicted="42", tags=["easy"])
     evaluator.add_sample(identifier="s2", expected="abc", predicted="xyz", tags=["hard"])
     evaluator.add_sample(identifier="s3", expected="1.0", predicted="1", tags=["woops"])
@@ -55,8 +61,8 @@ def test_add_sample_and_accuracies_no_grader() -> None:
 
 @pytest.mark.asyncio
 async def test_grader_accuracy_with_mock_chain() -> None:
-    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
-    evaluator._llm_grader_chain = _DummyGraderChain(  # simple grader = 1.0 on exact, 0.25 otherwise
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator._llm_grader_chain_config = _DummyGraderChain(  # simple grader = 1.0 on exact, 0.25 otherwise
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.25
     )
     evaluator.add_sample(identifier="g1", expected="42", predicted="42")
@@ -69,8 +75,8 @@ async def test_grader_accuracy_with_mock_chain() -> None:
 
 @pytest.mark.asyncio
 async def test_agreement_table_with_mock_chain() -> None:
-    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
-    evaluator._llm_grader_chain = _DummyGraderChain(
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator._llm_grader_chain_config = _DummyGraderChain(
         scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.0
     )
     # single fully-agreeing sample (hard == soft == True, grader >= 0.5)
@@ -107,7 +113,7 @@ def test_add_batch_validation_errors() -> None:
 
 
 def test_identifier_selector_filtering() -> None:
-    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
     evaluator.add_sample(identifier="foo/good", expected="1", predicted="1", tags=["x"])
     evaluator.add_sample(identifier="bar/bad", expected="1", predicted="2", tags=["y"])
 
@@ -121,12 +127,17 @@ def test_identifier_selector_filtering() -> None:
 
 
 def test_strip_hard_checks_behavior() -> None:
-    evaluator_no_strip = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=False)
-    evaluator_no_strip.add_sample(identifier="ns", expected="answer", predicted=" answer ")
-    assert evaluator_no_strip.compute_hard_accuracy() == 0.0
-    evaluator_strip = pyine.evals.code_exec.utils.OutcomeEvaluator(strip_hard_checks=True)
+    evaluator_strip = pyine.evals.code_exec.utils.OutcomeEvaluator()
     evaluator_strip.add_sample(identifier="s", expected="answer", predicted=" answer ")
     assert evaluator_strip.compute_hard_accuracy() == 1.0
+
+
+def test_tags_include_exec_type() -> None:
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator.add_sample(identifier="s1", expected="answer", predicted="answer", tags=["x"])
+    assert len(evaluator.results) == 1 and evaluator.results[0].tags == ["x", "execution_type:unknown"]
+    evaluator.add_sample(identifier="s2", expected="answer", predicted="answer", execution_type="potato", tags=["x"])
+    assert len(evaluator.results) == 2 and evaluator.results[1].tags == ["x", "execution_type:potato"]
 
 
 @pytest.mark.asyncio

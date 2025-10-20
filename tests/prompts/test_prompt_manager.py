@@ -79,8 +79,7 @@ class TestPromptManager:
             context_variables={"context": "value"},
             examples_block_variables={"examples": "value"},
         )
-        result = build_config.get_template()
-        assert result == "template"
+        assert build_config.template == "template"
         assert captured_kwargs["role_variables"] == {"role": "value"}
         assert captured_kwargs["context_variables"] == {"context": "value"}
         assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
@@ -89,14 +88,22 @@ class TestPromptManager:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        captured_kwargs: dict[str, dict[str, str] | None] = {}
+        captured_template_kwargs: dict[str, dict[str, str] | None] = {}
+        captured_chain_kwargs: dict[str, dict[str, str] | None] = {}
+
+        def fake_get_prompt_template(
+            **kwargs: typing.Any,
+        ) -> str:
+            captured_template_kwargs.update(kwargs)
+            return "template"
 
         def fake_get_prompt_chain(
             **kwargs: typing.Any,
         ) -> str:
-            captured_kwargs.update(kwargs)
+            captured_chain_kwargs.update(kwargs)
             return "chain"
 
+        monkeypatch.setattr(prompt_manager, "get_prompt_template", fake_get_prompt_template)
         monkeypatch.setattr(prompt_manager, "get_prompt_chain", fake_get_prompt_chain)
         build_config = prompt_types.PromptBuildConfig(
             prompt_name="dummy",
@@ -105,10 +112,11 @@ class TestPromptManager:
             examples_block_variables={"examples": "value"},
         )
         result = build_config.get_chain(model="model", runnable_name="run")
+        assert len(captured_template_kwargs) != 0
         assert result == "chain"
-        assert captured_kwargs["role_variables"] == {"role": "value"}
-        assert captured_kwargs["context_variables"] == {"context": "value"}
-        assert captured_kwargs["examples_block_variables"] == {"examples": "value"}
+        assert captured_chain_kwargs["role_variables"] == {"role": "value"}
+        assert captured_chain_kwargs["context_variables"] == {"context": "value"}
+        assert captured_chain_kwargs["examples_block_variables"] == {"examples": "value"}
 
     def test_prompt_aliases_reuse_hints_docs(
         self,

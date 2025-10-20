@@ -338,7 +338,7 @@ def traces(
         generate_obfuscated_solutions=generate_obfuscated_solutions,
         fetch_augmented_solutions=fetch_augmented_solutions_dict,
         prompt_result_db_path=str(prompt_result_db_path) if prompt_result_db_path is not None else None,
-        test_output_compare_options=pyine.utils.code.output_compare.get_options_for_code_exec_outputs(),
+        test_output_compare_options=pyine.utils.code.output_compare.get_default_comparison_config(),
         writer_serialization_config=default_serialization_config,
         failed_test_log_dir=default_failed_test_log_dir,
     )

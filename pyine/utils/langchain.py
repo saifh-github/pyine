@@ -2,6 +2,7 @@ import datetime
 import typing
 
 import langchain_core.callbacks
+import langchain_core.exceptions
 import langchain_core.outputs
 import langchain_core.runnables
 import pydantic
@@ -100,3 +101,16 @@ def is_invocable_chain(obj: typing.Any) -> bool:
         isinstance(obj, langchain_core.runnables.Runnable)
         or (hasattr(obj, "invoke") and callable(getattr(obj, "invoke", None)))
     )
+
+
+def get_default_structured_output_chain_retry_config(
+    max_retries: int = 3,
+) -> dict[str, typing.Any]:
+    """Returns a default LangChain `with_retry` configuration that can be used w/ OpenAI."""
+    return {
+        "retry_if_exception_type": (
+            langchain_core.exceptions.OutputParserException,  # for structured parsing failures
+        ),
+        "wait_exponential_jitter": True,  # backoff + jitter
+        "stop_after_attempt": max_retries,  # on top of max_retries specified in model config
+    }

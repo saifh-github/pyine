@@ -1,5 +1,3 @@
-import openai
-
 import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.utils.llm_providers
@@ -31,6 +29,7 @@ def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.Config
         },
     )
     openai_gpt5_nano_for_scoring_config = pyine.configs.utils.make_config_description(
+        # @@@@@@@ TODO update w/ new chain builder
         name="openai_gpt5nano_scoring",
         group=group,
         description=(
@@ -46,20 +45,8 @@ def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.Config
                 "max_retries": 10,  # be generous here
             },
             # note: the GPT-5 series dropped support for customizing temperature, so we don't set anything here
-            "with_retry_config": {
-                "retry_if_exception_type": (
-                    openai.APITimeoutError,  # stalled/timeout
-                    openai.APIConnectionError,  # network flake
-                    openai.RateLimitError,  # 429s
-                    openai.InternalServerError,  # 5xx
-                ),
-                "wait_exponential_jitter": True,  # backoff + jitter
-                "stop_after_attempt": 3,  # on top of max_retries above
-            },
-            "rate_limiter_config": {
-                "requests_per_second": 50,  # tier 4, with gpt-5-nano = 10K RPM, so this is a good/safe default
-                "max_bucket_size": 50,
-            },
+            "with_retry_config": pyine.utils.llm_providers.get_default_openai_provider_retry_config(),
+            "rate_limiter_config": pyine.utils.llm_providers.get_default_openai_provider_rate_limit_config(),
             # -------------
             "bases": (base_openai_config.config,),
         },

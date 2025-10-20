@@ -243,14 +243,14 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
         str | None,
         pydantic.Field(
             default=None,
-            description=("Path to the prompt result db file. If None, will default to the framework prompt result db."),
+            description="Path to the prompt result db file. If None, will default to the framework prompt result db.",
         ),
     ]
     test_output_compare_options: typing.Annotated[
         pyine.utils.code.output_compare.CompareOptions,
         pydantic.Field(
-            default=pyine.utils.code.output_compare.get_options_for_code_exec_outputs(),
-            description=("Options to use for comparing the output of a test with the expected output."),
+            default=pyine.utils.code.output_compare.get_default_comparison_config(),
+            description="Options to use for comparing the output of a test with the expected output.",
         ),
     ]
     writer_serialization_config: typing.Annotated[

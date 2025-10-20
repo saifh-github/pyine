@@ -96,12 +96,14 @@ def test_pred_grader_infer_score_only() -> None:
         provider="openai",
         model="gpt-4o-mini",
     )
-    result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
+    llm_grader_chain = pyine.utils.code.output_compare.get_llm_grading_chain_config(
+        provider=model,
+        with_reasoning=False,
+    )
+    result = llm_grader_chain.invoke(
         predicted="Hello Bob",
         expected="Hello, Bob",
         execution_type="program_output",
-        llm=model,
-        options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=False),
     )
     assert hasattr(result, "score")
     assert isinstance(result.score, float)
@@ -117,12 +119,41 @@ def test_pred_grader_infer_with_reasoning() -> None:
         provider="openai",
         model="gpt-4o-mini",
     )
-    result = pyine.utils.code.output_compare.compare_exec_output_with_llm(
+    llm_grader_chain = pyine.utils.code.output_compare.get_llm_grading_chain_config(
+        provider=model,
+        with_reasoning=True,
+    )
+    result = llm_grader_chain.invoke(
         predicted="Hello Bob",
         expected="Hello, Bob",
         execution_type="program_output",
-        llm=model,
-        options=pyine.utils.code.output_compare.get_options_for_llm_grading(with_reasoning=True),
+    )
+    assert hasattr(result, "score")
+    assert 0.0 <= float(result.score) <= 1.0
+    assert hasattr(result, "reasoning")
+    if result.reasoning is not None:
+        assert isinstance(result.reasoning, str)
+        assert len(result.reasoning) > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="OpenAI API key or network not available",
+)
+async def test_pred_grader_infer_with_async_reasoning() -> None:
+    model = pyine.utils.llm_providers.get_model_from_provider(
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+    llm_grader_chain = pyine.utils.code.output_compare.get_llm_grading_chain_config(
+        provider=model,
+        with_reasoning=True,
+    )
+    result = await llm_grader_chain.ainvoke(
+        predicted="Hello Bob",
+        expected="Hello, Bob",
+        execution_type="program_output",
     )
     assert hasattr(result, "score")
     assert 0.0 <= float(result.score) <= 1.0

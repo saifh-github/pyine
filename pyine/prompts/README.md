@@ -34,7 +34,7 @@ print(text)
 ```python
 from pyine.prompts import get_prompt_chain
 
-# model = ...  # any langchain_core.language_models.BaseLanguageModel
+# model = ...  # any `langchain_openai.chat_models.base.BaseChatOpenAI`-derived model
 chain = get_prompt_chain(model, "code_analysis")
 result = chain.invoke({"code": 'name = input("Enter name: ")\nprint("Hello, " + name)'})
 # if the prompt module provides an output parser, the above result is a structured object
@@ -177,14 +177,19 @@ or generates new ones:
 ```python
 import datetime
 import pyine.prompts
+import pyine.utils.llm_providers
 
 records = pyine.prompts.fetch_or_generate_prompt_results(
-    model=my_llm,
     identifier="dataset-item-42",
     input_variables={"code": "print('hi')"},
-    prompt_config=pyine.prompts.PromptBuildConfig(
-        prompt_name="code_summary",
-        # ... other args if needed
+    prompt_chain_config=pyine.prompts.PromptChainBuildConfig(
+        prompt=pyine.prompts.PromptBuildConfig(
+            prompt_name="code_summary",
+            # ... other args if needed
+        ),
+        provider=pyine.utils.llm_providers.LLMProviderConfig(
+            # ...
+        ),
     ),
     max_result_age=datetime.timedelta(days=7),
 )

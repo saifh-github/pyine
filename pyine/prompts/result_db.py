@@ -10,8 +10,6 @@ import threading
 import typing
 
 import backoff
-import langchain_core.exceptions
-import langchain_core.language_models
 import langchain_core.messages
 import langchain_core.runnables
 import orjson
@@ -21,7 +19,7 @@ import pyine.data.utils.filter_rules
 import pyine.utils.filesystem
 import pyine.utils.langchain
 import pyine.utils.reprod
-from pyine.prompts.types import PromptBuildConfig, PromptNameType, PromptVersionType  # noqa
+from pyine.prompts.types import PromptChainBuildConfig, PromptNameType, PromptVersionType  # noqa
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
@@ -650,13 +648,11 @@ class ValidatorCallableType(typing.Protocol):
 
 
 def fetch_or_generate_prompt_results(
-    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
     identifier: str,
     input_variables: dict[str, typing.Any],
-    prompt_config: PromptBuildConfig,
+    prompt_chain_config: PromptChainBuildConfig,
     *,
     db: PromptResultDB | None = None,
-    runnable_name: str | None = None,
     max_result_age: datetime.timedelta | None = None,
     tag_filter_rule: str | None = None,
     deduplicate_results: bool = True,
@@ -675,18 +671,16 @@ def fetch_or_generate_prompt_results(
     This utility function looks up previously recorded prompt results in the framework's default
     result database for the provided identifier and prompt spec. If matches are found, it returns
     them (optionally filtered by age, tags, and duplicates). If fewer than `generate_until_result_count`
-    matches are found, it will build a runnable chain using the prompt manager and invoke it to
+    matches are found, it will use the provided chain config to build a chain and invoke it to
     generate additional results. The results will be stored in the database (can be toggled off by
     setting ``log_new_results`` to False). To always generate the requested number of results no
     matter the number of preexisting results, set ``force_generation`` to True.
 
     Args:
-        model: A LangChain BaseLanguageModel instance.
         identifier: Identifier to match previously generated results.
         input_variables: Mapping of input variable names to values for rendering/invoking the prompt.
-        prompt_config: Prompt configuration object used to create prompt template and chain.
+        prompt_chain_config: Prompt chain config object used to create the prompt template and chain.
         db: Optional DB instance; if omitted, uses the framework default DB.
-        runnable_name: Optional name to use for the runnable chain.
         max_result_age: If provided, ignore preexisting results older than this age (relative to now).
         tag_filter_rule: Optional tag filter rule applied to preexisting DB records.
         deduplicate_results: If True, deduplicate records (based on result string) before returning.
@@ -714,8 +708,8 @@ def fetch_or_generate_prompt_results(
         if force_generation
         else db.get_by_identifier(
             identifier,
-            prompt_name=prompt_config.prompt_name,
-            prompt_version=prompt_config.version,
+            prompt_name=prompt_chain_config.prompt.prompt_name,
+            prompt_version=prompt_chain_config.prompt.version,
             tag_filter_rule=tag_filter_rule,
             max_result_age=max_result_age,
         )
@@ -739,23 +733,13 @@ def fetch_or_generate_prompt_results(
         need_to_generate = max(0, (generate_until_result_count or 1) - len(existing_records))
     new_records: list[PromptResultRecord] = []
     if need_to_generate > 0:
-        prompt_template = prompt_config.get_template()
-        chain = prompt_config.get_chain(
-            model=model,
-            runnable_name=runnable_name,
-        )
-        chain.with_retry(
-            retry_if_exception_type=(langchain_core.exceptions.OutputParserException,),
-            wait_exponential_jitter=True,  # backoff + jitter
-            stop_after_attempt=5,
-        )
         while len(new_records) < need_to_generate:
             retry_count = 0
             while True:  # attempt to generate a satisfactory output, with optional retries on valid failure
-                prompt_str = prompt_template.format(**input_variables)
+                prompt_str = prompt_chain_config.template.format(**input_variables)
                 llm_event_logger = pyine.utils.langchain.CaptureLLMHandler()
                 callback_config = langchain_core.runnables.RunnableConfig(callbacks=[llm_event_logger])
-                output = chain.invoke(input_variables, config=callback_config)
+                output = prompt_chain_config.chain.invoke(input_variables, config=callback_config)
                 cm = creation_meta if creation_meta is not None else CreationMeta()
                 llm_output_payload: dict[str, typing.Any] = {}
                 latest_llm_event = llm_event_logger.get_latest_event("llm_end")
@@ -807,8 +791,8 @@ def fetch_or_generate_prompt_results(
                             meta=meta,
                             tags=tags_to_store,
                             group=group,
-                            prompt_name=prompt_config.prompt_name,
-                            prompt_version=prompt_config.version,
+                            prompt_name=prompt_chain_config.prompt.prompt_name,
+                            prompt_version=prompt_chain_config.prompt.version,
                             creation_meta=cm,
                         )
                     if meta is not None:
@@ -818,8 +802,8 @@ def fetch_or_generate_prompt_results(
                     new_records.append(
                         PromptResultRecord(
                             identifier=identifier,
-                            prompt_name=prompt_config.prompt_name,
-                            prompt_version=prompt_config.version,
+                            prompt_name=prompt_chain_config.prompt.prompt_name,
+                            prompt_version=prompt_chain_config.prompt.version,
                             group=group,
                             creation_meta=cm,
                             prompt=prompt_str,
@@ -907,18 +891,16 @@ class TypedPromptResultFetcher[T]:
 
     def fetch_or_generate(
         self,
-        model: langchain_core.language_models.BaseLanguageModel[typing.Any],
         identifier: str,
         input_variables: dict[str, typing.Any],
-        prompt_config: PromptBuildConfig,
+        prompt_chain_config: PromptChainBuildConfig,
         **kwargs: typing.Any,
     ) -> list[TypedPromptResult[T]]:
         """Fetch/generate records then decode each into the target type."""
         records: list[PromptResultRecord] = fetch_or_generate_prompt_results(
-            model=model,
             identifier=identifier,
             input_variables=input_variables,
-            prompt_config=prompt_config,
+            prompt_chain_config=prompt_chain_config,
             **kwargs,
         )
         return [self.decode_record(record) for record in records]

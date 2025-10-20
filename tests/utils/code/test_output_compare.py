@@ -29,7 +29,7 @@ def neq(
 
 
 def test_get_default_options() -> None:
-    opts = pyine.utils.code.output_compare.get_options_for_code_exec_outputs()
+    opts = pyine.utils.code.output_compare.get_default_comparison_config()
     assert isinstance(opts, pyine.utils.code.output_compare.CompareOptions)
     assert eq("123", "123", **opts.model_dump())
 

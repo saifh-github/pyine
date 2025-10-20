@@ -9,6 +9,8 @@ It supports tolerant float comparisons, deep container comparisons, and
 numeric-aware text comparison for printed outputs.
 """
 
+from __future__ import annotations
+
 import ast
 import contextlib
 import dataclasses
@@ -16,10 +18,11 @@ import math
 import re
 import typing
 
-import langchain_core.language_models
 import pydantic
 
 import pyine.prompts.types
+import pyine.utils.langchain
+import pyine.utils.llm_providers
 import pyine.utils.portability
 from pyine.prompts.configs.pred_grader import (
     GradingResult,
@@ -27,15 +30,17 @@ from pyine.prompts.configs.pred_grader import (
 )
 
 __all__ = [
+    # ------ heuristic-based comparison ------
     "CompareOptions",
-    "get_options_for_code_exec_outputs",
     "CompareResult",
+    "compare",
+    "get_default_comparison_config",
+    # ------ LLM-based comparison ------
+    "get_llm_grading_prompt_config",
+    "get_llm_grading_chain_config",
+    "LLMGradingChainBuildConfig",
     "GradingResult",
     "GradingResultWithReasoning",
-    "compare",
-    "LLMCompareOptions",
-    "get_options_for_llm_grading",
-    "compare_exec_output_with_llm",
 ]
 
 
@@ -71,22 +76,6 @@ class CompareOptions(pydantic.BaseModel):
     """If True, NaN is considered equal to NaN."""
 
 
-def get_options_for_code_exec_outputs() -> CompareOptions:
-    """Get default options for experiments involving comparing code execution outputs."""
-    return CompareOptions(
-        rel_tol="auto",
-        abs_tol="auto",
-        normalize_whitespace=True,
-        strip=True,
-        case_sensitive=True,
-        numeric_token_tolerance=True,
-        list_order_matters=True,
-        tuple_order_matters=True,
-        array_type_matters=False,
-        nan_equal=True,
-    )
-
-
 @dataclasses.dataclass
 class CompareResult:
     """Result of a comparison.
@@ -105,7 +94,7 @@ class CompareResult:
         """Return True if comparison succeeded."""
         return self.equal
 
-    def with_path(self, segment: str) -> "CompareResult":
+    def with_path(self, segment: str) -> CompareResult:
         """Return a copy of this result with a path segment prepended when unequal.
 
         Args:
@@ -145,6 +134,22 @@ def compare(
         return _compare_strings_or_literals(a, b, options)
     # otherwise, compare as structured Python objects (lists, dicts, sets, tuples, POD, ...)
     return _compare_objects(a, b, options, path="")
+
+
+def get_default_comparison_config() -> CompareOptions:
+    """Get default options for experiments involving comparing code execution outputs."""
+    return CompareOptions(
+        rel_tol="auto",
+        abs_tol="auto",
+        normalize_whitespace=True,
+        strip=True,
+        case_sensitive=True,
+        numeric_token_tolerance=True,
+        list_order_matters=True,
+        tuple_order_matters=True,
+        array_type_matters=False,
+        nan_equal=True,
+    )
 
 
 def _compare_strings_or_literals(
@@ -492,50 +497,93 @@ def _fail_path(path: str, reason: str) -> CompareResult:
     return CompareResult(False, reason, path or "")
 
 
-class LLMCompareOptions(pyine.prompts.types.PromptBuildConfig):
-    """Options that control how outputs are compared by an LLM grader."""
-
-    prompt_name: pyine.prompts.types.PromptNameType = "pred_grader"
-    """Name of the comparison prompt chain."""
-    version: pyine.prompts.types.PromptVersionType | None = "score_only"
-    """Version of the comparison prompt chain (differs based on reasoning)."""
-
-
-def get_options_for_llm_grading(with_reasoning: bool = False) -> LLMCompareOptions:
+def get_llm_grading_prompt_config(with_reasoning: bool = False) -> pyine.prompts.types.PromptBuildConfig:
     """Get default options for experiments involving LLM grading."""
-    return LLMCompareOptions(
+    return pyine.prompts.types.PromptBuildConfig(
+        prompt_name="pred_grader",
         version="score_only" if not with_reasoning else "with_reasoning",
     )
 
 
-def compare_exec_output_with_llm(
-    predicted: typing.Any,
-    expected: typing.Any,
-    execution_type: str,
-    llm: langchain_core.language_models.BaseLanguageModel[typing.Any],
-    runnable_name: str | None = None,
-    options: LLMCompareOptions | None = None,
-) -> GradingResult | GradingResultWithReasoning:
-    """Compare two execution outputs (one predicted, one expected) using an LLM grader.
-
-    Args:
-        predicted: The predicted execution output to compare.
-        expected: The expected execution output to compare against.
-        execution_type: The type of execution (see the samples module for more information).
-        llm: The language model to use inside the runnable prompt chain.
-        runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
-        options: Options that control how outputs are compared by an LLM grader.
-
-    Returns:
-        Grading outcome with score and optional reasoning.
-    """
-    if options is None:
-        options = get_options_for_llm_grading()
-    chain = typing.cast("typing.Any", options.get_chain(typing.cast("typing.Any", llm), runnable_name))
-    return chain.invoke(
-        {
-            "expected_output": expected,
-            "predicted_output": predicted,
-            "execution_type": execution_type,
-        }
+def get_llm_grading_chain_config(
+    provider: pyine.utils.llm_providers.LLMProviderConfig | pyine.prompts.types.LanguageModel,
+    with_reasoning: bool = False,
+    with_retry_config: dict[str, typing.Any] | None | typing.Literal["auto"] = "auto",
+) -> LLMGradingChainBuildConfig:
+    """Returns a prompt chain config for LLM-based grading of code execution outputs."""
+    if with_retry_config == "auto":
+        if with_reasoning:
+            with_retry_config = pyine.utils.langchain.get_default_structured_output_chain_retry_config()
+        else:
+            with_retry_config = None  # no retry at chain level, rely solely on LLM provider retry config
+    prompt = get_llm_grading_prompt_config(with_reasoning=with_reasoning)
+    return LLMGradingChainBuildConfig(
+        prompt=prompt,
+        provider=provider,
+        with_retry_config=with_retry_config,
+        runnable_name=f"{prompt.prompt_name}:{prompt.version}",
     )
+
+
+class LLMGradingChainBuildConfig(pyine.prompts.PromptChainBuildConfig):
+    """Configuration for building/using LLM-based grading chains for code execution outputs."""
+
+    def invoke(
+        self,
+        predicted: typing.Any,
+        expected: typing.Any,
+        execution_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
+    ) -> GradingResult | GradingResultWithReasoning:
+        """Compare two execution outputs (one predicted, one expected) using the LLM grader.
+
+        This will actually invoke the LLM grader chain with the provided configuration.
+
+        Args:
+            predicted: The predicted execution output to compare.
+            expected: The expected execution output to compare against.
+            execution_type: The type of execution (see the samples module for more information).
+            invoke_kwargs: Additional keyword arguments to pass to the LLM grader chain invocation.
+
+        Returns:
+            Grading results that include score and optional reasoning.
+        """
+        return self.chain.invoke(
+            {
+                # the keys below are specific to the "pred_grader" prompt template
+                "expected_output": expected,
+                "predicted_output": predicted,
+                "execution_type": execution_type,
+            },
+            **invoke_kwargs,
+        )
+
+    async def ainvoke(
+        self,
+        predicted: typing.Any,
+        expected: typing.Any,
+        execution_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
+    ) -> GradingResult | GradingResultWithReasoning:
+        """Compare two execution outputs (one predicted, one expected) using the LLM grader.
+
+        This will actually invoke the LLM grader chain asynchronously with the provided configuration.
+
+        Args:
+            predicted: The predicted execution output to compare.
+            expected: The expected execution output to compare against.
+            execution_type: The type of execution (see the samples module for more information).
+            invoke_kwargs: Additional keyword arguments to pass to the LLM grader chain invocation.
+
+        Returns:
+            Grading results that include score and optional reasoning.
+        """
+        return await self.chain.ainvoke(
+            {
+                # the keys below are specific to the "pred_grader" prompt template
+                "expected_output": expected,
+                "predicted_output": predicted,
+                "execution_type": execution_type,
+            },
+            **invoke_kwargs,
+        )

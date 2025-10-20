@@ -18,6 +18,7 @@ import typing
 
 import click
 import langchain_core.exceptions
+import openai
 import orjson
 
 import pyine.data.taco.dataset_utils
@@ -29,9 +30,6 @@ import pyine.prompts.result_db
 import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
-
-if typing.TYPE_CHECKING:
-    import langchain_core.language_models
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +44,7 @@ MAX_LLM_TOKENS = 10_000
 
 
 def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfig:
-    """Build the rewrite LLM provider configuration from environment hints.
+    """Builds the LLM provider configuration from environment hints.
 
     Returns:
         pyine.utils.llm_providers.LLMProviderConfig: Provider configuration to instantiate the rewrite model.
@@ -64,6 +62,29 @@ def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfi
     temperature = float(os.environ.get("INPUT_OUTPUT_REWRITE_TEMPERATURE", "0"))
     model_kwargs: dict[str, typing.Any] = {"model": model_name, "temperature": temperature}
     return pyine.utils.llm_providers.LLMProviderConfig(provider=provider, model_kwargs=model_kwargs)
+
+
+def _get_prompt_chain_builder_config() -> pyine.prompts.types.PromptChainBuildConfig:
+    """Prepares and returns the input/output rewrite prompt chain builder config."""
+    prompt_name, prompt_version = "input_output_rewrite", "v1.0"
+    prompt_config = pyine.prompts.PromptBuildConfig(prompt_name=prompt_name, version=prompt_version)
+    with_retry_config: dict[str, typing.Any] = {
+        "retry_if_exception_type": (
+            openai.APITimeoutError,  # stalled/timeout
+            openai.APIConnectionError,  # network flake
+            openai.RateLimitError,  # 429s
+            openai.InternalServerError,  # 5xx
+            langchain_core.exceptions.OutputParserException,  # for structured parsing failures
+        ),
+        "wait_exponential_jitter": True,  # backoff + jitter
+        "stop_after_attempt": 3,  # on top of max_retries specified in model config
+    }
+    return pyine.prompts.PromptChainBuildConfig(
+        prompt=prompt_config,
+        provider=_resolve_llm_provider_config(),
+        with_retry_config=with_retry_config,
+        runnable_name=f"{prompt_name}:{prompt_version}",
+    )
 
 
 def _to_pretty_json(data: dict[str, typing.Any]) -> str:
@@ -136,11 +157,10 @@ def _save_override_log(path: pathlib.Path, entries: dict[str, dict[str, typing.A
 
 
 def _generate_candidate_input_output(
-    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
-    prompt_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
+    prompt_chain_config: pyine.prompts.PromptChainBuildConfig,
+    result_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
         pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
     ],
-    prompt_config: pyine.prompts.PromptBuildConfig,
     problem_identifier: str,
     question: str,
     starter_code: str,
@@ -150,9 +170,8 @@ def _generate_candidate_input_output(
     """Generate a candidate input/output block for a problem.
 
     Args:
-        model: LLM client used to execute the rewrite prompt.
-        prompt_fetcher: Fetcher used to retrieve or generate prompt results.
-        prompt_config: Prompt configuration for the rewrite flow.
+        prompt_chain_config: Prompt chain configuration for the rewrite flow.
+        result_fetcher: Fetcher used to retrieve or generate prompt results.
         problem_identifier: Stable problem identifier string.
         question: Natural language description of the problem.
         starter_code: Starter solution provided with the problem.
@@ -172,11 +191,10 @@ def _generate_candidate_input_output(
     }
     identifier = problem_identifier
     try:
-        records = prompt_fetcher.fetch_or_generate(
-            model=model,
+        records = result_fetcher.fetch_or_generate(
             identifier=identifier,
             input_variables=prompt_inputs,
-            prompt_config=prompt_config,
+            prompt_chain_config=prompt_chain_config,
             force_generation=False,
             log_new_results=True,
         )
@@ -245,9 +263,8 @@ def _collect_problem_paths(
     for candidate in candidates:
         if override_resolved and candidate.resolve() == override_resolved:
             continue
-        if candidate.is_file():
-            if candidate.stem.isdigit() and int(candidate.stem) > 13_000:
-                paths.append(candidate)
+        if candidate.is_file() and candidate.stem.isdigit() and int(candidate.stem) > 13_000:
+            paths.append(candidate)
     return paths
 
 
@@ -334,12 +351,8 @@ def run_input_output_rewrite(
 
     overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
 
-    llm_provider_config = _resolve_llm_provider_config()
-    prompt_config = pyine.prompts.PromptBuildConfig(
-        prompt_name="input_output_rewrite",
-        version="v1.0",
-    )
-    prompt_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
+    prompt_chain_config = _get_prompt_chain_builder_config()
+    result_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
         pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
     ] = pyine.prompts.TypedPromptResultFetcher(
         result_type=pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
@@ -361,12 +374,6 @@ def run_input_output_rewrite(
     if not problem_paths:
         logger.info("no problem files matched the given parameters")
         return
-    llm_model = pyine.utils.llm_providers.get_model_from_provider(
-        provider=llm_provider_config.provider,
-        model=llm_provider_config.model_kwargs["model"],
-        temperature=llm_provider_config.model_kwargs.get("temperature", 0.0),
-        max_tokens=MAX_LLM_TOKENS,
-    )
 
     for problem_path in problem_paths:
         problem_filename = problem_path.name
@@ -430,9 +437,8 @@ def run_input_output_rewrite(
 
         for attempt_idx in range(MAX_LLM_ATTEMPTS):
             response = _generate_candidate_input_output(
-                model=llm_model,
-                prompt_fetcher=prompt_fetcher,
-                prompt_config=prompt_config,
+                prompt_chain_config=prompt_chain_config,
+                result_fetcher=result_fetcher,
                 problem_identifier=problem_identifier,
                 question=question,
                 starter_code=starter_code,

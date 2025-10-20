@@ -541,7 +541,7 @@ async def main(
             indices_list = [idx for idx in indices_list if idx in parsed_target_indices]
     logger.debug(f"target indices: {indices_list}")
 
-    # -------- prepare provider/llm-related stuff --------
+    # -------- prepare provider/llm/prompt-related stuff --------
 
     llm_kwargs: dict[str, typing.Any] = {}
     if llm_config_file is not None:
@@ -557,8 +557,6 @@ async def main(
         llm_provider_config = pyine.utils.llm_providers.LLMProviderConfig.from_dict(llm_kwargs)
     except Exception as exc:
         raise click.BadParameter("llm options resulted in an invalid provider config") from exc
-
-    # -------- prepare provider/llm-related stuff --------
 
     prompt_partial_vars: dict[str, typing.Any] = {}
     if prompt_vars:

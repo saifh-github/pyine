@@ -11,7 +11,6 @@ import pydantic
 import pyine.data.utils.filter_rules
 import pyine.evals.utils
 import pyine.organisms.datamodules.utils.samples
-import pyine.prompts.types
 import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
 
@@ -20,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 type LLMScoreFuture = asyncio.Task[float]
 """Type alias for pending LLM score computations."""
-type LLMGraderPayload = dict[str, str]
-"""Typed payload expected by the LLM grading chain."""
 type LLMGraderResponse = float | pyine.utils.code.output_compare.GradingResult
 """Raw response type emitted by the LLM grading chain."""
 
@@ -121,45 +118,26 @@ class OutcomeEvaluator:
 
     def __init__(
         self,
-        strip_hard_checks: bool = True,
-        soft_checks_config: (pyine.utils.code.output_compare.CompareOptions | None) = None,
         llm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None,
-        llm_grader_config: (pyine.utils.code.output_compare.LLMCompareOptions | None) = None,
         use_async_llm_grader: bool = True,
         add_idempotency_header: bool = False,
-        runnable_name: str | None = None,
     ) -> None:
         """Initialize the evaluator.
 
         Args:
-            strip_hard_checks: Toggles whether to use whitespace-stripped strings when verifying
-                exact (hard) matches.
-            soft_checks_config: Optional soft match config override. If not provided, will use
-                a default config.
             llm_provider_config: Optional LLM provider config. If not provided, we will not be
-                using LLM grading at all, and will only compute hard/soft matches.
-            llm_grader_config: Optional LLM grader config override. If not provided, we will use
-                the default LLM grading options when a provider config is available. Has not effect
-                if no provider config is specified.
+                using LLM-based execution outcome grading, and will only compute hard/soft matches.
             use_async_llm_grader: Optional flag to use futures instead of blocking during llm grading;
                 falls back to synchronous execution if no event loop is running in the current thread.
             add_idempotency_header: Optional flag to add an idempotency header to the LLM grader.
-            runnable_name: Optional name for the runnable prompt chain (passed to its constructor).
         """
-        self.strip_hard_checks = strip_hard_checks
-        if soft_checks_config is None:
-            soft_checks_config = pyine.utils.code.output_compare.get_options_for_code_exec_outputs()
-        self.soft_checks_config = soft_checks_config
-        if llm_grader_config is None:
-            llm_grader_config = pyine.utils.code.output_compare.get_options_for_llm_grading()
-        self.llm_grader_config = llm_grader_config
-        self.llm_provider_config = llm_provider_config
-        self._llm_grader_chain: pyine.prompts.types.PromptRunnable | None = None
-        if self.llm_provider_config is not None:
-            model = pyine.utils.llm_providers.get_model_from_provider_config(self.llm_provider_config)
-            runnable_config = typing.cast("pyine.prompts.types.PromptBuildConfig", self.llm_grader_config)
-            chain = runnable_config.get_chain(model, runnable_name=runnable_name)
-            self._llm_grader_chain = chain
+        self.strip_hard_checks = True
+        self.soft_checks_config = pyine.utils.code.output_compare.get_default_comparison_config()
+        self._llm_grader_chain_config: pyine.utils.code.output_compare.LLMGradingChainBuildConfig | None = None
+        if llm_provider_config is not None:
+            self._llm_grader_chain_config = pyine.utils.code.output_compare.get_llm_grading_chain_config(
+                provider=llm_provider_config,
+            )
             logger.debug("setting up code exec outcome evaluator WITH llm grader")
         else:
             logger.debug("setting up code exec outcome evaluator WITHOUT llm grader")
@@ -169,17 +147,19 @@ class OutcomeEvaluator:
 
     def is_llm_grader_available(self) -> bool:
         """Returns whether the LLM grader is available."""
-        return self._llm_grader_chain is not None
+        return self._llm_grader_chain_config is not None
 
     def get_llm_grader_score(
         self,
-        expected: str,
         predicted: str,
+        expected: str,
+        execution_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float | LLMScoreFuture:
+        """Returns the LLM-based score (or future for that score) for a given prediction."""
         if not self.is_llm_grader_available():
             raise ValueError("LLM grader not configured, scoring is unavailable")
-        assert self._llm_grader_chain is not None  # narrow type for pyright
+        assert self._llm_grader_chain_config is not None  # narrow type for pyright
         if self.use_async_llm_grader:
             try:
                 asyncio.get_running_loop()
@@ -188,75 +168,92 @@ class OutcomeEvaluator:
             else:
                 return asyncio.create_task(
                     self._invoke_llm_grader_async(
-                        expected=expected,
                         predicted=predicted,
+                        expected=expected,
+                        execution_type=execution_type,
                         config=config,
                     )
                 )
         return self._invoke_llm_grader_sync(
-            expected=expected,
             predicted=predicted,
+            expected=expected,
+            execution_type=execution_type,
             config=config,
         )
 
     async def _invoke_llm_grader_async(
         self,
-        expected: str,
         predicted: str,
+        expected: str,
+        execution_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float:
-        if self._llm_grader_chain is None:
+        """Helper to invoke the LLM grader asynchronously."""
+        if self._llm_grader_chain_config is None:
             raise RuntimeError("LLM grader chain unexpectedly missing during async invoke")
-        payload: LLMGraderPayload = {
-            "expected_output": expected,
-            "predicted_output": predicted,
-        }
         invoke_kwargs: dict[str, typing.Any] = {"config": config}
         if self.add_idempotency_header:
             # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
             invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
-        response = await self._llm_grader_chain.ainvoke(payload, **invoke_kwargs)
+        response = await self._llm_grader_chain_config.ainvoke(
+            predicted=predicted,
+            expected=expected,
+            execution_type=execution_type,
+            **invoke_kwargs,
+        )
         return _decode_response(typing.cast("LLMGraderResponse", response))
 
     def _invoke_llm_grader_sync(
         self,
-        expected: str,
         predicted: str,
+        expected: str,
+        execution_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float:
-        if self._llm_grader_chain is None:
+        """Helper to invoke the LLM grader synchronously."""
+        if self._llm_grader_chain_config is None:
             raise RuntimeError("LLM grader chain unexpectedly missing during sync invoke")
-        payload: LLMGraderPayload = {
-            "expected_output": expected,
-            "predicted_output": predicted,
-        }
         invoke_kwargs: dict[str, typing.Any] = {"config": config}
         if self.add_idempotency_header:
             # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
             invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
-        response = self._llm_grader_chain.invoke(payload, **invoke_kwargs)
+        response = self._llm_grader_chain_config.invoke(
+            predicted=predicted,
+            expected=expected,
+            execution_type=execution_type,
+            **invoke_kwargs,
+        )
         return _decode_response(typing.cast("LLMGraderResponse", response))
 
     def add_sample(
         self,
         identifier: str,
-        expected: str,
         predicted: str,
+        expected: str,
+        execution_type: str = "unknown",
         tags: list[str] | None = None,
     ) -> None:
         """Evaluate and cache artifacts for a single sample.
 
         Args:
             identifier: Unique sample id associated with the executed code snippet.
-            expected: Ground-truth string that corresponds to the expected execution result.
             predicted: Model prediction string that we hope is the same as the expected result.
+            expected: Ground-truth string that corresponds to the expected execution result.
+            execution_type: Type of execution outcome that had to be predicted.
             tags: Arbitrary metadata (tags, difficulty, etc.).
         """
         hard_match = expected.strip() == predicted.strip() if self.strip_hard_checks else expected == predicted
         soft_match = pyine.utils.code.output_compare.compare(expected, predicted, self.soft_checks_config)
         llm_score: float | LLMScoreFuture | None = None
         if self.is_llm_grader_available():
-            llm_score = self.get_llm_grader_score(expected=expected, predicted=predicted)
+            llm_score = self.get_llm_grader_score(
+                expected=expected,
+                predicted=predicted,
+                execution_type=execution_type,
+            )
+        computed_tags: list[str] = tags.copy() if tags is not None else []
+        if not any(tag.startswith("execution_type:") for tag in computed_tags):
+            computed_tags.append(f"execution_type:{execution_type}")
         self.results.append(
             SampleEval(
                 identifier=identifier,
@@ -265,15 +262,16 @@ class OutcomeEvaluator:
                 hard_match=hard_match,
                 soft_match=soft_match,
                 _llm_score=llm_score,
-                tags=tags if tags is not None else [],
+                tags=computed_tags,
             )
         )
 
     def add_batch(
         self,
         identifiers: list[str],
-        expected_list: list[str],
         predicted_list: list[str],
+        expected_list: list[str],
+        execution_type: list[str] | str = "unknown",
         tags: list[list[str]] | None = None,
     ) -> None:
         """Vectorized add; computes and caches artifacts for a batch.
@@ -284,11 +282,20 @@ class OutcomeEvaluator:
             raise ValueError("identifiers, expected_list, and predicted_list must have equal lengths")
         if tags is not None and len(tags) != len(identifiers):
             raise ValueError("tags array count must match identifiers length if provided.")
-        for idx, (sid, exp, pred) in enumerate(zip(identifiers, expected_list, predicted_list, strict=False)):
+        if isinstance(execution_type, list):
+            if len(execution_type) != len(identifiers):
+                raise ValueError("exec type list must match identifiers list length")
+        else:
+            assert isinstance(execution_type, str), f"unexpected execution type: {type(execution_type)}"
+            execution_type = [execution_type] * len(identifiers)
+        for idx, (sid, pred, exp, etype) in enumerate(
+            zip(identifiers, predicted_list, expected_list, execution_type, strict=True)
+        ):
             self.add_sample(
                 identifier=sid,
-                expected=exp,
                 predicted=pred,
+                expected=exp,
+                execution_type=etype,
                 tags=(tags[idx] if tags is not None else None),
             )
 

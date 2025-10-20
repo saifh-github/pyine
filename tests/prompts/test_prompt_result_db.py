@@ -18,9 +18,6 @@ from pyine.prompts.result_db import (
     ValidationFailedError,
     fetch_or_generate_prompt_results,
 )
-from pyine.prompts.types import (
-    PromptBuildConfig,
-)
 
 
 @pytest.fixture()
@@ -209,25 +206,15 @@ def test_row_to_record_falls_back_to_created_at_column(db: PromptResultDB) -> No
 
 def test_fetch_or_generate_deduplicates_existing(
     db: PromptResultDB,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db.store(identifier="dup-id", prompt_name="pn", prompt="p", result="X")
     db.store(identifier="dup-id", prompt_name="pn", prompt="p", result="X")
 
-    # use minimal fake prompt manager to avoid heavy deps during tests; not used since no generation needed
-    def _tpl(**kwargs: typing.Any) -> str:
-        return "{name}"
-
-    def _chain(**kwargs: typing.Any) -> types.SimpleNamespace:
-        return types.SimpleNamespace(invoke=lambda _inputs: "ignored")
-
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", _tpl, raising=False)
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_chain", _chain, raising=False)
+    chain_config = _make_prompt_chain_config("{name}")
     res = fetch_or_generate_prompt_results(
-        model=object(),
         identifier="dup-id",
         input_variables={"name": "Bob"},
-        prompt_config=PromptBuildConfig(prompt_name="pn"),
+        prompt_chain_config=chain_config,
         db=db,
     )
     # deduplication should leave a single record and not generate new ones
@@ -264,28 +251,43 @@ class DummyChain:
             return ModelLike({"v": 999})
 
 
+class _StringTemplate:
+    def __init__(
+        self,
+        pattern: str,
+    ) -> None:
+        self._pattern = pattern
+
+    def format(
+        self,
+        **kwargs: typing.Any,
+    ) -> str:
+        return self._pattern.format(**kwargs)
+
+
+def _make_prompt_chain_config(
+    template_pattern: str,
+    outputs: typing.Iterable[typing.Any] | None = None,
+    prompt_name: str = "pn",
+    version: str | None = None,
+) -> types.SimpleNamespace:
+    template = _StringTemplate(template_pattern)
+    chain = types.SimpleNamespace(invoke=lambda *_args, **_kwargs: None) if outputs is None else DummyChain(outputs)
+    prompt = types.SimpleNamespace(prompt_name=prompt_name, version=version)
+    return types.SimpleNamespace(prompt=prompt, template=template, chain=chain)
+
+
 def test_fetch_or_generate_generate_until_count_no_log(
     db: PromptResultDB,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # here, we use a fake prompt manager producing model-like objects with .model_dump_json()
-
-    def get_prompt_template(**_kwargs: typing.Any) -> str:
-        return "Hello {name}"
-
-    def get_prompt_chain(
-        model: typing.Any | None = None,
-        **_kwargs: typing.Any,
-    ) -> DummyChain:
-        return DummyChain([ModelLike({"v": 1}), ModelLike({"v": 2})])
-
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_chain", get_prompt_chain, raising=False)
+    chain_config = _make_prompt_chain_config(
+        "Hello {name}",
+        outputs=[ModelLike({"v": 1}), ModelLike({"v": 2})],
+    )
     recs = fetch_or_generate_prompt_results(
-        model=object(),
         identifier="gen-no-log",
         input_variables={"name": "Bob"},
-        prompt_config=PromptBuildConfig(prompt_name="pn"),
+        prompt_chain_config=chain_config,
         db=db,
         generate_until_result_count=2,
         log_new_results=False,
@@ -312,28 +314,16 @@ def test_typed_prompt_result_fetcher_decode_record_dict() -> None:
 
 def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
     db: PromptResultDB,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Item(pydantic.BaseModel):
         v: int
 
-    def get_prompt_template(**_kwargs: typing.Any) -> str:
-        return "Value {x}"
-
-    def get_prompt_chain(
-        model: typing.Any | None = None,
-        **_kwargs: typing.Any,
-    ) -> DummyChain:
-        return DummyChain([ModelLike({"v": 10})])
-
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_chain", get_prompt_chain, raising=False)
+    chain_config = _make_prompt_chain_config("Value {x}", outputs=[ModelLike({"v": 10})])
     fetcher = TypedPromptResultFetcher(Item)
     items = fetcher.fetch_or_generate(
-        model=object(),
         identifier="typed-fetch",
         input_variables={"x": "Z"},
-        prompt_config=PromptBuildConfig(prompt_name="pn"),
+        prompt_chain_config=chain_config,
         db=db,
         log_new_results=False,
     )
@@ -345,7 +335,6 @@ def test_typed_prompt_result_fetcher_fetch_or_generate_with_pydantic(
 
 def test_validator_with_retries(
     db: PromptResultDB,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     validator_attempts = 0
 
@@ -360,33 +349,26 @@ def test_validator_with_retries(
             return False
         return True
 
-    def get_prompt_template(**_kwargs: typing.Any) -> str:
-        return "thingy {thang}"
-
-    def get_prompt_chain(
-        model: typing.Any | None = None,
-        **_kwargs: typing.Any,
-    ) -> DummyChain:
-        return DummyChain([ModelLike(f"t{idx}") for idx in range(10)])
-
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_template", get_prompt_template, raising=False)
-    monkeypatch.setattr("pyine.prompts.manager.get_prompt_chain", get_prompt_chain, raising=False)
     with pytest.raises(ValidationFailedError):
         _ = fetch_or_generate_prompt_results(
-            model=object(),
             identifier="valid-test",
             input_variables={"thang": "woops"},
-            prompt_config=PromptBuildConfig(prompt_name="pn"),
+            prompt_chain_config=_make_prompt_chain_config(
+                "thingy {thang}",
+                outputs=[ModelLike(f"t{idx}") for idx in range(10)],
+            ),
             db=db,
             output_validator=_validator,
             max_unsatisfactory_retries=4,
         )
     validator_attempts = 0
     recs = fetch_or_generate_prompt_results(
-        model=object(),
         identifier="valid-test",
         input_variables={"thang": "woops"},
-        prompt_config=PromptBuildConfig(prompt_name="pn"),
+        prompt_chain_config=_make_prompt_chain_config(
+            "thingy {thang}",
+            outputs=[ModelLike(f"t{idx}") for idx in range(10)],
+        ),
         db=db,
         output_validator=_validator,
         max_unsatisfactory_retries=5,

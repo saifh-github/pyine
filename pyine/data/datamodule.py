@@ -6,7 +6,6 @@ import logging
 import typing
 
 import datasets as hf_datasets
-import langchain_core.language_models
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
@@ -24,6 +23,7 @@ if typing.TYPE_CHECKING:
     import pathlib
 
     import langchain_core.runnables
+    import langchain_openai.chat_models.base
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +544,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     def get_prompt_chain(
         self,
-        model: langchain_core.language_models.BaseLanguageModel[typing.Any],
+        model: langchain_openai.chat_models.base.BaseChatOpenAI,
         runnable_name: str | None = None,
         **kwargs: typing.Any,  # forwarded to prompt manager / constructor, overrides internal options if needed
     ) -> langchain_core.runnables.Runnable[typing.Any, typing.Any]:

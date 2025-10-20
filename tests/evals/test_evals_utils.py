@@ -99,12 +99,12 @@ def test_token_usage_info_add_and_iadd_success() -> None:
     reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
 )
 def test_token_usage_with_real_openai_generation(tmp_path: pathlib.Path) -> None:
-    model = pyine.utils.llm_providers.LLMProviderConfig(
+    model_config = pyine.utils.llm_providers.LLMProviderConfig(
         provider="openai",
         model_kwargs={
             "model": "gpt-4o-mini",
         },
-    ).get_model()
+    )
     prompt_config = pyine.prompts.PromptBuildConfig(
         prompt_name="code_summary",
         partial_vars={
@@ -120,10 +120,12 @@ def f(x):
     return iters
 """
     records = pyine.prompts.fetch_or_generate_prompt_results(
-        model=model,
         identifier="potato",
         input_variables={"code": code_snippet},
-        prompt_config=prompt_config,
+        prompt_chain_config=pyine.prompts.PromptChainBuildConfig(
+            prompt=prompt_config,
+            provider=model_config,
+        ),
         db=pyine.prompts.PromptResultDB(pathlib.Path(tmp_path) / "prompt_results.sqlite"),
         log_new_results=False,
     )

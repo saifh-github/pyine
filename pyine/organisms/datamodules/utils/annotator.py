@@ -12,7 +12,6 @@ import traceback
 import typing
 import warnings
 
-import langchain_core.language_models
 import numpy as np
 import pydantic
 import tqdm
@@ -25,6 +24,7 @@ import pyine.prompts.result_db
 import pyine.prompts.types
 import pyine.utils.code.execution
 import pyine.utils.concurrency
+import pyine.utils.langchain
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
@@ -225,6 +225,10 @@ class AnnotationOptions(pydantic.BaseModel):
     runnable_name: str | None = pydantic.Field(
         default=None,
         description="Optional runnable name for the langchain invocation chain.",
+    )
+    chain_retry_config: dict[str, typing.Any] | None = pydantic.Field(
+        default_factory=pyine.utils.langchain.get_default_structured_output_chain_retry_config,
+        description="Optional retry config for the langchain invocation chain.",
     )
 
     # ---------- dataset parsing settings ----------
@@ -904,7 +908,6 @@ async def annotate_trace_dataset(
     Returns:
         A small report dictionary with annotation outcome counts.
     """
-    model = pyine.utils.llm_providers.get_model_from_provider_config(config.llm_provider_config)
     prompt_name, prompt_version = (
         config.prompt_config.prompt_name,
         config.prompt_config.version,
@@ -923,6 +926,12 @@ async def annotate_trace_dataset(
         except ValueError as exc:
             raise ValueError(f"failed to build coding problem test data cache from dataset metadata: {exc}") from exc
         config.set_test_data_cache(cache)
+    prompt_chain_config = pyine.prompts.PromptChainBuildConfig(
+        prompt=config.prompt_config,
+        provider=config.llm_provider_config,
+        with_retry_config=config.chain_retry_config,
+        runnable_name=config.runnable_name if config.runnable_name else f"{prompt_name}:{prompt_version}",
+    )
     base_filter_fn = pyine.data.utils.filter_rules.build_filter_from_rule(
         rule=(config.base_filter_rule or ""),
         case_sensitive=False,
@@ -953,7 +962,7 @@ async def annotate_trace_dataset(
                     problem=problem,
                     sample_idx=sample_idx,
                     sample_id=sample_id,
-                    model=model,
+                    prompt_chain_config=prompt_chain_config,
                     config=config,
                     dry_run=dry_run,
                     base_filter_fn=base_filter_fn,
@@ -986,7 +995,7 @@ async def annotate_trace_dataset(
             problem=problem,
             sample_idx=sample_idx,
             sample_id=sample_id,
-            model=model,
+            prompt_chain_config=prompt_chain_config,
             config=config,
             dry_run=dry_run,
             base_filter_fn=base_filter_fn,
@@ -1027,7 +1036,7 @@ def _process_one_annotation(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     sample_idx: int,
     sample_id: str,
-    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
+    prompt_chain_config: pyine.prompts.types.PromptChainBuildConfig,
     config: AnnotationOptions,
     dry_run: bool,
     base_filter_fn: typing.Callable[[list[str]], bool],
@@ -1067,12 +1076,10 @@ def _process_one_annotation(
                 ),
             )
         records = pyine.prompts.result_db.fetch_or_generate_prompt_results(
-            model=model,
             identifier=sample_id,
             input_variables=input_vars,
-            prompt_config=config.prompt_config,
+            prompt_chain_config=prompt_chain_config,
             db=db,
-            runnable_name=config.runnable_name,
             max_result_age=config.max_result_age,
             tag_filter_rule=config.record_tag_filter_rule,
             deduplicate_results=config.deduplicate_results,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import importlib.resources
 import importlib.resources.abc
@@ -5,13 +7,15 @@ import logging
 import pathlib
 import typing
 
-import langchain_core.language_models
 import langchain_core.runnables
 import pydantic
 import yaml
 
-from pyine.prompts.types import PromptNameType, PromptTemplate, PromptVersionType
-from pyine.prompts.utils import PromptConfig, VersionedPromptConfig
+if typing.TYPE_CHECKING:
+    import langchain_openai.chat_models.base
+
+    from pyine.prompts.types import PromptNameType, PromptTemplate, PromptVersionType
+    from pyine.prompts.utils import PromptConfig, VersionedPromptConfig
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +323,7 @@ def get_prompt_template(
 
 
 def get_prompt_chain(
-    model: langchain_core.language_models.BaseLanguageModel[typing.Any],
+    model: langchain_openai.chat_models.base.BaseChatOpenAI,
     prompt_name: PromptNameType,
     version: PromptVersionType | None = None,
     use_chat_template: bool = False,
@@ -397,4 +401,3 @@ def get_prompt_chain(
         model,
         name=runnable_name,
     )
-    # @@@@ TODO: add with_retry based on optional config here?

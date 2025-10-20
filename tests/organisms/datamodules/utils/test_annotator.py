@@ -4,6 +4,7 @@ import tempfile
 import types
 import typing
 
+import langchain_core.runnables
 import numpy as np
 import pytest
 
@@ -67,8 +68,11 @@ class _FakeDatasetReader:
         return self._problems[idx]
 
 
-class _DummyModel:
-    def invoke(self, _: typing.Any) -> str:
+class _DummyModel(langchain_core.runnables.Runnable):
+    def invoke(self, *args: typing.Any, **kwargs: typing.Any) -> str:
+        return "dummy-result"
+
+    async def ainvoke(self, *args: typing.Any, **kwargs: typing.Any) -> str:
         return "dummy-result"
 
 
@@ -128,11 +132,10 @@ async def _run_prompt_case(
     captured: dict[str, typing.Any] = {}
 
     def _fake_fetch(
-        model: typing.Any,
+        *,
         identifier: str,
         input_variables: dict[str, typing.Any],
-        prompt_config: typing.Any,
-        *,
+        prompt_chain_config: typing.Any,
         creation_meta: result_db.CreationMeta,
         group: str | None,
         tags: list[str],
@@ -143,7 +146,7 @@ async def _run_prompt_case(
             {
                 "identifier": identifier,
                 "group": group,
-                "prompt_name": prompt_config.prompt_name,
+                "prompt_name": prompt_chain_config.prompt.prompt_name,
                 "input_variables": dict(input_variables),
                 "tags": list(tags),
                 "meta": dict(meta),
@@ -152,8 +155,8 @@ async def _run_prompt_case(
         return [
             result_db.PromptResultRecord(
                 identifier=identifier,
-                prompt_name=prompt_config.prompt_name,
-                prompt_version=getattr(prompt_config, "version", None),
+                prompt_name=prompt_chain_config.prompt.prompt_name,
+                prompt_version=prompt_chain_config.prompt.version,
                 group=group,
                 creation_meta=creation_meta,
                 prompt="prompt",
@@ -169,7 +172,7 @@ async def _run_prompt_case(
         lambda: annotator.supported_prompts_for_trace_dataset_annotation,
     )
     monkeypatch.setattr(result_db, "fetch_or_generate_prompt_results", _fake_fetch)
-    monkeypatch.setattr(llm_providers, "get_model_from_provider_config", lambda *_: _DummyModel())
+    monkeypatch.setattr(llm_providers, "get_model_from_provider_config", lambda **_: _DummyModel())
 
     db_path = tmp_path / f"{prompt_name.replace('/', '_')}_test.db"
     options = annotator.AnnotationOptions(
@@ -229,11 +232,10 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
     captured: dict[str, typing.Any] = {}
 
     def _fake_fetch(
-        model: typing.Any,
+        *,
         identifier: str,
         input_variables: dict[str, typing.Any],
-        prompt_config: typing.Any,
-        *,
+        prompt_chain_config: typing.Any,
         creation_meta: result_db.CreationMeta,
         group: str | None,
         tags: list[str],
@@ -244,7 +246,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
             {
                 "identifier": identifier,
                 "group": group,
-                "prompt_name": getattr(prompt_config, "prompt_name", None),
+                "prompt_name": prompt_chain_config.prompt.prompt_name,
                 "input_variables": dict(input_variables),
             }
         )
@@ -252,8 +254,8 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         return [
             result_db.PromptResultRecord(
                 identifier=identifier,
-                prompt_name=prompt_config.prompt_name,
-                prompt_version=typing.cast("str | None", getattr(prompt_config, "version", None)),
+                prompt_name=prompt_chain_config.prompt.prompt_name,
+                prompt_version=prompt_chain_config.prompt.version,
                 group=group,
                 creation_meta=creation_meta,
                 prompt="prompt",
@@ -327,11 +329,10 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
 
     # fetch returns a pre-existing record with a different creation_meta -> treated as "skipped"
     def _fake_fetch_same_count(
-        model: typing.Any,
+        *,
         identifier: str,
         input_variables: dict[str, typing.Any],
-        prompt_config: typing.Any,
-        *,
+        prompt_chain_config: typing.Any,
         group: str | None,
         tags: list[str],
         meta: dict[str, typing.Any],
@@ -342,8 +343,8 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
         return [
             result_db.PromptResultRecord(
                 identifier=identifier,
-                prompt_name=getattr(prompt_config, "prompt_name", "code_summary"),
-                prompt_version=getattr(prompt_config, "version", None),
+                prompt_name=prompt_chain_config.prompt.prompt_name,
+                prompt_version=prompt_chain_config.prompt.version,
                 group=group,
                 creation_meta=different_meta,
                 prompt="prompt",
@@ -409,11 +410,10 @@ async def test_bad_id_handling_increments_skips(
     monkeypatch.setattr(llm_providers, "get_model_from_provider", lambda **kwargs: _DummyModel())
 
     def _fake_fetch(
-        model: typing.Any,
+        *,
         identifier: str,
         input_variables: dict[str, typing.Any],
-        prompt_config: typing.Any,
-        *,
+        prompt_chain_config: typing.Any,
         creation_meta: result_db.CreationMeta,
         group: str | None,
         tags: list[str],
