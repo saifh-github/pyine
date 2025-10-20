@@ -1,9 +1,7 @@
-import logging
 import pathlib
 import types
-import unittest.mock
 
-import pytest
+import pytest_mock
 
 import pyine.apps.traces.taco_trace_failure_analyzer
 import pyine.prompts.configs.input_output_rewrite
@@ -48,13 +46,17 @@ class TestCollectProblemPaths:
         assert override_path.resolve() not in {path.resolve() for path in collected}
         assert collected == [first_file, second_file]
 
-    def test_skips_directory_inputs(self, tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_skips_directory_inputs(
+        self,
+        tmp_path: pathlib.Path,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
         problem_dir = tmp_path
         target_dir = problem_dir / "nested"
         target_dir.mkdir()
 
-        caplog.set_level(logging.WARNING)
-
+        target_logger = pyine.apps.traces.taco_trace_failure_analyzer.logger
+        mock_warning = mocker.patch.object(target_logger, "warning")
         collected = pyine.apps.traces.taco_trace_failure_analyzer._collect_problem_paths(
             problem_dir=problem_dir,
             filenames=(target_dir,),
@@ -62,12 +64,14 @@ class TestCollectProblemPaths:
         )
 
         assert collected == []
-        assert "path is not a file" in caplog.text
+        mock_warning.assert_called_once()
+        warning_args = mock_warning.call_args[0]
+        assert warning_args and "path is not a file" in warning_args[0]
 
 
 class TestGenerateCandidateInputOutput:
-    def test_returns_latest_record_result(self) -> None:
-        prompt_fetcher = unittest.mock.Mock()
+    def test_returns_latest_record_result(self, mocker: pytest_mock.MockerFixture) -> None:
+        prompt_fetcher = mocker.Mock()
         expected = pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse(
             inputs=['{"value": 1}'],
             outputs=[1],
@@ -97,8 +101,11 @@ class TestGenerateCandidateInputOutput:
         assert kwargs["force_generation"] is False
         assert kwargs["log_new_results"] is True
 
-    def test_returns_none_on_validation_failure(self) -> None:
-        prompt_fetcher = unittest.mock.Mock()
+    def test_returns_none_on_validation_failure(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        prompt_fetcher = mocker.Mock()
         prompt_fetcher.fetch_or_generate.side_effect = pyine.prompts.result_db.ValidationFailedError("boom")
 
         result = pyine.apps.traces.taco_trace_failure_analyzer._generate_candidate_input_output(
