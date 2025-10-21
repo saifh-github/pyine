@@ -3,6 +3,12 @@ import dataclasses
 import typing
 
 import langchain_core.runnables
+import numpy as np
+import torch
+import transformers
+import wandb
+
+import pyine.utils.transformers
 
 type MetricsDictType = dict[str, float | int | str]
 """Type used to represent dictionaries of evaluation metrics."""
@@ -276,3 +282,69 @@ def print_metrics(
         print(output_str)
     else:
         logger(output_str)
+
+
+def build_category_wise_compute_metrics_fn(
+    data_sample_categories: list[list[str]],
+    wandb_run: wandb.Run | None,
+    metrics_prefix: str,
+    ignore_index: int = pyine.utils.transformers.default_ignore_index,
+) -> typing.Callable[[transformers.trainer_utils.EvalPrediction], dict[str, float]]:
+    """Creates and returns a HuggingFace `compute_metrics` callback for category-wise loss aggregation.
+
+    The provided `data_sample_categories` should be a list-of-lists-of-strings, where each inner
+    list contains the categories of a single data sample. The returned callback will aggregate
+    the losses for each category and return a dictionary of metrics for each category.
+    """
+
+    def compute_metrics(eval_prediction: transformers.trainer_utils.EvalPrediction) -> dict[str, float]:
+        assert isinstance(eval_prediction.predictions, np.ndarray)
+        assert isinstance(eval_prediction.label_ids, np.ndarray)
+        logits_tensor = torch.as_tensor(eval_prediction.predictions)
+        labels_tensor = torch.as_tensor(eval_prediction.label_ids)
+        if logits_tensor.ndim != 3 or labels_tensor.ndim != 2:
+            raise ValueError(f"unexpected tensor shapes: logits={logits_tensor.shape} labels={labels_tensor.shape}")
+        if logits_tensor.shape[0] != labels_tensor.shape[0]:
+            raise ValueError(f"unexpected batch sizes: logits={logits_tensor.shape[0]} labels={labels_tensor.shape[0]}")
+        if len(data_sample_categories) != logits_tensor.shape[0]:
+            raise ValueError(
+                f"unexpected number of examples: samples={len(data_sample_categories)} logits={logits_tensor.shape[0]}"
+            )
+        shift_logits = logits_tensor[:, :-1, :].contiguous()
+        shift_labels = labels_tensor[:, 1:].contiguous()
+        # we should probably be doing this on GPU to keep things fast...
+        per_token_loss = torch.nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1).long(),
+            reduction="none",
+            ignore_index=ignore_index,
+        )
+        per_token_loss = per_token_loss.view(shift_labels.shape)
+        loss_mask = shift_labels.ne(ignore_index)
+        token_counts = loss_mask.sum(dim=1)
+        valid_example_mask = token_counts > 0
+        assert bool(valid_example_mask.any()), "no valid token found in entire batch?"
+        token_loss_sums = (per_token_loss * loss_mask).sum(dim=1)
+        per_example_loss = torch.zeros_like(token_loss_sums, dtype=torch.float32)
+        per_example_loss[valid_example_mask] = token_loss_sums[valid_example_mask] / token_counts[
+            valid_example_mask
+        ].to(torch.float32)
+        per_example_loss_np = per_example_loss.detach().cpu().numpy()
+        losses_by_category: dict[str, list[float]] = collections.defaultdict(list)
+        for example_idx, loss_value in enumerate(per_example_loss_np.tolist()):
+            categories = data_sample_categories[example_idx]
+            for cat in categories:
+                losses_by_category[cat].append(float(loss_value))
+        metrics: dict[str, float] = {}
+        for category, losses in losses_by_category.items():
+            if not losses:
+                continue
+            metrics[f"{metrics_prefix}/{category}/loss"] = float(np.mean(losses))
+            metrics[f"{metrics_prefix}/{category}/count"] = len(losses)
+        if not metrics:
+            return {}
+        if wandb_run is not None:
+            wandb_run.log(metrics)  # noqa
+        return metrics
+
+    return compute_metrics

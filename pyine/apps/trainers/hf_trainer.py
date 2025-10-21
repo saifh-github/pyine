@@ -18,6 +18,7 @@ import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
+import pyine.evals.utils
 import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.transformers
@@ -27,49 +28,44 @@ logger = logging.getLogger(__name__)
 if typing.TYPE_CHECKING:
     import pyine.apps.trainers.hf_trainer_configs
 
-#
-# def compute_metrics(eval_pred: transformers.trainer_utils.EvalPrediction) -> Dict[str, float]:
-#     """Compute metrics for evaluation.
-#
-#     Args:
-#         eval_pred: EvalPrediction object containing predictions and labels
-#
-#     Returns:
-#         Dictionary of computed metrics.
-#     """
-#     # @@@@@@@ TODO do something here? (training metrics)
-#     predictions, labels = eval_pred
-#
-#     # For causal language modeling, we typically just use perplexity (based on loss)
-#     # But here's an example of how you might compute other metrics
-#
-#     # Shift predictions and labels for next-token prediction
-#     shift_predictions = predictions[..., :-1, :].contiguous()
-#     shift_labels = labels[..., 1:].contiguous()
-#
-#     # Get predicted token IDs
-#     predicted_ids = np.argmax(shift_predictions, axis=-1)
-#
-#     # Flatten for metric computation (ignore -100 labels)
-#     flat_predictions = predicted_ids.flatten()
-#     flat_labels = shift_labels.flatten()
-#
-#     # Only compute metrics on non-masked tokens
-#     mask = flat_labels != -100
-#     flat_predictions = flat_predictions[mask]
-#     flat_labels = flat_labels[mask]
-#
-#     if len(flat_labels) > 0:
-#         accuracy = accuracy_score(flat_labels, flat_predictions)
-#         f1 = f1_score(flat_labels, flat_predictions, average='macro', zero_division=0)
-#     else:
-#         accuracy = 0.0
-#         f1 = 0.0
-#
-#     return {
-#         "accuracy": accuracy,
-#         "f1": f1,
-#     }
+
+def _extract_sample_categories_from_dataset(
+    dataset: typing.Any,
+) -> list[list[str]]:
+    """Return the list of evaluation categories associated with each example of a dataset.
+
+    The returned list will have the same length as the dataset, and each element will be a list
+    of categories associated with the corresponding example.
+    """
+    # @@@@@ TODO: update this to work with target tags instead of just code_type?
+    # (@@@ move to datamodule?)
+    if dataset is None or not hasattr(dataset, "__len__"):
+        return []
+    if not hasattr(dataset, "column_names") or "sample_data" not in dataset.column_names:
+        return []
+    sample_column = dataset["sample_data"]
+    if isinstance(sample_column, dict):
+        sample_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_column)
+        column = sample_mapping.get("code_type")
+        if column is None:
+            return [[]] * len(dataset)
+        column_iterable = typing.cast("typing.Iterable[typing.Any]", column)
+        code_types = list(column_iterable)
+        if any(not isinstance(code_type, str) and code_type is not None for code_type in code_types):
+            raise ValueError("code_type column must contain only strings or None values")
+        return [[c] if c is not None else [] for c in code_types]
+    code_types: list[str | None] = []
+    sample_iterable = typing.cast("typing.Iterable[typing.Any]", sample_column)
+    for sample_data in sample_iterable:
+        if isinstance(sample_data, dict):
+            sample_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_data)
+            code_type = sample_mapping.get("code_type")
+            if code_type is not None and not isinstance(code_type, str):
+                raise ValueError("code_type column must contain only strings or None values")
+            code_types.append(code_type)
+        else:
+            code_types.append(None)
+    return [[c] if c is not None else [] for c in code_types]
 
 
 def train(
@@ -104,6 +100,7 @@ def train(
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
             append_answer=True,
+            keep_original_data=True,  # for category-wise evals below
         )
         for subset_name in config.datamodule_config.valid_subset_names
     ]
@@ -125,6 +122,7 @@ def train(
         tokenizer=tokenizer,
         max_seq_len=model_max_seq_len,
         num_proc=num_proc,
+        keep_extra_fields=["sample_data"],  # for category-wise evals below
     )
     # the collator pads to fixed length and masks labels for prompt tokens
     collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
@@ -132,7 +130,17 @@ def train(
         max_length=model_max_seq_len,
         # pad_to_multiple_of=32,  # @@@@ TODO test speed with and without?
     )
-
+    valid_sample_categories = _extract_sample_categories_from_dataset(valid_ds)
+    assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
+        "could not extract sample categories from validation dataset; check that sample data is preserved?"
+    )
+    compute_valid_metrics_fn: typing.Callable[[transformers.trainer_utils.EvalPrediction], dict[str, float]] = (
+        pyine.evals.utils.build_category_wise_compute_metrics_fn(
+            data_sample_categories=valid_sample_categories,
+            wandb_run=runtime.wandb_run if runtime is not None else None,
+            metrics_prefix="eval",
+        )
+    )
     training_args_dict = config.training_args_config.model_dump()
     if config.use_wandb_logging:
         assert runtime is not None and runtime.wandb_run is not None, "wandb should have been initialized"
@@ -147,7 +155,7 @@ def train(
         eval_dataset=valid_ds,
         processing_class=tokenizer,
         data_collator=collator,
-        # compute_metrics=_compute_metrics,  # @@@@ TODO: update w/ proper callback
+        compute_metrics=compute_valid_metrics_fn,
         # callbacks=[EarlyStoppingCallback()],  # @@@@@  TODO: update w/ proper callback
     )
 
@@ -202,8 +210,7 @@ async def main(
     # (those might correspond to the base model or to a local checkpoint from a previous run)
 
     if config.training_args_config.do_predict:
-        if config.use_wandb_logging:
-            assert runtime is not None and runtime.wandb_run is not None, "invalid wandb runtime"
+        if runtime is not None and runtime.wandb_run is not None:
             runtime.wandb_run.summary["model_name"] = model.config.name_or_path
         await pyine.apps.trainers.common.evaluate_model(
             model=model,

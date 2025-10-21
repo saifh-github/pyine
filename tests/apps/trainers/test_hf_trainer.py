@@ -9,8 +9,31 @@ import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
 
 
-class _FakePreparedDataset(list):
-    pass
+class _FakePreparedDataset:
+    def __init__(
+        self,
+        rows: list[dict[str, typing.Any]],
+    ) -> None:
+        self._rows = rows
+        self.column_names = list(rows[0].keys()) if rows else []
+
+    def __len__(
+        self,
+    ) -> int:
+        return len(self._rows)
+
+    def __iter__(
+        self,
+    ) -> typing.Iterator[dict[str, typing.Any]]:
+        return iter(self._rows)
+
+    def __getitem__(
+        self,
+        item: int | str,
+    ) -> typing.Any:
+        if isinstance(item, str):
+            return [row[item] for row in self._rows if item in row]
+        return self._rows[item]
 
 
 def test_train_configures_trainer_and_saves_artifacts(
@@ -18,7 +41,42 @@ def test_train_configures_trainer_and_saves_artifacts(
     tmp_path: pathlib.Path,
 ) -> None:
     raw_datasets: list[str] = []
-    prepared_calls: list[dict[str, int]] = []
+    prepared_calls: list[dict[str, typing.Any]] = []
+    prepared_rows_by_subset = {
+        "train": [
+            {
+                "input_ids": [101, 102],
+                "attention_mask": [1, 1],
+                "labels": [101, 102],
+            },
+            {
+                "input_ids": [103, 104],
+                "attention_mask": [1, 1],
+                "labels": [103, 104],
+            },
+        ],
+        "valid": [
+            {
+                "input_ids": [201, 202],
+                "attention_mask": [1, 1],
+                "labels": [201, 202],
+                "sample_data": {"code_type": "bugfix"},
+            },
+            {
+                "input_ids": [203, 204],
+                "attention_mask": [1, 1],
+                "labels": [203, 204],
+                "sample_data": {"code_type": None},
+            },
+            {
+                "input_ids": [205, 206],
+                "attention_mask": [1, 1],
+                "labels": [205, 206],
+                "sample_data": {"code_type": "refactor"},
+            },
+        ],
+    }
+    captured_metrics_config: list[dict[str, typing.Any]] = []
 
     class _RawDataset:
         def __init__(self, name: str) -> None:
@@ -29,8 +87,9 @@ def test_train_configures_trainer_and_saves_artifacts(
             self,
             subset_name: str,
             append_answer: bool,
+            keep_original_data: bool = False,
         ) -> _RawDataset:
-            raw_datasets.append(f"{subset_name}:{append_answer}")
+            raw_datasets.append(f"{subset_name}:{append_answer}:{keep_original_data}")
             return _RawDataset(subset_name)
 
     class _FakeModel:
@@ -99,15 +158,25 @@ def test_train_configures_trainer_and_saves_artifacts(
         tokenizer: _FakeTokenizer,
         max_seq_len: int,
         num_proc: int,
+        keep_extra_fields: list[str] | None = None,
     ) -> _FakePreparedDataset:
         prepared_calls.append(
             {
                 "name": convo_ds.name,
                 "max_seq_len": max_seq_len,
                 "num_proc": num_proc,
+                "keep_extra_fields": keep_extra_fields,
             },
         )
-        return _FakePreparedDataset([convo_ds.name])
+        include_sample_data = bool(keep_extra_fields and "sample_data" in keep_extra_fields)
+        subset_rows = prepared_rows_by_subset[convo_ds.name]
+        rows = []
+        for row in subset_rows:
+            row_copy = dict(row)
+            if not include_sample_data:
+                row_copy.pop("sample_data", None)
+            rows.append(row_copy)
+        return _FakePreparedDataset(rows)
 
     captured_args: dict[str, dict[str, object]] = {}
 
@@ -115,11 +184,31 @@ def test_train_configures_trainer_and_saves_artifacts(
         captured_args["kwargs"] = kwargs
         return types.SimpleNamespace(**kwargs)
 
+    def fake_build_category_wise_compute_metrics_fn(
+        data_sample_categories: list[list[str]],
+        wandb_run: typing.Any,
+        metrics_prefix: str,
+    ) -> typing.Callable[[typing.Any], dict[str, float]]:
+        def _metrics_fn(
+            _eval_prediction: typing.Any,
+        ) -> dict[str, float]:
+            return {"dummy_metric": 1.0}
+
+        captured_metrics_config.append(
+            {
+                "categories": data_sample_categories,
+                "wandb_run": wandb_run,
+                "metrics_prefix": metrics_prefix,
+                "metrics_fn": _metrics_fn,
+            },
+        )
+        return _metrics_fn
+
     fake_trainer_instance = _FakeTrainer(
         model=_FakeModel(),
         args=types.SimpleNamespace(),
-        train_dataset=_FakePreparedDataset(),
-        eval_dataset=_FakePreparedDataset(),
+        train_dataset=_FakePreparedDataset([]),
+        eval_dataset=_FakePreparedDataset([]),
         processing_class=_FakeTokenizer(),
         data_collator=None,
     )
@@ -159,6 +248,11 @@ def test_train_configures_trainer_and_saves_artifacts(
         "Trainer",
         fake_trainer_factory,
     )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.evals.utils,
+        "build_category_wise_compute_metrics_fn",
+        fake_build_category_wise_compute_metrics_fn,
+    )
 
     fake_model = _FakeModel()
     fake_tokenizer = _FakeTokenizer()
@@ -185,10 +279,34 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     assert trainer is fake_trainer_instance
     assert prepared_calls == [
-        {"name": "train", "max_seq_len": 64, "num_proc": 2},
-        {"name": "valid", "max_seq_len": 64, "num_proc": 2},
+        {
+            "name": "train",
+            "max_seq_len": 64,
+            "num_proc": 2,
+            "keep_extra_fields": None,
+        },
+        {
+            "name": "valid",
+            "max_seq_len": 64,
+            "num_proc": 2,
+            "keep_extra_fields": ["sample_data"],
+        },
     ]
+    assert raw_datasets == ["train:True:False", "valid:True:True"]
     assert captured_args["kwargs"]["report_to"] == ["wandb"]
+    assert len(captured_metrics_config) == 1
+    metrics_config = captured_metrics_config[0]
+    assert metrics_config["categories"] == [["bugfix"], [], ["refactor"]]
+    assert metrics_config["metrics_prefix"] == "eval"
+    assert metrics_config["wandb_run"] is runtime.wandb_run
+    assert trainer.compute_metrics is metrics_config["metrics_fn"]
+    assert "sample_data" not in trainer.train_dataset.column_names
+    assert "sample_data" in trainer.eval_dataset.column_names
+    assert trainer.eval_dataset["sample_data"] == [
+        {"code_type": "bugfix"},
+        {"code_type": None},
+        {"code_type": "refactor"},
+    ]
     assert trainer.trained
 
 
@@ -228,7 +346,7 @@ async def test_main_runs_train_and_evaluate(
         get_tokenizer=lambda: "tokenizer",
         use_wandb_logging=False,
     )
-    runtime = types.SimpleNamespace(finalize=lambda: None)
+    runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
 
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.reprod,
