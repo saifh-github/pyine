@@ -52,7 +52,6 @@ class RuntimeConfig(pydantic.BaseModel):
     instantiated when the `init_wandb` method is called (which is application-specific).
     """
 
-    @pydantic.computed_field
     @property
     def output_dir_path(self) -> pathlib.Path:
         """Path to the run's output directory."""
@@ -62,18 +61,19 @@ class RuntimeConfig(pydantic.BaseModel):
 
     @pydantic.computed_field
     @property
-    def console_log_path(self) -> pathlib.Path:
-        """Path to the console log file, located inside the output directory."""
-        log_extension = pyine.utils.reprod.get_log_extension_slug(self)
-        return self.output_dir_path / f"console{log_extension}"
-
-    @pydantic.computed_field
-    @property
     def wandb_run_id(self) -> str | None:
         """ID of the associated W&B run (if wandb logging is enabled)."""
         if self.wandb_run is None:
             return None
         return self.wandb_run.id
+
+    @pydantic.computed_field
+    @property
+    def wandb_run_url(self) -> str | None:
+        """URL of the associated W&B run (if wandb logging is enabled and not in offline mode)."""
+        if self.wandb_run is None:
+            return None
+        return self.wandb_run.url
 
     def init_wandb(
         self,
