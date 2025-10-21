@@ -64,7 +64,7 @@ def prepare_datamodule(
         for eval_subset_name in config.datamodule_config.eval_subset_names:
             config.evals_config.define_metrics_for_wandb(
                 wandb_run=runtime.wandb_run,
-                prefix=f"evals/{eval_subset_name}",
+                prefix=f"predict/{eval_subset_name}",
             )
     return dm
 

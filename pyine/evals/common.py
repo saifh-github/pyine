@@ -142,7 +142,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, EvalResult],
         *,
-        table_key: str = "evals/metrics_table",
+        table_key: str = "predict/metrics_table",
         step: int | None = None,
     ) -> wandb.Table | None:
         """Log aggregated evaluation metrics to a W&B table.

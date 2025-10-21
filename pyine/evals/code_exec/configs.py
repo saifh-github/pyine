@@ -366,7 +366,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, pyine.evals.common.EvalResult],
         *,
-        table_key: str = "evals/metrics_table",
+        table_key: str = "predict/metrics_table",
         step: int | None = None,
     ) -> wandb.Table:
         """Log aggregated evaluation metrics to a W&B table.
@@ -393,7 +393,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             for metric_name in ordered_metric_names:
                 row.append(subset_result.metrics.get(metric_name))
             table.add_data(*row)  # type: ignore[reportUnknownMemberType]
-            prefixed_metrics = {f"evals/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
+            prefixed_metrics = {f"predict/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
             wandb_run.summary.update(prefixed_metrics)  # type: ignore[reportUnknownMemberType]
         if step is None:
             wandb_run.log({table_key: table})  # noqa
@@ -431,7 +431,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             The table that was logged to the run.
         """
         if table_key is None:
-            table_key = f"evals/{subset_name}/predictions"
+            table_key = f"predict/{subset_name}/predictions"
         assert isinstance(subset_results, CodeExecEvalResult)
         incorrect: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         correct: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []

@@ -118,8 +118,8 @@ def test_prepare_datamodule_with_wandb_logging() -> None:
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
     assert [call["prefix"] for call in evals_config.define_metrics_calls] == [
-        "evals/valid",
-        "evals/test",
+        "predict/valid",
+        "predict/test",
     ]
 
 
