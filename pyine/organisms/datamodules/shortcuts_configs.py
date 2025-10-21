@@ -92,6 +92,21 @@ def _get_default_sampler_builder_config(
     return config_params
 
 
+def _get_default_sample_builder_selection_config() -> dict[str, typing.Any]:
+    """Returns the default selection config to be used for an arbitrary data subset."""
+    return {  # SampleSelectionConfig
+        "choice_strategy": "random",
+        "input_type_prob_map": {
+            "original": 0.5,
+            "hinted": 0.25,
+            "stubbed": 0.1,
+            "obfuscated_hinted": 0.1,
+            "obfuscated": 0.05,
+        },
+        "fallback_to_orig": True,
+    }
+
+
 def _get_default_sample_builder_overrides_for_subset(
     subset_name: str,
 ) -> dict[str, typing.Any]:
@@ -101,20 +116,10 @@ def _get_default_sample_builder_overrides_for_subset(
     resulting config suitable for the given subset. If no overrides are defined, an empty dict
     will be returned.
     """
-    if subset_name == "train":
+    if subset_name in ["train", "val", "valid"]:
         return {
             "filtering_config": {},  # SampleFilteringConfig
-            "selection_config": {  # SampleSelectionConfig
-                "choice_strategy": "random",
-                "input_type_prob_map": {
-                    "original": 0.5,
-                    "hinted": 0.25,
-                    "stubbed": 0.1,
-                    "obfuscated_hinted": 0.1,
-                    "obfuscated": 0.05,
-                },
-                "fallback_to_orig": True,
-            },
+            "selection_config": _get_default_sample_builder_selection_config(),  # SampleSelectionConfig
             "transform_config": {  # SampleTransformConfig
                 "transform_strategy": "never",  # @@@@@@ TODO consider switching to 'if_too_long'?
             },

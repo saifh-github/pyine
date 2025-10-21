@@ -7,6 +7,7 @@ This app wires together:
 - a Trainer that handles batching/padding/masking + the training loop.
 """
 
+import collections
 import logging
 import time
 import typing
@@ -134,6 +135,9 @@ def train(
     assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
         "could not extract sample categories from validation dataset; check that sample data is preserved?"
     )
+    category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
+    category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
+    logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
     compute_valid_metrics_fn: typing.Callable[[transformers.trainer_utils.EvalPrediction], dict[str, float]] = (
         pyine.evals.utils.build_category_wise_compute_metrics_fn(
             data_sample_categories=valid_sample_categories,
@@ -142,12 +146,12 @@ def train(
         )
     )
     training_args_dict = config.training_args_config.model_dump()
-    if config.use_wandb_logging:
-        assert runtime is not None and runtime.wandb_run is not None, "wandb should have been initialized"
+    if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
 
-    # note: if we want to support other trainers (e.g. from TRL, upate config dict+trainer w/ instantiable classes)
+    # note: if we want to support other trainers (e.g. TRL), update config dict+trainer w/ instantiable classes
     training_args = transformers.TrainingArguments(**training_args_dict)
+    milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     trainer = transformers.Trainer(
         model=model,
         args=training_args,
@@ -156,7 +160,7 @@ def train(
         processing_class=tokenizer,
         data_collator=collator,
         compute_metrics=compute_valid_metrics_fn,
-        # callbacks=[EarlyStoppingCallback()],  # @@@@@  TODO: update w/ proper callback
+        callbacks=[milestone_logger],
     )
 
     logger.info("starting training")

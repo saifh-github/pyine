@@ -29,7 +29,6 @@ def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.Config
         },
     )
     openai_gpt5_nano_for_scoring_config = pyine.configs.utils.make_config_description(
-        # @@@@@@@ TODO update w/ new chain builder
         name="openai_gpt5nano_scoring",
         group=group,
         description=(

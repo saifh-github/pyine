@@ -238,16 +238,15 @@ For the development of new experiment configurations, refer to [this README](../
 
 **Run outputs:**
 
-TODO: UPDATE THIS (LIKELY OUTDATED) @@@@@@@@@@@@@
+Hydra snapshots every run under `<PYINE_LOGS_ROOT>/runs/<app>/<exp_name>/<run_name>/`, which should contain:
 
-- Hydra snapshots every run under `<PYINE_LOGS_ROOT>/runs/<app>/<exp_name>/<run_name>/`. Expect
-  `hydra-config.yaml`, `hydra-overrides.yaml`, `output.log`, and `console.<ts>.<rank>.log` together
-  with JSON dumps of the runtime, reproducibility metadata, and resolved configs.
-- The HF trainer writes model checkpoints, tokenizer files, and `trainer_state.json` into the same
-  directory (or the custom `output_dir` you set). TensorBoard logs live under
-  `<run_dir>/logs/` because the training args default there.
-- Evaluation metrics stream to stdout; when W&B logging is enabled the same metrics and sampled
-  predictions are mirrored to your project dashboard.
+- A `.hydra` subfolder with the original, not-yet-resolved app config (`.hydra/config.yaml`),
+  the hydra config itself (`.hydra/hydra.yaml`), and any command line overrides that may have
+  been specified (`.hydra/overrides.yaml`);
+- The resolved runtime (`runtime.<timestamp>.rank00.json`) and app configs (`config.<timestamp>.rank00.json`);
+- The output stdout/stderr log of the app (`output.log`);
+- Reproducibility metadata that includes platform and environment details (`reprod_metadata.<timestamp>.rank00.json`);
+- The model checkpoints, tokenizer files, and/or trainer state (if relevant).
 
 ### HuggingFace trainer
 

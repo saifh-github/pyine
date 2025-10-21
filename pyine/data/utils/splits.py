@@ -369,7 +369,6 @@ def get_split_data_from_coding_problem_dataset(
         problem_tags = [t for t in problem_tags if not t.startswith("subset:")]
         # append custom tags as needed
         problem_tags.append(_get_solution_count_bucket_tag(len(solutions)))
-        # TODO @@@@@ add expected solution complexity buckets tag?
         identifiers.append(str(problem.problem_id))
         tag_lists.append(problem_tags)
         hash_list.append(problem.source_data_hash)
