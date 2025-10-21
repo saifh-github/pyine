@@ -261,9 +261,10 @@ def _collect_problem_paths(
     override_resolved = override_log_path.resolve() if override_log_path else None
     candidates = sorted(problem_dir.rglob("*.json"))
     for candidate in candidates:
-        if override_resolved and candidate.resolve() == override_resolved:
+        candidate_resolved = candidate.resolve()
+        if override_resolved and candidate_resolved == override_resolved:
             continue
-        if candidate.is_file() and candidate.stem.isdigit() and int(candidate.stem) > 13_000:
+        if candidate.is_file():
             paths.append(candidate)
     return paths
 

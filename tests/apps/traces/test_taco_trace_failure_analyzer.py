@@ -71,24 +71,25 @@ class TestCollectProblemPaths:
 
 class TestGenerateCandidateInputOutput:
     def test_returns_latest_record_result(self, mocker: pytest_mock.MockerFixture) -> None:
-        prompt_fetcher = mocker.Mock()
+        result_fetcher = mocker.Mock()
         expected = pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse(
             inputs=['{"value": 1}'],
             outputs=[1],
             fn_name="solve",
         )
-        prompt_fetcher.fetch_or_generate.return_value = [
+        result_fetcher.fetch_or_generate.return_value = [
             types.SimpleNamespace(result=expected),
         ]
 
+        prompt_chain_config = types.SimpleNamespace(
+            prompt=types.SimpleNamespace(prompt_name="input_output_rewrite", version="v1.0"),
+            template=types.SimpleNamespace(format=lambda **_: "ignored"),
+            chain=types.SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
+        )
+
         result = pyine.apps.traces.taco_trace_failure_analyzer._generate_candidate_input_output(
-            # prompt_chain_config=???,
-            model=object(),
-            prompt_fetcher=prompt_fetcher,
-            prompt_config=pyine.prompts.types.PromptBuildConfig(
-                prompt_name="input_output_rewrite",
-                version="v1.0",
-            ),
+            prompt_chain_config=prompt_chain_config,
+            result_fetcher=result_fetcher,
             problem_identifier="problem-1",
             question="What is 1+0?",
             starter_code="def solve(): ...",
@@ -97,8 +98,8 @@ class TestGenerateCandidateInputOutput:
         )
 
         assert result == expected
-        prompt_fetcher.fetch_or_generate.assert_called_once()
-        kwargs = prompt_fetcher.fetch_or_generate.call_args.kwargs
+        result_fetcher.fetch_or_generate.assert_called_once()
+        kwargs = result_fetcher.fetch_or_generate.call_args.kwargs
         assert kwargs["force_generation"] is False
         assert kwargs["log_new_results"] is True
 
@@ -106,17 +107,18 @@ class TestGenerateCandidateInputOutput:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        prompt_fetcher = mocker.Mock()
-        prompt_fetcher.fetch_or_generate.side_effect = pyine.prompts.result_db.ValidationFailedError("boom")
+        result_fetcher = mocker.Mock()
+        result_fetcher.fetch_or_generate.side_effect = pyine.prompts.result_db.ValidationFailedError("boom")
+
+        prompt_chain_config = types.SimpleNamespace(
+            prompt=types.SimpleNamespace(prompt_name="input_output_rewrite", version="v1.0"),
+            template=types.SimpleNamespace(format=lambda **_: "ignored"),
+            chain=types.SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
+        )
 
         result = pyine.apps.traces.taco_trace_failure_analyzer._generate_candidate_input_output(
-            # prompt_chain_config=???,
-            model=object(),
-            prompt_fetcher=prompt_fetcher,
-            prompt_config=pyine.prompts.types.PromptBuildConfig(
-                prompt_name="input_output_rewrite",
-                version="v1.0",
-            ),
+            prompt_chain_config=prompt_chain_config,
+            result_fetcher=result_fetcher,
             problem_identifier="problem-2",
             question="placeholder",
             starter_code="def solve(): ...",
@@ -125,6 +127,6 @@ class TestGenerateCandidateInputOutput:
         )
 
         assert result is None
-        kwargs = prompt_fetcher.fetch_or_generate.call_args.kwargs
+        kwargs = result_fetcher.fetch_or_generate.call_args.kwargs
         assert kwargs["force_generation"] is False
         assert kwargs["log_new_results"] is True
