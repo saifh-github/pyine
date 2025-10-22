@@ -7,7 +7,6 @@ import langchain_core.runnables
 import torch
 import transformers
 import transformers.trainer_callback
-import wandb
 
 import pyine.utils.transformers
 
@@ -298,14 +297,12 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
         self,
         data_sample_categories: list[list[str]],
         metrics_prefix: str,
-        wandb_run: wandb.Run | None = None,
         ignore_index: int = pyine.utils.transformers.default_ignore_index,
         log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
     ) -> None:
         """Initialize the callback."""
         self.data_sample_categories = data_sample_categories
         self.metrics_prefix = metrics_prefix
-        self.wandb_run = wandb_run
         self.ignore_index = ignore_index
         self._log_fn = log_fn
         self._expected_examples = len(data_sample_categories)
@@ -397,7 +394,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
         self,
         metrics: MetricsDictType,
     ) -> None:
-        """Log metrics to stdout/logger and wandb."""
+        """Log metrics to stdout/logger."""
         if not metrics:
             return
         print_metrics(
@@ -405,8 +402,6 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
             subset=self.metrics_prefix,
             logger=self._log_fn,
         )
-        if self.wandb_run is not None:
-            self.wandb_run.log(metrics)  # noqa
 
     def __call__(
         self,
@@ -458,7 +453,6 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
 
 def build_category_wise_compute_metrics_fn(
     data_sample_categories: list[list[str]],
-    wandb_run: wandb.Run | None,
     metrics_prefix: str,
     ignore_index: int = pyine.utils.transformers.default_ignore_index,
     log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
@@ -473,7 +467,6 @@ def build_category_wise_compute_metrics_fn(
     return CategoryWiseMetricsCallback(
         data_sample_categories=data_sample_categories,
         metrics_prefix=metrics_prefix,
-        wandb_run=wandb_run,
         ignore_index=ignore_index,
         log_fn=log_fn,
     )

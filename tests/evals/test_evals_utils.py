@@ -100,21 +100,10 @@ def test_token_usage_info_add_and_iadd_success() -> None:
 
 
 def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
-    class _FakeRun:
-        def __init__(self) -> None:
-            self.logged: list[dict[str, float]] = []
-
-        def log(
-            self,
-            metrics: dict[str, float],
-        ) -> None:
-            self.logged.append(dict(metrics))
-
     categories = [["bugfix"], ["refactor"], ["bugfix", "refactor"]]
     callback = pyine.evals.utils.CategoryWiseMetricsCallback(
         data_sample_categories=categories,
         metrics_prefix="eval",
-        wandb_run=_FakeRun(),
         log_fn=lambda _msg: None,
     )
     logits_batch1 = np.zeros((2, 3, 4), dtype=np.float32)
@@ -184,16 +173,6 @@ def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
         control=transformers.trainer_callback.TrainerControl(),
         metrics=dict(metrics),
     )
-    fake_run = callback.wandb_run
-    assert isinstance(fake_run, _FakeRun)
-    assert fake_run.logged
-    logged_metrics = fake_run.logged[0]
-    for key, value in expected_metrics.items():
-        if key.endswith("/loss"):
-            assert logged_metrics[key] == pytest.approx(value, rel=1e-6)
-        else:
-            assert logged_metrics[key] == value
-    assert callback.get_aggregated_metrics() == {}
 
     assert callback(pred_batch1, compute_result=False) == {}
     metrics_second_pass = callback(pred_batch2, compute_result=True)

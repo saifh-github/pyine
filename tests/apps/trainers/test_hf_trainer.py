@@ -281,7 +281,6 @@ def test_train_configures_trainer_and_saves_artifacts(
     metrics_callback = metrics_callbacks[0]
     assert metrics_callback.data_sample_categories == [["bugfix"], [], ["refactor"]]
     assert metrics_callback.metrics_prefix == "eval"
-    assert metrics_callback.wandb_run is runtime.wandb_run
     assert trainer.compute_metrics is metrics_callback
     assert "sample_data" not in trainer.train_dataset.column_names
     assert "sample_data" in trainer.eval_dataset.column_names
