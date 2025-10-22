@@ -77,13 +77,19 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     run_calls: list[dict[str, object]] = []
 
     class _FakeRun:
-        def __init__(self) -> None:
+        def __init__(
+            self,
+            project: str | None = None,
+            entity: str | None = None,
+        ) -> None:
             self.id = "run-id"
             self.offline = False
             self.name = "run-name"
-            self.url = None
+            self.url = "123"
             self.tags = ("tag",)
             self.notes = "note"
+            self.project = project
+            self.entity = entity
 
         def finalize(self) -> None:
             pass
@@ -103,12 +109,28 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         exp_name="exp",
         run_name="run",
     )
-    run_id = runtime.init_wandb(project="proj")
+    assert runtime.wandb_run is None
+    assert runtime.wandb_run_id is None
+    assert runtime.wandb_run_entity is None
+    assert runtime.wandb_run_project is None
+    assert runtime.wandb_run_url is None
+    run_id = runtime.init_wandb()
     assert run_id == "run-id"
+    assert "extra" not in runtime.wandb_run.tags
     runtime.add_wandb_tag("extra")
     assert "extra" in runtime.wandb_run.tags
     assert runtime.wandb_run_id == "run-id"
-    assert run_calls and run_calls[0]["project"] == "proj"
+    assert run_calls and run_calls[0]["tags"] is None
+    assert runtime.wandb_run_entity is None
+    assert runtime.wandb_run_project is None
+    assert runtime.wandb_run_url == "123"
+    run_calls.clear()
+    runtime = pyine.configs.schemas.RuntimeConfig(
+        exp_name="exp",
+        run_name="run2",
+    )
+    _ = runtime.init_wandb(entity="ent", project="proj")
+    assert run_calls and run_calls[0]["entity"] == "ent" and run_calls[0]["project"] == "proj"
 
 
 def test_runtime_config_wandb_guards(monkeypatch: pytest.MonkeyPatch) -> None:

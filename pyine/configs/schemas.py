@@ -61,6 +61,22 @@ class RuntimeConfig(pydantic.BaseModel):
 
     @pydantic.computed_field
     @property
+    def wandb_run_project(self) -> str | None:
+        """Project of the associated W&B run (if wandb logging is enabled)."""
+        if self.wandb_run is None:
+            return None
+        return self.wandb_run.project
+
+    @pydantic.computed_field
+    @property
+    def wandb_run_entity(self) -> str | None:
+        """Entity of the associated W&B run (if wandb logging is enabled)."""
+        if self.wandb_run is None:
+            return None
+        return self.wandb_run.entity
+
+    @pydantic.computed_field
+    @property
     def wandb_run_id(self) -> str | None:
         """ID of the associated W&B run (if wandb logging is enabled)."""
         if self.wandb_run is None:
@@ -77,7 +93,7 @@ class RuntimeConfig(pydantic.BaseModel):
 
     def init_wandb(
         self,
-        **extra_kwargs: typing.Any,
+        **init_kwargs: typing.Any,
     ) -> str:
         """Initializes W&B logging for this run and returns the run ID.
 
@@ -94,7 +110,7 @@ class RuntimeConfig(pydantic.BaseModel):
             "job_type": self.app_name,
             # TODO: could set run id based on e.g. slurm id here if needed
         }
-        default_kwargs.update(extra_kwargs)
+        default_kwargs.update(init_kwargs)
         self.wandb_run = wandb.init(**default_kwargs)
         assert self.wandb_run.id == self.wandb_run_id
         wandb_run_obj = typing.cast("typing.Any", self.wandb_run)

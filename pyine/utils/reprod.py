@@ -302,6 +302,7 @@ def entrypoint_setup(
     runtime_config: "pyine.configs.schemas.RuntimeConfig | None" = None,
     disable_http_logging_info_msgs: bool = True,
     use_wandb_logging: bool = False,
+    wandb_init_kwargs: dict[str, typing.Any] | None = None,
     **extra_configs: typing.Any,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments.
@@ -318,6 +319,8 @@ def entrypoint_setup(
         disable_http_logging_info_msgs: whether to disable the HTTP request POST messages in info
             level logs when using llm providers.
         use_wandb_logging: whether to initialize wandb logging (if using runtime) and not dry run.
+        wandb_init_kwargs: optional wandb initialization kwargs (to e.g. resume an existing run).
+            If `use_wandb_logging` is False, does nothing.
         extra_configs: extra configs that are forwarded to this function (to be logged).
     """
     import pyine.utils.filesystem
@@ -354,6 +357,7 @@ def entrypoint_setup(
     # if a runtime config is provided, log all configs to the output directory
     parent_app_name = runtime_config.app_name if runtime_config else "<missing runtime config>"
     if runtime_config is not None:
+        assert runtime_config.output_dir_path.is_dir(), "invalid runtime config output dir"
         set_seed(seed=runtime_config.seed, workers=runtime_config.seed_workers)
         app_config_dict: dict[str, typing.Any] = {}
         for config_name, config in extra_configs.items():
@@ -374,7 +378,9 @@ def entrypoint_setup(
             raise DryRunExit()
         if use_wandb_logging:
             # initialize wandb if enabled and not dry run (and with the app config as metadata)
-            runtime_config.init_wandb(config=app_config_dict)
+            wandb_init_kwargs = dict(wandb_init_kwargs or {})
+            wandb_init_kwargs.setdefault("config", app_config_dict)
+            runtime_config.init_wandb(**wandb_init_kwargs)
         # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
         logged_config_file_paths = log_configs(runtime_config, app_config_dict)
         if use_wandb_logging:

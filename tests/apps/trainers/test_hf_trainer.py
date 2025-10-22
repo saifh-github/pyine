@@ -231,8 +231,6 @@ def test_train_configures_trainer_and_saves_artifacts(
         "Trainer",
         fake_trainer_factory,
     )
-    fake_model = _FakeModel()
-    fake_tokenizer = _FakeTokenizer()
     fake_dm = _FakeDataModule()
 
     runtime = types.SimpleNamespace(wandb_run=object(), finalize=lambda: None)
@@ -245,16 +243,20 @@ def test_train_configures_trainer_and_saves_artifacts(
         gradient_checkpointing=True,
         use_wandb_logging=True,
         output_dir=str(tmp_path / "artifact"),
+        get_model=lambda: _FakeModel(),
+        get_tokenizer=lambda: _FakeTokenizer(),
     )
 
     trainer = pyine.apps.trainers.hf_trainer.train(
-        model=fake_model,
-        tokenizer=fake_tokenizer,
         datamodule=fake_dm,
         config=config,
         runtime=runtime,
+        resume_artifacts=None,
     )
     assert trainer is fake_trainer_instance
+    assert isinstance(trainer.model, _FakeModel)
+    assert isinstance(trainer.tokenizer, _FakeTokenizer)
+
     assert prepared_calls == [
         {
             "name": "train",
@@ -306,9 +308,12 @@ async def test_main_runs_train_and_evaluate(
 
     def fake_train(
         **kwargs: object,
-    ) -> str:
+    ) -> types.SimpleNamespace:
         train_calls.append(kwargs)
-        return "trainer"
+        return types.SimpleNamespace(
+            model="model",
+            processing_class="tokenizer",
+        )
 
     def fake_prepare_datamodule(
         config: object,
@@ -326,6 +331,8 @@ async def test_main_runs_train_and_evaluate(
         get_model=lambda: "model",
         get_tokenizer=lambda: "tokenizer",
         use_wandb_logging=False,
+        resume_from_run_dir=None,
+        is_resuming=lambda: False,
     )
     runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
 
@@ -376,6 +383,8 @@ async def test_main_exits_on_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     config = types.SimpleNamespace(
         training_args_config=types.SimpleNamespace(do_train=True, do_predict=True),
         use_wandb_logging=False,
+        resume_from_run_dir=None,
+        is_resuming=lambda: False,
     )
 
     monkeypatch.setattr(

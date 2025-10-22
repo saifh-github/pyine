@@ -29,11 +29,6 @@ import pyine.utils.transformers
 logger = logging.getLogger(__name__)
 
 
-def _default_auto_tokenizer_config() -> dict[str, typing.Any]:
-    """Return default tokenizer configuration options."""
-    return {"use_fast": True}
-
-
 class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     """Configuration for HuggingFace-Transformers model fine-tuning."""
 
@@ -66,7 +61,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     # --------------- tokenizer settings ---------------
 
     auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=_default_auto_tokenizer_config,
+        default_factory=lambda: {"use_fast": True},
         description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
     )
     tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
@@ -120,6 +115,22 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         """Returns a pretrained model to use for experiments."""
         return instantiate_model(self)
 
+    def normalize_for_resume_overlap_check(self) -> dict[str, typing.Any]:
+        """Normalizes the config by removing fields that might change without effects on experiments."""
+        data = super().normalize_for_resume_overlap_check()
+        assert "training_args_config" in data, "training_args_config not found in config"
+        training_args = typing.cast("dict[str, typing.Any]", data["training_args_config"])
+        # note: there are lots more, these are just the most typical ones...
+        training_args.pop("run_name", None)
+        training_args.pop("project", None)
+        training_args.pop("report_to", None)
+        training_args.pop("log_level", None)
+        training_args.pop("logging_dir", None)
+        training_args.pop("disable_tqdm", None)
+        training_args.pop("output_dir", None)
+        training_args.pop("do_predict", None)
+        return data
+
 
 def instantiate_tokenizer(
     config: HFTrainerAppMainConfig,
@@ -141,7 +152,11 @@ def instantiate_tokenizer(
 
 
 def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrainedModel:
-    """Instantiates and returns the pretrained model specified in the config."""
+    """Instantiates and returns the base pretrained model specified in the config.
+
+    Note: this function will NOT load the model weights tied to the resume ckpt which might be
+    specified in the app config; it only instantiates the base model with its pretrained weights.
+    """
     logger.info(f"setting up model: {config.base_model}")
     dtype, device_map = config.target_dtype, config.device_map
     model_kwargs: dict[str, typing.Any] = {

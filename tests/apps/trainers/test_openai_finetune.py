@@ -186,13 +186,22 @@ async def test_main_skip_fine_tuning_updates_wandb(
         def finalize(self) -> None:
             pass
 
-    class _FakeApi:
-        def run(
-            self,
-            run_id: str,
+    class _FakeWandbAPI:
+        run: _FakeRun
+
+        @classmethod
+        def init(
+            cls,
+            project: str,
+            entity: str,
+            id: str,
+            resume: str,
         ) -> _FakeRun:
-            assert run_id == "run-1"
-            return _FakeRun()
+            assert project == "project"
+            assert entity == "entity"
+            assert id == "run-1"
+            cls.run = _FakeRun()
+            return cls.run
 
     config = types.SimpleNamespace(
         openai_client_config=types.SimpleNamespace(
@@ -202,10 +211,13 @@ async def test_main_skip_fine_tuning_updates_wandb(
         needs_answers_in_train_dataset=lambda: False,
         supports_system_prompt=lambda: True,
         use_wandb_logging=True,
+        is_resuming=lambda: False,
     )
     runtime = types.SimpleNamespace(
         wandb_run=_FakeRun(),
         wandb_run_id="run-1",
+        wandb_run_entity="entity",
+        wandb_run_project="project",
         finalize=lambda: None,
     )
     monkeypatch.setattr(
@@ -229,9 +241,9 @@ async def test_main_skip_fine_tuning_updates_wandb(
         fake_get_model_from_provider,
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.openai_finetune.wandb,
-        "Api",
-        _FakeApi,
+        pyine.apps.trainers.openai_finetune,
+        "wandb",
+        _FakeWandbAPI,
     )
     await pyine.apps.trainers.openai_finetune.main(
         config=config,

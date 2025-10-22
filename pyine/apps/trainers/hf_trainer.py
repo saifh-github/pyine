@@ -70,25 +70,27 @@ def _extract_sample_categories_from_dataset(
 
 
 def train(
-    model: transformers.PreTrainedModel,
-    tokenizer: transformers.PreTrainedTokenizer,
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
+    resume_artifacts: pyine.apps.trainers.common.ResumeArtifacts | None,
 ) -> transformers.Trainer:
     """Run fine-tuning with HuggingFace Trainer.
 
     Args:
-        model: The model to fine-tune.
-        tokenizer: The tokenizer to use for tokenization.
         datamodule: The datamodule to fetch data from.
         config: The app config object to fetch settings from.
         runtime: The runtime config object to fetch settings from.
+        resume_artifacts: Resume artifacts to continue a previous run, when provided.
 
     Returns:
-        The instantiated trainer object that can be used for predictions.
+        The instantiated trainer object containing a model that can be used for predictions.
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
+
+    model = config.get_model()
+    tokenizer = config.get_tokenizer()
+
     train_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -162,12 +164,14 @@ def train(
         compute_metrics=eval_metrics_callback,
         callbacks=[milestone_logger, eval_metrics_callback],
     )
-
+    train_kwargs: dict[str, typing.Any] = {}
+    if resume_artifacts is not None:
+        assert resume_artifacts.checkpoint_path.is_dir(), f"invalid ckpt path: {resume_artifacts.checkpoint_path}"
+        logger.info(f"resuming from checkpoint: {resume_artifacts.checkpoint_path}")
+        train_kwargs["resume_from_checkpoint"] = str(resume_artifacts.checkpoint_path)
     logger.info("starting training")
     start_time = time.time()
-    trainer.train(  # type: ignore[reportUnknownMemberType]
-        # resume_from_checkpoint=...,  # @@@@@ TODO: add here if needed?
-    )
+    trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
     end_time = time.time()
     time_delta_seconds = end_time - start_time
     time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
@@ -185,11 +189,16 @@ async def main(
         config: Configuration for the application; see `HFTrainerAppMainConfig` for details.
         runtime: Configuration for the runtime; available when launched via hydra.
     """
+    resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
+        config=config,
+        runtime=runtime,
+    )
     try:
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,
             main_config=config,
             use_wandb_logging=config.use_wandb_logging,
+            wandb_init_kwargs=resume_artifacts.wandb_resume_kwargs if resume_artifacts else None,
         )
     except pyine.utils.reprod.DryRunExit:
         return
@@ -199,26 +208,43 @@ async def main(
         raise TypeError(
             f"HuggingFace trainer requires a ConversationDataModule; received {type(datamodule).__name__}",
         )
-    model = config.get_model()
-    tokenizer = config.get_tokenizer()
 
     if config.training_args_config.do_train:
-        _ = train(
-            model=model,
-            tokenizer=tokenizer,
+        trainer = train(
             datamodule=datamodule,
             config=config,
             runtime=runtime,
+            resume_artifacts=resume_artifacts,
         )
-    # note: if not training, the model+tokenizer states will depend the specified model name/path
-    # (those might correspond to the base model or to a local checkpoint from a previous run)
+        model = typing.cast(
+            "transformers.PreTrainedModel",
+            trainer.model,  # type: ignore[reportUnknownMemberType]
+        )
+        tokenizer = typing.cast(
+            "transformers.PreTrainedTokenizer",
+            trainer.processing_class,  # type: ignore[reportUnknownMemberType]
+        )
+    else:
+        if config.is_resuming():
+            # reinstantiate based on target checkpoint
+            assert resume_artifacts is not None, "resume artifacts must be provided for resuming"
+            model: transformers.PreTrainedModel = transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                resume_artifacts.checkpoint_path,
+            )
+            tokenizer: transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                resume_artifacts.checkpoint_path,
+            )
+        else:
+            # get base (pretrained) model/tokenizers directly
+            model = config.get_model()
+            tokenizer = config.get_tokenizer()
 
     if config.training_args_config.do_predict:
         if runtime is not None and runtime.wandb_run is not None:
             runtime.wandb_run.summary["model_name"] = model.config.name_or_path
         await pyine.apps.trainers.common.evaluate_model(
             model=model,
-            tokenizer=tokenizer,
+            tokenizer=tokenizer,  # type: ignore[reportUnknownArgumentType]
             datamodule=datamodule,
             config=config,
             runtime=runtime,
