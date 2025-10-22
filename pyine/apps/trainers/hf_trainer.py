@@ -39,7 +39,7 @@ def _extract_sample_categories_from_dataset(
     of categories associated with the corresponding example.
     """
     # @@@@@ TODO: update this to work with target tags instead of just code_type?
-    # (@@@ move to datamodule?)
+    # (@@@ move to datamodule? will need to concat in train func across multiple subsets)
     if dataset is None or not hasattr(dataset, "__len__"):
         return []
     if not hasattr(dataset, "column_names") or "sample_data" not in dataset.column_names:
