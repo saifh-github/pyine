@@ -81,7 +81,7 @@ class BaseDataLoaderConfig(pyine.utils.pydantic.ClassImportSpec):
     params: typing.Annotated[  # type: ignore[override]
         pydantic.SerializeAsAny[BaseDataLoaderParamsConfig],
         pydantic.Field(default_factory=BaseDataLoaderParamsConfig),
-    ] = BaseDataLoaderParamsConfig()
+    ]
     """Default parameters for the data loader."""
 
 

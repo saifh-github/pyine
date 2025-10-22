@@ -29,7 +29,7 @@ repos:
 
   # python code formatting and linting with ruff
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.2
+    rev: v0.14.1
     hooks:
       - id: ruff
         args: [--fix]
@@ -37,7 +37,7 @@ repos:
 
   # python upgrading syntax to newer version
   - repo: https://github.com/asottile/pyupgrade
-    rev: v3.20.0
+    rev: v3.21.0
     hooks:
       - id: pyupgrade
         args: ["--py312-plus"]

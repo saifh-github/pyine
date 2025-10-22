@@ -159,7 +159,7 @@ def train(
         train_dataset=train_ds,
         eval_dataset=valid_ds,
         processing_class=tokenizer,
-        data_collator=collator,
+        data_collator=typing.cast("transformers.DataCollator", collator),
         compute_metrics=eval_metrics_callback,
         callbacks=[milestone_logger, eval_metrics_callback],
     )
