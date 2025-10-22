@@ -138,14 +138,14 @@ def train(
     category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
     category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
     logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
-    compute_valid_metrics_fn: typing.Callable[[transformers.trainer_utils.EvalPrediction], dict[str, float]] = (
-        pyine.evals.utils.build_category_wise_compute_metrics_fn(
-            data_sample_categories=valid_sample_categories,
-            wandb_run=runtime.wandb_run if runtime is not None else None,
-            metrics_prefix="eval",
-        )
+    eval_metrics_callback = pyine.evals.utils.build_category_wise_compute_metrics_fn(
+        data_sample_categories=valid_sample_categories,
+        wandb_run=runtime.wandb_run if runtime is not None else None,
+        metrics_prefix="eval",
+        log_fn=logger.info,
     )
     training_args_dict = config.training_args_config.model_dump()
+    training_args_dict["batch_eval_metrics"] = True  # for compat w/ the eval_metrics_callback
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
 
@@ -159,8 +159,8 @@ def train(
         eval_dataset=valid_ds,
         processing_class=tokenizer,
         data_collator=collator,
-        compute_metrics=compute_valid_metrics_fn,
-        callbacks=[milestone_logger],
+        compute_metrics=eval_metrics_callback,
+        callbacks=[milestone_logger, eval_metrics_callback],
     )
 
     logger.info("starting training")

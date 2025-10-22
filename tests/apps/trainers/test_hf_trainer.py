@@ -7,6 +7,7 @@ import pytest_mock
 
 import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
+import pyine.evals.utils
 
 
 class _FakePreparedDataset:
@@ -76,7 +77,6 @@ def test_train_configures_trainer_and_saves_artifacts(
             },
         ],
     }
-    captured_metrics_config: list[dict[str, typing.Any]] = []
 
     class _RawDataset:
         def __init__(self, name: str) -> None:
@@ -132,6 +132,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             processing_class: _FakeTokenizer,
             data_collator: typing.Any,
             compute_metrics: typing.Callable[..., dict[str, typing.Any]] = None,
+            callbacks: list[typing.Any] | None = None,
         ) -> None:
             self.model = model
             self.args = args
@@ -140,6 +141,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             self.data_collator = data_collator
             self.tokenizer = processing_class
             self.compute_metrics = compute_metrics
+            self.callbacks = callbacks or []
             self.saved_to: str | None = None
             self.trained = False
 
@@ -184,26 +186,6 @@ def test_train_configures_trainer_and_saves_artifacts(
         captured_args["kwargs"] = kwargs
         return types.SimpleNamespace(**kwargs)
 
-    def fake_build_category_wise_compute_metrics_fn(
-        data_sample_categories: list[list[str]],
-        wandb_run: typing.Any,
-        metrics_prefix: str,
-    ) -> typing.Callable[[typing.Any], dict[str, float]]:
-        def _metrics_fn(
-            _eval_prediction: typing.Any,
-        ) -> dict[str, float]:
-            return {"dummy_metric": 1.0}
-
-        captured_metrics_config.append(
-            {
-                "categories": data_sample_categories,
-                "wandb_run": wandb_run,
-                "metrics_prefix": metrics_prefix,
-                "metrics_fn": _metrics_fn,
-            },
-        )
-        return _metrics_fn
-
     fake_trainer_instance = _FakeTrainer(
         model=_FakeModel(),
         args=types.SimpleNamespace(),
@@ -221,6 +203,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         fake_trainer_instance.data_collator = kwargs["data_collator"]
         fake_trainer_instance.tokenizer = kwargs["processing_class"]
         fake_trainer_instance.compute_metrics = kwargs.get("compute_metrics")
+        fake_trainer_instance.callbacks = kwargs.get("callbacks", [])
         return fake_trainer_instance
 
     monkeypatch.setattr(
@@ -248,12 +231,6 @@ def test_train_configures_trainer_and_saves_artifacts(
         "Trainer",
         fake_trainer_factory,
     )
-    monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.evals.utils,
-        "build_category_wise_compute_metrics_fn",
-        fake_build_category_wise_compute_metrics_fn,
-    )
-
     fake_model = _FakeModel()
     fake_tokenizer = _FakeTokenizer()
     fake_dm = _FakeDataModule()
@@ -294,12 +271,16 @@ def test_train_configures_trainer_and_saves_artifacts(
     ]
     assert raw_datasets == ["train:True:False", "valid:True:True"]
     assert captured_args["kwargs"]["report_to"] == ["wandb"]
-    assert len(captured_metrics_config) == 1
-    metrics_config = captured_metrics_config[0]
-    assert metrics_config["categories"] == [["bugfix"], [], ["refactor"]]
-    assert metrics_config["metrics_prefix"] == "eval"
-    assert metrics_config["wandb_run"] is runtime.wandb_run
-    assert trainer.compute_metrics is metrics_config["metrics_fn"]
+    assert captured_args["kwargs"]["batch_eval_metrics"] is True
+    metrics_callbacks = [
+        cb for cb in trainer.callbacks if isinstance(cb, pyine.evals.utils.CategoryWiseMetricsCallback)
+    ]
+    assert len(metrics_callbacks) == 1
+    metrics_callback = metrics_callbacks[0]
+    assert metrics_callback.data_sample_categories == [["bugfix"], [], ["refactor"]]
+    assert metrics_callback.metrics_prefix == "eval"
+    assert metrics_callback.wandb_run is runtime.wandb_run
+    assert trainer.compute_metrics is metrics_callback
     assert "sample_data" not in trainer.train_dataset.column_names
     assert "sample_data" in trainer.eval_dataset.column_names
     assert trainer.eval_dataset["sample_data"] == [

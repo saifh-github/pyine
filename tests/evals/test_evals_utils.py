@@ -1,10 +1,15 @@
+import collections
 import pathlib
 
+import numpy as np
 import pytest
+import torch
+import transformers
 
 import pyine.evals.utils
 import pyine.prompts
 import pyine.utils.llm_providers
+import pyine.utils.transformers
 import tests.env_checks
 
 
@@ -92,6 +97,111 @@ def test_token_usage_info_add_and_iadd_success() -> None:
         _ = info_known + info_unknown
     with pytest.raises(ValueError):
         info_unknown += info_known
+
+
+def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
+    class _FakeRun:
+        def __init__(self) -> None:
+            self.logged: list[dict[str, float]] = []
+
+        def log(
+            self,
+            metrics: dict[str, float],
+        ) -> None:
+            self.logged.append(dict(metrics))
+
+    categories = [["bugfix"], ["refactor"], ["bugfix", "refactor"]]
+    callback = pyine.evals.utils.CategoryWiseMetricsCallback(
+        data_sample_categories=categories,
+        metrics_prefix="eval",
+        wandb_run=_FakeRun(),
+        log_fn=lambda _msg: None,
+    )
+    logits_batch1 = np.zeros((2, 3, 4), dtype=np.float32)
+    logits_batch1[0, 0, 1] = 8.0
+    logits_batch1[0, 1, 0] = 8.0
+    logits_batch1[1, 0, 2] = 8.0
+    logits_batch1[1, 1, 1] = 8.0
+    labels_batch1 = np.array([[-100, 1, 0], [-100, 2, 1]], dtype=np.int64)
+    pred_batch1 = transformers.trainer_utils.EvalPrediction(
+        predictions=logits_batch1,
+        label_ids=labels_batch1,
+    )
+    assert callback(pred_batch1, compute_result=False) == {}
+
+    logits_batch2 = np.zeros((1, 3, 4), dtype=np.float32)
+    labels_batch2 = np.array([[-100, 1, 2]], dtype=np.int64)
+    pred_batch2 = transformers.trainer_utils.EvalPrediction(
+        predictions=logits_batch2,
+        label_ids=labels_batch2,
+    )
+    metrics = callback(pred_batch2, compute_result=True)
+
+    full_logits = np.concatenate([logits_batch1, logits_batch2], axis=0)
+    full_labels = np.concatenate([labels_batch1, labels_batch2], axis=0)
+
+    def _compute_expected_metrics() -> dict[str, float]:
+        shift_logits = torch.as_tensor(full_logits)[:, :-1, :].contiguous()
+        shift_labels = torch.as_tensor(full_labels)[:, 1:].contiguous()
+        losses = torch.nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1).long(),
+            reduction="none",
+            ignore_index=pyine.utils.transformers.default_ignore_index,
+        )
+        losses = losses.view(shift_labels.shape)
+        mask = shift_labels.ne(pyine.utils.transformers.default_ignore_index)
+        token_counts = mask.sum(dim=1)
+        token_loss = (losses * mask).sum(dim=1)
+        per_example_loss = torch.zeros_like(token_loss, dtype=torch.float32)
+        valid = token_counts > 0
+        per_example_loss[valid] = token_loss[valid] / token_counts[valid].to(torch.float32)
+        sums: collections.defaultdict[str, float] = collections.defaultdict(float)
+        counts: collections.defaultdict[str, int] = collections.defaultdict(int)
+        for idx, loss_value in enumerate(per_example_loss.tolist()):
+            for category in categories[idx]:
+                sums[category] += float(loss_value)
+                counts[category] += 1
+        expected: dict[str, float] = {}
+        for category, loss_sum in sums.items():
+            count = counts[category]
+            expected[f"eval/{category}/loss"] = loss_sum / count
+            expected[f"eval/{category}/count"] = count
+        return expected
+
+    expected_metrics = _compute_expected_metrics()
+    for key, value in expected_metrics.items():
+        if key.endswith("/loss"):
+            assert metrics[key] == pytest.approx(value, rel=1e-6)
+        else:
+            assert metrics[key] == value
+    assert callback.get_aggregated_metrics() == metrics
+
+    training_args = transformers.TrainingArguments(output_dir=str(tmp_path))
+    callback.on_evaluate(
+        args=training_args,
+        state=transformers.trainer_callback.TrainerState(),
+        control=transformers.trainer_callback.TrainerControl(),
+        metrics=dict(metrics),
+    )
+    fake_run = callback.wandb_run
+    assert isinstance(fake_run, _FakeRun)
+    assert fake_run.logged
+    logged_metrics = fake_run.logged[0]
+    for key, value in expected_metrics.items():
+        if key.endswith("/loss"):
+            assert logged_metrics[key] == pytest.approx(value, rel=1e-6)
+        else:
+            assert logged_metrics[key] == value
+    assert callback.get_aggregated_metrics() == {}
+
+    assert callback(pred_batch1, compute_result=False) == {}
+    metrics_second_pass = callback(pred_batch2, compute_result=True)
+    for key, value in expected_metrics.items():
+        if key.endswith("/loss"):
+            assert metrics_second_pass[key] == pytest.approx(value, rel=1e-6)
+        else:
+            assert metrics_second_pass[key] == value
 
 
 @pytest.mark.skipif(

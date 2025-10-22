@@ -1,11 +1,12 @@
+import collections
 import collections.abc
 import dataclasses
 import typing
 
 import langchain_core.runnables
-import numpy as np
 import torch
 import transformers
+import transformers.trainer_callback
 import wandb
 
 import pyine.utils.transformers
@@ -284,31 +285,69 @@ def print_metrics(
         logger(output_str)
 
 
-def build_category_wise_compute_metrics_fn(
-    data_sample_categories: list[list[str]],
-    wandb_run: wandb.Run | None,
-    metrics_prefix: str,
-    ignore_index: int = pyine.utils.transformers.default_ignore_index,
-) -> typing.Callable[[transformers.trainer_utils.EvalPrediction], dict[str, float]]:
-    """Creates and returns a HuggingFace `compute_metrics` callback for category-wise loss aggregation.
+class CategoryWiseMetricsCallback(transformers.TrainerCallback):
+    """Streams evaluation metrics without materializing full prediction arrays.
 
-    The provided `data_sample_categories` should be a list-of-lists-of-strings, where each inner
-    list contains the categories of a single data sample. The returned callback will aggregate
-    the losses for each category and return a dictionary of metrics for each category.
+    This callback accumulates per-example losses on a category basis as evaluation batches are
+    processed. It exposes a callable interface compatible with Hugging Face's ``compute_metrics``
+    API (including the ``batch_eval_metrics`` flow) while also integrating with the callback
+    system to print and log aggregated metrics once an evaluation loop completes.
     """
 
-    def compute_metrics(eval_prediction: transformers.trainer_utils.EvalPrediction) -> dict[str, float]:
-        assert isinstance(eval_prediction.predictions, np.ndarray)
-        assert isinstance(eval_prediction.label_ids, np.ndarray)
-        logits_tensor = torch.as_tensor(eval_prediction.predictions)
-        labels_tensor = torch.as_tensor(eval_prediction.label_ids)
+    def __init__(
+        self,
+        data_sample_categories: list[list[str]],
+        metrics_prefix: str,
+        wandb_run: wandb.Run | None = None,
+        ignore_index: int = pyine.utils.transformers.default_ignore_index,
+        log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
+    ) -> None:
+        """Initialize the callback."""
+        self.data_sample_categories = data_sample_categories
+        self.metrics_prefix = metrics_prefix
+        self.wandb_run = wandb_run
+        self.ignore_index = ignore_index
+        self._log_fn = log_fn
+        self._expected_examples = len(data_sample_categories)
+        self._latest_metrics: MetricsDictType = {}
+        self._has_active_eval = False
+        self._category_loss_sums: collections.defaultdict[str, float]
+        self._category_counts: collections.defaultdict[str, int]
+        self._processed_examples = 0
+        self._reset_accumulators()
+
+    def _reset_accumulators(
+        self,
+    ) -> None:
+        """Clear all per-evaluation accumulators."""
+        self._category_loss_sums = collections.defaultdict(float)
+        self._category_counts = collections.defaultdict(int)
+        self._processed_examples = 0
+
+    def _ensure_eval_started(
+        self,
+    ) -> None:
+        """Prepare accumulators when a new evaluation loop begins."""
+        if self._has_active_eval:
+            return
+        self._reset_accumulators()
+        self._latest_metrics = {}
+        self._has_active_eval = True
+
+    def _update_from_batch(
+        self,
+        logits_tensor: torch.Tensor,
+        labels_tensor: torch.Tensor,
+        batch_categories: list[list[str]],
+    ) -> None:
+        """Update accumulators using a single evaluation batch."""
         if logits_tensor.ndim != 3 or labels_tensor.ndim != 2:
             raise ValueError(f"unexpected tensor shapes: logits={logits_tensor.shape} labels={labels_tensor.shape}")
         if logits_tensor.shape[0] != labels_tensor.shape[0]:
             raise ValueError(f"unexpected batch sizes: logits={logits_tensor.shape[0]} labels={labels_tensor.shape[0]}")
-        if len(data_sample_categories) != logits_tensor.shape[0]:
+        if logits_tensor.shape[0] != len(batch_categories):
             raise ValueError(
-                f"unexpected number of examples: samples={len(data_sample_categories)} logits={logits_tensor.shape[0]}"
+                f"batch categories mismatch: expected {logits_tensor.shape[0]} items, got {len(batch_categories)}"
             )
         shift_logits = logits_tensor[:, :-1, :].contiguous()
         shift_labels = labels_tensor[:, 1:].contiguous()
@@ -317,34 +356,124 @@ def build_category_wise_compute_metrics_fn(
             shift_logits.view(-1, shift_logits.size(-1)),
             shift_labels.view(-1).long(),
             reduction="none",
-            ignore_index=ignore_index,
+            ignore_index=self.ignore_index,
         )
         per_token_loss = per_token_loss.view(shift_labels.shape)
-        loss_mask = shift_labels.ne(ignore_index)
+        loss_mask = shift_labels.ne(self.ignore_index)
         token_counts = loss_mask.sum(dim=1)
         valid_example_mask = token_counts > 0
-        assert bool(valid_example_mask.any()), "no valid token found in entire batch?"
+        if not bool(valid_example_mask.any()):
+            raise ValueError("no valid tokens encountered in current evaluation batch (bad data??)")
         token_loss_sums = (per_token_loss * loss_mask).sum(dim=1)
         per_example_loss = torch.zeros_like(token_loss_sums, dtype=torch.float32)
         per_example_loss[valid_example_mask] = token_loss_sums[valid_example_mask] / token_counts[
             valid_example_mask
         ].to(torch.float32)
-        per_example_loss_np = per_example_loss.detach().cpu().numpy()
-        losses_by_category: dict[str, list[float]] = collections.defaultdict(list)
-        for example_idx, loss_value in enumerate(per_example_loss_np.tolist()):
-            categories = data_sample_categories[example_idx]
-            for cat in categories:
-                losses_by_category[cat].append(float(loss_value))
-        metrics: dict[str, float] = {}
-        for category, losses in losses_by_category.items():
-            if not losses:
+        per_example_loss_cpu = per_example_loss.detach().cpu()
+        per_example_loss_list: list[float] = [float(val) for val in per_example_loss_cpu]
+        for example_idx, loss_value in enumerate(per_example_loss_list):
+            categories = batch_categories[example_idx]
+            if not categories:
                 continue
-            metrics[f"{metrics_prefix}/{category}/loss"] = float(np.mean(losses))
-            metrics[f"{metrics_prefix}/{category}/count"] = len(losses)
-        if not metrics:
-            return {}
-        if wandb_run is not None:
-            wandb_run.log(metrics)  # noqa
+            for category in categories:
+                self._category_loss_sums[category] += loss_value
+                self._category_counts[category] += 1
+
+    def get_aggregated_metrics(
+        self,
+    ) -> MetricsDictType:
+        """Return the aggregated category-wise metrics accumulated so far."""
+        metrics: MetricsDictType = {}
+        for category in sorted(self._category_loss_sums.keys()):
+            count = self._category_counts[category]
+            if count <= 0:
+                continue
+            loss_sum = self._category_loss_sums[category]
+            metrics[f"{self.metrics_prefix}/{category}/loss"] = loss_sum / count
+            metrics[f"{self.metrics_prefix}/{category}/count"] = count
         return metrics
 
-    return compute_metrics
+    def _log_metrics(
+        self,
+        metrics: MetricsDictType,
+    ) -> None:
+        """Log metrics to stdout/logger and wandb."""
+        if not metrics:
+            return
+        print_metrics(
+            metrics=metrics,
+            subset=self.metrics_prefix,
+            logger=self._log_fn,
+        )
+        if self.wandb_run is not None:
+            self.wandb_run.log(metrics)  # noqa
+
+    def __call__(
+        self,
+        eval_prediction: transformers.trainer_utils.EvalPrediction,
+        compute_result: bool = False,
+        **_: typing.Any,
+    ) -> MetricsDictType:
+        """Consume a batch of predictions coming from the trainer."""
+        self._ensure_eval_started()
+        logits_tensor = torch.as_tensor(eval_prediction.predictions)
+        labels_tensor = torch.as_tensor(eval_prediction.label_ids)
+        start_idx = self._processed_examples
+        batch_size = logits_tensor.shape[0]
+        end_idx = start_idx + batch_size
+        if end_idx > self._expected_examples:
+            raise ValueError(f"received {end_idx} evaluation samples but only {self._expected_examples} were expected")
+        batch_categories = self.data_sample_categories[start_idx:end_idx]
+        self._update_from_batch(
+            logits_tensor=logits_tensor,
+            labels_tensor=labels_tensor,
+            batch_categories=batch_categories,
+        )
+        self._processed_examples = end_idx
+        is_final = compute_result or self._processed_examples == self._expected_examples
+        if not is_final:
+            return {}
+        if self._processed_examples != self._expected_examples:
+            raise ValueError(f"processed {self._processed_examples} examples, expected {self._expected_examples}")
+        self._latest_metrics = self.get_aggregated_metrics()
+        self._has_active_eval = False
+        return dict(self._latest_metrics)
+
+    @typing.override
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.trainer_callback.TrainerState,
+        control: transformers.trainer_callback.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Log aggregated metrics and reset state after evaluation."""
+        _ = kwargs.get("metrics")
+        aggregated = dict(self._latest_metrics) if self._latest_metrics else self.get_aggregated_metrics()
+        self._log_metrics(aggregated)
+        self._latest_metrics = {}
+        self._has_active_eval = False
+        self._reset_accumulators()
+
+
+def build_category_wise_compute_metrics_fn(
+    data_sample_categories: list[list[str]],
+    wandb_run: wandb.Run | None,
+    metrics_prefix: str,
+    ignore_index: int = pyine.utils.transformers.default_ignore_index,
+    log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
+) -> CategoryWiseMetricsCallback:
+    """Build a streaming evaluation callback for category-wise metrics.
+
+    Note: for this callback to work, the HuggingFace Trainer must be initialized with the
+    `batch_eval_metrics` trainer argument, and the callback object returned by this function
+    must be passed to the Trainer's `compute_metrics` argument as well as inside its `callbacks`
+    list.
+    """
+    return CategoryWiseMetricsCallback(
+        data_sample_categories=data_sample_categories,
+        metrics_prefix=metrics_prefix,
+        wandb_run=wandb_run,
+        ignore_index=ignore_index,
+        log_fn=log_fn,
+    )
