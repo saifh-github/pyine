@@ -1,9 +1,13 @@
+import json
 import pathlib
 import types
 import typing
 
+import datasets
 import pytest
 import pytest_mock
+import torch
+import transformers
 
 import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
@@ -401,3 +405,292 @@ async def test_main_exits_on_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
         config=config,
         runtime=None,
     )
+
+
+@pytest.mark.slow
+def test_train_resumes_from_checkpoint_with_real_trainer(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SimpleTokenizer:
+        def __init__(
+            self,
+        ) -> None:
+            self.pad_token = "<pad>"  # noqa: S105 (not a password)
+            self.eos_token = "<eos>"  # noqa: S105 (not a password)
+            self.pad_token_id = 0
+            self.eos_token_id = 1
+            self.padding_side = "right"
+            self.truncation_side = "left"
+            self.model_max_length = 64
+            self.is_fast = False
+            self._vocab: dict[str, int] = {
+                self.pad_token: self.pad_token_id,
+                self.eos_token: self.eos_token_id,
+            }
+
+        def _get_token_id(
+            self,
+            token: str,
+        ) -> int:
+            if token not in self._vocab:
+                self._vocab[token] = len(self._vocab)
+            return self._vocab[token]
+
+        def apply_chat_template(
+            self,
+            conversation: list[list[dict[str, typing.Any]]] | list[dict[str, typing.Any]],
+            tokenize: bool = False,
+            add_generation_prompt: bool = False,
+            **_: typing.Any,
+        ) -> list[str]:
+            assert tokenize is False
+            if conversation and isinstance(conversation[0], list):
+                conversations = typing.cast("list[list[dict[str, typing.Any]]]", conversation)
+            else:
+                single_conversation = typing.cast("list[dict[str, typing.Any]]", conversation)
+                conversations = [single_conversation]
+            formatted: list[str] = []
+            for messages in conversations:
+                parts: list[str] = []
+                for message in messages:
+                    parts.append(f"{message['role']}:{message['content']}")
+                if add_generation_prompt:
+                    parts.append("assistant:")
+                formatted.append(" | ".join(parts))
+            return formatted
+
+        def __call__(
+            self,
+            text: str,
+            add_special_tokens: bool = False,
+            **_: typing.Any,
+        ) -> dict[str, list[int]]:
+            del add_special_tokens
+            token_ids = [self._get_token_id(character) for character in text]
+            attention_mask = [1] * len(token_ids)
+            return {
+                "input_ids": token_ids,
+                "attention_mask": attention_mask,
+            }
+
+        def save_pretrained(
+            self,
+            output_dir: str,
+        ) -> None:
+            output_path = pathlib.Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            config_payload = {
+                "pad_token": self.pad_token,
+                "eos_token": self.eos_token,
+                "pad_token_id": self.pad_token_id,
+                "eos_token_id": self.eos_token_id,
+                "vocab": self._vocab,
+            }
+            (output_path / "tokenizer_config.json").write_text(json.dumps(config_payload, indent=2))
+
+        def pad(
+            self,
+            encoded_inputs: dict[str, typing.Any],
+            **_: typing.Any,
+        ) -> dict[str, typing.Any]:
+            return encoded_inputs
+
+        def decode(
+            self,
+            token_ids: typing.Iterable[int],
+            skip_special_tokens: bool = True,
+        ) -> str:
+            inverse_vocab = {value: key for key, value in self._vocab.items()}
+            tokens: list[str] = []
+            for token_id in token_ids:
+                if skip_special_tokens and token_id in (self.pad_token_id, self.eos_token_id):
+                    continue
+                tokens.append(inverse_vocab.get(token_id, "?"))
+            return "".join(tokens)
+
+    class _TinyTrainingArgsConfig:
+        def __init__(
+            self,
+            output_dir: pathlib.Path,
+            max_steps: int,
+        ) -> None:
+            self.output_dir = output_dir
+            self.max_steps = max_steps
+            self.do_train = True
+            self.dataloader_num_workers = 0
+
+        def model_dump(
+            self,
+        ) -> dict[str, typing.Any]:
+            return {
+                "output_dir": str(self.output_dir),
+                "per_device_train_batch_size": 1,
+                "max_steps": self.max_steps,
+                "num_train_epochs": 1,
+                "save_steps": 1,
+                "save_strategy": "steps",
+                "logging_steps": 1,
+                "learning_rate": 5e-4,
+                "report_to": "none",
+                "overwrite_output_dir": True,
+                "use_cpu": True,
+                "disable_tqdm": True,
+            }
+
+    class _TinyDataModule:
+        def __init__(
+            self,
+            train_ds: datasets.Dataset,
+            valid_ds: datasets.Dataset,
+        ) -> None:
+            self._train_ds = train_ds
+            self._valid_ds = valid_ds
+
+        def get_hf_messages_dataset(
+            self,
+            subset_name: str,
+            append_answer: bool,
+            keep_original_data: bool = False,
+        ) -> datasets.Dataset:
+            del append_answer
+            del keep_original_data
+            if subset_name == "train":
+                return self._train_ds
+            if subset_name == "valid":
+                return self._valid_ds
+            raise ValueError(f"unexpected subset name: {subset_name}")
+
+    def _build_tiny_model() -> transformers.GPT2LMHeadModel:
+        config = transformers.GPT2Config(
+            n_layer=1,
+            n_head=1,
+            n_embd=32,
+            n_positions=64,
+            n_ctx=64,
+            vocab_size=512,
+            pad_token_id=0,
+            eos_token_id=1,
+        )
+        return transformers.GPT2LMHeadModel(config)
+
+    def _make_config(
+        max_steps: int,
+        output_dir: pathlib.Path,
+    ) -> types.SimpleNamespace:
+        return types.SimpleNamespace(
+            training_args_config=_TinyTrainingArgsConfig(output_dir=output_dir, max_steps=max_steps),
+            datamodule_config=types.SimpleNamespace(
+                train_subset_names=["train"],
+                valid_subset_names=["valid"],
+            ),
+            gradient_checkpointing=False,
+            use_wandb_logging=False,
+            output_dir=str(output_dir),
+            get_model=_build_tiny_model,
+            get_tokenizer=_SimpleTokenizer,
+        )
+
+    train_conversations = [
+        {
+            "messages": [
+                {"role": "user", "content": "Hello there"},
+                {"role": "assistant", "content": "Hi!"},
+            ],
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "How are you"},
+                {"role": "assistant", "content": "Doing fine"},
+            ],
+        },
+    ]
+    valid_conversations = [
+        {
+            "messages": [
+                {"role": "user", "content": "Ping"},
+                {"role": "assistant", "content": "Pong"},
+            ],
+            "sample_data": {"code_type": "alpha"},
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "Tell me a joke"},
+                {"role": "assistant", "content": "No jokes today"},
+            ],
+            "sample_data": {"code_type": "beta"},
+        },
+    ]
+    train_dataset = datasets.Dataset.from_list(train_conversations)
+    valid_dataset = datasets.Dataset.from_list(valid_conversations)
+    datamodule = _TinyDataModule(train_ds=train_dataset, valid_ds=valid_dataset)
+
+    output_dir = tmp_path / "trainer_output"
+    output_dir.mkdir()
+
+    runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
+
+    original_trainer_cls = transformers.Trainer
+    recorded_steps: list[int] = []
+    stop_after = {"value": None}
+
+    class _RecordingCallback(transformers.TrainerCallback):
+        def on_step_end(  # type: ignore[override]
+            self,
+            args: transformers.TrainingArguments,
+            state: transformers.trainer_callback.TrainerState,
+            control: transformers.trainer_callback.TrainerControl,
+            **kwargs: typing.Any,
+        ) -> transformers.trainer_callback.TrainerControl:
+            del args
+            del kwargs
+            recorded_steps.append(state.global_step)
+            target = stop_after["value"]
+            if target is not None and state.global_step >= target:
+                control.should_training_stop = True
+            return control
+
+    class _RecordingTrainer(original_trainer_cls):
+        def __init__(
+            self,
+            *args: typing.Any,
+            **kwargs: typing.Any,
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self.add_callback(_RecordingCallback())
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
+        _RecordingTrainer,
+    )
+
+    torch.manual_seed(0)
+    config_first = _make_config(max_steps=2, output_dir=output_dir)
+    stop_after["value"] = 1
+    recorded_steps.clear()
+    trainer_first = pyine.apps.trainers.hf_trainer.train(
+        datamodule=datamodule,
+        config=config_first,
+        runtime=runtime,
+        resume_artifacts=None,
+    )
+    assert trainer_first.state.global_step == 1
+    assert recorded_steps == [1]
+    checkpoint_dir = output_dir / "checkpoint-1"
+    assert checkpoint_dir.is_dir()
+    assert (checkpoint_dir / "trainer_state.json").is_file()
+
+    config_second = _make_config(max_steps=2, output_dir=output_dir)
+    stop_after["value"] = None
+    recorded_steps.clear()
+    resume_artifacts = types.SimpleNamespace(checkpoint_path=checkpoint_dir)
+    trainer_second = pyine.apps.trainers.hf_trainer.train(
+        datamodule=datamodule,
+        config=config_second,
+        runtime=runtime,
+        resume_artifacts=resume_artifacts,
+    )
+    assert trainer_second.state.global_step == 2
+    assert recorded_steps and recorded_steps[0] == 2
+    assert (output_dir / "checkpoint-2").is_dir()
