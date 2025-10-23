@@ -87,11 +87,11 @@ def train(
         The instantiated trainer object containing a model that can be used for predictions.
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
-    logging.info("instantiating model and tokenizer...")
+    logger.info("instantiating model and tokenizer...")
     model = config.get_model()
     tokenizer = config.get_tokenizer()
 
-    logging.info("preparing train messages dataset...")
+    logger.info("preparing train messages dataset...")
     train_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -100,7 +100,7 @@ def train(
         for subset_name in config.datamodule_config.train_subset_names
     ]
     train_ds = train_ds[0] if len(train_ds) == 1 else datasets.concatenate_datasets(train_ds)
-    logging.info("preparing validation messages dataset...")
+    logger.info("preparing validation messages dataset...")
     valid_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -111,8 +111,6 @@ def train(
     ]
     valid_ds = valid_ds[0] if len(valid_ds) == 1 else datasets.concatenate_datasets(valid_ds)
 
-    # use some of the dataloader workers for dataset.map to parallelize tokenization
-    num_proc = max(1, config.training_args_config.dataloader_num_workers // 2)
     # convert conversation-style rows into flat, tokenized examples for training/valid
     model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
     logger.info(f"effective max_seq_len={model_max_seq_len}")
@@ -120,13 +118,13 @@ def train(
         convo_ds=train_ds,
         tokenizer=tokenizer,
         max_seq_len=model_max_seq_len,
-        num_proc=num_proc,
+        num_proc=config.training_args_config.dataloader_num_workers,
     )
     valid_ds = pyine.utils.transformers.prepare_examples_from_conversations(
         convo_ds=valid_ds,
         tokenizer=tokenizer,
         max_seq_len=model_max_seq_len,
-        num_proc=num_proc,
+        num_proc=config.training_args_config.dataloader_num_workers,
         keep_extra_fields=["sample_data"],  # for category-wise evals below
     )
     # the collator pads to fixed length and masks labels for prompt tokens

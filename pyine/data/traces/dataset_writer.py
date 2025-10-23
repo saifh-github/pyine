@@ -1043,7 +1043,7 @@ def write_dataset(
             if config.max_output_traces is not None and written_outputs >= config.max_output_traces:
                 break  # if we already reached our target output dataset size, we're done
     except pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS as e:
-        logging.warning("writing process interrupted")
+        logger.warning("writing process interrupted")
         raise e
     finally:
         log(f"done; wrote {written_outputs} outputs to LMDB dataset at: {writer.path}")

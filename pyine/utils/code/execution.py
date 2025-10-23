@@ -374,7 +374,7 @@ def _resolve_entrypoint_from_namespace(
             try:
                 current = current()  # create a fresh instance to expose nested attributes
             except Exception:  # instantiation can fail for classes requiring args or having side effects
-                logging.debug(  # log the failure without interrupting resolution
+                logger.debug(  # log the failure without interrupting resolution
                     "failed to instantiate %s while resolving entrypoint %s",
                     candidate,
                     entrypoint_name,
@@ -385,7 +385,7 @@ def _resolve_entrypoint_from_namespace(
             instance = parent()  # instantiate the class again to obtain a bound method
             return getattr(instance, segments[-1])  # fetch the attribute so python binds self automatically
         except Exception:  # instantiation may fail, in which case fall back to the raw function
-            logging.debug(
+            logger.debug(
                 "failed to bind method %s on %s while resolving entrypoint %s",
                 segments[-1],
                 parent,
