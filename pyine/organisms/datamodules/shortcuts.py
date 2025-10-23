@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc
 import itertools
 import logging
 import typing
@@ -120,23 +121,28 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
             for subset_name, traces_meta in subset_traces_meta.items():
                 tidxs_to_sids = {tidx: str(tm.solution_id) for tidx, tm in enumerate(traces_meta)}
                 solution_ids = list(set(tidxs_to_sids.values()))
-                if len(solution_ids) > self.config.max_solution_count:
-                    # if we have more solutions than requested, pick a random subset of the available ones
-                    picked_solution_ids = rng.choice(
-                        solution_ids,
-                        size=self.config.max_solution_count,
-                        replace=False,
-                    )
-                    # find the associated traces for all picked solutions
-                    picked_trace_meta_idxs = [
-                        trace_meta_idx
-                        for trace_meta_idx, solution_id in tidxs_to_sids.items()
-                        if solution_id in picked_solution_ids
-                    ]
-                    subset_traces_meta[subset_name] = [traces_meta[idx] for idx in picked_trace_meta_idxs]
-                    # (also put the leftovers back into the unassigned list)
-                    unassigned_idxs = [idx for idx in tidxs_to_sids if idx not in picked_trace_meta_idxs]
-                    unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
+                if isinstance(self.config.max_solution_count, int):
+                    max_solution_count = self.config.max_solution_count
+                else:
+                    assert isinstance(self.config.max_solution_count, collections.abc.Mapping)
+                    if subset_name not in self.config.max_solution_count:
+                        continue
+                    max_solution_count = self.config.max_solution_count[subset_name]
+                assert max_solution_count > 0, "max solution count must be positive"
+                if len(solution_ids) <= max_solution_count:
+                    continue
+                # if we have more solutions than requested, pick a random subset of the available ones
+                picked_solution_ids = rng.choice(solution_ids, size=max_solution_count, replace=False)
+                # find the associated traces for all picked solutions
+                picked_trace_meta_idxs = [
+                    trace_meta_idx
+                    for trace_meta_idx, solution_id in tidxs_to_sids.items()
+                    if solution_id in picked_solution_ids
+                ]
+                subset_traces_meta[subset_name] = [traces_meta[idx] for idx in picked_trace_meta_idxs]
+                # (also put the leftovers back into the unassigned list)
+                unassigned_idxs = [idx for idx in tidxs_to_sids if idx not in picked_trace_meta_idxs]
+                unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
 
     # TODO: if we create more data modules that are based on trace datasets, add a common interf for metadata stuff
 

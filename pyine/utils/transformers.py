@@ -175,7 +175,7 @@ def prepare_generation_prompts_from_dataset(
     max_seq_len: int | None,
     prompt_text_key: str = "text",
     keep_extra_fields: list[str] | bool | None = None,
-    keep_in_memory: bool = True,
+    keep_in_memory: bool = False,
 ) -> hf_datasets.Dataset:
     """Prepares and returns a dataset of encoded and generation-ready prompts.
 
@@ -314,7 +314,7 @@ def prepare_examples_from_conversations(
     num_proc: int,
     messages_key: str = "messages",
     keep_extra_fields: list[str] | bool | None = None,
-    keep_in_memory: bool = True,
+    keep_in_memory: bool = False,
 ) -> hf_datasets.Dataset:
     """Flattens conversations into tokenizer-encoded (history -> assistant) training examples.
 

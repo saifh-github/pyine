@@ -97,10 +97,10 @@ def _get_default_sample_builder_selection_config() -> dict[str, typing.Any]:
     return {  # SampleSelectionConfig
         "choice_strategy": "random",
         "input_type_prob_map": {
-            "original": 0.5,
-            "hinted": 0.25,
+            "original": 0.75,
+            "hinted": 0.05,
             "stubbed": 0.1,
-            "obfuscated_hinted": 0.1,
+            "obfuscated_hinted": 0.05,
             "obfuscated": 0.05,
         },
         "fallback_to_orig": True,
@@ -158,12 +158,14 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 
-    max_solution_count: int | None = None
-    """Maximum number of solutions to load across all data subsets (used to do quick test runs).
+    max_solution_count: int | dict[pyine.data.datamodule.SubsetNameType, int] | None = None
+    """Maximum number of solutions to load across specific or all data subsets (used to do quick test runs).
 
-    If None, all solutions (and their traces) will be loaded; this is the default behavior. If an
-    integer is specified, that many solutions will be randomly picked for each subset. The traces
-    for those solutions will be kept, and all other traces will be unassigned from the subsets.
+    If None, all solutions (and their traces) will be loaded; this is the default behavior. If an integer is
+    specified, that many solutions will be randomly picked for each subset. The traces for those solutions
+    will be kept, and all other traces will be unassigned from the subsets. If a dictionary is specified, it
+    is expected to map subset names to the desired number of solutions to load for that subset. If a subset
+    that exists does not have a corresponding entry in the dictionary, no maximum count will be enforced.
     """
     split_file_path: pathlib.Path  # must be specified!
     """Path to the file containing the split data for the full dataset.
@@ -469,6 +471,23 @@ def _get_taco_configs(
                     "split_file_path": taco_split_path,
                     # -------------
                     "builds_bases": (datamodule_base_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
+                name="TACO_10s10t_v1_part1to4",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset consisting of parts 1 to 4 (of 26, so about 15%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a small subset that can be useful for medium-sized"
+                    "experiments, and should be quite representative of the full dataset's distribution."
+                ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths[0:4],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
                 },
             )
         )

@@ -528,7 +528,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Configuration of the prompt to use for the conversation datamodule; given to the prompt manager."""
     keep_generated_datasets_in_memory: bool = True
     """Defines whether generated datasets should be kept in memory."""
-    message_generator_num_workers: int = 6
+    message_generator_num_workers: int = 4
     """Defines the number of workers to use when generating message datasets."""
     use_local_dataset_cache: bool = True
     """Whether to always try to save/load datasets from the local cache or not."""

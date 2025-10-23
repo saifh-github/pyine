@@ -87,10 +87,11 @@ def train(
         The instantiated trainer object containing a model that can be used for predictions.
     """
     assert config.training_args_config.do_train, "do_train must be True for training"
-
+    logging.info("instantiating model and tokenizer...")
     model = config.get_model()
     tokenizer = config.get_tokenizer()
 
+    logging.info("preparing train messages dataset...")
     train_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -99,6 +100,7 @@ def train(
         for subset_name in config.datamodule_config.train_subset_names
     ]
     train_ds = train_ds[0] if len(train_ds) == 1 else datasets.concatenate_datasets(train_ds)
+    logging.info("preparing validation messages dataset...")
     valid_ds = [
         datamodule.get_hf_messages_dataset(
             subset_name=subset_name,
@@ -159,7 +161,7 @@ def train(
         train_dataset=train_ds,
         eval_dataset=valid_ds,
         processing_class=tokenizer,
-        data_collator=typing.cast("transformers.DataCollator", collator),
+        data_collator=collator,
         compute_metrics=eval_metrics_callback,
         callbacks=[milestone_logger, eval_metrics_callback],
     )
