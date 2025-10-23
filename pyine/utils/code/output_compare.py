@@ -512,10 +512,7 @@ def get_llm_grading_chain_config(
 ) -> LLMGradingChainBuildConfig:
     """Returns a prompt chain config for LLM-based grading of code execution outputs."""
     if with_retry_config == "auto":
-        if with_reasoning:
-            with_retry_config = pyine.utils.langchain.get_default_structured_output_chain_retry_config()
-        else:
-            with_retry_config = None  # no retry at chain level, rely solely on LLM provider retry config
+        with_retry_config = pyine.utils.langchain.get_default_structured_output_chain_retry_config()
     prompt = get_llm_grading_prompt_config(with_reasoning=with_reasoning)
     return LLMGradingChainBuildConfig(
         prompt=prompt,
