@@ -142,7 +142,6 @@ def train(
     logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
     eval_metrics_callback = pyine.evals.utils.build_category_wise_compute_metrics_fn(
         data_sample_categories=valid_sample_categories,
-        metrics_prefix="eval",
         log_fn=logger.info,
     )
     training_args_dict = config.training_args_config.model_dump()

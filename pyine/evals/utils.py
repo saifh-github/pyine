@@ -264,7 +264,7 @@ def parse_token_usage_from_response(
 
 def print_metrics(
     metrics: MetricsDictType,
-    subset: str,
+    subset: str | None = None,
     logger: typing.Callable[[str], typing.Any] | None = None,
 ) -> None:
     """Helper that prints the given metrics using the provided callable logger (or stdout)."""
@@ -277,7 +277,7 @@ def print_metrics(
         else:
             eval_output_strs.append(f"\t{key}: {val}")
     eval_output_str = "\n".join(eval_output_strs)
-    output_str = f"{subset} metrics:\n{eval_output_str}"
+    output_str = f"metrics:\n{eval_output_str}" if subset is None else f"{subset} metrics:\n{eval_output_str}"
     if logger is None:
         print(output_str)
     else:
@@ -296,13 +296,11 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
     def __init__(
         self,
         data_sample_categories: list[list[str]],
-        metrics_prefix: str,
         ignore_index: int = pyine.utils.transformers.default_ignore_index,
         log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
     ) -> None:
         """Initialize the callback."""
         self.data_sample_categories = data_sample_categories
-        self.metrics_prefix = metrics_prefix
         self.ignore_index = ignore_index
         self._log_fn = log_fn
         self._expected_examples = len(data_sample_categories)
@@ -386,8 +384,8 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
             if count <= 0:
                 continue
             loss_sum = self._category_loss_sums[category]
-            metrics[f"{self.metrics_prefix}/{category}/loss"] = loss_sum / count
-            metrics[f"{self.metrics_prefix}/{category}/count"] = count
+            metrics[f"{category}/loss"] = loss_sum / count
+            metrics[f"{category}/count"] = count
         return metrics
 
     def _log_metrics(
@@ -397,11 +395,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
         """Log metrics to stdout/logger."""
         if not metrics:
             return
-        print_metrics(
-            metrics=metrics,
-            subset=self.metrics_prefix,
-            logger=self._log_fn,
-        )
+        print_metrics(metrics=metrics, logger=self._log_fn)
 
     def __call__(
         self,
@@ -453,7 +447,6 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
 
 def build_category_wise_compute_metrics_fn(
     data_sample_categories: list[list[str]],
-    metrics_prefix: str,
     ignore_index: int = pyine.utils.transformers.default_ignore_index,
     log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
 ) -> CategoryWiseMetricsCallback:
@@ -466,7 +459,6 @@ def build_category_wise_compute_metrics_fn(
     """
     return CategoryWiseMetricsCallback(
         data_sample_categories=data_sample_categories,
-        metrics_prefix=metrics_prefix,
         ignore_index=ignore_index,
         log_fn=log_fn,
     )

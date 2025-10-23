@@ -265,13 +265,13 @@ def test_train_configures_trainer_and_saves_artifacts(
         {
             "name": "train",
             "max_seq_len": 64,
-            "num_proc": 2,
+            "num_proc": 4,
             "keep_extra_fields": None,
         },
         {
             "name": "valid",
             "max_seq_len": 64,
-            "num_proc": 2,
+            "num_proc": 4,
             "keep_extra_fields": ["sample_data"],
         },
     ]
@@ -284,7 +284,6 @@ def test_train_configures_trainer_and_saves_artifacts(
     assert len(metrics_callbacks) == 1
     metrics_callback = metrics_callbacks[0]
     assert metrics_callback.data_sample_categories == [["bugfix"], [], ["refactor"]]
-    assert metrics_callback.metrics_prefix == "eval"
     assert trainer.compute_metrics is metrics_callback
     assert "sample_data" not in trainer.train_dataset.column_names
     assert "sample_data" in trainer.eval_dataset.column_names

@@ -103,7 +103,6 @@ def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
     categories = [["bugfix"], ["refactor"], ["bugfix", "refactor"]]
     callback = pyine.evals.utils.CategoryWiseMetricsCallback(
         data_sample_categories=categories,
-        metrics_prefix="eval",
         log_fn=lambda _msg: None,
     )
     logits_batch1 = np.zeros((2, 3, 4), dtype=np.float32)
@@ -154,8 +153,8 @@ def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
         expected: dict[str, float] = {}
         for category, loss_sum in sums.items():
             count = counts[category]
-            expected[f"eval/{category}/loss"] = loss_sum / count
-            expected[f"eval/{category}/count"] = count
+            expected[f"{category}/loss"] = loss_sum / count
+            expected[f"{category}/count"] = count
         return expected
 
     expected_metrics = _compute_expected_metrics()
