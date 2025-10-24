@@ -9,6 +9,8 @@ a couple are [Hydra](https://hydra.cc/docs/intro/)-integrated launchers (for con
 training/evaluation jobs). Below is a high-level tour with quick-start examples; for more detailed
 docs, refer to each app's docstring.
 
+@@@ TODO: start thinking about ddp-sweeps on short jobs
+
 ______________________________________________________________________
 
 Dataset preparation:
