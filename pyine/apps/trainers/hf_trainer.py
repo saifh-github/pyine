@@ -143,6 +143,7 @@ def train(
     eval_metrics_callback = pyine.evals.utils.build_category_wise_compute_metrics_fn(
         data_sample_categories=valid_sample_categories,
         log_fn=logger.info,
+        runtime=runtime,
     )
     training_args_dict = config.training_args_config.model_dump()
     training_args_dict["batch_eval_metrics"] = True  # for compat w/ the eval_metrics_callback

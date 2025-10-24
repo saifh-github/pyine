@@ -1,4 +1,5 @@
 import logging
+import os
 import pathlib
 import typing
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeConfig(pydantic.BaseModel):
-    """Global application runtime configuration settings."""
+    """Global application runtime configuration settings, resolved by hydra apps on launch."""
 
     model_config = pydantic.ConfigDict(
         arbitrary_types_allowed=True,  # for e.g. wandb run object; it'll be excluded from dumps
@@ -40,7 +41,10 @@ class RuntimeConfig(pydantic.BaseModel):
     seed_workers: bool = pydantic.Field(False, frozen=True)
     """Whether to seed the workers for parallel execution."""
     metadata: dict[str, str] = pydantic.Field(
-        default_factory=lambda: pyine.utils.reprod.get_reprod_metadata(include_installed_packages=False)
+        default_factory=lambda: pyine.utils.reprod.get_reprod_metadata(
+            include_installed_packages=False,  # would be too verbose in dumped dicts
+            with_hydra_info=False,  # available directly via computed props below
+        )
     )
     """Reproducibility metadata."""
     dry_run: bool = pydantic.Field(False, frozen=True)
@@ -91,6 +95,14 @@ class RuntimeConfig(pydantic.BaseModel):
             return None
         return self.wandb_run.url
 
+    @pydantic.computed_field
+    @property
+    def wandb_run_dir(self) -> pathlib.Path | None:
+        """Directory of the associated W&B run (if wandb logging is enabled)."""
+        if self.wandb_run is None:
+            return None
+        return pathlib.Path(self.wandb_run.dir)
+
     def init_wandb(
         self,
         **init_kwargs: typing.Any,
@@ -108,6 +120,7 @@ class RuntimeConfig(pydantic.BaseModel):
             "tags": sorted(set(self.tags)) if self.tags else None,
             "group": self.run_group,
             "job_type": self.app_name,
+            "dir": self.output_dir_path / "wandb",
             # TODO: could set run id based on e.g. slurm id here if needed
         }
         default_kwargs.update(init_kwargs)
@@ -147,6 +160,42 @@ class RuntimeConfig(pydantic.BaseModel):
         existing_tags.append(tag)
         wandb_run_obj.tags = tuple(sorted(set(existing_tags)))
         logger.info(f"added tag '{tag}' to wandb run id: {self.wandb_run_id}")
+
+    @pydantic.computed_field
+    @property
+    def hydra_job_name(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_JOB_NAME")
+
+    @pydantic.computed_field
+    @property
+    def hydra_job_num(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_JOB_NUM")
+
+    @pydantic.computed_field
+    @property
+    def hydra_parent_job_name(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_PARENT_JOB_NAME")
+
+    @pydantic.computed_field
+    @property
+    def hydra_parent_job_num(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_PARENT_JOB_NUM")
+
+    @pydantic.computed_field
+    @property
+    def hydra_sweep_id(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_SWEEP_ID")
+
+    @pydantic.computed_field
+    @property
+    def hydra_stack_trace_depth(self) -> str | None:
+        """Returns the Hydra job name."""
+        return os.environ.get("HYDRA_STACK_TRACE_DEPTH")
 
     def finalize(self) -> None:
         """Finalizes the run by e.g. closing the wandb run if one exists."""

@@ -163,15 +163,15 @@ async def main(
     if config.use_wandb_logging:
         if runtime is None:
             raise RuntimeError("runtime config must be provided when logging to wandb")
-        wandb_run_id = runtime.wandb_run_id
-        if wandb_run_id is None:
+        if runtime.wandb_run_id is None:
             raise RuntimeError("wandb run id must be available when logging to wandb")
         if getattr(runtime.wandb_run, "_is_finished", True):
             # the openai integration 'finalized' the run; re-open it to log the last few metrics/summaries
             runtime.wandb_run = wandb.init(
                 project=runtime.wandb_run_project,
                 entity=runtime.wandb_run_entity,
-                id=wandb_run_id,
+                id=runtime.wandb_run_id,
+                dir=runtime.wandb_run_dir,
                 resume="must",
             )
         runtime.wandb_run.summary.update({"model_name": model_name})  # type: ignore[reportUnknownMemberType]

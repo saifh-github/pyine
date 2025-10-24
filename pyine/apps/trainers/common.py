@@ -9,7 +9,6 @@ import typing
 
 import pydantic
 import transformers
-import wandb
 
 import pyine.configs.schemas
 import pyine.data.datamodule
@@ -288,6 +287,7 @@ def prepare_resume_artifacts(
                 continue
             target_path = runtime.output_dir_path / target_name
             shutil.copy2(source_path, target_path)
+    # @@@@ TODO: add warnings if resuming from different commit/seed?
     return resume_artifacts
 
 
@@ -389,22 +389,17 @@ async def evaluate_model(
     if config.use_wandb_logging and evaluation_results:
         if runtime is None:
             raise RuntimeError("runtime configuration with wandb run must be provided when logging to wandb")
-        wandb_run_id = runtime.wandb_run_id
-        if wandb_run_id is None:
-            raise RuntimeError("wandb run ID is not set; should have been initialized already")
-        wandb_run = runtime.wandb_run
-        if wandb_run is None or not hasattr(wandb_run, "log"):
-            wandb_run = wandb.init(id=wandb_run_id, resume="must")
-            runtime.wandb_run = wandb_run
-        logger.info(f"logging evaluation results to wandb run id: {wandb_run_id}...")
+        if runtime.wandb_run is None:
+            raise RuntimeError("wandb run must be initialized before logging to wandb")
+        logger.info(f"logging evaluation results to wandb run id: {runtime.wandb_run_id}...")
         config.evals_config.log_metrics(
-            wandb_run=wandb_run,
+            wandb_run=runtime.wandb_run,
             results_by_subset=evaluation_results,
         )
         for subset_name, subset_result in evaluation_results.items():
-            logger.info(f"logging predictions for subset '{subset_name}' to wandb run id: {wandb_run_id}...")
+            logger.info(f"logging predictions for {subset_name} subset to wandb run id: {runtime.wandb_run_id}...")
             config.evals_config.log_predictions(
-                wandb_run=wandb_run,
+                wandb_run=runtime.wandb_run,
                 subset_name=subset_name,
                 subset_results=subset_result,
             )

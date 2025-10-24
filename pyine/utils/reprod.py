@@ -48,6 +48,24 @@ def get_platform_name() -> str:
     return str(platform.uname())
 
 
+def get_hydra_runtime_metadata() -> dict[str, str]:
+    """Collect Hydra-related runtime metadata from environment variables."""
+    env_to_key = {
+        "HYDRA_JOB_NAME": "hydra_job_name",
+        "HYDRA_JOB_NUM": "hydra_job_num",
+        "HYDRA_PARENT_JOB_NAME": "hydra_parent_job_name",
+        "HYDRA_PARENT_JOB_NUM": "hydra_parent_job_num",
+        "HYDRA_SWEEP_ID": "hydra_sweep_id",
+        "HYDRA_STACK_TRACE_DEPTH": "hydra_stack_trace_depth",
+    }
+    metadata: dict[str, str] = {}
+    for env_key, meta_key in env_to_key.items():
+        value = os.environ.get(env_key)
+        if value:
+            metadata[meta_key] = value
+    return metadata
+
+
 def get_timestamp(time_since_epoch: float | None = None) -> str:
     """Returns a print-friendly timestamp (year, month, day, hour, minute, second) for logs."""
     if time_since_epoch is None:
@@ -247,6 +265,7 @@ def get_reprod_metadata(
     include_installed_packages: bool = True,
     with_gpu_info: bool = False,
     with_distrib_info: bool = False,
+    with_hydra_info: bool = True,
 ) -> dict[str, str]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     import pyine.utils.filesystem
@@ -294,6 +313,8 @@ def get_reprod_metadata(
                 "world_size": get_failsafe_worldsize(),
             }
         )
+    if with_hydra_info:
+        reprod_metadata["hydra"] = get_hydra_runtime_metadata()
     return reprod_metadata
 
 
@@ -381,6 +402,11 @@ def entrypoint_setup(
             wandb_init_kwargs = dict(wandb_init_kwargs or {})
             wandb_init_kwargs.setdefault("config", app_config_dict)
             runtime_config.init_wandb(**wandb_init_kwargs)
+            hydra_metadata = runtime_config.metadata.get("hydra")
+            if hydra_metadata:
+                runtime_config.wandb_run.summary.update(  # type: ignore[reportUnknownMemberType]
+                    {f"hydra/{key}": value for key, value in hydra_metadata.items()}
+                )
         # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
         logged_config_file_paths = log_configs(runtime_config, app_config_dict)
         if use_wandb_logging:

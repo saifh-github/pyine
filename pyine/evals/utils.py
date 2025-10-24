@@ -7,7 +7,9 @@ import langchain_core.runnables
 import torch
 import transformers
 import transformers.trainer_callback
+import wandb
 
+import pyine.configs.schemas
 import pyine.utils.transformers
 
 type MetricsDictType = dict[str, float | int | str]
@@ -388,6 +390,23 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
             metrics[f"{category}/count"] = count
         return metrics
 
+    def define_metrics(
+        self,
+        wandb_run: wandb.Run,
+    ) -> None:
+        """Define metrics for wandb logging."""
+        known_categories = {cat for sample_cats in self.data_sample_categories for cat in sample_cats}
+        for category in known_categories:
+            wandb_run.define_metric(  # type: ignore[reportUnknownMemberType]
+                f"eval/{category}/loss",
+                summary="min",
+            )
+            wandb_run.define_metric(  # type: ignore[reportUnknownMemberType]
+                f"eval/{category}/count",  # is actually static, that's why we hide it
+                hidden=True,
+                summary="none",
+            )
+
     def _log_metrics(
         self,
         metrics: MetricsDictType,
@@ -449,6 +468,7 @@ def build_category_wise_compute_metrics_fn(
     data_sample_categories: list[list[str]],
     ignore_index: int = pyine.utils.transformers.default_ignore_index,
     log_fn: collections.abc.Callable[[str], typing.Any] | None = None,
+    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
 ) -> CategoryWiseMetricsCallback:
     """Build a streaming evaluation callback for category-wise metrics.
 
@@ -457,8 +477,11 @@ def build_category_wise_compute_metrics_fn(
     must be passed to the Trainer's `compute_metrics` argument as well as inside its `callbacks`
     list.
     """
-    return CategoryWiseMetricsCallback(
+    callback = CategoryWiseMetricsCallback(
         data_sample_categories=data_sample_categories,
         ignore_index=ignore_index,
         log_fn=log_fn,
     )
+    if runtime is not None and runtime.wandb_run is not None:
+        callback.define_metrics(runtime.wandb_run)
+    return callback
