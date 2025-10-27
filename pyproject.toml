@@ -85,7 +85,7 @@ markers = [
 ]
 filterwarnings = [
     # until hydra-zen fixes their deprecation warnings, we need this (currently using 0.15.0)
-    'ignore:The `__fields__` attribute is deprecated, use `model_fields` instead\.:pydantic.warnings.PydanticDeprecatedSince20:hydra_zen\.structured_configs\._implementations',
+    'ignore:The `__fields__` attribute is deprecated, use the `model_fields` class property instead\.:pydantic.warnings.PydanticDeprecatedSince20:hydra_zen\.structured_configs\._implementations',
 ]
 
 [tool.coverage.run]
