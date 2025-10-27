@@ -18,12 +18,16 @@ type InvocableModelChain = langchain_core.runnables.Runnable[typing.Any, typing.
 """Type used to represent invocable model chains (i.e. objects with an 'invoke' method)."""
 type TokenUsageMapping = collections.abc.Mapping[str, typing.Any]
 """Type used for mapping-like containers that expose token usage information."""
-
-
-UnknownTokenCount = typing.Literal["unknown"]
-"""Type used to refer to token counts that cannot be deduced from an LLM response."""
-TokenCount = int | UnknownTokenCount
+type TokenCount = int | typing.Literal["unknown"]
 """Type used to represent token counts, either as an integer or the literal string "unknown"."""
+TokenType = typing.Literal[
+    "total_tokens",
+    "prompt_tokens",
+    "cached_tokens",
+    "reasoning_tokens",
+    "completion_tokens",
+]
+"""Type used to represent token counts that can be used as keys in a MetricsDictType."""
 
 
 @dataclasses.dataclass
@@ -62,11 +66,10 @@ class TokenUsageInfo:
         if other == self.get_default():
             return self
         return TokenUsageInfo(
-            total_tokens=self._combine_field(self.total_tokens, other.total_tokens, "total_tokens"),
-            prompt_tokens=self._combine_field(self.prompt_tokens, other.prompt_tokens, "prompt_tokens"),
-            cached_tokens=self._combine_field(self.cached_tokens, other.cached_tokens, "cached_tokens"),
-            reasoning_tokens=self._combine_field(self.reasoning_tokens, other.reasoning_tokens, "reasoning_tokens"),
-            completion_tokens=self._combine_field(self.completion_tokens, other.completion_tokens, "completion_tokens"),
+            **typing.cast(
+                "dict[str, TokenCount]",
+                {t: self._combine_field(getattr(self, t), getattr(other, t), t) for t in typing.get_args(TokenType)},
+            )
         )
 
     def __iadd__(self, other: typing.Any) -> "TokenUsageInfo":
@@ -74,52 +77,30 @@ class TokenUsageInfo:
         if other == self.get_default():
             return self
         if self == self.get_default():
-            self.total_tokens = other.total_tokens
-            self.prompt_tokens = other.prompt_tokens
-            self.cached_tokens = other.cached_tokens
-            self.reasoning_tokens = other.reasoning_tokens
-            self.completion_tokens = other.completion_tokens
+            for token_type in typing.get_args(TokenType):
+                setattr(self, token_type, getattr(other, token_type))
             return self
-        self.total_tokens = self._combine_field(self.total_tokens, other.total_tokens, "total_tokens")
-        self.prompt_tokens = self._combine_field(self.prompt_tokens, other.prompt_tokens, "prompt_tokens")
-        self.cached_tokens = self._combine_field(self.cached_tokens, other.cached_tokens, "cached_tokens")
-        self.reasoning_tokens = self._combine_field(self.reasoning_tokens, other.reasoning_tokens, "reasoning_tokens")
-        self.completion_tokens = self._combine_field(
-            self.completion_tokens, other.completion_tokens, "completion_tokens"
-        )
+        for token_type in typing.get_args(TokenType):
+            setattr(
+                self,
+                token_type,
+                self._combine_field(getattr(self, token_type), getattr(other, token_type), token_type),
+            )
         return self
 
     @classmethod
     def get_default(cls) -> "TokenUsageInfo":
         """Returns a TokenUsageInfo object with all fields set to unknown."""
-        return cls(
-            total_tokens="unknown",
-            prompt_tokens="unknown",
-            cached_tokens="unknown",
-            reasoning_tokens="unknown",
-            completion_tokens="unknown",
-        )
+        return cls(**typing.cast("dict[str, TokenCount]", dict.fromkeys(typing.get_args(TokenType), "unknown")))
 
     @staticmethod
     def get_metric_names() -> list[str]:
         """Returns a list of metric names supported by this evaluator."""
-        return [
-            "total_tokens",
-            "prompt_tokens",
-            "cached_tokens",
-            "reasoning_tokens",
-            "completion_tokens",
-        ]
+        return list(typing.get_args(TokenType))
 
     def asdict(self) -> dict[str, TokenCount]:
         """Returns a dictionary representation of the TokenUsageInfo object."""
-        return {
-            "total_tokens": self.total_tokens,
-            "prompt_tokens": self.prompt_tokens,
-            "cached_tokens": self.cached_tokens,
-            "reasoning_tokens": self.reasoning_tokens,
-            "completion_tokens": self.completion_tokens,
-        }
+        return {t: getattr(self, t) for t in typing.get_args(TokenType)}
 
 
 def parse_token_usage_from_response(
@@ -249,16 +230,7 @@ def parse_token_usage_from_response(
     completion_kws = ["completion_tokens", "output_tokens"]
     if (completion := _get_first_available(usage, completion_kws)) is not None:
         result.completion_tokens = completion
-    any_known = any(
-        isinstance(getattr(result, attr), int)
-        for attr in (
-            "total_tokens",
-            "prompt_tokens",
-            "cached_tokens",
-            "reasoning_tokens",
-            "completion_tokens",
-        )
-    )
+    any_known = any(isinstance(getattr(result, token_type), int) for token_type in typing.get_args(TokenType))
     if not any_known:
         raise ValueError("could not deduce token usage information from the provided response")
     return result

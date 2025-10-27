@@ -161,6 +161,27 @@ class RuntimeConfig(pydantic.BaseModel):
         wandb_run_obj.tags = tuple(sorted(set(existing_tags)))
         logger.info(f"added tag '{tag}' to wandb run id: {self.wandb_run_id}")
 
+    def is_wandb_run_finished(self) -> bool:
+        """Returns whether the wandb run is finished."""
+        if not self.wandb_run_initialized:
+            raise RuntimeError("wandb run is not initialized, cannot check for status")
+        # wandb does not expose a nice/clean way to check if a run is finalized; this one is brittle...
+        return getattr(self.wandb_run, "_is_finished", True)
+
+    def resume_wandb_run_if_needed(self, resume_kwargs: dict[str, typing.Any] | None = None) -> None:
+        """Resumes a previously initialized and 'finished' wandb run if needed."""
+        if not self.is_wandb_run_finished():
+            return
+        base_reinit_args: dict[str, typing.Any] = {
+            "project": self.wandb_run_project,
+            "entity": self.wandb_run_entity,
+            "id": self.wandb_run_id,
+            "dir": self.wandb_run_dir,
+            "resume": "must",
+        }
+        base_reinit_args.update(resume_kwargs or {})
+        self.wandb_run = wandb.init(**base_reinit_args)
+
     @pydantic.computed_field
     @property
     def hydra_job_name(self) -> str | None:

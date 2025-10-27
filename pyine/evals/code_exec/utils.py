@@ -62,8 +62,10 @@ class SampleEval:
             obj._llm_score = score
 
 
-AccuracyType = typing.Literal["hard", "soft", "grader"]
+type AccuracyType = typing.Literal["accuracy_hard", "accuracy_soft", "accuracy_grader"]
 """Type of accuracy to compute (hard, soft, or grader-based)."""
+type AccuracyDictType = dict[AccuracyType, float]
+"""Type of accuracy dictionary."""
 
 
 class AgreementTable(typing.TypedDict):
@@ -409,7 +411,7 @@ class OutcomeEvaluator:
     @staticmethod
     def get_metric_names() -> list[str]:
         """Returns a list of metric names supported by this evaluator."""
-        return ["accuracy/hard", "accuracy/soft", "accuracy/grader"]
+        return list(typing.get_args(AccuracyType))
 
     async def compute_metrics(
         self,
@@ -419,11 +421,11 @@ class OutcomeEvaluator:
     ) -> pyine.evals.utils.MetricsDictType:
         """Computes and returns a dictionary of metrics."""
         output: pyine.evals.utils.MetricsDictType = {
-            "accuracy/hard": self.compute_hard_accuracy(identifier_selector, tags_filter_rule),
-            "accuracy/soft": self.compute_soft_accuracy(identifier_selector, tags_filter_rule),
+            "accuracy_hard": self.compute_hard_accuracy(identifier_selector, tags_filter_rule),
+            "accuracy_soft": self.compute_soft_accuracy(identifier_selector, tags_filter_rule),
         }
         if self.is_llm_grader_available():
-            output["accuracy/grader"] = await self.compute_grader_accuracy(
+            output["accuracy_grader"] = await self.compute_grader_accuracy(
                 score_threshold, identifier_selector, tags_filter_rule
             )
         return output

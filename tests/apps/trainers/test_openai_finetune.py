@@ -213,7 +213,9 @@ async def test_main_skip_fine_tuning_updates_wandb(
         use_wandb_logging=True,
         is_resuming=lambda: False,
     )
+    resume_sentry: list[bool] = []
     runtime = types.SimpleNamespace(
+        resume_wandb_run_if_needed=lambda: resume_sentry.append(True),
         wandb_run=_FakeRun(),
         wandb_run_id="run-1",
         wandb_run_entity="entity",
@@ -252,6 +254,7 @@ async def test_main_skip_fine_tuning_updates_wandb(
     )
     assert provider_calls[0]["model"] == "base-model"
     assert evaluate_calls and evaluate_calls[0]["model"] == "provider-model"
+    assert resume_sentry == [True]
     assert wandb_updates[-1] == {"model_name": "base-model"}
 
 

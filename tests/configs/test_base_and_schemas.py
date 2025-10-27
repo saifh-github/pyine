@@ -1,3 +1,4 @@
+import pathlib
 import types
 
 import pytest
@@ -73,7 +74,10 @@ def test_print_experiment_configs_lists_expected_sections(
     assert calls["render"] == [(experiment.config, {"config": "value"})]
 
 
-def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_config_wandb_flow(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     run_calls: list[dict[str, object]] = []
 
     class _FakeRun:
@@ -105,9 +109,12 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         "init",
         fake_wandb_init,
     )
+    output_dir1 = tmp_path / "output1"
+    output_dir1.mkdir(parents=True)
     runtime = pyine.configs.schemas.RuntimeConfig(
         exp_name="exp",
         run_name="run",
+        output_dir=str(output_dir1),
     )
     assert runtime.wandb_run is None
     assert runtime.wandb_run_id is None
@@ -125,9 +132,12 @@ def test_runtime_config_wandb_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert runtime.wandb_run_project is None
     assert runtime.wandb_run_url == "123"
     run_calls.clear()
+    output_dir2 = tmp_path / "output2"
+    output_dir2.mkdir(parents=True)
     runtime = pyine.configs.schemas.RuntimeConfig(
         exp_name="exp",
         run_name="run2",
+        output_dir=str(output_dir2),
     )
     _ = runtime.init_wandb(entity="ent", project="proj")
     assert run_calls and run_calls[0]["entity"] == "ent" and run_calls[0]["project"] == "proj"

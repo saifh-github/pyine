@@ -7,6 +7,7 @@ import pydantic
 import pytest
 
 import pyine.apps.trainers.common as trainer_common
+import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 
@@ -175,54 +176,6 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_evaluate_model_wandb_logging_reopens_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(trainer_common.pyine.evals.utils, "print_metrics", lambda *args, **kwargs: None)
-    replacement_run = types.SimpleNamespace(summary={}, logged=[])  # new run returned by wandb.init
-
-    def fake_wandb_init(**kwargs: typing.Any) -> types.SimpleNamespace:
-        replacement_run.log = lambda payload: replacement_run.logged.append(payload)
-        return replacement_run
-
-    monkeypatch.setattr(trainer_common.wandb, "init", fake_wandb_init)
-    result = FakeEvaluationResult(metrics={"acc": 0.77}, artifacts=["sample"])
-
-    async def fake_evaluate_runnable_model(
-        chain: typing.Any,
-        datamodule: DummyDatamodule,
-        eval_subset_name: str,
-        verbose: bool,
-    ) -> FakeEvaluationResult:
-        return result
-
-    evals_config = DummyEvalsConfig()
-    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
-    runtime = types.SimpleNamespace(
-        wandb_run=types.SimpleNamespace(summary={}),  # missing log attr triggers reopen
-        wandb_run_id="run-42",
-        finalize=lambda: None,
-    )
-    config = _build_app_config(
-        DummyDatamoduleConfig(eval_subset_names=["test"]),
-        use_wandb_logging=True,
-        evals_config=evals_config,
-    )
-    model = types.SimpleNamespace(invoke=lambda x: x)
-    results = await trainer_common.evaluate_model(
-        model=model,
-        tokenizer=None,
-        datamodule=DummyDatamodule(),
-        config=config,
-        runtime=runtime,
-    )
-    assert results["test"] is result
-    assert runtime.wandb_run is replacement_run
-    assert len(evals_config.log_metrics_calls) == 1
-    assert len(evals_config.log_predictions_calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_evaluate_model_requires_wandb_run_id() -> None:
     result = FakeEvaluationResult(metrics={"acc": 0.5}, artifacts=[])
 
@@ -238,7 +191,7 @@ async def test_evaluate_model_requires_wandb_run_id() -> None:
     evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
 
     runtime = types.SimpleNamespace(
-        wandb_run=types.SimpleNamespace(summary={}),
+        wandb_run=None,
         wandb_run_id=None,
         finalize=lambda: None,
     )

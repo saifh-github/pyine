@@ -215,8 +215,8 @@ async def test_real_llm_grade_scoring() -> None:
         tags=["hard"],
     )
     metrics = await evaluator.compute_metrics()
-    assert metrics["accuracy/hard"] == pytest.approx(0.5)
-    assert metrics["accuracy/soft"] == pytest.approx(0.5)
-    assert metrics["accuracy/grader"] >= 0.5
+    assert metrics["accuracy_hard"] == pytest.approx(0.5)
+    assert metrics["accuracy_soft"] == pytest.approx(0.5)
+    assert metrics["accuracy_grader"] >= 0.5
     agreement = await evaluator.compute_agreement_table()
     assert agreement["hard_vs_soft"] == pytest.approx(1.0)

@@ -346,10 +346,11 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     ) -> None:
         """Defines the evaluation metrics for the given wandb run."""
         for metric_name in pyine.evals.code_exec.utils.OutcomeEvaluator.get_metric_names():
+            assert metric_name.startswith("accuracy_")
             metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
             wandb_run.define_metric(
                 name=metric_name,
-                summary="max",  # outcome eval metrics are always max
+                summary="max",  # outcome eval metrics are always max here (i.e. accuracy_*)
                 step_metric="global_step",
             )  # noqa
         for metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():

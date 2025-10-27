@@ -165,15 +165,8 @@ async def main(
             raise RuntimeError("runtime config must be provided when logging to wandb")
         if runtime.wandb_run_id is None:
             raise RuntimeError("wandb run id must be available when logging to wandb")
-        if getattr(runtime.wandb_run, "_is_finished", True):
-            # the openai integration 'finalized' the run; re-open it to log the last few metrics/summaries
-            runtime.wandb_run = wandb.init(
-                project=runtime.wandb_run_project,
-                entity=runtime.wandb_run_entity,
-                id=runtime.wandb_run_id,
-                dir=runtime.wandb_run_dir,
-                resume="must",
-            )
+        # the openai integration 'finalizes' the run; re-open it to log the last few metrics/summaries
+        runtime.resume_wandb_run_if_needed()
         runtime.wandb_run.summary.update({"model_name": model_name})  # type: ignore[reportUnknownMemberType]
 
     model_for_evals = pyine.utils.llm_providers.get_model_from_provider(

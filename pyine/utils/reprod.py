@@ -314,7 +314,7 @@ def get_reprod_metadata(
             }
         )
     if with_hydra_info:
-        reprod_metadata["hydra"] = get_hydra_runtime_metadata()
+        reprod_metadata["hydra"] = json.dumps(get_hydra_runtime_metadata())
     return reprod_metadata
 
 
@@ -404,8 +404,9 @@ def entrypoint_setup(
             runtime_config.init_wandb(**wandb_init_kwargs)
             hydra_metadata = runtime_config.metadata.get("hydra")
             if hydra_metadata:
+                hydra_dict = typing.cast("dict[str, str]", json.loads(hydra_metadata))
                 runtime_config.wandb_run.summary.update(  # type: ignore[reportUnknownMemberType]
-                    {f"hydra/{key}": value for key, value in hydra_metadata.items()}
+                    {f"hydra/{key}": value for key, value in hydra_dict.items()}
                 )
         # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
         logged_config_file_paths = log_configs(runtime_config, app_config_dict)
