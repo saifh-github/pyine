@@ -86,6 +86,42 @@ def get_openai_client_configs(
     return [default_openai_client_config, timeout300s_openai_client_config]
 
 
+def get_sweeper_configs(
+    group: str = "hydra/sweeper",
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Generates and returns sweeper configs for hydra zen storage."""
+    import hydra_plugins.hydra_wandb_sweeper.config as sweeper_config
+
+    base_wandb_sweep_config = pyine.configs.utils.make_config_description(
+        sweeper_config.WandbConfig,
+        name="wandb_sweep_base",
+        group=f"{group}/wandb_sweep_config",
+        description="Base wandb sweep config combining plugin defaults with runtime args.",
+        config={
+            "name": "${runtime.run_name}-sweep",
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    base_wandb_sweeper_config = pyine.configs.utils.make_config_description(
+        sweeper_config.WandbSweeperConf,
+        name="wandb_sweeper_base",
+        group=group,
+        description="Base wandb sweeper configuration combining plugin defaults with runtime args.",
+        config={
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
+                "_self_",
+                {"wandb_sweep_config": "wandb_sweep_base"},
+            ],
+        },
+    )
+    return [base_wandb_sweep_config, base_wandb_sweeper_config]
+
+
 def get_base_store_and_configs(
     app_name: str,
 ) -> tuple[hydra_zen.ZenStore, list[pyine.configs.schemas.ConfigDescription]]:
@@ -121,15 +157,15 @@ def get_base_store_and_configs(
             },
         )
     )
-    runtime_configs = get_hydra_runtime_configs()
-    for config in runtime_configs:
+    output_configs: list[pyine.configs.schemas.ConfigDescription] = [
+        *get_hydra_runtime_configs(),
+        *get_sweeper_configs(),
+        # ...add more here if needed (job callbacks? loggers? profilers?)
+    ]
+    for config in output_configs:
         if config.name is None:
             raise ValueError("config name must be defined before registration")
         store(config.config, name=config.name, group=config.group, package=config.package)
-
-    # ...add more here if needed (job callbacks? loggers? profilers?)
-
-    output_configs = runtime_configs  # add more here too
     return store, output_configs
 
 

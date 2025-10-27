@@ -237,7 +237,12 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     fake_dm = _FakeDataModule()
 
-    runtime = types.SimpleNamespace(wandb_run=object(), finalize=lambda: None)
+    runtime = types.SimpleNamespace(
+        wandb_run=types.SimpleNamespace(
+            define_metric=lambda *args, **kwargs: None,
+        ),
+        finalize=lambda: None,
+    )
     config = types.SimpleNamespace(
         training_args_config=_FakeTrainingArgsConfig(),
         datamodule_config=types.SimpleNamespace(

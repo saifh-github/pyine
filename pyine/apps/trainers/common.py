@@ -21,9 +21,6 @@ import pyine.utils.transformers
 logger = logging.getLogger(__name__)
 
 
-# @@@@@ TODO: start thinking about hyperparameter sweep impl
-
-
 class AppMainConfig(pydantic.BaseModel):
     """Trainer application main entrypoint configuration settings.
 

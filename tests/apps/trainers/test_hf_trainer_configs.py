@@ -46,3 +46,13 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
         config_name="hf_trainer",
         version_base=pyine.configs.base.target_hydra_version,
     )
+
+
+def test_register_hydra_configs_registers_sweepers(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
+    configs = pyine.apps.trainers.hf_trainer_configs.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
+    sweeper_configs = {(cfg.group, cfg.name) for cfg in configs if cfg.group == "hydra/sweeper"}
+    assert ("hydra/sweeper", "wandb_sweeper_base") in sweeper_configs
