@@ -98,7 +98,7 @@ def get_sweeper_configs(
         group=f"{group}/wandb_sweep_config",
         description="Base wandb sweep config combining plugin defaults with runtime args.",
         config={
-            "name": "${runtime.run_name}-sweep",
+            "name": "${runtime.exp_name}/sweep",
             # -------------
             "populate_full_signature": True,
             "hydra_convert": "object",
