@@ -1,5 +1,6 @@
 import logging
 import pathlib
+import shutil
 import typing
 
 import hydra.core.utils
@@ -82,7 +83,10 @@ class TestNonPrimaryRankCleanupCallback:
     ) -> None:
         monkeypatch.setenv("RANK", "1")
         config = build_sample_hydra_config(tmp_path)
-        callback = pyine.configs.callbacks.NonPrimaryRankCleanupCallback()
+        callback = pyine.configs.callbacks.NonPrimaryRankCleanupCallback(
+            remove_temp_dir_on_exit=True,
+            disable_disk_logging=True,
+        )
         callback.on_run_start(config=config)
         run_dir_value = typing.cast("str", omegaconf.OmegaConf.select(config, "hydra.run.dir"))
         assert run_dir_value is not None
@@ -120,6 +124,49 @@ class TestNonPrimaryRankCleanupCallback:
         monkeypatch.delenv("RANK", raising=False)
         monkeypatch.setenv("LOCAL_RANK", "2")
         config = build_sample_hydra_config(tmp_path)
-        callback = pyine.configs.callbacks.NonPrimaryRankCleanupCallback()
+        callback = pyine.configs.callbacks.NonPrimaryRankCleanupCallback(
+            remove_temp_dir_on_exit=True,
+            disable_disk_logging=True,
+        )
         callback.on_run_start(config=config)
         assert omegaconf.OmegaConf.select(config, "hydra.job_logging") is None
+
+    def test_non_primary_rank_preserves_outputs_when_configured(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("RANK", "3")
+        config = build_sample_hydra_config(tmp_path)
+        original_output_subdir = omegaconf.OmegaConf.select(config, "hydra.output_subdir")
+        original_job_logging = omegaconf.OmegaConf.select(config, "hydra.job_logging")
+        callback = pyine.configs.callbacks.NonPrimaryRankCleanupCallback(
+            remove_temp_dir_on_exit=False,
+            disable_disk_logging=False,
+        )
+        callback.on_run_start(config=config)
+        run_dir_value = typing.cast("str", omegaconf.OmegaConf.select(config, "hydra.run.dir"))
+        run_dir_path = pathlib.Path(run_dir_value)
+        assert run_dir_path.exists()
+        assert omegaconf.OmegaConf.select(config, "hydra.output_subdir") == original_output_subdir
+        assert omegaconf.OmegaConf.select(config, "hydra.job_logging") == original_job_logging
+        with omegaconf.open_dict(config["hydra"]["runtime"]):
+            config["hydra"]["runtime"]["output_dir"] = str(run_dir_path)
+        run_dir_path.mkdir(parents=True, exist_ok=True)
+        (run_dir_path / "debug.txt").write_text("debug", encoding="utf-8")
+        root_logger = logging.getLogger()
+        original_handlers = list(root_logger.handlers)
+        try:
+            preexisting_handler = logging.FileHandler(run_dir_path / "kept.log")
+            root_logger.addHandler(preexisting_handler)
+            callback.on_job_start(
+                config=config,
+                task_function=lambda *args, **kwargs: None,
+            )
+            assert any(isinstance(handler, logging.FileHandler) for handler in root_logger.handlers)
+            job_return = hydra.core.utils.JobReturn()
+            callback.on_job_end(config=config, job_return=job_return)
+        finally:
+            root_logger.handlers = original_handlers
+        assert run_dir_path.exists()
+        shutil.rmtree(run_dir_path)

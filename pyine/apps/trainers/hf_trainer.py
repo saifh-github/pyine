@@ -20,6 +20,7 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.transformers
@@ -175,6 +176,7 @@ def train(
     time_delta_seconds = end_time - start_time
     time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
     logger.info(f"training finished in {time_delta_str}")
+    pyine.utils.distrib.barrier()
     return trainer
 
 
@@ -188,16 +190,21 @@ async def main(
         config: Configuration for the application; see `HFTrainerAppMainConfig` for details.
         runtime: Configuration for the runtime; available when launched via hydra.
     """
+    persist_runtime_artifacts = pyine.utils.distrib.is_main_process()
     resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
         config=config,
         runtime=runtime,
+        persist_to_runtime=persist_runtime_artifacts,
     )
     try:
+        use_wandb_logging = config.use_wandb_logging and persist_runtime_artifacts
+        wandb_init_kwargs = resume_artifacts.wandb_resume_kwargs if resume_artifacts and use_wandb_logging else None
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,
             main_config=config,
-            use_wandb_logging=config.use_wandb_logging,
-            wandb_init_kwargs=resume_artifacts.wandb_resume_kwargs if resume_artifacts else None,
+            use_wandb_logging=use_wandb_logging,
+            wandb_init_kwargs=wandb_init_kwargs,
+            persist_runtime_artifacts=persist_runtime_artifacts,
         )
     except pyine.utils.reprod.DryRunExit:
         return
@@ -239,16 +246,18 @@ async def main(
             tokenizer = config.get_tokenizer()
 
     if config.training_args_config.do_predict:
-        if runtime is not None and runtime.wandb_run is not None:
+        if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
             runtime.wandb_run.summary["model_name"] = model.config.name_or_path
-        await pyine.apps.trainers.common.evaluate_model(
-            model=model,
-            tokenizer=tokenizer,  # type: ignore[reportUnknownArgumentType]
-            datamodule=datamodule,
-            config=config,
-            runtime=runtime,
-        )
-    if runtime is not None:
+        if pyine.utils.distrib.is_main_process():
+            await pyine.apps.trainers.common.evaluate_model(
+                model=model,
+                tokenizer=tokenizer,  # type: ignore[reportUnknownArgumentType]
+                datamodule=datamodule,
+                config=config,
+                runtime=runtime,
+            )
+        pyine.utils.distrib.barrier()
+    if runtime is not None and pyine.utils.distrib.is_main_process():
         runtime.finalize()
 
 

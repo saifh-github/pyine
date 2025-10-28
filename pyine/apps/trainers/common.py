@@ -14,6 +14,7 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.utils.distrib
 import pyine.utils.langchain
 import pyine.utils.timers
 import pyine.utils.transformers
@@ -256,6 +257,8 @@ class ResumeArtifacts(pydantic.BaseModel):
 def prepare_resume_artifacts(
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
+    *,
+    persist_to_runtime: bool = True,
 ) -> ResumeArtifacts | None:
     """Prepares resume artifacts (if resuming is requested) and returns them.
 
@@ -270,7 +273,7 @@ def prepare_resume_artifacts(
         logger.debug(f"will resume wandb run id: {resume_artifacts.wandb_resume_kwargs['id']}")
     elif config.use_wandb_logging:
         logger.debug("will create a new wandb run for resumed training")
-    if runtime is not None:
+    if runtime is not None and persist_to_runtime:
         assert runtime.output_dir_path.is_dir(), "invalid runtime config output dir"
         runtime.metadata["resumed_from_run_dir"] = str(resume_artifacts.run_dir)
         runtime.metadata["resume_checkpoint_path"] = str(resume_artifacts.checkpoint_path)
@@ -305,7 +308,12 @@ def prepare_datamodule(
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     dm.prepare_data()
     dm.setup()
-    if config.use_wandb_logging:
+    if (
+        config.use_wandb_logging
+        and runtime is not None
+        and runtime.wandb_run is not None
+        and pyine.utils.distrib.is_main_process()
+    ):
         assert runtime is not None and runtime.wandb_run is not None
         target_subsets = [
             *config.datamodule_config.train_subset_names,

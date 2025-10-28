@@ -22,9 +22,10 @@ import torch
 import transformers
 import wandb
 
-import pyine.utils.portability
+import pyine.utils.distrib as distrib_utils
+import pyine.utils.portability as portab_utils
 
-_ = pyine.utils.portability  # always used for yaml path dump fixer (triggered at import time)
+_ = portab_utils  # always used for yaml path dump fixer (triggered at import time)
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas  # noqa
@@ -304,13 +305,15 @@ def get_reprod_metadata(
             }
         )
     if with_distrib_info:
+        is_available = torch.distributed.is_available()
+        is_initialized = is_available and torch.distributed.is_initialized()
         reprod_metadata["distrib"] = json.dumps(
             {
-                "is_available": torch.distributed.is_available(),
-                "is_initialized": torch.distributed.is_initialized(),
-                "backend": get_failsafe_backend(),
-                "rank": get_failsafe_rank(),
-                "world_size": get_failsafe_worldsize(),
+                "is_available": is_available,
+                "is_initialized": is_initialized,
+                "backend": distrib_utils.get_backend(),
+                "rank": distrib_utils.get_global_rank(default=0),
+                "world_size": distrib_utils.get_world_size(default=-1),
             }
         )
     if with_hydra_info:
@@ -324,6 +327,7 @@ def entrypoint_setup(
     disable_http_logging_info_msgs: bool = True,
     use_wandb_logging: bool = False,
     wandb_init_kwargs: dict[str, typing.Any] | None = None,
+    persist_runtime_artifacts: bool = True,
     **extra_configs: typing.Any,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments.
@@ -342,6 +346,8 @@ def entrypoint_setup(
         use_wandb_logging: whether to initialize wandb logging (if using runtime) and not dry run.
         wandb_init_kwargs: optional wandb initialization kwargs (to e.g. resume an existing run).
             If `use_wandb_logging` is False, does nothing.
+        persist_runtime_artifacts: whether to write configs/metadata artifacts to the runtime output
+            directory. Set to False for non-primary distributed ranks that should avoid disk writes.
         extra_configs: extra configs that are forwarded to this function (to be logged).
     """
     import pyine.utils.filesystem
@@ -386,15 +392,17 @@ def entrypoint_setup(
             try:
                 curr_config = config.model_dump(mode="json")
             except (pydantic_core.PydanticSerializationError, TypeError, ValueError):
-                curr_config = pyine.utils.portability.make_json_serializable(config.model_dump(mode="python"))  # type: ignore[reportUnknownVariableType]
+                curr_config = portab_utils.make_json_serializable(config.model_dump(mode="python"))  # type: ignore[reportUnknownVariableType]
             assert isinstance(curr_config, dict), "config must be serializable to a dict"
             curr_config = typing.cast("dict[str, typing.Any]", curr_config)
-            print(f"{config_name} config:")
-            rich.print_json(data=curr_config, indent=2)
+            if persist_runtime_artifacts:
+                print(f"{config_name} config:")
+                rich.print_json(data=curr_config, indent=2)
             app_config_dict[config_name] = curr_config
         if runtime_config.dry_run:
-            # dry run; log configs right away (even if potential wandb init not complete, no need for it)
-            log_configs(runtime_config, app_config_dict)
+            if persist_runtime_artifacts:
+                # dry run; log configs right away (even if potential wandb init not complete, no need for it)
+                log_configs(runtime_config, app_config_dict)
             logger.info(f"entrypoint dry run complete for app: {parent_app_name}")
             raise DryRunExit()
         if use_wandb_logging:
@@ -408,9 +416,11 @@ def entrypoint_setup(
                 runtime_config.wandb_run.summary.update(  # type: ignore[reportUnknownMemberType]
                     {f"hydra/{key}": value for key, value in hydra_dict.items()}
                 )
-        # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
-        logged_config_file_paths = log_configs(runtime_config, app_config_dict)
-        if use_wandb_logging:
+        logged_config_file_paths: list[pathlib.Path] = []
+        if persist_runtime_artifacts:
+            # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
+            logged_config_file_paths = log_configs(runtime_config, app_config_dict)
+        if use_wandb_logging and persist_runtime_artifacts:
             assert runtime_config.wandb_run_id is not None
             artifact_name = pyine.utils.filesystem.slugify(
                 text=f"{runtime_config.app_name}-{runtime_config.wandb_run.name}-configs",
@@ -449,27 +459,6 @@ def load_dotenv(**kwargs: typing.Any) -> bool:
     return dotenv.load_dotenv(dotenv_path, **kwargs)
 
 
-def get_failsafe_rank(group: torch.distributed.ProcessGroup | None = None) -> int:
-    """Returns the result of torch.distributed.get_rank, or zero if not in a process group."""
-    if torch.distributed.is_initialized():
-        return torch.distributed.get_rank(group)
-    return 0
-
-
-def get_failsafe_worldsize(group: torch.distributed.ProcessGroup | None = None) -> int:
-    """Returns the result of torch.distributed.get_world_size, or -1 if not in a process group."""
-    if torch.distributed.is_initialized():
-        return torch.distributed.get_world_size(group)
-    return -1
-
-
-def get_failsafe_backend(group: torch.distributed.ProcessGroup | None = None) -> str:
-    """Returns the result of torch.distributed.get_backend, or "n/a" if not in a process group."""
-    if torch.distributed.is_initialized():
-        return torch.distributed.get_backend(group)
-    return "n/a"
-
-
 def get_log_extension_slug(
     runtime_config: "pyine.configs.schemas.RuntimeConfig | None",
     extension_suffix: str = ".log",
@@ -480,7 +469,7 @@ def get_log_extension_slug(
     else:
         time_since_epoch = time.time()
         seconds_since_epoch = int(time_since_epoch)
-    rank_id = get_failsafe_rank()
+    rank_id = distrib_utils.get_global_rank(default=0) or 0
     return f".{seconds_since_epoch}.rank{rank_id:02d}{extension_suffix}"
 
 
