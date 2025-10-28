@@ -381,6 +381,8 @@ def entrypoint_setup(
         # enforce the spawn start method for multiprocessing functions/pools
         pyine.utils.concurrency.ensure_spawn_start_method()
         setup_fn._executed = True
+        # for distributed experiments, help async error handling via nccl
+        os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
     # if a runtime config is provided, log all configs to the output directory
     parent_app_name = runtime_config.app_name if runtime_config else "<missing runtime config>"
     if runtime_config is not None:

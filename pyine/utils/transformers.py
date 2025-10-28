@@ -3,9 +3,11 @@
 import collections.abc
 import contextlib
 import functools
+import json
 import logging
 import math
 import pathlib
+import time
 import typing
 
 import datasets as hf_datasets
@@ -14,7 +16,9 @@ import torch
 import tqdm
 import transformers
 
+import pyine.configs.schemas
 import pyine.utils.pydantic
+import pyine.utils.reprod
 
 if typing.TYPE_CHECKING:
 
@@ -916,6 +920,41 @@ def run_text_generation(
                     curr_output.update(metadata)
                 results.append(curr_output)
     return results
+
+
+def write_checkpoint_metadata(
+    checkpoint_dir: str,
+    *,
+    config: typing.Any,
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+    state: transformers.TrainerState,
+    shutdown_manager: typing.Any,
+) -> None:
+    """Persist run metadata alongside a Hugging Face checkpoint directory."""
+    checkpoint_path = pathlib.Path(checkpoint_dir).resolve()
+    checkpoint_path.mkdir(parents=True, exist_ok=True)
+    config_payload = config.model_dump(mode="json")
+    metadata: dict[str, typing.Any] = {
+        "global_step": state.global_step,
+        "epoch": state.epoch,
+        "best_metric": state.best_metric,
+        "training_loss": getattr(state, "loss", None),
+        "git_revision": pyine.utils.reprod.get_git_revision_hash(),
+        "config_hash": pyine.utils.reprod.get_params_hash(json.dumps(config_payload, sort_keys=True)),
+        "config": config_payload,
+        "generated_at": time.time(),
+    }
+    shutdown_request = getattr(shutdown_manager, "shutdown_request", None)
+    metadata["shutdown_requested"] = shutdown_request is not None
+    if shutdown_request is not None:
+        metadata["shutdown_reason"] = shutdown_request.reason
+        metadata["shutdown_requested_at"] = shutdown_request.requested_at
+        metadata["shutdown_deadline_at"] = shutdown_request.deadline_at
+    if runtime is not None:
+        runtime_payload = runtime.model_dump(mode="json")
+        metadata["runtime"] = runtime_payload
+    metadata_path = checkpoint_path / "run_meta.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
 
 
 class StdoutMilestones(transformers.TrainerCallback):

@@ -28,6 +28,10 @@ _LOCAL_WORLD_SIZE_ENV_KEYS: tuple[str, ...] = (
 )
 
 __all__ = [
+    "all_reduce_boolean_or",
+    "all_gather_objects",
+    "broadcast_boolean",
+    "broadcast_object",
     "barrier",
     "get_backend",
     "get_distributed_context",
@@ -129,6 +133,51 @@ def barrier() -> None:
     if not torch.distributed.is_initialized():
         return
     torch.distributed.barrier()  # type: ignore[reportUnknownMemberType]
+
+
+def broadcast_object(
+    payload: typing.Any,
+    src: int = 0,
+) -> typing.Any:
+    """Broadcast a picklable payload from the source rank to all ranks."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return payload
+    object_list = [payload]
+    torch.distributed.broadcast_object_list(object_list, src=src)  # type: ignore[reportUnknownMemberType]
+    return object_list[0]
+
+
+def broadcast_boolean(
+    flag: bool,
+    src: int = 0,
+) -> bool:
+    """Broadcast a boolean flag from the source rank to all ranks."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return flag
+    tensor = torch.tensor([1 if flag else 0], device="cpu", dtype=torch.int32)
+    torch.distributed.broadcast(tensor, src=src)  # type: ignore[reportUnknownMemberType]
+    return bool(tensor.item())
+
+
+def all_reduce_boolean_or(flag: bool) -> bool:
+    """Return True when any rank reports True."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return flag
+    tensor = torch.tensor([1 if flag else 0], device="cpu", dtype=torch.int32)
+    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)  # type: ignore[reportUnknownMemberType]
+    return bool(tensor.item())
+
+
+def all_gather_objects(
+    obj: typing.Any,
+) -> list[typing.Any]:
+    """Gather picklable objects from all ranks."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return [obj]
+    world_size = torch.distributed.get_world_size()  # type: ignore[reportUnknownMemberType]
+    gather_list: list[typing.Any] = [None] * world_size
+    torch.distributed.all_gather_object(gather_list, obj)  # type: ignore[reportUnknownMemberType]
+    return gather_list
 
 
 def get_distributed_context() -> dict[str, typing.Any]:

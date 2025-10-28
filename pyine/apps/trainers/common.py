@@ -16,6 +16,7 @@ import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.distrib
 import pyine.utils.langchain
+import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.transformers
 
@@ -63,6 +64,14 @@ class AppMainConfig(pydantic.BaseModel):
             "requested."
         ),
     )
+    resume_incompatibility_policy: typing.Literal["error", "warn", "ignore"] = pydantic.Field(
+        default="error",
+        description=(
+            "Policy for handling incompatibilities between the previous run metadata and the current launch. "
+            "'error' raises when mismatches such as git revision or seed are detected, 'warn' logs a warning, "
+            "and 'ignore' skips the checks."
+        ),
+    )
     auto_resume_if_possible: bool = pydantic.Field(
         default=True,
         description=(
@@ -85,6 +94,7 @@ class AppMainConfig(pydantic.BaseModel):
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)
         data.pop("resume_wandb_behavior", None)
+        data.pop("resume_incompatibility_policy", None)
         data.pop("auto_resume_if_possible", None)
         return data
 
@@ -113,6 +123,10 @@ class ResumeArtifacts(pydantic.BaseModel):
     """Path to the Hydra output directory of the previous run being resumed."""
     checkpoint_path: pathlib.Path
     """Path to the specific checkpoint directory to resume training from."""
+    checkpoint_metadata_dict: dict[str, typing.Any]
+    """Metadata dictionary stored alongside the checkpoint, if present."""
+    checkpoint_metadata_path: pathlib.Path | None
+    """Path to the checkpoint metadata file, if found."""
     previous_config: pydantic.SerializeAsAny[AppMainConfig]
     """Configuration object from the previous run, loaded from the logged config file."""
     previous_config_path: pathlib.Path | None
@@ -127,17 +141,21 @@ class ResumeArtifacts(pydantic.BaseModel):
     """Path to the logged reproducibility metadata file from the previous run, if found."""
     wandb_resume_kwargs: dict[str, typing.Any]
     """Dictionary of kwargs for resuming a Weights & Biases run (to be passed to `wandb.init`)."""
+    compatibility_issues: list[str] = pydantic.Field(default_factory=list)
+    """List of detected compatibility issues between the previous run and the current launch."""
 
     @classmethod
     def create(
         cls,
         config: AppMainConfig,
+        runtime: pyine.configs.schemas.RuntimeConfig | None = None,
     ) -> ResumeArtifacts:
         """Creates a ResumeArtifacts object from a config that should contain resume-related args.
 
         Args:
             config: The application configuration, which should contain the resume settings. If it
                 does not, an error will be raised.
+            runtime: The runtime config object to fetch settings from (if available).
 
         Returns:
             A ResumeArtifacts object containing the information required to resume a training run.
@@ -181,9 +199,70 @@ class ResumeArtifacts(pydantic.BaseModel):
             raise FileNotFoundError(
                 f"invalid checkpoint directory (missing trainer_state.json): {checkpoint_path}",
             )
+        missing_artifacts: list[str] = []
+        for artifact_name in ("optimizer.pt", "scheduler.pt"):
+            artifact_path = checkpoint_path / artifact_name
+            if not artifact_path.is_file():
+                missing_artifacts.append(artifact_name)
+        if missing_artifacts:
+            missing_display = ", ".join(sorted(missing_artifacts))
+            logger.warning(
+                f"resume checkpoint is missing optimizer-related artifacts ({missing_display}); "
+                "automatic resumption may skip optimizer or scheduler state restore"
+            )
+        compatibility_issues: list[str] = []
+        policy = getattr(config, "resume_incompatibility_policy", "error")
+        if policy != "ignore":
+            previous_git = typing.cast("str | None", metadata_payload.get("git_revision_hash"))
+            current_git = pyine.utils.reprod.get_git_revision_hash()
+            if previous_git and current_git and previous_git != current_git:
+                compatibility_issues.append(
+                    f"git_revision_hash mismatch (previous: {previous_git}, current: {current_git})",
+                )
+            previous_seed_value = runtime_payload.get("seed", metadata_payload.get("seed"))
+            previous_seed = cls._coerce_optional_int(previous_seed_value)
+            current_seed = cls._coerce_optional_int(getattr(runtime, "seed", None)) if runtime is not None else None
+            if previous_seed is not None and current_seed is not None and previous_seed != current_seed:
+                compatibility_issues.append(
+                    f"seed mismatch (previous: {previous_seed}, current: {current_seed})",
+                )
+        if compatibility_issues:
+            issues_str = "; ".join(compatibility_issues)
+            if policy == "error":
+                raise ValueError(
+                    f"resume metadata compatibility check failed: {issues_str}; "
+                    "set resume_incompatibility_policy to 'warn' or 'ignore' to override",
+                )
+            if policy == "warn":
+                logger.warning(f"resume metadata compatibility warnings: {issues_str}")
+        checkpoint_metadata_dict: dict[str, typing.Any] = {}
+        checkpoint_metadata_path = checkpoint_path / "run_meta.json"
+        if checkpoint_metadata_path.is_file():
+            checkpoint_metadata_dict = cls._load_json_if_exists(checkpoint_metadata_path)
+            if config.use_wandb_logging and not wandb_resume_kwargs:
+                checkpoint_runtime_payload = typing.cast(
+                    "dict[str, typing.Any]",
+                    checkpoint_metadata_dict.get("runtime", {}),
+                )
+                wandb_run_id_meta = typing.cast("str | None", checkpoint_runtime_payload.get("wandb_run_id"))
+                wandb_project_meta = typing.cast("str | None", checkpoint_runtime_payload.get("wandb_run_project"))
+                wandb_entity_meta = typing.cast("str | None", checkpoint_runtime_payload.get("wandb_run_entity"))
+                if wandb_run_id_meta and wandb_project_meta and wandb_entity_meta:
+                    wandb_resume_kwargs = {
+                        "project": wandb_project_meta,
+                        "entity": wandb_entity_meta,
+                        "id": wandb_run_id_meta,
+                        "resume": config.resume_wandb_behavior,
+                    }
+                    logger.info(
+                        "resuming wandb run from checkpoint metadata: "
+                        f"id={wandb_run_id_meta} project={wandb_project_meta}"
+                    )
         return ResumeArtifacts(
             run_dir=run_dir,
             checkpoint_path=checkpoint_path,
+            checkpoint_metadata_dict=checkpoint_metadata_dict,
+            checkpoint_metadata_path=checkpoint_metadata_path if checkpoint_metadata_path.is_file() else None,
             previous_config=previous_config,
             previous_config_path=config_path,
             previous_runtime_dict=runtime_payload,
@@ -191,6 +270,7 @@ class ResumeArtifacts(pydantic.BaseModel):
             previous_metadata_dict=metadata_payload,
             previous_metadata_path=metadata_path,
             wandb_resume_kwargs=wandb_resume_kwargs,
+            compatibility_issues=compatibility_issues,
         )
 
     # ------------- private utility functions -------------
@@ -210,6 +290,15 @@ class ResumeArtifacts(pydantic.BaseModel):
         if path is None:
             return {}
         return typing.cast("dict[str, typing.Any]", json.loads(path.read_text()))
+
+    @staticmethod
+    def _coerce_optional_int(value: typing.Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _ensure_resume_config_matches(
@@ -285,11 +374,10 @@ def prepare_resume_artifacts(
             config.resume_checkpoint_name = None
             auto_resume_activated = True
             logger.info(f"auto-resume enabled using run dir: {inferred_run_dir}")
-
     if not config.is_resuming():
         return None
     try:
-        resume_artifacts = ResumeArtifacts.create(config)
+        resume_artifacts = ResumeArtifacts.create(config, runtime)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         if auto_resume_activated:
             logger.warning(f"auto-resume skipped because prerequisites were not met: {exc}")
@@ -317,6 +405,7 @@ def prepare_resume_artifacts(
             (resume_artifacts.previous_config_path, "previous_config.json"),
             (resume_artifacts.previous_runtime_path, "previous_runtime.json"),
             (resume_artifacts.previous_metadata_path, "previous_reprod_metadata.json"),
+            (resume_artifacts.checkpoint_metadata_path, "resume_checkpoint_run_meta.json"),
         ]
         for source_path, target_name in file_mappings:
             if source_path is None or not source_path.is_file():

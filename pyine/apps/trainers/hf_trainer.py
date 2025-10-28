@@ -21,6 +21,7 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.distrib
+import pyine.utils.interrupts
 import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.transformers
@@ -153,6 +154,16 @@ def train(
 
     # note: if we want to support other trainers (e.g. TRL), update config dict+trainer w/ instantiable classes
     training_args = transformers.TrainingArguments(**training_args_dict)
+    save_strategy = getattr(training_args, "save_strategy", None)
+    if save_strategy == transformers.trainer_utils.IntervalStrategy.NO:
+        raise ValueError(
+            "training_args_config.save_strategy cannot be 'no' when graceful interruption handling is enabled",
+        )
+    save_steps_value = getattr(training_args, "save_steps", None)
+    if save_strategy == transformers.trainer_utils.IntervalStrategy.STEPS and (
+        save_steps_value is None or save_steps_value <= 0
+    ):
+        raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     trainer = transformers.Trainer(
         model=model,
@@ -169,13 +180,34 @@ def train(
         assert resume_artifacts.checkpoint_path.is_dir(), f"invalid ckpt path: {resume_artifacts.checkpoint_path}"
         logger.info(f"resuming from checkpoint: {resume_artifacts.checkpoint_path}")
         train_kwargs["resume_from_checkpoint"] = str(resume_artifacts.checkpoint_path)
-    logger.info("starting training")
-    start_time = time.time()
-    trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
-    end_time = time.time()
-    time_delta_seconds = end_time - start_time
-    time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
-    logger.info(f"training finished in {time_delta_str}")
+    with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
+
+        def metadata_writer(checkpoint_dir: str, state: transformers.TrainerState) -> None:
+            pyine.utils.transformers.write_checkpoint_metadata(
+                checkpoint_dir,
+                config=config,
+                runtime=runtime,
+                state=state,
+                shutdown_manager=shutdown_manager,
+            )
+
+        shutdown_callback = pyine.utils.interrupts.GracefulShutdownCallback(
+            shutdown_manager=shutdown_manager,
+            metadata_writer=metadata_writer,
+        )
+        if hasattr(trainer, "add_callback"):
+            trainer.add_callback(shutdown_callback)  # type: ignore[reportUnknownMemberType]
+        else:
+            typing.cast("typing.Any", trainer).callbacks.append(shutdown_callback)
+        logger.info("starting training")
+        start_time = time.time()
+        trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
+        end_time = time.time()
+        time_delta_seconds = end_time - start_time
+        time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
+        logger.info(f"training finished after {time_delta_str}")
+        if shutdown_manager.should_terminate():
+            logger.info("training run exited early after honoring shutdown request")
     pyine.utils.distrib.barrier()
     return trainer
 
