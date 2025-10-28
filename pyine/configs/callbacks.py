@@ -30,6 +30,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         self._remove_temp_dir_on_exit = remove_temp_dir_on_exit
         self._disable_disk_logging = disable_disk_logging
 
+    @typing.override
     def on_run_start(
         self,
         config: omegaconf.DictConfig,
@@ -65,6 +66,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
                 if "hydra_logging" in hydra_section:
                     hydra_section["hydra_logging"] = None
 
+    @typing.override
     def on_job_start(
         self,
         config: omegaconf.DictConfig,
@@ -81,6 +83,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         if self._disable_disk_logging:
             self._remove_file_handlers()
 
+    @typing.override
     def on_job_end(
         self,
         config: omegaconf.DictConfig,
@@ -107,8 +110,8 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         """Returns whether the callback is running on the primary process (rank 0)."""
         return pyine.utils.distrib.is_main_process(rank=self._detected_rank)
 
+    @staticmethod
     def _get_runtime_output_dir(
-        self,
         config: omegaconf.DictConfig,
     ) -> pathlib.Path | None:
         """Extracts Hydra's runtime output directory as a path, if available."""
@@ -117,7 +120,8 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
             return None
         return pathlib.Path(str(runtime_output_dir)).expanduser().resolve()
 
-    def _remove_file_handlers(self) -> None:
+    @staticmethod
+    def _remove_file_handlers() -> None:
         """Removes file handlers from all active loggers."""
         loggers_to_check: list[logging.Logger] = [logging.getLogger()]
         for _logger_name, logger_candidate in logging.Logger.manager.loggerDict.items():
@@ -131,8 +135,8 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
                     logger_instance.removeHandler(handler)
                     handler.close()
 
+    @staticmethod
     def _get_hydra_section(
-        self,
         config: omegaconf.DictConfig,
     ) -> omegaconf.DictConfig:
         """Returns the `hydra` section of the composed config, raising if missing."""
