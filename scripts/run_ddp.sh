@@ -149,7 +149,7 @@ Options:
 
 Environment knobs (via env vars):
   TEE_LOG=0                    Console only (disable file logging)
-  PYTHON_BIN=python3           Select interpreter used for the target module
+  PYTHON_BIN=python3           Select interpreter for internal helpers (not torchrun)
   DEBUG=1                      Verbose NCCL + TORCH_DISTRIBUTED_DEBUG=DETAIL
   OMP_NUM_THREADS=4            Increase from default (1) if dataloader is CPU-bound
 
@@ -311,6 +311,12 @@ fi
 ###################################################
 #      SLURM integration (auto if present)
 ###################################################
+# validate PYTHON_BIN early since it's used in derive_slurm_master_port()
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "Error: PYTHON_BIN='${PYTHON_BIN}' not found on PATH." >&2
+  exit 1
+fi
+
 # If running under SLURM, infer ranks, nodes, rendezvous info, and GPU counts:
 if [[ -n "${SLURM_JOB_ID-}" ]]; then
   NNODES="${SLURM_NNODES:-$NNODES}"
@@ -412,18 +418,14 @@ else
                   --master_addr "${MASTER_ADDR}" --master_port "${MASTER_PORT}")
 fi
 
-# use `python -m <module>` rather than a script path to keep import semantics clean
-PY_ENTRY=("${PYTHON_BIN}" -m "${APP_MODULE}")
+# torchrun uses its own Python; just pass the module, no need to specify PYTHON_BIN
+PY_ENTRY=(-m "${APP_MODULE}")
 
 # final command: torchrun launcher + python module + forwarded app or Hydra args
 CMD=("${TORCHRUN_BASE[@]}" "${PY_ENTRY[@]}" "${APP_ARGS[@]}")
 
 if ! command -v torchrun >/dev/null 2>&1; then
   echo "Error: torchrun not found on PATH. Install PyTorch with distributed support." >&2
-  exit 1
-fi
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "Error: PYTHON_BIN='${PYTHON_BIN}' not found on PATH." >&2
   exit 1
 fi
 
