@@ -301,6 +301,94 @@ def test_train_configures_trainer_and_saves_artifacts(
 
 
 @pytest.mark.asyncio
+async def test_main_loads_checkpoint_when_resume_artifacts_only(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint-100"
+    resume_artifacts = types.SimpleNamespace(
+        checkpoint_path=checkpoint_path,
+        wandb_resume_kwargs={},
+    )
+
+    def fake_prepare_resume_artifacts(
+        **_kwargs: object,
+    ) -> types.SimpleNamespace:
+        return resume_artifacts
+
+    def fake_prepare_datamodule(
+        *_args: object,
+        **_kwargs: object,
+    ) -> typing.Any:
+        return mocker.Mock(spec=pyine.data.datamodule.ConversationDataModule)
+
+    auto_model_calls: list[tuple[typing.Any, typing.Any]] = []
+    auto_tokenizer_calls: list[tuple[typing.Any, typing.Any]] = []
+
+    def fake_auto_model_from_pretrained(
+        path: str | pathlib.Path,
+        **kwargs: object,
+    ) -> str:
+        auto_model_calls.append((path, kwargs))
+        return "model"
+
+    def fake_auto_tokenizer_from_pretrained(
+        path: str | pathlib.Path,
+        **kwargs: object,
+    ) -> str:
+        auto_tokenizer_calls.append((path, kwargs))
+        return "tokenizer"
+
+    config = types.SimpleNamespace(
+        training_args_config=types.SimpleNamespace(do_train=False, do_predict=False),
+        get_model=lambda: "base_model",
+        get_tokenizer=lambda: "base_tokenizer",
+        use_wandb_logging=False,
+        resume_from_run_dir=None,
+        is_resuming=lambda: False,
+    )
+    runtime = types.SimpleNamespace(
+        wandb_run=None,
+        finalize=lambda: None,
+    )
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.apps.trainers.common,
+        "prepare_resume_artifacts",
+        fake_prepare_resume_artifacts,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.apps.trainers.common,
+        "prepare_datamodule",
+        fake_prepare_datamodule,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "AutoModelForCausalLM",
+        types.SimpleNamespace(from_pretrained=fake_auto_model_from_pretrained),
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "AutoTokenizer",
+        types.SimpleNamespace(from_pretrained=fake_auto_tokenizer_from_pretrained),
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.reprod,
+        "entrypoint_setup",
+        lambda **_: None,
+    )
+
+    await pyine.apps.trainers.hf_trainer.main(
+        config=config,
+        runtime=runtime,
+    )
+
+    assert auto_model_calls == [(checkpoint_path, {})]
+    assert auto_tokenizer_calls == [(checkpoint_path, {})]
+
+
+@pytest.mark.asyncio
 async def test_main_runs_train_and_evaluate(
     monkeypatch: pytest.MonkeyPatch,
     mocker: pytest_mock.MockerFixture,

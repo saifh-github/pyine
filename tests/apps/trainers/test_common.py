@@ -239,6 +239,7 @@ def test_app_main_config_normalize_for_resume_overlap_check() -> None:
     assert "resume_from_run_dir" not in normalized
     assert "resume_checkpoint_name" not in normalized
     assert "resume_wandb_behavior" not in normalized
+    assert "auto_resume_if_possible" not in normalized
     assert "datamodule_config" in normalized
     assert "evals_config" in normalized
 
@@ -561,3 +562,105 @@ def test_prepare_resume_artifacts_success(tmp_path: pathlib.Path, monkeypatch: p
     assert (output_dir / "previous_config.json").exists()
     assert (output_dir / "previous_runtime.json").exists()
     assert (output_dir / "previous_reprod_metadata.json").exists()
+
+
+def test_prepare_resume_artifacts_auto_resume_success(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir()
+    checkpoint_dir = run_dir / "checkpoint-100"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "trainer_state.json").write_text("{}")
+    dm_config = DummyDatamoduleConfig()
+    evals_config = DummyEvalsConfig()
+    config_payload = {
+        "main_config": {
+            "datamodule_config": dm_config.model_dump(mode="json"),
+            "evals_config": evals_config.model_dump(mode="json"),
+        }
+    }
+    config_file = run_dir / "config.test.rank0.json"
+    config_file.write_text(json.dumps(config_payload))
+    runtime_file = run_dir / "runtime.test.rank0.json"
+    runtime_file.write_text(json.dumps({"key": "value"}))
+    metadata_file = run_dir / "reprod_metadata.test.rank0.json"
+    metadata_file.write_text(json.dumps({"seed": 42}))
+    runtime = types.SimpleNamespace(
+        output_dir_path=run_dir,
+        metadata={},
+    )
+    config = trainer_common.AppMainConfig.model_construct(
+        datamodule_config=dm_config,
+        evals_config=evals_config,
+        auto_resume_if_possible=True,
+    )
+    monkeypatch.setattr("transformers.trainer_utils.get_last_checkpoint", lambda x: str(checkpoint_dir))
+    artifacts = trainer_common.prepare_resume_artifacts(config, runtime)
+    assert artifacts is not None
+    assert config.resume_from_run_dir == run_dir
+    assert artifacts.checkpoint_path == checkpoint_dir
+    assert runtime.metadata["resumed_from_run_dir"] == str(run_dir)
+    assert runtime.metadata["resume_checkpoint_path"] == str(checkpoint_dir)
+    assert (run_dir / "previous_config.json").exists()
+    assert (run_dir / "previous_runtime.json").exists()
+    assert (run_dir / "previous_reprod_metadata.json").exists()
+
+
+def test_prepare_resume_artifacts_auto_resume_no_checkpoint(tmp_path: pathlib.Path) -> None:
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir()
+    runtime = types.SimpleNamespace(
+        output_dir_path=run_dir,
+        metadata={},
+    )
+    config = trainer_common.AppMainConfig.model_construct(
+        datamodule_config=DummyDatamoduleConfig(),
+        evals_config=DummyEvalsConfig(),
+        auto_resume_if_possible=True,
+    )
+    result = trainer_common.prepare_resume_artifacts(config, runtime)
+    assert result is None
+    assert config.resume_from_run_dir is None
+    assert config.resume_checkpoint_name is None
+
+
+def test_prepare_resume_artifacts_auto_resume_config_mismatch(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir()
+    checkpoint_dir = run_dir / "checkpoint-100"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "trainer_state.json").write_text("{}")
+    previous_dm_config = DummyDatamoduleConfig(valid_subset_names=["test"], eval_subset_names=["test"])
+    previous_evals_config = DummyEvalsConfig()
+    config_payload = {
+        "main_config": {
+            "datamodule_config": previous_dm_config.model_dump(mode="json"),
+            "evals_config": previous_evals_config.model_dump(mode="json"),
+        }
+    }
+    config_file = run_dir / "config.test.rank0.json"
+    config_file.write_text(json.dumps(config_payload))
+    runtime_file = run_dir / "runtime.test.rank0.json"
+    runtime_file.write_text(json.dumps({}))
+    metadata_file = run_dir / "reprod_metadata.test.rank0.json"
+    metadata_file.write_text(json.dumps({}))
+    runtime = types.SimpleNamespace(
+        output_dir_path=run_dir,
+        metadata={},
+    )
+    config = trainer_common.AppMainConfig.model_construct(
+        datamodule_config=DummyDatamoduleConfig(),
+        evals_config=DummyEvalsConfig(),
+        auto_resume_if_possible=True,
+    )
+    monkeypatch.setattr("transformers.trainer_utils.get_last_checkpoint", lambda x: str(checkpoint_dir))
+    result = trainer_common.prepare_resume_artifacts(config, runtime)
+    assert result is None
+    assert config.resume_from_run_dir is None
+    assert config.resume_checkpoint_name is None
+    assert "resumed_from_run_dir" not in runtime.metadata

@@ -231,9 +231,8 @@ async def main(
             trainer.processing_class,  # type: ignore[reportUnknownMemberType]
         )
     else:
-        if config.is_resuming():
+        if resume_artifacts is not None:
             # reinstantiate based on target checkpoint
-            assert resume_artifacts is not None, "resume artifacts must be provided for resuming"
             model: transformers.PreTrainedModel = transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
                 resume_artifacts.checkpoint_path,
             )

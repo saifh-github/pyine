@@ -63,6 +63,13 @@ class AppMainConfig(pydantic.BaseModel):
             "requested."
         ),
     )
+    auto_resume_if_possible: bool = pydantic.Field(
+        default=True,
+        description=(
+            "Whether to attempt resuming automatically when the current Hydra output directory "
+            "already contains checkpoints from a previous run."
+        ),
+    )
 
     # --------------- public / utility / helper functions ---------------
 
@@ -78,6 +85,7 @@ class AppMainConfig(pydantic.BaseModel):
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)
         data.pop("resume_wandb_behavior", None)
+        data.pop("auto_resume_if_possible", None)
         return data
 
     @pydantic.model_validator(mode="after")
@@ -264,9 +272,37 @@ def prepare_resume_artifacts(
 
     Will also update the runtime config with the resume artifacts if resuming is requested.
     """
+    auto_resume_activated = False
+    has_resume_dir_attr = hasattr(config, "resume_from_run_dir")
+    has_resume_checkpoint_attr = hasattr(config, "resume_checkpoint_name")
+    original_resume_dir = getattr(config, "resume_from_run_dir", None)
+    original_resume_checkpoint = getattr(config, "resume_checkpoint_name", None)
+    auto_resume_enabled = bool(getattr(config, "auto_resume_if_possible", False))
+    if not config.is_resuming() and auto_resume_enabled:
+        inferred_run_dir = _infer_resume_run_dir_from_runtime(runtime)
+        if inferred_run_dir is not None:
+            config.resume_from_run_dir = inferred_run_dir
+            config.resume_checkpoint_name = None
+            auto_resume_activated = True
+            logger.info(f"auto-resume enabled using run dir: {inferred_run_dir}")
+
     if not config.is_resuming():
         return None
-    resume_artifacts = ResumeArtifacts.create(config)
+    try:
+        resume_artifacts = ResumeArtifacts.create(config)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        if auto_resume_activated:
+            logger.warning(f"auto-resume skipped because prerequisites were not met: {exc}")
+            if has_resume_dir_attr:
+                config.resume_from_run_dir = original_resume_dir
+            elif hasattr(config, "resume_from_run_dir"):
+                delattr(config, "resume_from_run_dir")
+            if has_resume_checkpoint_attr:
+                config.resume_checkpoint_name = original_resume_checkpoint
+            elif hasattr(config, "resume_checkpoint_name"):
+                delattr(config, "resume_checkpoint_name")
+            return None
+        raise
     logger.info(f"prepared resume artifacts from run dir: {resume_artifacts.run_dir}")
     logger.debug(f"will resume training from checkpoint: {resume_artifacts.checkpoint_path}")
     if resume_artifacts.wandb_resume_kwargs and "id" in resume_artifacts.wandb_resume_kwargs:
@@ -289,6 +325,28 @@ def prepare_resume_artifacts(
             shutil.copy2(source_path, target_path)
     # @@@@ TODO: add warnings if resuming from different commit/seed?
     return resume_artifacts
+
+
+def _infer_resume_run_dir_from_runtime(
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+) -> pathlib.Path | None:
+    """Return the runtime output directory when it already contains a valid HF Trainer checkpoint."""
+    if runtime is None or not runtime.output_dir_path.exists():
+        return None
+    last_checkpoint = typing.cast(
+        "str | None",
+        transformers.trainer_utils.get_last_checkpoint(str(runtime.output_dir_path)),  # type: ignore[reportUnknownMemberType]
+    )
+    if last_checkpoint is None:
+        return None
+    checkpoint_path = pathlib.Path(last_checkpoint)
+    trainer_state_path = checkpoint_path / "trainer_state.json"
+    if not trainer_state_path.is_file():
+        logger.warning(
+            f"auto-resume detected checkpoint without trainer_state.json; ignoring checkpoint at {checkpoint_path}",
+        )
+        return None
+    return runtime.output_dir_path
 
 
 def prepare_datamodule(

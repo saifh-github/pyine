@@ -159,7 +159,7 @@ def _read_first_env_int(
         try:
             return int(raw_value)
         except ValueError:
-            logger.debug("failed to parse env var %s=%r as int", key, raw_value)
+            logger.debug(f"failed to parse env var {key}={raw_value} as int")
     return None
 
 
