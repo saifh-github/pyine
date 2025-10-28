@@ -471,7 +471,7 @@ log "env:        OMP_NUM_THREADS=${OMP_NUM_THREADS} TOKENIZERS_PARALLELISM=${TOK
 if [[ "${DEBUG}" == "1" ]]; then
   log "env:        DEBUG=1 (NCCL_DEBUG=${NCCL_DEBUG}, TORCH_DISTRIBUTED_DEBUG=${TORCH_DISTRIBUTED_DEBUG:-})"
 fi
-log "python:     ${PYTHON_BIN} ($(${PYTHON_BIN} --version 2>&1))"
+log "python:     $(command -v "${PYTHON_BIN}") ($(${PYTHON_BIN} --version 2>&1))"
 log "command:    ${COMMAND_PRETTY}"
 log "REMINDER:   Never pass secrets via CLI overrides. They WILL appear in logs."
 

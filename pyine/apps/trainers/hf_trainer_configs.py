@@ -12,6 +12,7 @@ import hydra_zen
 import peft
 import pydantic
 import torch
+import torch.distributed.elastic.multiprocessing.errors
 import transformers
 
 import pyine.apps.trainers.common
@@ -223,6 +224,7 @@ def _async_main_wrapper(
     asyncio.run(hf_trainer_app.main(config=config, runtime=runtime))
 
 
+@torch.distributed.elastic.multiprocessing.errors.record
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
     """Hydra main entrypoint for the HuggingFace trainer app."""
     _ = register_hydra_configs(eval_type=eval_type)
