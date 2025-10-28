@@ -138,6 +138,11 @@ def get_base_store_and_configs(
                 subdir="${hydra:job.num}_${hydra.job.override_dirname}",
             ),
             job=hydra.conf.JobConf(name=app_name),
+            callbacks={
+                "non_primary_rank_cleanup": {
+                    "_target_": "pyine.configs.callbacks.NonPrimaryRankCleanupCallback",
+                },
+            },
             job_logging={
                 "handlers": {
                     "file": {

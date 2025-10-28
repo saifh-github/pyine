@@ -39,6 +39,17 @@ a basic introduction to Hydra and how to structure configuration YAMLs, see
 
 ______________________________________________________________________
 
+## Distributed Runs
+
+Hydra integrates a callback (`pyine.configs.callbacks.NonPrimaryRankCleanupCallback`) that
+automatically disables disk logging for non-primary distributed ranks. When environment
+variables such as `RANK`, `SLURM_PROCID`, or `LOCAL_RANK` indicate a non-zero rank, Hydra
+routes the run directory to a temporary location, skips `.hydra/` artifacts, and removes the
+temporary directory once the job ends. Only the primary rank persists logs under original output
+directories, keeping multi-process runs free from clashing artifacts.
+
+______________________________________________________________________
+
 ## Quick Start: Experiment Creation
 
 1. Create a new YAML file for the experiment you would like to configure:
