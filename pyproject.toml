@@ -84,8 +84,10 @@ markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
 ]
 filterwarnings = [
-    # until hydra-zen fixes their deprecation warnings, we need this (currently using 0.15.0)
+    # until hydra-zen fixes their pydantic v1 warnings, we need this (currently using 0.15.0)
     'ignore:The `__fields__` attribute is deprecated, use the `model_fields` class property instead\.:pydantic.warnings.PydanticDeprecatedSince20:hydra_zen\.structured_configs\._implementations',
+    'ignore:.*hydra-zen.*pydantic v1.*:UserWarning',
+    'ignore:.*:pydantic.warnings.UnsupportedFieldAttributeWarning',
 ]
 
 [tool.coverage.run]
