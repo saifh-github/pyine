@@ -59,10 +59,10 @@ def get_global_rank(
     if rank is not None:
         return rank
     rank = _read_first_env_int(_GLOBAL_RANK_ENV_KEYS)
-    if rank is not None:
+    if rank is not None and rank >= 0:
         return rank
     local_rank = _read_first_env_int(_LOCAL_RANK_ENV_KEYS)
-    if local_rank is not None:
+    if local_rank is not None and local_rank >= 0:
         return local_rank
     return default
 

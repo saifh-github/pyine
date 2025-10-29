@@ -54,6 +54,14 @@ def test_is_main_process_with_explicit_rank() -> None:
     assert pyine.utils.distrib.is_main_process(rank=5) is False
 
 
+def test_is_main_process_with_negative_local_rank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOCAL_RANK", "-1")
+    assert pyine.utils.distrib.get_global_rank(default=None) is None
+    assert pyine.utils.distrib.is_main_process() is True
+
+
 def test_get_world_size_from_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
