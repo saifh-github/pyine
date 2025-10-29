@@ -944,7 +944,7 @@ def write_checkpoint_metadata(
         "config": config_payload,
         "generated_at": time.time(),
     }
-    shutdown_request = getattr(shutdown_manager, "shutdown_request", None)
+    shutdown_request = getattr(shutdown_manager, "shutdown_request", None) if shutdown_manager is not None else None
     metadata["shutdown_requested"] = shutdown_request is not None
     if shutdown_request is not None:
         metadata["shutdown_reason"] = shutdown_request.reason

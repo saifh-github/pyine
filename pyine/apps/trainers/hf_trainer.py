@@ -76,6 +76,7 @@ def train(
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
     runtime: pyine.configs.schemas.RuntimeConfig | None,
     resume_artifacts: pyine.apps.trainers.common.ResumeArtifacts | None,
+    shutdown_manager: pyine.utils.interrupts.GracefulShutdownManager | None = None,
 ) -> transformers.Trainer:
     """Run fine-tuning with HuggingFace Trainer.
 
@@ -84,6 +85,7 @@ def train(
         config: The app config object to fetch settings from.
         runtime: The runtime config object to fetch settings from.
         resume_artifacts: Resume artifacts to continue a previous run, when provided.
+        shutdown_manager: The shutdown manager to use for graceful shutdown handling.
 
     Returns:
         The instantiated trainer object containing a model that can be used for predictions.
@@ -180,17 +182,17 @@ def train(
         assert resume_artifacts.checkpoint_path.is_dir(), f"invalid ckpt path: {resume_artifacts.checkpoint_path}"
         logger.info(f"resuming from checkpoint: {resume_artifacts.checkpoint_path}")
         train_kwargs["resume_from_checkpoint"] = str(resume_artifacts.checkpoint_path)
-    with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
 
-        def metadata_writer(checkpoint_dir: str, state: transformers.TrainerState) -> None:
-            pyine.utils.transformers.write_checkpoint_metadata(
-                checkpoint_dir,
-                config=config,
-                runtime=runtime,
-                state=state,
-                shutdown_manager=shutdown_manager,
-            )
+    def metadata_writer(checkpoint_dir: str, state: transformers.TrainerState) -> None:
+        pyine.utils.transformers.write_checkpoint_metadata(
+            checkpoint_dir,
+            config=config,
+            runtime=runtime,
+            state=state,
+            shutdown_manager=shutdown_manager,
+        )
 
+    if shutdown_manager is not None:
         shutdown_callback = pyine.utils.interrupts.GracefulShutdownCallback(
             shutdown_manager=shutdown_manager,
             metadata_writer=metadata_writer,
@@ -199,16 +201,15 @@ def train(
             trainer.add_callback(shutdown_callback)  # type: ignore[reportUnknownMemberType]
         else:
             typing.cast("typing.Any", trainer).callbacks.append(shutdown_callback)
-        logger.info("starting training")
-        start_time = time.time()
-        trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
-        end_time = time.time()
-        time_delta_seconds = end_time - start_time
-        time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
-        logger.info(f"training finished after {time_delta_str}")
-        if shutdown_manager.should_terminate():
-            logger.info("training run exited early after honoring shutdown request")
-    pyine.utils.distrib.barrier()
+    logger.info("starting training")
+    start_time = time.time()
+    trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
+    end_time = time.time()
+    time_delta_seconds = end_time - start_time
+    time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
+    logger.info(f"training finished after {time_delta_str}")
+    if shutdown_manager is not None and shutdown_manager.should_terminate():
+        logger.info("training run exited early after honoring shutdown request")
     return trainer
 
 
@@ -247,47 +248,54 @@ async def main(
             f"HuggingFace trainer requires a ConversationDataModule; received {type(datamodule).__name__}",
         )
 
-    if config.training_args_config.do_train:
-        trainer = train(
-            datamodule=datamodule,
-            config=config,
-            runtime=runtime,
-            resume_artifacts=resume_artifacts,
-        )
-        model = typing.cast(
-            "transformers.PreTrainedModel",
-            trainer.model,  # type: ignore[reportUnknownMemberType]
-        )
-        tokenizer = typing.cast(
-            "transformers.PreTrainedTokenizer",
-            trainer.processing_class,  # type: ignore[reportUnknownMemberType]
-        )
-    else:
-        if resume_artifacts is not None:
-            # reinstantiate based on target checkpoint
-            model: transformers.PreTrainedModel = transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
-                resume_artifacts.checkpoint_path,
-            )
-            tokenizer: transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
-                resume_artifacts.checkpoint_path,
-            )
-        else:
-            # get base (pretrained) model/tokenizers directly
-            model = config.get_model()
-            tokenizer = config.get_tokenizer()
-
-    if config.training_args_config.do_predict:
-        if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
-            runtime.wandb_run.summary["model_name"] = model.config.name_or_path
-        if pyine.utils.distrib.is_main_process():
-            await pyine.apps.trainers.common.evaluate_model(
-                model=model,
-                tokenizer=tokenizer,  # type: ignore[reportUnknownArgumentType]
+    with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
+        if config.training_args_config.do_train:
+            trainer = train(
                 datamodule=datamodule,
                 config=config,
                 runtime=runtime,
+                resume_artifacts=resume_artifacts,
+                shutdown_manager=shutdown_manager,
             )
+            model = typing.cast(
+                "transformers.PreTrainedModel",
+                trainer.model,  # type: ignore[reportUnknownMemberType]
+            )
+            tokenizer = typing.cast(
+                "transformers.PreTrainedTokenizer",
+                trainer.processing_class,  # type: ignore[reportUnknownMemberType]
+            )
+        else:
+            if resume_artifacts is not None:
+                # reinstantiate based on target checkpoint
+                model: transformers.PreTrainedModel = transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    resume_artifacts.checkpoint_path,
+                )
+                tokenizer: transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                    resume_artifacts.checkpoint_path,
+                )
+            else:
+                # get base (pretrained) model/tokenizers directly
+                model = config.get_model()
+                tokenizer = config.get_tokenizer()
         pyine.utils.distrib.barrier()
+
+        if config.training_args_config.do_predict and not shutdown_manager.should_terminate():
+            if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
+                runtime.wandb_run.summary["model_name"] = model.config.name_or_path
+            if pyine.utils.distrib.is_main_process():
+                await pyine.apps.trainers.common.evaluate_model(
+                    model=model,
+                    tokenizer=tokenizer,  # type: ignore[reportUnknownArgumentType]
+                    datamodule=datamodule,
+                    config=config,
+                    runtime=runtime,
+                    # TODO: maybe pass the shutdown_manager to the eval function too? (or let it die?)
+                )
+            pyine.utils.distrib.barrier()
+        elif config.training_args_config.do_predict:
+            logger.info("skipping evaluation because graceful shutdown was requested")
+
     if runtime is not None and pyine.utils.distrib.is_main_process():
         runtime.finalize()
 
