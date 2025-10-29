@@ -16,6 +16,7 @@ import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.distrib
 import pyine.utils.langchain
+import pyine.utils.portability
 import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.transformers
@@ -89,7 +90,7 @@ class AppMainConfig(pydantic.BaseModel):
     def normalize_for_resume_overlap_check(self) -> dict[str, typing.Any]:
         """Normalizes the config by removing fields that might change without effects on experiments."""
         # derives classes might want to override this and add new pops for other non-important attributes
-        data = self.model_dump(mode="json")
+        data = pyine.utils.portability.make_json_serializable(self.model_dump(mode="python"))
         data.pop("use_wandb_logging", None)
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)

@@ -15,10 +15,14 @@ import pydantic
 import torch
 import tqdm
 import transformers
+import transformers.trainer_utils
 
 import pyine.configs.schemas
+import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
+
+logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
 
@@ -923,7 +927,7 @@ def run_text_generation(
 
 
 def write_checkpoint_metadata(
-    checkpoint_dir: str,
+    checkpoint_dir: pathlib.Path,
     *,
     config: typing.Any,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
@@ -931,9 +935,8 @@ def write_checkpoint_metadata(
     shutdown_manager: typing.Any,
 ) -> None:
     """Persist run metadata alongside a Hugging Face checkpoint directory."""
-    checkpoint_path = pathlib.Path(checkpoint_dir).resolve()
-    checkpoint_path.mkdir(parents=True, exist_ok=True)
-    config_payload = config.model_dump(mode="json")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    config_payload = pyine.utils.portability.make_json_serializable(config.model_dump(mode="python"))
     metadata: dict[str, typing.Any] = {
         "global_step": state.global_step,
         "epoch": state.epoch,
@@ -953,8 +956,19 @@ def write_checkpoint_metadata(
     if runtime is not None:
         runtime_payload = runtime.model_dump(mode="json")
         metadata["runtime"] = runtime_payload
-    metadata_path = checkpoint_path / "run_meta.json"
+    metadata_path = checkpoint_dir / "run_meta.json"
+    logger.debug(f"writing checkpoint metadata to {metadata_path}")
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
+
+
+def get_checkpoint_folder_path(
+    args: transformers.TrainingArguments,
+    state: transformers.TrainerState,
+) -> pathlib.Path:
+    """Returns the folder path for a given checkpoint directory and training state."""
+    # the checkpoint dir name is hard-coded as follows in the transformers trainer impl:
+    ckpt_dir_name = f"{transformers.trainer_utils.PREFIX_CHECKPOINT_DIR}-{state.global_step}"
+    return pathlib.Path(args.output_dir or ".").resolve() / ckpt_dir_name
 
 
 class StdoutMilestones(transformers.TrainerCallback):
@@ -1139,8 +1153,8 @@ class StdoutMilestones(transformers.TrainerCallback):
         """Called when saving a checkpoint."""
         if not self._should_print(args):
             return
-        ckpt_dir = pathlib.Path(args.output_dir or ".") / f"checkpoint-{state.global_step}"
-        self.print_fn(f"save; checkpoint_dir={ckpt_dir.resolve().absolute()}")
+        ckpt_dir_path = get_checkpoint_folder_path(args, state)
+        self.print_fn(f"save; checkpoint_dir={ckpt_dir_path.absolute()}")
 
     @typing.override
     def on_train_end(

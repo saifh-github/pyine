@@ -51,9 +51,9 @@ def test_write_checkpoint_metadata_records_shutdown(tmp_path: pathlib.Path) -> N
     state.epoch = 0.0
     state.best_metric = None
     state.loss = 0.5
-    pyine.utils.transformers.write_checkpoint_metadata(  # type: ignore[attr-defined]
-        str(checkpoint_dir),
-        config=config,  # type: ignore[arg-type]
+    pyine.utils.transformers.write_checkpoint_metadata(
+        checkpoint_dir,
+        config=config,
         runtime=runtime,
         state=state,
         shutdown_manager=manager,

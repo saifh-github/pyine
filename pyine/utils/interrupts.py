@@ -12,6 +12,10 @@ import typing
 import transformers
 
 import pyine.utils.distrib
+import pyine.utils.transformers
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +203,7 @@ class GracefulShutdownCallback(transformers.TrainerCallback):
         self,
         *,
         shutdown_manager: GracefulShutdownManager,
-        metadata_writer: typing.Callable[[str, transformers.TrainerState], None],
+        metadata_writer: typing.Callable[[pathlib.Path, transformers.TrainerState], None],
     ) -> None:
         """Initialize the callback."""
         self._shutdown_manager = shutdown_manager
@@ -249,12 +253,13 @@ class GracefulShutdownCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> transformers.TrainerControl:
         """Writes checkpoint metadata after each checkpoint save."""
-        checkpoint_dir = typing.cast("str | None", kwargs.get("checkpoint_dir"))
-        if checkpoint_dir is None:
-            return control
         if not pyine.utils.distrib.is_main_process():
             return control
-        self._metadata_writer(checkpoint_dir, state)
+        # the callback should be called AFTER the creation of the checkpoint, so we know it should exist at this point
+        ckpt_dir_path = pyine.utils.transformers.get_checkpoint_folder_path(args, state)
+        if not ckpt_dir_path.is_dir():
+            raise RuntimeError(f"checkpoint directory does not exist: {ckpt_dir_path}")
+        self._metadata_writer(ckpt_dir_path, state)
         return control
 
     def _maybe_finalize(

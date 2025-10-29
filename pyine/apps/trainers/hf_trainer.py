@@ -9,6 +9,7 @@ This app wires together:
 
 import collections
 import logging
+import pathlib
 import time
 import typing
 
@@ -183,7 +184,7 @@ def train(
         logger.info(f"resuming from checkpoint: {resume_artifacts.checkpoint_path}")
         train_kwargs["resume_from_checkpoint"] = str(resume_artifacts.checkpoint_path)
 
-    def metadata_writer(checkpoint_dir: str, state: transformers.TrainerState) -> None:
+    def metadata_writer(checkpoint_dir: pathlib.Path, state: transformers.TrainerState) -> None:
         pyine.utils.transformers.write_checkpoint_metadata(
             checkpoint_dir,
             config=config,
