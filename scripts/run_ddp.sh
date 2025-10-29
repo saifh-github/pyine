@@ -112,7 +112,7 @@ export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}" # safer colle
 export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}" # future-proof
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"                            # quiet unless debugging
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"                     # keep CPU threads in check
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" # fewer OOM stalls
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}" # fewer OOM stalls
 export HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}"                   # full Hydra tracebacks (no trimming)
 PYTHON_BIN="${PYTHON_BIN:-python}"                                 # which Python to use (override if needed)
 
