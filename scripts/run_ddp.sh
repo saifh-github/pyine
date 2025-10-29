@@ -512,20 +512,11 @@ if [[ "${TEE_LOG}" != "0" ]]; then
 fi
 
 ###################################################
-#         Signal handling and execution
-###################################################
-# Ensure any child torchrun workers are terminated if this script is interrupted.
-# We SIGTERM the whole process group so no orphaned ranks linger on GPUs.
-# NOTE: In the TEE_LOG!="1" branch where we 'exec', this trap won't persist (intentional).
-trap 'echo "signal caught, terminating..."; kill -TERM -$$ 2>/dev/null || true' INT TERM
-
-###################################################
 #              Launch and log handling
 ###################################################
-# If tee is enabled, stream stdout/stderr to console and append to the launcher log.
-# console-only mode runs without touching the log file.
-# any other TEE_LOG value -> "log-only": exec torchrun and redirect to file.
-# IMPORTANT: we capture exit code from torchrun even when piped through tee.
+# if tee is enabled, stream stdout/stderr to console and append to the launcher log
+# IMPORTANT: we capture exit code from torchrun even when piped through tee;
+# run in foreground so bash forwards INT/TERM signals to torchrun for graceful shutdown.
 if [[ "${TEE_LOG}" == "1" ]]; then
   "${CMD[@]}" 2>&1 | tee -a "${LAUNCH_LOG}"
   exit_code=${PIPESTATUS[0]}   # exit code of "${CMD[@]}" side of the pipe
