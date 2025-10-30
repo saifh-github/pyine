@@ -406,10 +406,14 @@ def model_from_callable(
     base: type[pydantic.BaseModel] = pydantic.BaseModel,
     model_config: pydantic.ConfigDict | dict[str, typing.Any] | None = None,
     default_overrides: dict[str, typing.Any] | None = None,
+    type_overrides: dict[str, typing.Any] | None = None,
     resolve_annotations: bool = True,
     module_for_created_model: str | None = None,
 ) -> type[pydantic.BaseModel]:
     """Creates a Pydantic model whose fields mirror the parameters of a specified function (`fn`).
+
+    Supports default factories when parameter defaults (or overrides) are provided as
+    `pydantic.Field` or `dataclasses.field` instances.
 
     Args:
         fn: The function whose parameters should be used as the model fields.
@@ -423,6 +427,7 @@ def model_from_callable(
         base: Optional base class for the model. Defaults to `pydantic.BaseModel`.
         model_config: Optional model configuration dictionary or object.
         default_overrides: Optional dictionary of arguments with default values to override.
+        type_overrides: Optional dictionary of argument annotations to override.
         resolve_annotations: Whether to resolve annotations for the model fields. If False,
             will use the raw annotations from the function signature directly.
         module_for_created_model: Optional module name to use for the model class. If not set,
@@ -442,7 +447,46 @@ def model_from_callable(
     if not resolve_annotations:
         anns = inspect.get_annotations(fn, eval_str=False) or {}
         hints = {k: (typing.Any if isinstance(v, str) else v) for k, v in anns.items()}
+    field_info_type = getattr(pydantic.fields, "FieldInfo", None)
     default_overrides = default_overrides or {}
+    type_overrides = type_overrides or {}
+    dataclass_fields_by_name: dict[str, dataclasses.Field[typing.Any]] = {}
+    if inspect.isclass(fn) and dataclasses.is_dataclass(fn):
+        dataclass_fields_by_name = {field.name: field for field in dataclasses.fields(fn)}
+    dataclasses_has_default_factory = getattr(dataclasses, "_HAS_DEFAULT_FACTORY_CLASS", None)
+
+    def _normalize_default(
+        param_name: str,
+        raw_default: typing.Any,
+    ) -> typing.Any:
+        if field_info_type is not None and isinstance(raw_default, field_info_type):
+            return raw_default
+        if isinstance(raw_default, dataclasses.Field):
+            dataclass_field_info = typing.cast("dataclasses.Field[typing.Any]", raw_default)
+            default_factory_value = getattr(dataclass_field_info, "default_factory", dataclasses.MISSING)
+            if default_factory_value is not dataclasses.MISSING:
+                factory = typing.cast("typing.Callable[[], typing.Any]", default_factory_value)
+                return pydantic.Field(default_factory=factory)
+            default_value = getattr(dataclass_field_info, "default", dataclasses.MISSING)
+            if default_value is not dataclasses.MISSING:
+                return default_value
+            return ...
+        if (
+            dataclasses_has_default_factory is not None
+            and isinstance(raw_default, dataclasses_has_default_factory)
+            and param_name in dataclass_fields_by_name
+        ):
+            dataclass_field = dataclass_fields_by_name[param_name]
+            default_factory_value = getattr(dataclass_field, "default_factory", dataclasses.MISSING)
+            if default_factory_value is not dataclasses.MISSING:
+                factory = typing.cast("typing.Callable[[], typing.Any]", default_factory_value)
+                return pydantic.Field(default_factory=factory)
+            default_value = getattr(dataclass_field, "default", dataclasses.MISSING)
+            if default_value is not dataclasses.MISSING:
+                return default_value
+            return ...
+        return raw_default
+
     field_definitions: dict[str, tuple[typing.Any, typing.Any]] = {}
     for p in sig.parameters.values():
         if include and p.name not in include:
@@ -458,12 +502,14 @@ def model_from_callable(
             if not include_kwargs:
                 continue
             anno = dict[str, typing.Any]
-            default = {}
+            default = pydantic.Field(default_factory=dict)
         else:
-            anno = hints.get(p.name, typing.Any)
-            default = ... if p.default is inspect.Signature.empty else default_overrides.get(p.name, p.default)
+            anno = type_overrides.get(p.name, hints.get(p.name, typing.Any))
+            raw_default = ... if p.default is inspect.Signature.empty else default_overrides.get(p.name, p.default)
+            default = _normalize_default(p.name, raw_default)
         field_definitions[p.name] = (anno, default)
-    model_name = name or f"{getattr(fn, '__name__', fn.__class__.__name__)}ParamsConfig"
+    callable_name = getattr(fn, "__name__", type(fn).__name__)
+    model_name = name or f"{callable_name}ParamsConfig"
     if module_for_created_model is None:
         # default to the caller’s module if not provided
         frame = inspect.currentframe()

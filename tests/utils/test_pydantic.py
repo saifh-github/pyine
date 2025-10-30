@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import types
 import typing
@@ -589,3 +590,22 @@ class TestModelFromCallable:
 
         _ = pyd.model_from_callable(openai.OpenAI)
         # if we manage the create the above object, we've solved the forward-ref hints problem
+
+    def test_type_overrides_are_applied(self) -> None:
+        model_cls = pyd.model_from_callable(f_basic, type_overrides={"a": str})
+        assert model_cls.model_fields["a"].annotation is str
+
+    def test_dataclass_default_factory_is_preserved(self) -> None:
+        @dataclasses.dataclass
+        class Example:
+            required: int
+            extras: dict[str, int] = dataclasses.field(default_factory=dict)
+
+        model_cls = pyd.model_from_callable(Example)
+        extras_field = model_cls.model_fields["extras"]
+        assert extras_field.default is pydantic.fields.PydanticUndefined
+        assert extras_field.default_factory is dict
+        first_instance = model_cls(required=1)
+        second_instance = model_cls(required=2)
+        assert first_instance.extras == {} and second_instance.extras == {}
+        assert first_instance.extras is not second_instance.extras
