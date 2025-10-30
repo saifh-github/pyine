@@ -200,7 +200,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
         logger.info("  (setting up LoRA adapters)")
         logger.debug(f"lora_config: {config.lora_config}")
         if isinstance(config.lora_config, pyine.utils.transformers.LoraConfig):
-            lora_peft_config = peft.LoraConfig(**config.lora_config.model_dump())
+            lora_peft_config = config.lora_config.to_peft_config()
         else:
             assert isinstance(config.lora_config, peft.LoraConfig)
             lora_peft_config = config.lora_config

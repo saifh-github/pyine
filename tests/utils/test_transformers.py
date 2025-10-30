@@ -2,6 +2,7 @@ import types
 import typing
 
 import datasets
+import peft
 import pytest
 import torch
 import transformers
@@ -218,6 +219,14 @@ def test_build_example_ids_truncates_prompt_only(
     assert result["prompt_ids"] == expected_prompt_ids
     assert result["input_ids"] == expected_prompt_ids + response_ids
     assert result["input_ids"] == full_ids[-12:]
+
+
+def test_lora_config_to_peft_preserves_runtime_config() -> None:
+    lora_config = utils_transformers.LoraConfig.model_validate({})
+    peft_config = lora_config.to_peft_config()
+    assert isinstance(peft_config, peft.LoraConfig)
+    assert isinstance(peft_config.runtime_config, peft.LoraRuntimeConfig)
+    assert hasattr(peft_config.runtime_config, "ephemeral_gpu_offload")
 
 
 def test_prepare_examples_from_conversations_flattens_assistant_turns(

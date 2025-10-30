@@ -78,6 +78,18 @@ else:
     )
     """Configuration parameters for PEFT LoRA adapter configuration."""
 
+    def _to_peft_config(
+        self: "LoraConfig",
+    ) -> peft.LoraConfig:
+        """Serialization helper that converts the LoraConfig to a peft.LoraConfig."""
+        data = typing.cast("dict[str, typing.Any]", self.model_dump())
+        runtime_config_value = data.get("runtime_config")
+        if isinstance(runtime_config_value, dict) and not isinstance(runtime_config_value, peft.LoraRuntimeConfig):
+            data["runtime_config"] = peft.LoraRuntimeConfig(**runtime_config_value)
+        return peft.LoraConfig(**data)
+
+    LoraConfig.to_peft_config = _to_peft_config  # type: ignore[attr-defined]
+
 
 default_ignore_index: int = -100  # this is an extremely-commonly-used default in pytorch/huggingface
 """The default index to ignore when computing the loss on example tokens."""
