@@ -659,8 +659,5 @@ def test_prepare_resume_artifacts_auto_resume_config_mismatch(
         auto_resume_if_possible=True,
     )
     monkeypatch.setattr("transformers.trainer_utils.get_last_checkpoint", lambda x: str(checkpoint_dir))
-    result = trainer_common.prepare_resume_artifacts(config, runtime)
-    assert result is None
-    assert config.resume_from_run_dir is None
-    assert config.resume_checkpoint_name is None
-    assert "resumed_from_run_dir" not in runtime.metadata
+    with pytest.raises(ValueError, match="resume configuration mismatch detected"):
+        trainer_common.prepare_resume_artifacts(config, runtime)

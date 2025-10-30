@@ -16,9 +16,9 @@ class _ConfigStub:
 
     def model_dump(
         self,
-        mode: str = "json",
+        mode: str = "python",
     ) -> dict[str, object]:
-        assert mode == "json"
+        assert mode == "python"
         return self._payload
 
 

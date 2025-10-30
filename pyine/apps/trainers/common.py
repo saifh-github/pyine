@@ -87,10 +87,19 @@ class AppMainConfig(pydantic.BaseModel):
         """Returns whether the application configuration indicates that a run is being resumed."""
         return self.resume_from_run_dir is not None
 
-    def normalize_for_resume_overlap_check(self) -> dict[str, typing.Any]:
+    def normalize_for_resume_overlap_check(
+        self,
+        config: AppMainConfig | dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]:
         """Normalizes the config by removing fields that might change without effects on experiments."""
         # derives classes might want to override this and add new pops for other non-important attributes
-        data = pyine.utils.portability.make_json_serializable(self.model_dump(mode="python"))
+        if config is None:
+            data = pyine.utils.portability.make_json_serializable(self.model_dump(mode="python"))
+        elif isinstance(config, AppMainConfig):
+            data = pyine.utils.portability.make_json_serializable(config.model_dump(mode="python"))
+        else:
+            assert isinstance(config, dict)
+            data = config.copy()
         data.pop("use_wandb_logging", None)
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)
@@ -128,8 +137,8 @@ class ResumeArtifacts(pydantic.BaseModel):
     """Metadata dictionary stored alongside the checkpoint, if present."""
     checkpoint_metadata_path: pathlib.Path | None
     """Path to the checkpoint metadata file, if found."""
-    previous_config: pydantic.SerializeAsAny[AppMainConfig]
-    """Configuration object from the previous run, loaded from the logged config file."""
+    previous_config_dict: dict[str, typing.Any]
+    """Configuration object dump from the previous run, loaded from the logged config file."""
     previous_config_path: pathlib.Path | None
     """Path to the logged config file from the previous run, if found."""
     previous_runtime_dict: dict[str, typing.Any]
@@ -173,10 +182,9 @@ class ResumeArtifacts(pydantic.BaseModel):
         runtime_path = cls._find_first_matching_path(run_dir, "runtime.*.rank*.json")
         metadata_path = cls._find_first_matching_path(run_dir, "reprod_metadata.*.rank*.json")
         config_payload = cls._load_json_if_exists(config_path)
-        previous_config_payload = typing.cast("dict[str, typing.Any] | None", config_payload.get("main_config"))
-        if previous_config_payload is None:
+        previous_config = typing.cast("dict[str, typing.Any] | None", config_payload.get("main_config"))
+        if previous_config is None:
             raise ValueError("resume directory is missing the logged main_config payload")
-        previous_config = config.__class__.model_validate(previous_config_payload)
         cls._ensure_resume_config_matches(current_config=config, previous_config=previous_config)
         runtime_payload = cls._load_json_if_exists(runtime_path)
         metadata_payload = cls._load_json_if_exists(metadata_path)
@@ -264,7 +272,7 @@ class ResumeArtifacts(pydantic.BaseModel):
             checkpoint_path=checkpoint_path,
             checkpoint_metadata_dict=checkpoint_metadata_dict,
             checkpoint_metadata_path=checkpoint_metadata_path if checkpoint_metadata_path.is_file() else None,
-            previous_config=previous_config,
+            previous_config_dict=previous_config,
             previous_config_path=config_path,
             previous_runtime_dict=runtime_payload,
             previous_runtime_path=runtime_path,
@@ -304,10 +312,10 @@ class ResumeArtifacts(pydantic.BaseModel):
     @staticmethod
     def _ensure_resume_config_matches(
         current_config: AppMainConfig,
-        previous_config: AppMainConfig,
+        previous_config: dict[str, typing.Any] | AppMainConfig,
     ) -> None:
         current_payload = current_config.normalize_for_resume_overlap_check()
-        previous_payload = previous_config.normalize_for_resume_overlap_check()
+        previous_payload = current_config.normalize_for_resume_overlap_check(previous_config)
         if current_payload == previous_payload:
             return
         diff_keys: list[str] = []
@@ -381,7 +389,7 @@ def prepare_resume_artifacts(
         resume_artifacts = ResumeArtifacts.create(config, runtime)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         if auto_resume_activated:
-            logger.warning(f"auto-resume skipped because prerequisites were not met: {exc}")
+            logger.error(f"auto-resume aborted because prerequisites were not met: {exc}")
             if has_resume_dir_attr:
                 config.resume_from_run_dir = original_resume_dir
             elif hasattr(config, "resume_from_run_dir"):
@@ -390,7 +398,6 @@ def prepare_resume_artifacts(
                 config.resume_checkpoint_name = original_resume_checkpoint
             elif hasattr(config, "resume_checkpoint_name"):
                 delattr(config, "resume_checkpoint_name")
-            return None
         raise
     logger.info(f"prepared resume artifacts from run dir: {resume_artifacts.run_dir}")
     logger.debug(f"will resume training from checkpoint: {resume_artifacts.checkpoint_path}")

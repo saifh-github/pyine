@@ -11,6 +11,7 @@ import time
 import typing
 
 import datasets as hf_datasets
+import peft
 import pydantic
 import torch
 import tqdm
@@ -33,6 +34,11 @@ if typing.TYPE_CHECKING:
 
     class GenerationConfig(pydantic.BaseModel):
         """Stubbed interface for the HuggingFace text generation pipeline config class defined below."""
+
+        def __getattr__(self, name: str) -> typing.Any: ...
+
+    class LoraConfig(pydantic.BaseModel):
+        """Stubbed interface for the HuggingFace PEFT LoRA config class defined below."""
 
         def __getattr__(self, name: str) -> typing.Any: ...
 
@@ -63,6 +69,14 @@ else:
         },
     )
     """Configuration parameters for the HuggingFace text generation pipeline."""
+
+    LoraConfig = pyine.utils.pydantic.model_from_callable(
+        fn=peft.LoraConfig,
+        name="LoraConfig",
+        model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        type_overrides={"target_modules": (set[str] | list[str] | str | None)},
+    )
+    """Configuration parameters for PEFT LoRA adapter configuration."""
 
 
 default_ignore_index: int = -100  # this is an extremely-commonly-used default in pytorch/huggingface

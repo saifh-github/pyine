@@ -591,10 +591,6 @@ class TestModelFromCallable:
         _ = pyd.model_from_callable(openai.OpenAI)
         # if we manage the create the above object, we've solved the forward-ref hints problem
 
-    def test_type_overrides_are_applied(self) -> None:
-        model_cls = pyd.model_from_callable(f_basic, type_overrides={"a": str})
-        assert model_cls.model_fields["a"].annotation is str
-
     def test_dataclass_default_factory_is_preserved(self) -> None:
         @dataclasses.dataclass
         class Example:
@@ -609,3 +605,45 @@ class TestModelFromCallable:
         second_instance = model_cls(required=2)
         assert first_instance.extras == {} and second_instance.extras == {}
         assert first_instance.extras is not second_instance.extras
+
+    def test_default_overrides(self) -> None:
+        model_cls = pyd.model_from_callable(
+            f_basic,
+            default_overrides={"b": "overridden"},
+        )
+        # should override the default value for 'b' from "x" to "overridden"
+        assert model_cls.model_fields["b"].default == "overridden"
+        instance = model_cls(a=1)
+        assert instance.b == "overridden"
+
+    def test_type_overrides(self) -> None:
+        model_cls = pyd.model_from_callable(
+            f_basic,
+            type_overrides={"a": str, "d": dict[str, typing.Any]},
+        )
+        # 'a' should now be str instead of int
+        assert model_cls.model_fields["a"].annotation is str
+        # 'd' should now be dict[str, Any] instead of list[int] | None
+        assert model_cls.model_fields["d"].annotation == dict[str, typing.Any]
+        # validation should reflect the new types
+        instance = model_cls(a="string_value", d={"key": "value"})
+        assert instance.a == "string_value"
+        assert instance.d == {"key": "value"}
+        # should reject old type
+        with pytest.raises(pydantic.ValidationError):
+            model_cls(a=123)  # int is no longer valid for 'a'
+
+    def test_type_and_default_overrides_together(self) -> None:
+        model_cls = pyd.model_from_callable(
+            f_basic,
+            type_overrides={"c": int},
+            default_overrides={"c": 42},
+        )
+        # 'c' should now be int instead of Any, with default 42
+        assert model_cls.model_fields["c"].annotation is int
+        assert model_cls.model_fields["c"].default == 42
+        instance = model_cls(a=1)
+        assert instance.c == 42
+        # validation should enforce int type
+        with pytest.raises(pydantic.ValidationError):
+            model_cls(a=1, c="not_an_int")

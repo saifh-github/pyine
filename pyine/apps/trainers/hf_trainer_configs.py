@@ -4,6 +4,7 @@ If you execute this script directly, it will print all available experiment conf
 """
 
 import asyncio
+import dataclasses
 import itertools
 import logging
 import typing
@@ -54,7 +55,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         default="none",
         description='Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.',
     )
-    lora_config: peft.LoraConfig | None = pydantic.Field(
+    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = pydantic.Field(
         default=None,
         description="LoRA adapter configuration. If None, does not apply LoRA.",
     )
@@ -90,9 +91,13 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         if isinstance(data, dict):
             typed_data = typing.cast("dict[str, typing.Any]", data)
             lora_config = typed_data.get("lora_config")
-            if isinstance(lora_config, dict) and not isinstance(lora_config, peft.LoraConfig):
+            if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
+                return typed_data
+            if isinstance(lora_config, peft.LoraConfig):
+                return pyine.utils.transformers.LoraConfig.model_validate(dataclasses.asdict(lora_config))
+            if isinstance(lora_config, dict):
                 typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
-                typed_data["lora_config"] = peft.LoraConfig(**typed_lora_config)
+                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(typed_lora_config)
             return typed_data
         return data
 
@@ -116,9 +121,13 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         """Returns a pretrained model to use for experiments."""
         return instantiate_model(self)
 
-    def normalize_for_resume_overlap_check(self) -> dict[str, typing.Any]:
+    @typing.override
+    def normalize_for_resume_overlap_check(
+        self,
+        config: pyine.apps.trainers.common.AppMainConfig | dict[str, typing.Any] | None = None,
+    ) -> dict[str, typing.Any]:
         """Normalizes the config by removing fields that might change without effects on experiments."""
-        data = super().normalize_for_resume_overlap_check()
+        data = super().normalize_for_resume_overlap_check(config)
         assert "training_args_config" in data, "training_args_config not found in config"
         training_args = typing.cast("dict[str, typing.Any]", data["training_args_config"])
         # note: there are lots more, these are just the most typical ones...
@@ -190,10 +199,12 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     if config.lora_config is not None:
         logger.info("  (setting up LoRA adapters)")
         logger.debug(f"lora_config: {config.lora_config}")
-        model = typing.cast(
-            "transformers.PreTrainedModel",
-            peft.get_peft_model(model, config.lora_config),
-        )
+        if isinstance(config.lora_config, pyine.utils.transformers.LoraConfig):
+            lora_peft_config = peft.LoraConfig(**config.lora_config.model_dump())
+        else:
+            assert isinstance(config.lora_config, peft.LoraConfig)
+            lora_peft_config = config.lora_config
+        model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
     logger.info(f"model successfully created:\n{model}")
     model_config = getattr(model, "config", None)
     if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):
