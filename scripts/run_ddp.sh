@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------------------
-# run_ddp.sh - Launch Hydra/Transformers experiments with torchrun, forwarding overrides.
+# run_ddp.sh - Launches experiments with torchrun, forwarding arguments/overrides.
 #
 # IMPORTANT:
 #   - This script REQUIRES bash, not sh. SLURM job scripts sometimes default to /bin/sh.
@@ -11,7 +11,7 @@
 #     Secrets MUST come from a trusted .env file or some secure mechanism, NOT via CLI args.
 #
 # This script is designed for robustness and debuggability:
-#   - forwards everything after `--` to the target Python app (e.g. Hydra overrides);
+#   - forwards everything after `--` to the target Python app (e.g. args, or Hydra overrides);
 #   - works on single-node and multi-node (including SLURM);
 #   - auto-detects GPU count if you do not specify one;
 #   - captures a clean launcher log (optionally via `tee`);
@@ -28,7 +28,7 @@ IFS=$'\n\t'
 ###################################################
 #    Early .env loading (BEFORE anything else)
 ###################################################
-# We support an env file according to this priority:
+# We support an env file to override subsequent default vars according to this priority:
 #   1) `--env-file <path>` flag (first occurrence on CLI, parsed in this pre-pass)
 #   2) $ENVFILE environment variable
 #   3) ./.env in current working directory
@@ -109,12 +109,21 @@ DRY_RUN="${DRY_RUN:-0}"                                    # 1 -> print info and
 # optional environment knobs
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"   # avoid tokenizer thread storms
 export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}" # safer collective error handling
-export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}" # future-proof
+export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}" # future-proof for above
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"                            # quiet unless debugging
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"                     # keep CPU threads in check
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}" # fewer OOM stalls
 export HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}"                   # full Hydra tracebacks (no trimming)
 PYTHON_BIN="${PYTHON_BIN:-python}"                                 # which Python to use (override if needed)
+
+# internal defines
+TORCHRUN_PID=""
+TORCHRUN_PGID=""
+TEE_CHILD_PID=""
+OUTPUT_PIPE_PATH=""
+TRAPS_INSTALLED=0
+LAUNCHER_PGID=""
+TORCHRUN_SPAWNED_WITH_SETSID=0
 
 ###################################################
 #                 Helper defs
@@ -238,6 +247,58 @@ else:
     digest = int(hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest(), 16)
     print(port_min + (digest % port_span))
 PY
+}
+
+cleanup_launch_artifacts() {
+  # shell safety: ignore errors in cleanup paths
+  set +e
+  trap - EXIT
+  if [[ ${TRAPS_INSTALLED:-0} -eq 1 ]]; then
+    trap - INT TERM
+    TRAPS_INSTALLED=0
+  fi
+  if [[ -n "${TORCHRUN_PID:-}" ]] && kill -0 "${TORCHRUN_PID}" 2>/dev/null; then
+    wait "${TORCHRUN_PID}" 2>/dev/null
+  fi
+  if [[ -n "${TEE_CHILD_PID:-}" ]] && kill -0 "${TEE_CHILD_PID}" 2>/dev/null; then
+    wait "${TEE_CHILD_PID}" 2>/dev/null
+  fi
+  if [[ -n "${OUTPUT_PIPE_PATH:-}" && -p "${OUTPUT_PIPE_PATH}" ]]; then
+    rm -f "${OUTPUT_PIPE_PATH}"
+  fi
+  TORCHRUN_PID=""
+  TORCHRUN_PGID=""
+  TEE_CHILD_PID=""
+  OUTPUT_PIPE_PATH=""
+  LAUNCHER_PGID=""
+  TORCHRUN_SPAWNED_WITH_SETSID=0
+  set -e
+}
+
+forward_signal_to_child() {
+  local signal="$1"
+  if [[ -z "${TORCHRUN_PID:-}" ]]; then
+    return
+  fi
+  if ! kill -0 "${TORCHRUN_PID}" 2>/dev/null; then
+    return
+  fi
+  local target_pgid="${TORCHRUN_PGID:-}"
+  if [[ -n "${target_pgid}" && -n "${LAUNCHER_PGID:-}" && "${target_pgid}" == "${LAUNCHER_PGID}" ]]; then
+    target_pgid=""
+  fi
+  if [[ -n "${target_pgid}" ]]; then
+    kill -"${signal}" "-${target_pgid}" 2>/dev/null || true
+  fi
+  kill -"${signal}" "${TORCHRUN_PID}" 2>/dev/null || true
+}
+
+handle_sigint() {
+  forward_signal_to_child SIGINT
+}
+
+handle_sigterm() {
+  forward_signal_to_child SIGTERM
 }
 
 ###################################################
@@ -422,7 +483,10 @@ fi
 PY_ENTRY=(-m "${APP_MODULE}")
 
 # final command: torchrun launcher + python module + forwarded app or Hydra args
-CMD=("${TORCHRUN_BASE[@]}" "${PY_ENTRY[@]}" "${APP_ARGS[@]}")
+CMD=("${TORCHRUN_BASE[@]}" "${PY_ENTRY[@]}")
+if [[ ${#APP_ARGS[@]} -gt 0 ]]; then
+  CMD+=("${APP_ARGS[@]}")
+fi
 
 if ! command -v torchrun >/dev/null 2>&1; then
   echo "Error: torchrun not found on PATH. Install PyTorch with distributed support." >&2
@@ -515,11 +579,51 @@ fi
 #              Launch and log handling
 ###################################################
 # if tee is enabled, stream stdout/stderr to console and append to the launcher log
-# IMPORTANT: we capture exit code from torchrun even when piped through tee;
-# run in foreground so bash forwards INT/TERM signals to torchrun for graceful shutdown.
+# IMPORTANT: we capture torchrun's exit code even when tee is engaged and install traps so
+# SIGINT/SIGTERM are forwarded explicitly to the torchrun session (or PID) for graceful shutdown.
 if [[ "${TEE_LOG}" == "1" ]]; then
-  "${CMD[@]}" 2>&1 | tee -a "${LAUNCH_LOG}"
-  exit_code=${PIPESTATUS[0]}   # exit code of "${CMD[@]}" side of the pipe
+  trap cleanup_launch_artifacts EXIT
+  trap handle_sigint INT
+  trap handle_sigterm TERM
+  TRAPS_INSTALLED=1
+
+  OUTPUT_PIPE_PATH="$(mktemp)"
+  rm -f "${OUTPUT_PIPE_PATH}"
+  mkfifo "${OUTPUT_PIPE_PATH}"
+
+  tee -a "${LAUNCH_LOG}" < "${OUTPUT_PIPE_PATH}" &
+  TEE_CHILD_PID=$!
+
+  TORCHRUN_SPAWNED_WITH_SETSID=0
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${CMD[@]}" > "${OUTPUT_PIPE_PATH}" 2>&1 &
+    TORCHRUN_SPAWNED_WITH_SETSID=1
+  else
+    "${CMD[@]}" > "${OUTPUT_PIPE_PATH}" 2>&1 &
+  fi
+  TORCHRUN_PID=$!
+  if [[ -z "${LAUNCHER_PGID:-}" ]]; then
+    if launcher_pgid_output=$(ps -o pgid= -p $$ 2>/dev/null); then
+      LAUNCHER_PGID="$(tr -d '[:space:]' <<<"${launcher_pgid_output}")"
+    else
+      LAUNCHER_PGID=""
+    fi
+  fi
+  if pgid_output=$(ps -o pgid= -p "${TORCHRUN_PID}" 2>/dev/null); then
+    TORCHRUN_PGID="$(tr -d '[:space:]' <<<"${pgid_output}")"
+  elif [[ "${TORCHRUN_SPAWNED_WITH_SETSID}" == "1" ]]; then
+    TORCHRUN_PGID="${TORCHRUN_PID}"
+  else
+    TORCHRUN_PGID=""
+  fi
+
+  wait "${TORCHRUN_PID}"
+  exit_code=$?
+
+  # close writer and let tee flush remaining output
+  wait "${TEE_CHILD_PID}" 2>/dev/null || true
+
+  cleanup_launch_artifacts
   exit "${exit_code}"
 elif [[ "${TEE_LOG}" == "0" ]]; then
   "${CMD[@]}"
