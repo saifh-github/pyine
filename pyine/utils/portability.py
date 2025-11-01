@@ -27,6 +27,13 @@ import rich.table
 import rich.text
 import yaml
 
+ConfigDisplayType = (
+    hydra_zen.typing.Builds[typing.Any]
+    | type[typing.Any]
+    | collections.abc.Mapping[str, typing.Any]
+    | omegaconf.DictConfig
+)
+
 
 def get_portable_representation(
     obj: typing.Any,
@@ -548,7 +555,7 @@ yaml.Dumper.add_multi_representer(pathlib.Path, _path_representer)
 
 
 def render_config(
-    cfg_type: hydra_zen.typing.Builds[typing.Any] | type[typing.Any],
+    cfg_type: ConfigDisplayType,
     cfg_values: typing.Any | None = None,
     *,
     show_field_descriptions: bool = False,
@@ -577,8 +584,13 @@ def render_config(
         or "<no config documentation available>"
     ).strip()
     default_title = getattr(cfg_type, "__name__", "Config")
-    if hasattr(cfg_type, "__cfg_name__") and hasattr(cfg_type, "__cfg_group__"):
-        default_title += f" => '+{cfg_type.__cfg_group__}={cfg_type.__cfg_name__}'"
+    cfg_group = getattr(cfg_type, "__cfg_group__", None)
+    cfg_name = getattr(cfg_type, "__cfg_name__", None)
+    if isinstance(cfg_type, collections.abc.Mapping):
+        cfg_group = cfg_type.get("__cfg_group__", cfg_group)
+        cfg_name = cfg_type.get("__cfg_name__", cfg_name)
+    if cfg_name and cfg_group:
+        default_title += f" => '+{cfg_group}={cfg_name}'"
     # start building the table that will contain config fields/types/values/(descriptions)
     table = rich.table.Table(expand=True)
     table.box = rich.box.SIMPLE_HEAD

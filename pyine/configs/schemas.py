@@ -1,3 +1,4 @@
+import collections.abc
 import logging
 import os
 import pathlib
@@ -256,7 +257,12 @@ class ConfigDescription(pydantic.BaseModel):
     we will look for a `__cfg_description__`, `__description__`, or `__doc__` field in the config
     to use as the description.
     """
-    config: hydra_zen.typing.Builds[typing.Any] | type[typing.Any]
+    config: (
+        hydra_zen.typing.Builds[typing.Any]
+        | type[typing.Any]
+        | collections.abc.MutableMapping[str, typing.Any]
+        | omegaconf.DictConfig
+    )
     """Hydra-zen config object (can be used for instantiations and as a base in new definitions)."""
 
     @staticmethod
@@ -297,14 +303,22 @@ class ConfigDescription(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def _attach_config_attributes(self) -> "ConfigDescription":
         """Attaches description/name/group to the config."""
-        self.config.__cfg_name__ = self.name
-        self.config.__cfg_group__ = self.group
-        self.config.__cfg_package__ = self.package
-        self.config.__cfg_description__ = self.description
-        if hasattr(self.config, "zen_meta"):
+        if isinstance(self.config, collections.abc.MutableMapping):
+            config_mapping = typing.cast("collections.abc.MutableMapping[str, typing.Any]", self.config)
+            config_mapping["__cfg_name__"] = self.name
+            config_mapping["__cfg_group__"] = self.group
+            config_mapping["__cfg_package__"] = self.package
+            config_mapping["__cfg_description__"] = self.description
+        else:
+            self.config.__cfg_name__ = self.name
+            self.config.__cfg_group__ = self.group
+            self.config.__cfg_package__ = self.package
+            self.config.__cfg_description__ = self.description
+        zen_meta = getattr(self.config, "zen_meta", None)
+        if isinstance(zen_meta, collections.abc.MutableMapping):
             # @@@@ TODO might need to update zen exclude?
-            self.config.zen_meta["__cfg_name__"] = self.name
-            self.config.zen_meta["__cfg_group__"] = self.group
-            self.config.zen_meta["__cfg_package__"] = self.package
-            self.config.zen_meta["__cfg_description__"] = self.description
+            zen_meta["__cfg_name__"] = self.name
+            zen_meta["__cfg_group__"] = self.group
+            zen_meta["__cfg_package__"] = self.package
+            zen_meta["__cfg_description__"] = self.description
         return self

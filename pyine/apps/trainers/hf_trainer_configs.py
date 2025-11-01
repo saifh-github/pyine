@@ -528,7 +528,7 @@ def register_hydra_configs(
     configs_to_register.extend(external_configs)
     for config in configs_to_register:
         assert config.name is not None, "config names should have been set and validated by now"
-        store(config.config, name=config.name, group=config.group, package=config.package)
+        store(typing.cast("typing.Any", config.config), name=config.name, group=config.group, package=config.package)
     store.add_to_hydra_store(overwrite_ok=True)  # to avoid issues with name conflicts in tests
     return [*base_configs, *configs_to_register]
 
