@@ -462,6 +462,7 @@ def prepare_datamodule(
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
     dm.prepare_data()
+    pyine.utils.distrib.barrier()  # wait for all processes to finish preparing data
     dm.setup()
     if (
         config.use_wandb_logging
