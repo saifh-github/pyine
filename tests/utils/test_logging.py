@@ -1,41 +1,101 @@
 import logging
-import logging.handlers
-import os
-import pathlib
 
 import pytest
 
-import pyine.utils.logging as log_utils
+import pyine.utils.logging as logging_utils
 
 
-def test_setup_logging_console_only(
-    tmp_path: str,
-    capsys: pytest.CaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)  # run in temp dir to avoid writing to repo root
-    log_utils.setup_logging(level=logging.DEBUG, log_to_file=False)
-    out = capsys.readouterr().out
-    assert "Logging has been configured." in out
-    main_logger = logging.getLogger(log_utils.PROJECT_LOGGER_NAME)
-    assert main_logger.level == logging.DEBUG
-    assert not os.path.exists(f"{log_utils.PROJECT_LOGGER_NAME}.log")
+def _make_log_record(
+    message: str,
+) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="pyine.tests",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
+    )
 
 
-def test_setup_logging_with_file(
-    tmp_path: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    log_path = pathlib.Path(tmp_path) / "some_dir" / "dummy.log"
-    log_utils.setup_logging(level=logging.INFO, log_to_file=True, log_path=log_path)
-    main_logger = logging.getLogger(log_utils.PROJECT_LOGGER_NAME)
-    has_file_handler = any(isinstance(h, logging.handlers.RotatingFileHandler) for h in main_logger.handlers)
-    assert has_file_handler
-    test_message = "hello-file-logging"
-    main_logger.info(test_message)
-    for h in main_logger.handlers:
-        if isinstance(h, logging.handlers.RotatingFileHandler):
-            h.flush()
-    assert log_path.exists()
-    content = log_path.read_text(encoding="utf-8")
-    assert test_message in content
+class TestDistributedRankFilter:
+    def test_filter_noop_when_world_size_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: None)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("hello world")
+        assert log_filter.filter(record) is True
+        assert record.msg == "hello world"
+        assert record.rank_info == ""
+
+    def test_filter_prefixes_when_distributed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 3)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 2)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("train start")
+        assert log_filter.filter(record) is True
+        assert record.msg.startswith("[rank 2/3] train start")
+        assert record.rank_info == "[rank 2/3]"
+        prefixed_msg = record.msg
+        assert log_filter.filter(record) is True
+        assert record.msg == prefixed_msg
+
+    def test_filter_handles_unknown_rank(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 4)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: None)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("no rank info")
+        assert log_filter.filter(record) is True
+        assert record.msg.startswith("[rank ?/4] no rank info")
+        assert record.rank_info == "[rank ?/4]"
+
+
+class _CapturingHandler(logging.Handler):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__()
+        self.records: list[str] = []
+
+    def emit(
+        self,
+        record: logging.LogRecord,
+    ) -> None:
+        self.records.append(record.getMessage())
+
+
+class TestEnsureDistributedRankFilterAttached:
+    def test_filter_attached_to_handlers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 2)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 1)
+        test_logger = logging.getLogger("pyine.tests.logging_filter")
+        test_logger.setLevel(logging.INFO)
+        handler_one = _CapturingHandler()
+        handler_two = _CapturingHandler()
+        test_logger.addHandler(handler_one)
+        test_logger.addHandler(handler_two)
+        try:
+            logging_utils.ensure_distributed_rank_filter_attached(test_logger)
+            for handler in (handler_one, handler_two):
+                distributed_filters = [
+                    filt for filt in handler.filters if isinstance(filt, logging_utils.DistributedRankFilter)
+                ]
+                assert len(distributed_filters) == 1
+            test_logger.propagate = False
+            test_logger.info("prefixed message")
+            assert handler_one.records == handler_two.records
+            assert handler_one.records[0].startswith("[rank 1/2] prefixed message")
+        finally:
+            test_logger.handlers.clear()

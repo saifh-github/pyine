@@ -367,6 +367,7 @@ def entrypoint_setup(
                 log_to_file=True,
                 log_path=None,  # use the framework's shared default log path by default
             )
+        pyine.utils.logging.ensure_distributed_rank_filter_attached()
         logging.captureWarnings(True)
         warnings.simplefilter("default")
         if disable_http_logging_info_msgs:
