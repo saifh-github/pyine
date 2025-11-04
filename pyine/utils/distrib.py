@@ -132,7 +132,17 @@ def barrier() -> None:
         return
     if not torch.distributed.is_initialized():
         return
-    torch.distributed.barrier()  # type: ignore[reportUnknownMemberType]
+    device_ids = None
+    if torch.cuda.is_available():
+        backend = torch.distributed.get_backend()
+        if backend == "nccl":
+            local_rank = get_local_rank(default=None)
+            if local_rank is not None and 0 <= local_rank < torch.cuda.device_count():
+                current_device = torch.cuda.current_device()
+                if current_device != local_rank:
+                    torch.cuda.set_device(local_rank)
+                device_ids = [local_rank]
+    torch.distributed.barrier(device_ids=device_ids)  # type: ignore[reportUnknownMemberType]
 
 
 def broadcast_object(
