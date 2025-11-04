@@ -234,6 +234,12 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         )
         max_prompt_len: int = model_max_seq_len - max_generation_tokens
         assert max_prompt_len > 0, "invalid max prompt length"
+        if getattr(model.config, "use_cache", None) is False:
+            logger.debug("re-enabling kv-cache for generation evals")
+            model.config.use_cache = True
+        if getattr(model, "gradient_checkpointing", False):
+            logger.debug("disabling gradient checkpointing for generation evals")
+            model.gradient_checkpointing_disable()
         _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
         prompts_ds = datamodule.get_hf_messages_dataset(
             subset_name=eval_subset_name,
