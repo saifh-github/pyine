@@ -13,6 +13,7 @@ import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.utils.samples
+import pyine.utils.distrib
 import pyine.utils.filesystem
 import pyine.utils.reprod
 from pyine.organisms.datamodules.shortcuts_configs import (
@@ -71,8 +72,9 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         will only run on the main process.
         """
         lmdb_paths_str = "\n\t".join([str(p) for p in self.config.lmdb_paths])
-        if self._is_metadata_prepared():
-            logger.info(f"using cached shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
+        if self._is_metadata_prepared() or not pyine.utils.distrib.is_main_process():
+            if pyine.utils.distrib.is_main_process():
+                logger.info(f"using cached shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
             return
         logger.info(f"preparing shortcuts datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
         # first prep step: identify which traces are to be kept based on our base tag filter rule
@@ -105,7 +107,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
             augment_types=pyine.organisms.datamodules.utils.samples.get_supported_augment_types(),
             split_hash=split_hash,
         )
-        logger.info(f"done; saving prepared metadata to: {self._get_prepared_metadata_file_path()}")
         self._save_prepared_metadata(metadata)
 
     def _apply_max_solution_count_cap(
@@ -153,6 +154,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def _save_prepared_metadata(self, metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata) -> None:
         """Saves the prepared metadata to a local tmpdir."""
         encoded_data = msgspec.msgpack.encode(metadata.model_dump())
+        logger.info(f"saving prepared shortcuts datamodule metadata to: {self._get_prepared_metadata_file_path()}")
         with open(self._get_prepared_metadata_file_path(), "wb") as fd:
             fd.write(encoded_data)
 
@@ -160,6 +162,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         self,
     ) -> pyine.data.traces.dataset_utils.TraceDatasetMetadata:
         """Loads the prepared metadata from a local tmpdir."""
+        logger.debug(f"loading shortcuts datamodule metadata from: {self._get_prepared_metadata_file_path()}")
         with open(self._get_prepared_metadata_file_path(), "rb") as fd:
             encoded_data = msgspec.msgpack.decode(fd.read())
         return pyine.data.traces.dataset_utils.TraceDatasetMetadata.model_validate(encoded_data)
@@ -188,7 +191,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         """
         if not self._is_metadata_prepared():
             raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
-        logger.debug(f"loading shortcuts datamodule metadata from: {self._get_prepared_metadata_file_path()}")
         self._metadata = self._load_prepared_metadata()
         # note: we share lmdb readers across all parsers since they should be read-only and never pickled
         readers: list[pyine.data.traces.dataset_reader.DatasetProtocol] = [
