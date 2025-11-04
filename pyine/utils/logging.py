@@ -24,8 +24,8 @@ class DistributedRankFilter(logging.Filter):
     """Logging filter that prefixes log messages with distributed rank information.
 
     When running in distributed mode (world size > 1), this filter prefixes log messages with a
-    `[rank X/Y]` tag indicating the current process rank and total world size. It can also promote
-    log records emitted by non-primary ranks to warning level to reduce chatter (opt out via
+    `[rank X/Y]` tag indicating the current process rank and total world size. It can also suppress
+    log records emitted by non-primary ranks when their severity is below WARNING (opt out via
     `PYINE_LOG_NON_PRIMARY_WARN_ONLY=0`). The prefix is injected exactly once per log record,
     regardless of how many handlers process the record.
     """
@@ -59,12 +59,11 @@ class DistributedRankFilter(logging.Filter):
         if world_size is None or world_size <= 1:
             return True
         rank = distrib_utils.get_global_rank(default=None)
+        if self._reduce_non_primary_log_level and rank not in (None, 0) and record.levelno < logging.WARNING:
+            return False
         rank_display = "?" if rank is None else str(rank)
         rank_token = f"[rank {rank_display}/{world_size}]"
         record.rank_info = rank_token
-        if self._reduce_non_primary_log_level and rank not in (None, 0) and record.levelno < logging.WARNING:
-            record.levelno = logging.WARNING
-            record.levelname = logging.getLevelName(record.levelno)
         if not getattr(record, "_pyine_rank_prefixed", False):
             record.msg = f"{rank_token} {record.msg}"
             record._pyine_rank_prefixed = True

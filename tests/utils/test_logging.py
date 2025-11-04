@@ -31,7 +31,7 @@ class TestDistributedRankFilter:
         assert record.msg == "hello world"
         assert record.rank_info == ""
 
-    def test_filter_prefixes_when_distributed(
+    def test_filter_drops_info_from_secondary_rank(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -40,14 +40,9 @@ class TestDistributedRankFilter:
         monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 2)
         log_filter = logging_utils.DistributedRankFilter()
         record = _make_log_record("train start")
-        assert log_filter.filter(record) is True
-        assert record.msg.startswith("[rank 2/3] train start")
-        assert record.rank_info == "[rank 2/3]"
-        assert record.levelno == logging.WARNING
-        assert record.levelname == "WARNING"
-        prefixed_msg = record.msg
-        assert log_filter.filter(record) is True
-        assert record.msg == prefixed_msg
+        assert log_filter.filter(record) is False
+        assert record.msg == "train start"
+        assert record.rank_info == ""
 
     def test_filter_handles_unknown_rank(
         self,
@@ -62,7 +57,7 @@ class TestDistributedRankFilter:
         assert record.rank_info == "[rank ?/4]"
         assert record.levelno == logging.INFO
 
-    def test_filter_does_not_promote_rank_zero(
+    def test_filter_preserves_primary_rank_records(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -78,7 +73,23 @@ class TestDistributedRankFilter:
         assert record.levelno == logging.INFO
         assert record.levelname == "INFO"
 
-    def test_filter_promotion_can_be_disabled_via_env(
+    def test_filter_secondary_warning_is_emitted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "1")
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 5)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 3)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("secondary warning")
+        record.levelno = logging.WARNING
+        record.levelname = "WARNING"
+        assert log_filter.filter(record) is True
+        assert record.msg.startswith("[rank 3/5] secondary warning")
+        assert record.levelno == logging.WARNING
+        assert record.levelname == "WARNING"
+
+    def test_filter_suppression_can_be_disabled_via_env(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -128,8 +139,8 @@ class TestEnsureDistributedRankFilterAttached:
                 ]
                 assert len(distributed_filters) == 1
             test_logger.propagate = False
-            test_logger.info("prefixed message")
+            test_logger.warning("prefixed warning")
             assert handler_one.records == handler_two.records
-            assert handler_one.records[0].startswith("[rank 1/2] prefixed message")
+            assert handler_one.records[0].startswith("[rank 1/2] prefixed warning")
         finally:
             test_logger.handlers.clear()
