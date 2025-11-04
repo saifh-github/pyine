@@ -35,6 +35,7 @@ class TestDistributedRankFilter:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "1")
         monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 3)
         monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 2)
         log_filter = logging_utils.DistributedRankFilter()
@@ -42,6 +43,8 @@ class TestDistributedRankFilter:
         assert log_filter.filter(record) is True
         assert record.msg.startswith("[rank 2/3] train start")
         assert record.rank_info == "[rank 2/3]"
+        assert record.levelno == logging.WARNING
+        assert record.levelname == "WARNING"
         prefixed_msg = record.msg
         assert log_filter.filter(record) is True
         assert record.msg == prefixed_msg
@@ -57,6 +60,37 @@ class TestDistributedRankFilter:
         assert log_filter.filter(record) is True
         assert record.msg.startswith("[rank ?/4] no rank info")
         assert record.rank_info == "[rank ?/4]"
+        assert record.levelno == logging.INFO
+
+    def test_filter_does_not_promote_rank_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "1")
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 4)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 0)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("primary rank info")
+        record.levelno = logging.INFO
+        record.levelname = "INFO"
+        assert log_filter.filter(record) is True
+        assert record.msg.startswith("[rank 0/4] primary rank info")
+        assert record.levelno == logging.INFO
+        assert record.levelname == "INFO"
+
+    def test_filter_promotion_can_be_disabled_via_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "0")
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 5)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 3)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("secondary rank info")
+        assert log_filter.filter(record) is True
+        assert record.msg.startswith("[rank 3/5] secondary rank info")
+        assert record.levelno == logging.INFO
+        assert record.levelname == "INFO"
 
 
 class _CapturingHandler(logging.Handler):

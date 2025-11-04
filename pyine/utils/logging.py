@@ -1,19 +1,45 @@
 import logging
 import logging.config
+import os
 import pathlib
 import typing
 
 PROJECT_LOGGER_NAME = "pyine"
 """The name of the root logger for the entire PyINE framework."""
 
+REDUCE_NON_PRIMARY_LOG_LEVEL_ENV = "PYINE_LOG_NON_PRIMARY_WARN_ONLY"
+"""Env var that toggles warning-level promotion for non-primary ranks."""
+
+
+def _should_reduce_non_primary_log_level() -> bool:
+    """Return whether non-primary ranks should have their logs promoted to warnings."""
+    env_value = os.getenv(REDUCE_NON_PRIMARY_LOG_LEVEL_ENV)
+    if env_value is None:
+        return True  # defaults to true
+    normalized = env_value.strip().lower()
+    return normalized not in {"0", "false", "off", "no"}
+
 
 class DistributedRankFilter(logging.Filter):
     """Logging filter that prefixes log messages with distributed rank information.
 
     When running in distributed mode (world size > 1), this filter prefixes log messages with a
-    `[rank X/Y]` tag indicating the current process rank and total world size. The prefix is
-    injected exactly once per log record, regardless of how many handlers process the record.
+    `[rank X/Y]` tag indicating the current process rank and total world size. It can also promote
+    log records emitted by non-primary ranks to warning level to reduce chatter (opt out via
+    `PYINE_LOG_NON_PRIMARY_WARN_ONLY=0`). The prefix is injected exactly once per log record,
+    regardless of how many handlers process the record.
     """
+
+    def __init__(
+        self,
+        reduce_non_primary_log_level: bool | None = None,
+    ) -> None:
+        super().__init__()
+        self._reduce_non_primary_log_level = (
+            _should_reduce_non_primary_log_level()
+            if reduce_non_primary_log_level is None
+            else reduce_non_primary_log_level
+        )
 
     @typing.override
     def filter(
@@ -36,6 +62,9 @@ class DistributedRankFilter(logging.Filter):
         rank_display = "?" if rank is None else str(rank)
         rank_token = f"[rank {rank_display}/{world_size}]"
         record.rank_info = rank_token
+        if self._reduce_non_primary_log_level and rank not in (None, 0) and record.levelno < logging.WARNING:
+            record.levelno = logging.WARNING
+            record.levelname = logging.getLevelName(record.levelno)
         if not getattr(record, "_pyine_rank_prefixed", False):
             record.msg = f"{rank_token} {record.msg}"
             record._pyine_rank_prefixed = True
