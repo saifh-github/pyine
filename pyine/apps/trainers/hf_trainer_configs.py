@@ -95,12 +95,15 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
             if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
                 return typed_data
             if isinstance(lora_config, peft.LoraConfig):
-                return pyine.utils.transformers.LoraConfig.model_validate(dataclasses.asdict(lora_config))
+                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(
+                    dataclasses.asdict(lora_config)
+                )
+                return typed_data
             if isinstance(lora_config, dict):
                 typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
                 typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(typed_lora_config)
-            return typed_data
-        return data
+                return typed_data
+        return typing.cast("typing.Any", data)
 
     @property
     def target_dtype(self) -> torch.dtype:
