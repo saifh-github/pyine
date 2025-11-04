@@ -1,3 +1,4 @@
+import contextlib
 import itertools
 import logging
 import os
@@ -283,7 +284,8 @@ def _fallback_barrier_if_needed() -> None:
             )
         time.sleep(0.1)
     rank_file.unlink()
-    if rank == 0:
+    with contextlib.suppress(OSError):
+        # other ranks may still be removing their marker files; whichever finishes last will succeed
         barrier_dir.rmdir()
 
 
