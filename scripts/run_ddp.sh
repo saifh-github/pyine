@@ -101,7 +101,7 @@ if [[ "${MASTER_PORT}" != "${MASTER_PORT_DEFAULT}" ]]; then _MASTER_PORT_IS_DEFA
 MASTER_PORT_FROM_FLAG=0
 
 LOG_DIR="${LOG_DIR:-logs/ddp}"                             # where to write the launcher log
-RUN_NAME="${RUN_NAME:-$(date +'%Y%m%d_%H%M%S')_rank${NODE_RANK}_$$}" # label appended to log filename
+RUN_NAME="${RUN_NAME:-$(date +'%Y%m%d-%H%M%S')-rank${NODE_RANK}-$$}" # label appended to log filename
 TEE_LOG="${TEE_LOG:-1}"                                    # 1 -> console+log, 0 -> console only, other -> log only
 DEBUG="${DEBUG:-0}"                                        # 1 -> verbose NCCL / distributed debug (no shell trace)
 DRY_RUN="${DRY_RUN:-0}"                                    # 1 -> print info and exit without launching

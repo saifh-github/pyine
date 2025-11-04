@@ -72,7 +72,7 @@ def get_timestamp(time_since_epoch: float | None = None) -> str:
     if time_since_epoch is None:
         time_since_epoch = time.time()
     local_time = time.localtime(time_since_epoch)
-    return time.strftime("%Y%m%d_%H%M%S", local_time)
+    return time.strftime("%Y%m%d-%H%M%S", local_time)
 
 
 def get_framework_version() -> str:
