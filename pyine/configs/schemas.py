@@ -121,7 +121,7 @@ class RuntimeConfig(pydantic.BaseModel):
             "tags": sorted(set(self.tags)) if self.tags else None,
             "group": self.run_group,
             "job_type": self.app_name,
-            "dir": self.output_dir_path / "wandb",
+            "dir": self.output_dir_path,
             # TODO: could set run id based on e.g. slurm id here if needed
         }
         default_kwargs.update(init_kwargs)
