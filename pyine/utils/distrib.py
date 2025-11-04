@@ -259,17 +259,20 @@ def _fallback_barrier_if_needed() -> None:
 
     We rely on the launcher (torchrun, SLURM, etc.) to set rank and world-size environment
     variables. Each worker writes a marker file to a shared rendezvous directory; once all markers
-    exist, the barrier completes. Rank 0 then removes the rendezvous directory so repeated barriers
-    do not leak files. This provides a safe pre-DDP synchronization point without double-initializing
-    the process group Hugging Face owns.
+    exist, the barrier completes. We scope rendezvous directories under a per-job token derived from
+    launch environment variables (or `PYINE_BARRIER_TOKEN`) so concurrent jobs on the same node do not
+    interfere. Cleanup is best-effort—whichever rank finishes last removes the directory tree. This
+    provides a safe pre-DDP synchronization point without double-initializing the process group
+    Hugging Face owns.
     """
     world_size = get_world_size(default=None)
     rank = get_global_rank(default=None)
     if world_size is None or world_size <= 1 or rank is None:
         return
     barrier_idx = next(_FALLBACK_BARRIER_COUNTER)
-    call_token = f"{_FALLBACK_BARRIER_PREFIX}_{barrier_idx}"
-    barrier_dir = _resolve_barrier_root() / call_token
+    job_dir = _resolve_barrier_root() / _fallback_job_token()
+    job_dir.mkdir(parents=True, exist_ok=True)
+    barrier_dir = job_dir / f"{_FALLBACK_BARRIER_PREFIX}_{barrier_idx}"
     barrier_dir.mkdir(parents=True, exist_ok=True)
     rank_file = barrier_dir / f"rank_{rank}"
     rank_file.touch(exist_ok=False)
@@ -285,8 +288,46 @@ def _fallback_barrier_if_needed() -> None:
         time.sleep(0.1)
     rank_file.unlink()
     with contextlib.suppress(OSError):
-        # other ranks may still be removing their marker files; whichever finishes last will succeed
         barrier_dir.rmdir()
+    with contextlib.suppress(OSError):
+        job_dir.rmdir()
+
+
+def _fallback_job_token() -> str:
+    """Return a per-job identifier to avoid cross-run rendezvous collisions.
+
+    Priority order:
+    1. User-provided `PYINE_BARRIER_TOKEN` (guaranteed shared across ranks).
+    2. `TORCHELASTIC_RUN_ID`, populated by torchrun/elastic launches.
+    3. Tuple of `MASTER_ADDR` and `MASTER_PORT`, which differ across concurrent standalone torchrun jobs.
+    4. A `_default` sentinel when no information is available. Users should set
+       `PYINE_BARRIER_TOKEN` (or run under Hydra, which gives us a distinct root) if they expect to
+       run multiple pre-DDP barriers concurrently in the same temp directory.
+    """
+    explicit = os.environ.get("PYINE_BARRIER_TOKEN")
+    if explicit:
+        return _sanitize_token(explicit)
+    torchelastic_run_id = os.environ.get("TORCHELASTIC_RUN_ID")
+    if torchelastic_run_id:
+        return _sanitize_token(torchelastic_run_id)
+    master_addr = os.environ.get("MASTER_ADDR")
+    master_port = os.environ.get("MASTER_PORT")
+    if master_addr or master_port:
+        token = f"master_{master_addr or 'n'}_{master_port or '0'}"
+        return _sanitize_token(token)
+    return "_default"
+
+
+def _sanitize_token(token: str) -> str:
+    """Return a filesystem-safe token derived from the provided string."""
+    allowed: list[str] = []
+    for char in token:
+        if char.isalnum() or char in ("-", "_"):
+            allowed.append(char)
+        else:
+            allowed.append("_")
+    sanitized = "".join(allowed).strip("_")
+    return sanitized or "_default"
 
 
 def _resolve_barrier_root() -> pathlib.Path:
