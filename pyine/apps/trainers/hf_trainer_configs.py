@@ -24,6 +24,7 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
 import pyine.organisms.datamodules.shortcuts_configs
+import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.tokenizers
 import pyine.utils.transformers
@@ -111,6 +112,13 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     @property
     def device_map(self) -> torch.device | str | dict[str, torch.device | str] | None:
         """Returns the device map to use with models."""
+        if pyine.utils.distrib.is_distributed():
+            if torch.cuda.is_available():
+                local_rank = pyine.utils.distrib.get_local_rank(default=0)
+                if local_rank is None:
+                    return None
+                return {"": f"cuda:{local_rank}"}
+            return None
         return {"": "mps"} if torch.backends.mps.is_available() else "auto"
 
     def get_tokenizer(self) -> transformers.PreTrainedTokenizer:
