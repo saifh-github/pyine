@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import typing
 
@@ -85,3 +86,38 @@ def test_distributed_context_keys(
     assert context["rank"] == 4
     assert context["world_size"] == 16
     assert "local_rank" in context
+
+
+def _barrier_worker(
+    rank: int,
+    world_size: int,
+    barrier_root: str,
+) -> None:
+    """Exercise the filesystem-based barrier in a subprocess before DDP init."""
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["PYINE_BARRIER_ROOT"] = barrier_root
+    pyine.utils.distrib.barrier()
+
+
+def test_barrier_fallback_rendezvous(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    barrier_root = tmp_path_factory.mktemp("barrier")
+    world_size = 2
+    ctx = multiprocessing.get_context("spawn")
+    workers = [
+        ctx.Process(
+            target=_barrier_worker,
+            args=(rank, world_size, str(barrier_root)),
+        )
+        for rank in range(world_size)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+    for worker in workers:
+        assert worker.exitcode == 0
+    assert not any(barrier_root.iterdir())

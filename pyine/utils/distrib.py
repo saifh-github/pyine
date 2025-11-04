@@ -1,5 +1,9 @@
+import itertools
 import logging
 import os
+import pathlib
+import tempfile
+import time
 import typing
 
 import torch
@@ -12,20 +16,30 @@ _GLOBAL_RANK_ENV_KEYS: tuple[str, ...] = (
     "OMPI_COMM_WORLD_RANK",
     "PMI_RANK",
 )
+"""Environment variables that may encode the global rank before torch.distributed initializes."""
 _LOCAL_RANK_ENV_KEYS: tuple[str, ...] = (
     "LOCAL_RANK",
     "MPI_LOCALRANKID",
 )
+"""Environment variables that may encode the node-local rank before torch.distributed initializes."""
 _WORLD_SIZE_ENV_KEYS: tuple[str, ...] = (
     "WORLD_SIZE",
     "SLURM_NTASKS",
     "OMPI_COMM_WORLD_SIZE",
     "PMI_SIZE",
 )
+"""Environment variables that may encode the total world size before torch.distributed initializes."""
 _LOCAL_WORLD_SIZE_ENV_KEYS: tuple[str, ...] = (
     "LOCAL_WORLD_SIZE",
     "MPI_LOCALNRANKS",
 )
+"""Environment variables that may encode the per-node world size before torch.distributed initializes."""
+_FALLBACK_BARRIER_COUNTER = itertools.count()
+"""Monotonic counter ensuring each fallback barrier rendezvous uses a distinct directory."""
+_FALLBACK_BARRIER_PREFIX = "pyine_pre_ddp_barrier"
+"""Prefix applied to fallback barrier rendezvous directories for deterministic cleanup."""
+_FALLBACK_BARRIER_TIMEOUT_SECONDS = float(os.environ.get("PYINE_BARRIER_TIMEOUT_SECONDS", "600"))
+"""Maximum number of seconds a rank will wait inside the fallback barrier."""
 
 __all__ = [
     "all_reduce_boolean_or",
@@ -127,22 +141,28 @@ def is_main_process(
 
 
 def barrier() -> None:
-    """Synchronize all distributed processes when a backend is available."""
-    if not torch.distributed.is_available():
+    """Synchronize all distributed processes.
+
+    Hugging Face's Trainer (and Accelerate) bring up `torch.distributed` lazily. Several call sites
+    in PyINE need a coordination point *before* that happens (most notably datamodule preparation,
+    where non-zero ranks must wait for rank 0 to finish e.g. downloads). To keep that code unchanged,
+    this helper performs a filesystem-based rendezvous until the process group is live, then falls
+    back to the standard CUDA-aware barrier path.
+    """
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        device_ids = None
+        if torch.cuda.is_available():
+            backend = torch.distributed.get_backend()
+            if backend == "nccl":
+                local_rank = get_local_rank(default=None)
+                if local_rank is not None and 0 <= local_rank < torch.cuda.device_count():
+                    current_device = torch.cuda.current_device()
+                    if current_device != local_rank:
+                        torch.cuda.set_device(local_rank)
+                    device_ids = [local_rank]
+        torch.distributed.barrier(device_ids=device_ids)  # type: ignore[reportUnknownMemberType]
         return
-    if not torch.distributed.is_initialized():
-        return
-    device_ids = None
-    if torch.cuda.is_available():
-        backend = torch.distributed.get_backend()
-        if backend == "nccl":
-            local_rank = get_local_rank(default=None)
-            if local_rank is not None and 0 <= local_rank < torch.cuda.device_count():
-                current_device = torch.cuda.current_device()
-                if current_device != local_rank:
-                    torch.cuda.set_device(local_rank)
-                device_ids = [local_rank]
-    torch.distributed.barrier(device_ids=device_ids)  # type: ignore[reportUnknownMemberType]
+    _fallback_barrier_if_needed()
 
 
 def broadcast_object(
@@ -230,3 +250,57 @@ def get_backend(
         return default
     backend = torch.distributed.get_backend()
     return str(backend)
+
+
+def _fallback_barrier_if_needed() -> None:
+    """Synchronize ranks before the torch process group comes online.
+
+    We rely on the launcher (torchrun, SLURM, etc.) to set rank and world-size environment
+    variables. Each worker writes a marker file to a shared rendezvous directory; once all markers
+    exist, the barrier completes. Rank 0 then removes the rendezvous directory so repeated barriers
+    do not leak files. This provides a safe pre-DDP synchronization point without double-initializing
+    the process group Hugging Face owns.
+    """
+    world_size = get_world_size(default=None)
+    rank = get_global_rank(default=None)
+    if world_size is None or world_size <= 1 or rank is None:
+        return
+    barrier_idx = next(_FALLBACK_BARRIER_COUNTER)
+    call_token = f"{_FALLBACK_BARRIER_PREFIX}_{barrier_idx}"
+    barrier_dir = _resolve_barrier_root() / call_token
+    barrier_dir.mkdir(parents=True, exist_ok=True)
+    rank_file = barrier_dir / f"rank_{rank}"
+    rank_file.touch(exist_ok=False)
+    deadline = time.monotonic() + _FALLBACK_BARRIER_TIMEOUT_SECONDS
+    while True:
+        participants = list(barrier_dir.iterdir())
+        if len(participants) >= world_size:
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"fallback barrier timed out waiting for {world_size} ranks (saw {len(participants)})",
+            )
+        time.sleep(0.1)
+    rank_file.unlink()
+    if rank == 0:
+        barrier_dir.rmdir()
+
+
+def _resolve_barrier_root() -> pathlib.Path:
+    """Return the directory used for fallback barrier rendezvous files.
+
+    Preference order:
+    1. `PYINE_BARRIER_ROOT` when set explicitly by the user.
+    2. Hydra's run directory, which our launch script shares across ranks by default.
+    3. A temp folder so that ad-hoc launches (e.g., local tests) still have a rendezvous path.
+    """
+    env_root = os.environ.get("PYINE_BARRIER_ROOT")
+    if env_root:
+        return pathlib.Path(env_root).expanduser()
+    hydra_root = os.environ.get("HYDRA_RUN_DIR")
+    if hydra_root:
+        return pathlib.Path(hydra_root)
+    temp_root = pathlib.Path(tempfile.gettempdir())
+    root_dir = temp_root / "pyine_barriers"
+    root_dir.mkdir(parents=True, exist_ok=True)
+    return root_dir
