@@ -149,6 +149,7 @@ def barrier() -> None:
     this helper performs a filesystem-based rendezvous until the process group is live, then falls
     back to the standard CUDA-aware barrier path.
     """
+    logger.debug("synchronizing distributed processes")
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         device_ids = None
         if torch.cuda.is_available():

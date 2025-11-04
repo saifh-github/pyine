@@ -202,6 +202,7 @@ def train(
             trainer.add_callback(shutdown_callback)  # type: ignore[reportUnknownMemberType]
         else:
             typing.cast("typing.Any", trainer).callbacks.append(shutdown_callback)
+    pyine.utils.distrib.barrier()
     logger.info("starting training")
     start_time = time.time()
     trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
