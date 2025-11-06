@@ -2,14 +2,14 @@ import types
 
 import pytest
 
-import pyine.apps.datamodules.hf_precacher
+import pyine.apps.data.hf_precacher
 
 
 @pytest.mark.asyncio
 async def test_main_exits_on_dry_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hf_precacher = pyine.apps.datamodules.hf_precacher
+    hf_precacher = pyine.apps.data.hf_precacher
     entrypoint_calls: list[dict[str, object]] = []
 
     def fake_entrypoint_setup(
@@ -45,7 +45,7 @@ async def test_main_exits_on_dry_run(
 async def test_main_precaches_expected_subsets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hf_precacher = pyine.apps.datamodules.hf_precacher
+    hf_precacher = pyine.apps.data.hf_precacher
 
     class _Runtime:
         def __init__(
@@ -167,7 +167,7 @@ async def test_main_precaches_expected_subsets(
 async def test_main_precaches_with_force_regenerate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hf_precacher = pyine.apps.datamodules.hf_precacher
+    hf_precacher = pyine.apps.data.hf_precacher
 
     class _Runtime:
         def finalize(self) -> None:
