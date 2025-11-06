@@ -612,8 +612,20 @@ def test_run_text_generation_with_real_model(
     # GPT-2 doesn't have a chat template, so add a simple one for testing
     tokenizer.chat_template = "{% for message in messages %}{{ message.role }}: {{ message.content }}\n{% endfor %}"
     conversations = [
-        {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}]},
-        {"messages": [{"role": "user", "content": "Test"}, {"role": "assistant", "content": "Response"}]},
+        {
+            "messages": [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+            ],
+            "something": "hello1",
+        },
+        {
+            "messages": [
+                {"role": "user", "content": "Test"},
+                {"role": "assistant", "content": "Response"},
+            ],
+            "something": "hello2",
+        },
     ]
     convo_ds = datasets.Dataset.from_list(conversations)
     # Test that prepare_examples_from_conversations works with a real tokenizer
@@ -634,7 +646,7 @@ def test_run_text_generation_with_real_model(
         assert len(example["input_ids"]) > 0
         assert example["prompt_len"] > 0
         # Verify extra fields were preserved
-        assert "messages" in example
+        assert "something" in example
 
 
 def test_prepare_examples_from_conversations_cache_roundtrip(
