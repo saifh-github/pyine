@@ -159,6 +159,9 @@ ignore = [
     # Security exceptions for common patterns
     "S101",   # Use of assert (common in tests)
     "S603",   # subprocess calls
+    "S311",   # Non-cryptographic RNG
+    # Code unreadability
+    "SIM108", # avoid ternary operator (`A if cond else B`)
 ]
 [tool.ruff.lint.isort]
 known-third-party = ["wandb"]
