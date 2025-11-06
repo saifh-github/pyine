@@ -163,6 +163,7 @@ ignore = [
     "S603",   # subprocess calls
     "S311",   # Non-cryptographic RNG
     # Code unreadability
+    "SIM102", # use a single `if` statement instead of nested `if`
     "SIM108", # avoid ternary operator (`A if cond else B`)
 ]
 [tool.ruff.lint.isort]
