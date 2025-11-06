@@ -126,6 +126,7 @@ async def main(
         skip_fine_tuning: Whether to skip fine-tuning and just evaluate the base model directly (as
             a reference for performance comparisons).
     """
+    pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
     if config.is_resuming():
         raise ValueError("run resuming is not supported for OpenAI fine-tuning")
     try:

@@ -661,3 +661,92 @@ def test_prepare_resume_artifacts_auto_resume_config_mismatch(
     monkeypatch.setattr("transformers.trainer_utils.get_last_checkpoint", lambda x: str(checkpoint_dir))
     with pytest.raises(ValueError, match="resume configuration mismatch detected"):
         trainer_common.prepare_resume_artifacts(config, runtime)
+
+
+def test_validate_wandb_sweeper_requirements_not_initialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that validation passes when Hydra is not initialized."""
+    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
+    fake_instance = types.SimpleNamespace(is_initialized=lambda: False)
+    monkeypatch.setattr(
+        trainer_common.hydra.core.global_hydra.GlobalHydra,
+        "instance",
+        lambda: fake_instance,
+    )
+    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
+
+
+def test_validate_wandb_sweeper_requirements_not_multirun(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that validation passes when not in multirun mode."""
+    from hydra.types import RunMode
+
+    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
+    fake_hydra_cfg = types.SimpleNamespace(
+        mode=types.SimpleNamespace(value=RunMode.RUN),
+        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
+    )
+    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
+    monkeypatch.setattr(
+        trainer_common.hydra.core.global_hydra.GlobalHydra,
+        "instance",
+        lambda: fake_instance,
+    )
+    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
+
+
+def test_validate_wandb_sweeper_requirements_multirun_without_wandb_sweeper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that validation passes when in multirun mode but not using wandb sweeper."""
+    from hydra.types import RunMode
+
+    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
+    fake_hydra_cfg = types.SimpleNamespace(
+        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
+        sweeper=types.SimpleNamespace(_target_="hydra._internal.core_plugins.basic_sweeper.BasicSweeper"),
+    )
+    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
+    monkeypatch.setattr(
+        trainer_common.hydra.core.global_hydra.GlobalHydra,
+        "instance",
+        lambda: fake_instance,
+    )
+    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
+
+
+def test_validate_wandb_sweeper_requirements_wandb_sweeper_with_logging_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validation passes when using wandb sweeper with wandb logging enabled."""
+    from hydra.types import RunMode
+
+    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=True)
+    fake_hydra_cfg = types.SimpleNamespace(
+        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
+        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
+    )
+    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
+    monkeypatch.setattr(
+        trainer_common.hydra.core.global_hydra.GlobalHydra,
+        "instance",
+        lambda: fake_instance,
+    )
+    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
+
+
+def test_validate_wandb_sweeper_requirements_wandb_sweeper_without_logging_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validation raises error when using wandb sweeper without wandb logging."""
+    from hydra.types import RunMode
+
+    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
+    fake_hydra_cfg = types.SimpleNamespace(
+        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
+        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
+    )
+    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
+    monkeypatch.setattr(
+        trainer_common.hydra.core.global_hydra.GlobalHydra,
+        "instance",
+        lambda: fake_instance,
+    )
+    with pytest.raises(ValueError, match="hydra-wandb-sweeper.*config.use_wandb_logging must be set to True"):
+        trainer_common.validate_wandb_sweeper_requirements(config)

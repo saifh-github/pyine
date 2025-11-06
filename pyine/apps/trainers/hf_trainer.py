@@ -204,6 +204,7 @@ async def main(
         config: Configuration for the application; see `HFTrainerAppMainConfig` for details.
         runtime: Configuration for the runtime; available when launched via hydra.
     """
+    pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
     persist_runtime_artifacts = pyine.utils.distrib.is_main_process()
     resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
         config=config,

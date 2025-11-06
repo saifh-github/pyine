@@ -7,6 +7,7 @@ import shutil
 import time
 import typing
 
+import hydra.core.global_hydra
 import pydantic
 import transformers
 
@@ -22,6 +23,44 @@ import pyine.utils.timers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
+
+
+def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
+    """Validates that wandb logging is enabled when using the wandb sweeper.
+
+    This function should be called early in the main entrypoint of any trainer app that supports
+    Hydra multirun sweeps. It checks if the app is running in multirun mode with the wandb sweeper,
+    and raises an error if wandb logging is not enabled (which is required for sweep tracking).
+
+    Args:
+        config: The application configuration to validate.
+
+    Raises:
+        ValueError: If using wandb sweeper without wandb logging enabled.
+    """
+    from hydra.core.global_hydra import GlobalHydra
+    from hydra.types import RunMode
+
+    if not hydra.core.global_hydra.GlobalHydra.instance().is_initialized():
+        return
+    hydra_cfg = GlobalHydra.instance().hydra
+    if hydra_cfg is None:
+        return
+    # check if we're in multirun mode (sweep)
+    hydra_mode = getattr(hydra_cfg.mode, "value", None)
+    is_multirun = hydra_mode == RunMode.MULTIRUN or str(hydra_mode or "") == str(RunMode.MULTIRUN)
+    if not is_multirun:
+        return
+    # check if the sweeper is the wandb sweeper
+    sweeper_cfg = getattr(hydra_cfg.sweeper, "_target_", None)
+    if sweeper_cfg is not None and "wandb" in str(sweeper_cfg).lower():
+        # wandb sweeper requires wandb logging to be enabled
+        if not config.use_wandb_logging:
+            raise ValueError(
+                "When using the hydra-wandb-sweeper (multirun with wandb sweeper), "
+                "config.use_wandb_logging must be set to True. "
+                "Please set config.use_wandb_logging=true or remove the wandb sweeper configuration."
+            )
 
 
 class AppMainConfig(pydantic.BaseModel):
