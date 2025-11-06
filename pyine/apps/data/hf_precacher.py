@@ -124,19 +124,29 @@ def register_hydra_configs(
     Note: strongly tied to (and inspired from) the HF trainer app config registration.
     """
     pyine.utils.reprod.load_dotenv()
+    precache_config_builder = pyine.configs.utils.make_config_description(
+        PrecacherConfig,
+        name="default",
+        group="precache_config",
+        description="Default settings controlling dataset precaching behavior.",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
     entrypoint_config = pyine.configs.utils.make_config_description(
         _async_main_wrapper,
         name="entrypoint",
         group=None,
         description="Entrypoint settings for the data precaching app.",
         config={
+            "precache_config": precache_config_builder.config,
             # -------------
             "populate_full_signature": True,
             "hydra_defaults": [
                 "_self_",
                 {"config": "base"},  # from the hf trainer configs
                 {"runtime": "default"},  # from pyine.configs.base
-                {"precache": "default"},  # from below
                 *pyine.configs.base.get_base_hydra_default_overrides(),
             ],
         },
@@ -146,17 +156,7 @@ def register_hydra_configs(
         eval_type=eval_type,
         group="config",
     )
-    precache_config = pyine.configs.utils.make_config_description(
-        PrecacherConfig,
-        name="default",
-        group="precache",
-        description="Default settings controlling dataset precaching behavior.",
-        config={
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    configs_to_register = [entrypoint_config, *app_configs, precache_config]
+    configs_to_register = [entrypoint_config, *app_configs, precache_config_builder]
     experiment_configs = pyine.apps.trainers.hf_trainer_configs._get_experiment_configs(  # type: ignore[reportPrivateUsage]
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
