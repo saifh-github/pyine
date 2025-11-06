@@ -1,3 +1,4 @@
+import pathlib
 import types
 import typing
 
@@ -620,3 +621,41 @@ def test_run_text_generation_with_real_model(
         assert example["prompt_len"] > 0
         # Verify extra fields were preserved
         assert "messages" in example
+
+
+def test_prepare_examples_from_conversations_cache_roundtrip(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = SimpleTokenizer()
+    conversations = [
+        {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey"}]},
+        {"messages": [{"role": "user", "content": "bye"}, {"role": "assistant", "content": "ciao"}]},
+    ]
+    convo_ds = datasets.Dataset.from_list(conversations)
+    cache_settings = utils_transformers.DataCacheSettings(
+        cache_path=tmp_path / "tokenized" / "train_cache",
+        lock_timeout_seconds=1.0,
+    )
+    first_ds = utils_transformers.prepare_examples_from_conversations(
+        convo_ds=convo_ds,
+        tokenizer=tokenizer,
+        max_seq_len=128,
+        num_proc=1,
+        cache_settings=cache_settings,
+    )
+    assert cache_settings.cache_path.exists()
+    assert len(first_ds) == 2
+
+    def _fail_if_called(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+        raise AssertionError("cache path should be reused without regenerating dataset")
+
+    monkeypatch.setattr(utils_transformers, "apply_model_template_to_messages", _fail_if_called)
+    second_ds = utils_transformers.prepare_examples_from_conversations(
+        convo_ds=convo_ds,
+        tokenizer=tokenizer,
+        max_seq_len=128,
+        num_proc=1,
+        cache_settings=cache_settings,
+    )
+    assert len(second_ds) == len(first_ds)

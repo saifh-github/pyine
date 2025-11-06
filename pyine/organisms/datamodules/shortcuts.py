@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import collections.abc
+import contextlib
 import itertools
 import logging
+import os
+import tempfile
 import typing
 
+import filelock
 import msgspec
 import numpy as np
 
@@ -154,30 +158,56 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def _save_prepared_metadata(self, metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata) -> None:
         """Saves the prepared metadata to a local tmpdir."""
         encoded_data = msgspec.msgpack.encode(metadata.model_dump())
-        logger.info(f"saving prepared shortcuts datamodule metadata to: {self._get_prepared_metadata_file_path()}")
-        with open(self._get_prepared_metadata_file_path(), "wb") as fd:
-            fd.write(encoded_data)
+        metadata_path = self._get_prepared_metadata_file_path()
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"saving prepared shortcuts datamodule metadata to: {metadata_path}")
+        lock = self._get_metadata_lock(metadata_path)
+        with lock:
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(metadata_path.parent),
+                prefix=f"{metadata_path.name}.tmp.",
+            )
+            try:
+                with os.fdopen(tmp_fd, "wb") as tmp_file:
+                    tmp_file.write(encoded_data)
+                os.replace(tmp_path, metadata_path)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(tmp_path)
 
     def _load_prepared_metadata(
         self,
     ) -> pyine.data.traces.dataset_utils.TraceDatasetMetadata:
         """Loads the prepared metadata from a local tmpdir."""
-        logger.debug(f"loading shortcuts datamodule metadata from: {self._get_prepared_metadata_file_path()}")
-        with open(self._get_prepared_metadata_file_path(), "rb") as fd:
+        metadata_path = self._get_prepared_metadata_file_path()
+        logger.debug(f"loading shortcuts datamodule metadata from: {metadata_path}")
+        lock = self._get_metadata_lock(metadata_path)
+        with lock, open(metadata_path, "rb") as fd:
             encoded_data = msgspec.msgpack.decode(fd.read())
         return pyine.data.traces.dataset_utils.TraceDatasetMetadata.model_validate(encoded_data)
 
     def _clear_prepared_metadata(self) -> None:
         """Clears the prepared metadata from a local tmpdir."""
         if self._is_metadata_prepared():
-            self._get_prepared_metadata_file_path().unlink()
+            metadata_path = self._get_prepared_metadata_file_path()
+            lock = self._get_metadata_lock(metadata_path)
+            with lock, contextlib.suppress(FileNotFoundError):
+                metadata_path.unlink()
 
     def _get_prepared_metadata_file_path(self) -> pathlib.Path:
         """Returns the file path used to store prepared metadata in the local tmpdir."""
         # note: the file name that will be created contains a hash that depends on input params
         params_hash = pyine.utils.reprod.get_params_hash(self.config.model_dump())
-        tmpdir = pyine.utils.filesystem.get_tmp_dir()
-        return tmpdir / f"shortcuts.metadata.{params_hash}.msgspec"
+        cache_dir = pyine.utils.filesystem.get_data_cache_subdir("datamodules", "shortcuts", "metadata")
+        return cache_dir / f"{params_hash}.msgspec"
+
+    def _get_metadata_lock(self, metadata_path: pathlib.Path) -> filelock.BaseFileLock:
+        """Returns a lock object for the given metadata file path."""
+        lock_path = metadata_path.with_suffix(f"{metadata_path.suffix}.lock")
+        return filelock.FileLock(
+            str(lock_path),
+            timeout=self.config.cache_lock_timeout_seconds,
+        )
 
     @typing.override
     def setup(

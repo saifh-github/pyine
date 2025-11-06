@@ -249,8 +249,8 @@ def _async_main_wrapper(
 @torch.distributed.elastic.multiprocessing.errors.record
 def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
     """Hydra main entrypoint for the HuggingFace trainer app."""
-    _ = register_hydra_configs(eval_type=eval_type)
     pyine.configs.base.register_searchpath_plugin()
+    _ = register_hydra_configs(eval_type=eval_type)
     hydra_zen.zen(_async_main_wrapper).hydra_main(
         config_path=None,
         config_name="entrypoint",

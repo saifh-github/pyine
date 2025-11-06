@@ -2,15 +2,20 @@
 
 import collections.abc
 import contextlib
+import dataclasses
 import functools
 import json
 import logging
 import math
+import os
 import pathlib
+import shutil
 import time
 import typing
+import uuid
 
 import datasets as hf_datasets
+import filelock
 import peft
 import pydantic
 import torch
@@ -341,6 +346,22 @@ def _build_example_ids_from_conversation_parts(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class DataCacheSettings:
+    """Configuration for on-disk data cache."""
+
+    cache_path: pathlib.Path
+    """Target directory where the data should be saved."""
+    lock_timeout_seconds: float
+    """Maximum time to wait when acquiring the cache lock, in seconds."""
+
+    def build_lock(self) -> filelock.BaseFileLock:
+        """Returns the file lock guarding this dataset cache."""
+        assert self.cache_path.parent.is_dir()
+        lock_path = self.cache_path.parent / f"{self.cache_path.name}.lock"
+        return filelock.FileLock(str(lock_path), timeout=self.lock_timeout_seconds)
+
+
 def prepare_examples_from_conversations(
     convo_ds: hf_datasets.Dataset,
     tokenizer: transformers.PreTrainedTokenizer,
@@ -349,6 +370,7 @@ def prepare_examples_from_conversations(
     messages_key: str = "messages",
     keep_extra_fields: list[str] | bool | None = None,
     keep_in_memory: bool = False,
+    cache_settings: DataCacheSettings | None = None,
 ) -> hf_datasets.Dataset:
     """Flattens conversations into tokenizer-encoded (history -> assistant) training examples.
 
@@ -371,78 +393,108 @@ def prepare_examples_from_conversations(
             - True to keep all fields (except messages_key); or
             - None/False to keep only input_ids and prompt_len.
         keep_in_memory: Whether to keep the datasets in memory.
+        cache_settings: Optional configuration describing where to cache tokenized datasets. When provided,
+            the cache will be checked before recomputing the tokenized dataset, preventing duplicate work.
     """
-    # TODO: if the map calls in here become a bottleneck, tune num_proc, use cache
-    # (worse case scenario, we can switch to a streaming/iterable dataset?)
     forward_all_fields, keep_extra_fields_list = _parse_keep_extra_fields_config(keep_extra_fields)
-    templated_convo_ds: hf_datasets.Dataset = apply_model_template_to_messages(
-        hf_messages_ds=convo_ds,
-        tokenizer=tokenizer,
-        keep_original_data=bool(forward_all_fields or keep_extra_fields_list),
-        apply_chat_template_kwargs={
-            "tokenize": False,
-            "add_generation_prompt": False,
-        },
-        keep_in_memory=keep_in_memory,
-    )
 
-    def _split_to_examples(batch: dict[str, typing.Any]) -> dict[str, typing.Any]:
-        # called on a batch of conversations by Dataset.map; must return dict of column->flat lists
-        conversations = typing.cast("list[ConversationHistory]", batch[messages_key])
-        out_input_ids: list[list[int]] = []
-        out_prompt_len: list[int] = []
-        # track extra fields to forward
-        extra_fields_data: dict[str, list[typing.Any]] = {}
+    def _build_dataset() -> hf_datasets.Dataset:
+        templated_convo_ds: hf_datasets.Dataset = apply_model_template_to_messages(
+            hf_messages_ds=convo_ds,
+            tokenizer=tokenizer,
+            keep_original_data=bool(forward_all_fields or keep_extra_fields_list),
+            apply_chat_template_kwargs={
+                "tokenize": False,
+                "add_generation_prompt": False,
+            },
+            keep_in_memory=keep_in_memory,
+        )
+
+        def _split_to_examples(batch: dict[str, typing.Any]) -> dict[str, typing.Any]:
+            # called on a batch of conversations by Dataset.map; must return dict of column->flat lists
+            conversations = typing.cast("list[ConversationHistory]", batch[messages_key])
+            out_input_ids: list[list[int]] = []
+            out_prompt_len: list[int] = []
+            # track extra fields to forward
+            extra_fields_data: dict[str, list[typing.Any]] = {}
+            if forward_all_fields:
+                # initialize lists for all fields except messages_key
+                for key in batch:
+                    if key != messages_key:
+                        extra_fields_data[key] = []
+            elif keep_extra_fields_list:
+                # initialize lists for specified fields
+                for key in keep_extra_fields_list:
+                    if key in batch and key != messages_key:
+                        extra_fields_data[key] = []
+            for convo_idx, messages in enumerate(conversations):
+                for msg_idx, message in enumerate(messages):
+                    # only model-authored turns are training targets
+                    if message.get("role") != "assistant":
+                        continue
+                    # history is everything before the currently-targeted assistant message
+                    history = messages[:msg_idx]
+                    result = _build_example_ids_from_conversation_parts(tokenizer, history, message, max_seq_len)
+                    if result is None:
+                        # skip empty/invalid assistant messages
+                        continue
+                    # collect one example per assistant turn; HF will create one row per appended item
+                    prompt_ids = result["prompt_ids"]
+                    out_input_ids.append(result["input_ids"])
+                    out_prompt_len.append(len(prompt_ids))
+                    # replicate extra fields for this example
+                    for key in extra_fields_data:
+                        extra_fields_data[key].append(batch[key][convo_idx])
+
+            # return columns needed for training plus any extra fields
+            output = {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
+            output.update(extra_fields_data)
+            return output
+
         if forward_all_fields:
-            # initialize lists for all fields except messages_key
-            for key in batch:
-                if key != messages_key:
-                    extra_fields_data[key] = []
+            columns_to_remove: list[str] = []
         elif keep_extra_fields_list:
-            # initialize lists for specified fields
-            for key in keep_extra_fields_list:
-                if key in batch and key != messages_key:
-                    extra_fields_data[key] = []
-        for convo_idx, messages in enumerate(conversations):
-            for msg_idx, message in enumerate(messages):
-                # only model-authored turns are training targets
-                if message.get("role") != "assistant":
-                    continue
-                # history is everything before the currently-targeted assistant message
-                history = messages[:msg_idx]
-                result = _build_example_ids_from_conversation_parts(tokenizer, history, message, max_seq_len)
-                if result is None:
-                    # skip empty/invalid assistant messages
-                    continue
-                # collect one example per assistant turn; HF will create one row per appended item
-                prompt_ids = result["prompt_ids"]
-                out_input_ids.append(result["input_ids"])
-                out_prompt_len.append(len(prompt_ids))
-                # replicate extra fields for this example
-                for key in extra_fields_data:
-                    extra_fields_data[key].append(batch[key][convo_idx])
+            columns_to_remove = [col for col in templated_convo_ds.column_names if col not in keep_extra_fields_list]
+        else:
+            columns_to_remove = templated_convo_ds.column_names
+        dataset: hf_datasets.Dataset = templated_convo_ds.map(  # type: ignore[reportUnknownMemberType]
+            _split_to_examples,
+            batched=True,  # explode list outputs into individual rows automatically
+            remove_columns=columns_to_remove,
+            num_proc=num_proc,  # parallelize if possible
+            desc="preparing examples",
+            keep_in_memory=keep_in_memory,
+        )
+        return dataset
 
-        # return columns needed for training plus any extra fields
-        output = {"input_ids": out_input_ids, "prompt_len": out_prompt_len}
-        output.update(extra_fields_data)
-        return output
+    if cache_settings is None:
+        # if caching is not enabled, build and return the dataset directly
+        return _build_dataset()
 
-    if forward_all_fields:
-        columns_to_remove: list[str] = []
-    elif keep_extra_fields_list:
-        columns_to_remove = [col for col in templated_convo_ds.column_names if col not in keep_extra_fields_list]
-    else:
-        columns_to_remove = templated_convo_ds.column_names
-
-    dataset: hf_datasets.Dataset = templated_convo_ds.map(  # type: ignore[reportUnknownMemberType]
-        _split_to_examples,
-        batched=True,  # explode list outputs into individual rows automatically
-        remove_columns=columns_to_remove,
-        num_proc=num_proc,  # parallelize if possible
-        desc="preparing examples",
-        keep_in_memory=keep_in_memory,
-    )
-    return dataset
+    cache_settings.cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_settings.build_lock():
+        if cache_settings.cache_path.exists():
+            # happens if multiple processes are racing to build the same dataset
+            logger.info(f"loading tokenized dataset from cache: {cache_settings.cache_path}")
+            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                dataset_path=cache_settings.cache_path,
+                keep_in_memory=keep_in_memory,
+            )
+        logger.info(f"building tokenized dataset cache at: {cache_settings.cache_path}")
+        dataset = _build_dataset()
+        tmp_path = cache_settings.cache_path.parent / f"{cache_settings.cache_path.name}.tmp.{uuid.uuid4().hex}"
+        try:
+            dataset.save_to_disk(tmp_path)  # type: ignore[reportUnknownMemberType]
+            os.replace(tmp_path, cache_settings.cache_path)
+        finally:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+        logger.info(f"saved tokenized dataset cache: {cache_settings.cache_path}")
+        if keep_in_memory:
+            return dataset
+        return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+            dataset_path=cache_settings.cache_path,
+            keep_in_memory=keep_in_memory,
+        )
 
 
 def _parse_keep_extra_fields_config(
@@ -682,7 +734,7 @@ class PaddingCollatorWithPromptMask:
 
 
 def infer_effective_max_seq_len(
-    model: transformers.PreTrainedModel,
+    model: transformers.PreTrainedModel | transformers.PretrainedConfig,
     tokenizer: transformers.PreTrainedTokenizer,
 ) -> int:
     """Infers the effective max_seq_len for a model and its tokenizer."""
@@ -691,21 +743,26 @@ def infer_effective_max_seq_len(
     if t_max is None or t_max > 10**8:  # treat huge sentinels as "unknown"
         t_max = None
     # check model config caps
-    cfg = getattr(model, "config", None)
+    if is_hf_model(model):
+        model_cfg = getattr(model, "config", None)
+    else:
+        assert isinstance(model, transformers.PretrainedConfig), f"unsupported model type: {type(model)}"
+        model_cfg = model
     m_caps: list[int] = []
-    if cfg is not None:
+    if model_cfg is not None:
         for attr in ("max_position_embeddings", "n_positions", "max_seq_len"):
-            val = getattr(cfg, attr, None)
+            val = getattr(model_cfg, attr, None)
             if isinstance(val, int) and val > 0:
                 m_caps.append(val)
         # some models define a smaller sliding window for training efficiency
-        sw = getattr(cfg, "sliding_window", None)
+        sw = getattr(model_cfg, "sliding_window", None)
         if isinstance(sw, int) and sw > 0:
             m_caps.append(sw)
     # gather all valid candidates we have found
     candidates = [c for c in [t_max, *(m_caps or [])] if isinstance(c, int)]
     if not candidates:
-        raise ValueError(f"can't infer effective max_seq_len for {type(model)} and {type(tokenizer)}")
+        model_name = getattr(model_cfg, "name_or_path", type(model))
+        raise ValueError(f"can't infer effective max_seq_len for {model_name} and {type(tokenizer)}")
     return min(candidates)  # keep the minimum as a conservative choice
 
 

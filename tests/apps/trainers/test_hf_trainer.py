@@ -165,6 +165,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         max_seq_len: int,
         num_proc: int,
         keep_extra_fields: list[str] | None = None,
+        cache_settings: typing.Any | None = None,
     ) -> _FakePreparedDataset:
         prepared_calls.append(
             {
@@ -172,6 +173,7 @@ def test_train_configures_trainer_and_saves_artifacts(
                 "max_seq_len": max_seq_len,
                 "num_proc": num_proc,
                 "keep_extra_fields": keep_extra_fields,
+                "cache_path": getattr(cache_settings, "dataset_path", None),
             },
         )
         include_sample_data = bool(keep_extra_fields and "sample_data" in keep_extra_fields)

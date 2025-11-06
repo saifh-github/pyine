@@ -130,6 +130,14 @@ def get_data_cache_path() -> pathlib.Path:
     return out_path
 
 
+def get_data_cache_subdir(*parts: str) -> pathlib.Path:
+    """Resolve and return a data cache subdirectory rooted under the data cache path."""
+    cache_root = get_data_cache_path()
+    cache_dir = cache_root.joinpath(*parts)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def get_configs_root_path() -> pathlib.Path | None:
     """Returns the optional root path for storing configuration files (if defined; None otherwise)."""
     env_path = os.environ.get(CONFIGS_ROOT_ENV_VAR, None)

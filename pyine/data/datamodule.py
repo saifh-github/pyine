@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import typing
+import uuid
 
 import datasets as hf_datasets
+import filelock
 import lightning.pytorch as pl
 import lightning.pytorch.utilities.types as pl_types
 import pydantic
@@ -18,12 +22,14 @@ import pyine.utils.openai
 import pyine.utils.portability
 import pyine.utils.pydantic
 import pyine.utils.reprod
+import pyine.utils.transformers
 
 if typing.TYPE_CHECKING:
     import pathlib
 
     import langchain_core.runnables
     import langchain_openai.chat_models.base
+    import transformers
 
 logger = logging.getLogger(__name__)
 
@@ -531,7 +537,11 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     message_generator_num_workers: int = 4
     """Defines the number of workers to use when generating message datasets."""
     use_local_dataset_cache: bool = True
-    """Whether to always try to save/load datasets from the local cache or not."""
+    """Whether to always try to save/load pre-tokenized datasets from the local cache or not."""
+    use_tokenized_dataset_cache: bool = True
+    """Whether to enable caching for tokenized datasets derived from conversation datasets."""
+    cache_lock_timeout_seconds: float = pydantic.Field(default=600.0, ge=0)
+    """Maximum time (in seconds) to wait when acquiring dataset cache locks."""
 
     def get_prompt_template(
         self,
@@ -602,15 +612,35 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
         dataset_path = hf_datasets_cache_dir / dataset_name
         named_split = hf_datasets.NamedSplit(name=subset_name)
-        if not self.use_local_dataset_cache or not dataset_path.exists():
-            parser_config = self._resolved_dataparser_configs[subset_name]
-            assert isinstance(parser_config, ConversationDataParserConfig)
-            transf_fn = self.get_sample_to_messages_transform(
-                append_answer=append_answer,
-                use_hf_messages=True,
-                merge_system_with_user=merge_system_with_user,
-                keep_original_data=keep_original_data,
+        parser_config = self._resolved_dataparser_configs[subset_name]
+        assert isinstance(parser_config, ConversationDataParserConfig)
+        transf_fn = self.instantiate_sample_to_messages_transform(
+            append_answer=append_answer,
+            use_hf_messages=True,
+            merge_system_with_user=merge_system_with_user,
+            keep_original_data=keep_original_data,
+        )
+        if not self.use_local_dataset_cache:
+            # if we are not using any caching, generate and return the dataset directly
+            return parser_config.generate_hf_messages_dataset(
+                named_split=named_split,
+                raw_transform_fn=transf_fn,
+                instantiate_kwargs=parser_kwargs,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
+                num_workers=self.message_generator_num_workers,
             )
+        # otherwise, acquire a lock (for potential ddp runs) and check if it needs to be generated
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = dataset_path.parent / f"{dataset_path.name}.lock"
+        lock = filelock.FileLock(str(lock_path), timeout=self.cache_lock_timeout_seconds)
+        with lock:
+            if dataset_path.exists():
+                logger.info(f"loading already-generated dataset from cache: {dataset_path}")
+                return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                    dataset_path=dataset_path,
+                    keep_in_memory=self.keep_generated_datasets_in_memory,
+                )
+            logger.info(f"building huggingface dataset cache at: {dataset_path}")
             dataset = parser_config.generate_hf_messages_dataset(
                 named_split=named_split,
                 raw_transform_fn=transf_fn,
@@ -618,15 +648,19 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
                 keep_in_memory=self.keep_generated_datasets_in_memory,
                 num_workers=self.message_generator_num_workers,
             )
-            if self.use_local_dataset_cache:
-                logger.info(f"saving generated dataset to cache: {dataset_path}")
-                dataset.save_to_disk(dataset_path)  # type: ignore[reportUnknownMemberType]
-            return dataset
-        logger.info(f"loading already-generated dataset from cache: {dataset_path}")
-        return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
-            dataset_path=dataset_path,
-            keep_in_memory=self.keep_generated_datasets_in_memory,
-        )
+            tmp_path = dataset_path.parent / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
+            try:
+                dataset.save_to_disk(tmp_path)  # type: ignore[reportUnknownMemberType]
+                os.replace(tmp_path, dataset_path)
+            finally:
+                shutil.rmtree(tmp_path, ignore_errors=True)
+            logger.info(f"saved dataset cache: {dataset_path}")
+            if self.keep_generated_datasets_in_memory:
+                return dataset
+            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                dataset_path=dataset_path,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
+            )
 
     def instantiate_openai_messages_dataset(
         self,
@@ -674,7 +708,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             pyine.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
 
-    def get_sample_to_messages_transform(
+    def instantiate_sample_to_messages_transform(
         self,
         append_answer: bool = True,
         use_hf_messages: bool = False,
@@ -712,6 +746,10 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         _resolved_template = self.get_prompt_template()
         assert _resolved_template is not None
         return self
+
+    def get_tokenized_dataset_cache_root(self) -> pathlib.Path:
+        """Returns the root directory used to persist tokenized dataset caches."""
+        return pyine.utils.filesystem.get_data_cache_subdir("hf_tokenized")
 
 
 class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
@@ -762,6 +800,82 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
              The HuggingFace dataset object.
         """
         raise NotImplementedError("derived class should implement this function")
+
+    def get_hf_tokenized_examples_dataset(
+        self,
+        subset_name: typing.Literal["train", "valid", "eval"],
+        tokenizer: transformers.PreTrainedTokenizer,
+        model_max_seq_len: int,
+        num_proc: int = 4,
+    ) -> hf_datasets.Dataset:
+        """Returns a HuggingFace dataset of tokenized examples for supervised training.
+
+        This function wraps other dataset preparation functions to provide a dataset of tokenized
+        examples as expected by HuggingFace for the supervised training (or evaluation) of models.
+        In contrast with other dataset preparation functions, the subset name provided to this one
+        must match one of the subset names expected by HuggingFace, and tied to the parent class's
+        `train_subset_names`, `valid_subset_names`, and `eval_subset_names` attributes.
+
+        Args:
+            subset_name: the subset name to prepare the dataset for (train/valid/eval only!).
+            tokenizer: the tokenizer to use for tokenization.
+            model_max_seq_len: the maximum sequence length supported by the tokenizer/model.
+            num_proc: the number of processes to use for dataset preparation.
+
+        Returns:
+            The HuggingFace dataset object.
+        """
+        config = typing.cast("ConversationDataModuleConfig", self.config)
+        hf_subset_names_map = {
+            "train": config.train_subset_names,
+            "valid": config.valid_subset_names,
+            "eval": config.eval_subset_names,
+        }
+        assert subset_name in hf_subset_names_map, f"invalid hf subset name: {subset_name}"
+        actual_subset_names = hf_subset_names_map[subset_name]
+        keep_original_data = subset_name != "train"  # for evaluations, orig data might be needed, so keep it
+        messages_datasets = [
+            self.get_hf_messages_dataset(
+                subset_name=subset_name,
+                append_answer=True,
+                keep_original_data=keep_original_data,
+            )
+            for subset_name in actual_subset_names
+        ]
+        if len(messages_datasets) == 1:
+            messages_ds = messages_datasets[0]
+        else:
+            messages_ds = hf_datasets.concatenate_datasets(messages_datasets)  # should return same interface
+        datamodule_label = config.datamodule_name or self.__class__.__name__
+        tokenizer_identifier = getattr(tokenizer, "name_or_path", type(tokenizer).__name__)
+        if not config.use_tokenized_dataset_cache:
+            cache_settings = None
+        else:
+            cache_root = config.get_tokenized_dataset_cache_root()
+            assert cache_root.is_dir(), f"invalid cache root dir: {cache_root}"
+            dataset_fingerprint = getattr(messages_ds, "_fingerprint", getattr(messages_ds, "_hash", None))
+            cache_hash = pyine.utils.reprod.get_params_hash(
+                datamodule_label,
+                subset_name,
+                actual_subset_names,
+                dataset_fingerprint,
+                tokenizer_identifier,
+                model_max_seq_len,
+                keep_original_data,
+            )
+            dataset_name = f"{datamodule_label}.{subset_name}.{cache_hash}"
+            dataset_cache_path = cache_root / dataset_name
+            cache_settings = pyine.utils.transformers.DataCacheSettings(
+                cache_path=dataset_cache_path, lock_timeout_seconds=config.cache_lock_timeout_seconds
+            )
+        return pyine.utils.transformers.prepare_examples_from_conversations(
+            convo_ds=messages_ds,
+            tokenizer=tokenizer,
+            max_seq_len=model_max_seq_len,
+            num_proc=num_proc,
+            keep_extra_fields=keep_original_data,
+            cache_settings=cache_settings,
+        )
 
     def get_openai_messages_dataset(
         self,

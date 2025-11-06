@@ -207,7 +207,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
     @typing.override
-    def get_sample_to_messages_transform(
+    def instantiate_sample_to_messages_transform(
         self,
         append_answer: bool = True,
         use_hf_messages: bool = False,

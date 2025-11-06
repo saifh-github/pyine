@@ -13,7 +13,6 @@ import pathlib
 import time
 import typing
 
-import datasets
 import transformers
 
 import pyine.apps.trainers.common
@@ -95,43 +94,23 @@ def train(
     logger.info("instantiating model and tokenizer...")
     model = config.get_model()
     tokenizer = config.get_tokenizer()
-
-    logger.info("preparing train messages dataset...")
-    train_ds = [
-        datamodule.get_hf_messages_dataset(
-            subset_name=subset_name,
-            append_answer=True,
-        )
-        for subset_name in config.datamodule_config.train_subset_names
-    ]
-    train_ds = train_ds[0] if len(train_ds) == 1 else datasets.concatenate_datasets(train_ds)
-    logger.info("preparing validation messages dataset...")
-    valid_ds = [
-        datamodule.get_hf_messages_dataset(
-            subset_name=subset_name,
-            append_answer=True,
-            keep_original_data=True,  # for category-wise evals below
-        )
-        for subset_name in config.datamodule_config.valid_subset_names
-    ]
-    valid_ds = valid_ds[0] if len(valid_ds) == 1 else datasets.concatenate_datasets(valid_ds)
-
-    # convert conversation-style rows into flat, tokenized examples for training/valid
     model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
     logger.info(f"effective max_seq_len={model_max_seq_len}")
-    train_ds = pyine.utils.transformers.prepare_examples_from_conversations(
-        convo_ds=train_ds,
+
+    # convert conversation-style rows into flat, tokenized examples for training/valid
+    logger.info("preparing train dataset...")
+    train_ds = datamodule.get_hf_tokenized_examples_dataset(
+        subset_name="train",
         tokenizer=tokenizer,
-        max_seq_len=model_max_seq_len,
-        num_proc=config.training_args_config.dataloader_num_workers,
+        model_max_seq_len=model_max_seq_len,
     )
-    valid_ds = pyine.utils.transformers.prepare_examples_from_conversations(
-        convo_ds=valid_ds,
+    logger.info("preparing validation dataset...")
+    valid_ds = datamodule.get_hf_tokenized_examples_dataset(
+        subset_name="valid",
         tokenizer=tokenizer,
-        max_seq_len=model_max_seq_len,
-        num_proc=config.training_args_config.dataloader_num_workers,
-        keep_extra_fields=["sample_data"],  # for category-wise evals below
+        model_max_seq_len=model_max_seq_len,
     )
+
     # the collator pads to fixed length and masks labels for prompt tokens
     collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
         tokenizer,
