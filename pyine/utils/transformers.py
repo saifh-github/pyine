@@ -454,9 +454,11 @@ def prepare_examples_from_conversations(
             return output
 
         if forward_all_fields:
-            columns_to_remove: list[str] = []
+            columns_to_remove: list[str] = [messages_key]  # always remove messages since it's exploded
         elif keep_extra_fields_list:
             columns_to_remove = [col for col in templated_convo_ds.column_names if col not in keep_extra_fields_list]
+            if messages_key not in columns_to_remove:
+                columns_to_remove.append(messages_key)  # always remove messages since it's exploded
         else:
             columns_to_remove = templated_convo_ds.column_names
         dataset: hf_datasets.Dataset = templated_convo_ds.map(  # type: ignore[reportUnknownMemberType]
