@@ -46,7 +46,6 @@ def test_train_configures_trainer_and_saves_artifacts(
     tmp_path: pathlib.Path,
 ) -> None:
     raw_datasets: list[str] = []
-    prepared_calls: list[dict[str, typing.Any]] = []
     prepared_rows_by_subset = {
         "train": [
             {
@@ -82,19 +81,55 @@ def test_train_configures_trainer_and_saves_artifacts(
         ],
     }
 
-    class _RawDataset:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
     class _FakeDataModule:
+        def __init__(self) -> None:
+            self.tokenized_calls: list[dict[str, typing.Any]] = []
+
         def get_hf_messages_dataset(
             self,
             subset_name: str,
             append_answer: bool,
             keep_original_data: bool = False,
-        ) -> _RawDataset:
+        ) -> datasets.Dataset:
             raw_datasets.append(f"{subset_name}:{append_answer}:{keep_original_data}")
-            return _RawDataset(subset_name)
+            include_sample_data = keep_original_data
+            rows = []
+            for row in prepared_rows_by_subset[subset_name]:
+                row_copy = dict(row)
+                if not include_sample_data:
+                    row_copy.pop("sample_data", None)
+                rows.append(row_copy)
+            return datasets.Dataset.from_list(rows)
+
+        def get_hf_tokenized_examples_dataset(
+            self,
+            subset_name: str,
+            tokenizer: typing.Any,
+            model_max_seq_len: int,
+            keep_extra_fields: list[str] | bool | None = None,
+        ) -> _FakePreparedDataset:
+            include_sample_data = subset_name != "train"
+            if isinstance(keep_extra_fields, (list, tuple, set)):
+                include_sample_data = "sample_data" in keep_extra_fields
+            elif isinstance(keep_extra_fields, bool):
+                include_sample_data = keep_extra_fields
+            self.tokenized_calls.append(
+                {
+                    "subset_name": subset_name,
+                    "tokenizer": tokenizer,
+                    "max_seq_len": model_max_seq_len,
+                    "keep_extra_fields": keep_extra_fields,
+                    "include_sample_data": include_sample_data,
+                },
+            )
+            subset_rows = prepared_rows_by_subset[subset_name]
+            rows = []
+            for row in subset_rows:
+                row_copy = dict(row)
+                if not include_sample_data:
+                    row_copy.pop("sample_data", None)
+                rows.append(row_copy)
+            return _FakePreparedDataset(rows)
 
     class _FakeModel:
         def __init__(self) -> None:
@@ -159,33 +194,6 @@ def test_train_configures_trainer_and_saves_artifacts(
         ) -> None:
             self.saved_to = output_dir
 
-    def fake_prepare_examples_from_conversations(
-        convo_ds: _RawDataset,
-        tokenizer: _FakeTokenizer,
-        max_seq_len: int,
-        num_proc: int,
-        keep_extra_fields: list[str] | None = None,
-        cache_settings: typing.Any | None = None,
-    ) -> _FakePreparedDataset:
-        prepared_calls.append(
-            {
-                "name": convo_ds.name,
-                "max_seq_len": max_seq_len,
-                "num_proc": num_proc,
-                "keep_extra_fields": keep_extra_fields,
-                "cache_path": getattr(cache_settings, "dataset_path", None),
-            },
-        )
-        include_sample_data = bool(keep_extra_fields and "sample_data" in keep_extra_fields)
-        subset_rows = prepared_rows_by_subset[convo_ds.name]
-        rows = []
-        for row in subset_rows:
-            row_copy = dict(row)
-            if not include_sample_data:
-                row_copy.pop("sample_data", None)
-            rows.append(row_copy)
-        return _FakePreparedDataset(rows)
-
     captured_args: dict[str, dict[str, object]] = {}
 
     def fake_training_arguments(**kwargs: typing.Any) -> types.SimpleNamespace:
@@ -219,11 +227,6 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "prepare_examples_from_conversations",
-        fake_prepare_examples_from_conversations,
-    )
-    monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
         "PaddingCollatorWithPromptMask",
         lambda *_args, **_kwargs: "collator",
     )
@@ -239,18 +242,53 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     fake_dm = _FakeDataModule()
 
+    def _bound_get_tokenized_examples(
+        self: _FakeDataModule,
+        subset_name: str,
+        tokenizer: typing.Any,
+        model_max_seq_len: int,
+        keep_extra_fields: list[str] | bool | None = None,
+    ) -> _FakePreparedDataset:
+        return _FakeDataModule.get_hf_tokenized_examples_dataset(
+            self,
+            subset_name=subset_name,
+            tokenizer=tokenizer,
+            model_max_seq_len=model_max_seq_len,
+            keep_extra_fields=keep_extra_fields,
+        )
+
+    fake_dm.get_hf_tokenized_examples_dataset = types.MethodType(  # type: ignore[attr-defined]
+        _bound_get_tokenized_examples,
+        fake_dm,
+    )
+
+    cache_root = tmp_path / "tokenized_cache"
+    cache_root.mkdir()
+
     runtime = types.SimpleNamespace(
         wandb_run=types.SimpleNamespace(
             define_metric=lambda *args, **kwargs: None,
         ),
         finalize=lambda: None,
     )
+
+    class _FakeDatamoduleConfig:
+        def __init__(self, cache_dir: pathlib.Path) -> None:
+            self.train_subset_names = ["train"]
+            self.valid_subset_names = ["valid"]
+            self.datamodule_name = "fake_dm"
+            self.use_tokenized_dataset_cache = False
+            self.dataset_cache_lock_timeout_seconds = 0.0
+            self.keep_generated_datasets_in_memory = False
+            self._cache_dir = cache_dir
+
+        def get_tokenized_dataset_cache_root(self) -> pathlib.Path:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            return self._cache_dir
+
     config = types.SimpleNamespace(
         training_args_config=_FakeTrainingArgsConfig(),
-        datamodule_config=types.SimpleNamespace(
-            train_subset_names=["train"],
-            valid_subset_names=["valid"],
-        ),
+        datamodule_config=_FakeDatamoduleConfig(cache_dir=cache_root),
         gradient_checkpointing=True,
         use_wandb_logging=True,
         output_dir=str(tmp_path / "artifact"),
@@ -268,21 +306,23 @@ def test_train_configures_trainer_and_saves_artifacts(
     assert isinstance(trainer.model, _FakeModel)
     assert isinstance(trainer.tokenizer, _FakeTokenizer)
 
-    assert prepared_calls == [
+    assert fake_dm.tokenized_calls == [
         {
-            "name": "train",
+            "subset_name": "train",
+            "tokenizer": trainer.tokenizer,
             "max_seq_len": 64,
-            "num_proc": 4,
             "keep_extra_fields": None,
+            "include_sample_data": False,
         },
         {
-            "name": "valid",
+            "subset_name": "valid",
+            "tokenizer": trainer.tokenizer,
             "max_seq_len": 64,
-            "num_proc": 4,
-            "keep_extra_fields": ["sample_data"],
+            "keep_extra_fields": None,
+            "include_sample_data": True,
         },
     ]
-    assert raw_datasets == ["train:True:False", "valid:True:True"]
+    assert raw_datasets == []
     assert captured_args["kwargs"]["report_to"] == ["wandb"]
     assert captured_args["kwargs"]["batch_eval_metrics"] is True
     metrics_callbacks = [
@@ -655,6 +695,31 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
                 return self._valid_ds
             raise ValueError(f"unexpected subset name: {subset_name}")
 
+        def get_hf_tokenized_examples_dataset(
+            self,
+            subset_name: str,
+            tokenizer: transformers.PreTrainedTokenizer,
+            model_max_seq_len: int,
+            keep_extra_fields: list[str] | bool | None = None,
+        ) -> datasets.Dataset:
+            keep_original_data = subset_name != "train"
+            if isinstance(keep_extra_fields, (list, tuple, set)):
+                keep_original_data = "sample_data" in keep_extra_fields
+            elif isinstance(keep_extra_fields, bool):
+                keep_original_data = keep_extra_fields
+            convo_ds = self.get_hf_messages_dataset(
+                subset_name=subset_name,
+                append_answer=True,
+                keep_original_data=keep_original_data,
+            )
+            return pyine.utils.transformers.prepare_examples_from_conversations(
+                convo_ds=convo_ds,
+                tokenizer=tokenizer,
+                max_seq_len=model_max_seq_len,
+                num_proc=1,
+                keep_extra_fields=keep_original_data,
+            )
+
     def _build_tiny_model() -> transformers.GPT2LMHeadModel:
         config = transformers.GPT2Config(
             n_layer=1,
@@ -672,12 +737,23 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
         max_steps: int,
         output_dir: pathlib.Path,
     ) -> types.SimpleNamespace:
+        class _TinyDatamoduleConfig:
+            def __init__(self, cache_dir: pathlib.Path) -> None:
+                self.train_subset_names = ["train"]
+                self.valid_subset_names = ["valid"]
+                self.datamodule_name = "tiny_dm"
+                self.use_tokenized_dataset_cache = False
+                self.dataset_cache_lock_timeout_seconds = 0.0
+                self.keep_generated_datasets_in_memory = False
+                self._cache_dir = cache_dir
+
+            def get_tokenized_dataset_cache_root(self) -> pathlib.Path:
+                self._cache_dir.mkdir(parents=True, exist_ok=True)
+                return self._cache_dir
+
         return types.SimpleNamespace(
             training_args_config=_TinyTrainingArgsConfig(output_dir=output_dir, max_steps=max_steps),
-            datamodule_config=types.SimpleNamespace(
-                train_subset_names=["train"],
-                valid_subset_names=["valid"],
-            ),
+            datamodule_config=_TinyDatamoduleConfig(cache_dir=output_dir / "tokenized_cache"),
             gradient_checkpointing=False,
             use_wandb_logging=False,
             output_dir=str(output_dir),
@@ -763,6 +839,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
     config_first = _make_config(max_steps=2, output_dir=output_dir)
     stop_after["value"] = 1
     recorded_steps.clear()
+    assert hasattr(datamodule, "get_hf_tokenized_examples_dataset")
     trainer_first = pyine.apps.trainers.hf_trainer.train(
         datamodule=datamodule,
         config=config_first,

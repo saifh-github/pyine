@@ -425,17 +425,31 @@ def test_padding_collator_with_multiple_of_32() -> None:
 
 def test_infer_effective_max_seq_len_uses_minimum_candidate() -> None:
     tokenizer = types.SimpleNamespace(model_max_length=4096)
-    config = types.SimpleNamespace(max_position_embeddings=2048, sliding_window=1024)
-    model = types.SimpleNamespace(config=config)
-    result = utils_transformers.infer_effective_max_seq_len(model=model, tokenizer=tokenizer)
+    config = transformers.GPT2Config(
+        n_positions=2048,
+        n_ctx=2048,
+        n_layer=1,
+        n_head=1,
+        n_embd=32,
+    )
+    config.sliding_window = 1024
+    result = utils_transformers.infer_effective_max_seq_len(model=config, tokenizer=tokenizer)
     assert result == 1024
 
 
 def test_infer_effective_max_seq_len_raises_when_unknown() -> None:
     tokenizer = types.SimpleNamespace(model_max_length=None)
-    model = types.SimpleNamespace(config=types.SimpleNamespace())
+    config = transformers.GPT2Config(
+        n_layer=1,
+        n_head=1,
+        n_embd=32,
+    )
+    config.max_position_embeddings = None
+    config.n_positions = None
+    config.max_seq_len = None
+    config.sliding_window = None
     with pytest.raises(ValueError):
-        utils_transformers.infer_effective_max_seq_len(model=model, tokenizer=tokenizer)
+        utils_transformers.infer_effective_max_seq_len(model=config, tokenizer=tokenizer)
 
 
 def test_get_base_pretrained_model_unwraps_module(
