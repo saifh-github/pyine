@@ -371,6 +371,7 @@ def prepare_examples_from_conversations(
     keep_extra_fields: list[str] | bool | None = None,
     keep_in_memory: bool = False,
     cache_settings: DataCacheSettings | None = None,
+    force_rebuild: bool = False,
 ) -> hf_datasets.Dataset:
     """Flattens conversations into tokenizer-encoded (history -> assistant) training examples.
 
@@ -395,6 +396,7 @@ def prepare_examples_from_conversations(
         keep_in_memory: Whether to keep the datasets in memory.
         cache_settings: Optional configuration describing where to cache tokenized datasets. When provided,
             the cache will be checked before recomputing the tokenized dataset, preventing duplicate work.
+        force_rebuild: Whether to force rebuilding the cached dataset even if it already exists.
     """
     forward_all_fields, keep_extra_fields_list = _parse_keep_extra_fields_config(keep_extra_fields)
 
@@ -474,12 +476,15 @@ def prepare_examples_from_conversations(
     cache_settings.cache_path.parent.mkdir(parents=True, exist_ok=True)
     with cache_settings.build_lock():
         if cache_settings.cache_path.exists():
-            # happens if multiple processes are racing to build the same dataset
-            logger.info(f"loading tokenized dataset from cache: {cache_settings.cache_path}")
-            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
-                dataset_path=cache_settings.cache_path,
-                keep_in_memory=keep_in_memory,
-            )
+            if force_rebuild:
+                logger.info(f"force-regenerating tokenized dataset cache at: {cache_settings.cache_path}")
+                shutil.rmtree(cache_settings.cache_path)
+            else:
+                logger.info(f"loading tokenized dataset from cache: {cache_settings.cache_path}")
+                return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                    dataset_path=cache_settings.cache_path,
+                    keep_in_memory=keep_in_memory,
+                )
         logger.info(f"building tokenized dataset cache at: {cache_settings.cache_path}")
         dataset = _build_dataset()
         tmp_path = cache_settings.cache_path.parent / f"{cache_settings.cache_path.name}.tmp.{uuid.uuid4().hex}"

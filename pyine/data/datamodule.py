@@ -582,6 +582,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         merge_system_with_user: bool = False,
         keep_original_data: bool = False,
         parser_kwargs: dict[str, typing.Any] | None = None,
+        force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Instantiates a `hf_datasets.Dataset` object based on the configured parser settings.
 
@@ -596,6 +597,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             keep_original_data: whether to keep the original data inside the output samples (e.g.
                 to access metadata in evaluations).
             parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
+            force_regenerate: whether to rebuild the dataset cache even if it already exists.
 
         Returns:
             A huggingface dataset that produces chat-templated 'conversations' (lists of messages).
@@ -635,11 +637,15 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         lock = filelock.FileLock(str(lock_path), timeout=self.cache_lock_timeout_seconds)
         with lock:
             if dataset_path.exists():
-                logger.info(f"loading already-generated dataset from cache: {dataset_path}")
-                return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
-                    dataset_path=dataset_path,
-                    keep_in_memory=self.keep_generated_datasets_in_memory,
-                )
+                if force_regenerate:
+                    logger.info(f"force-regenerating huggingface dataset cache at: {dataset_path}")
+                    shutil.rmtree(dataset_path)
+                else:
+                    logger.info(f"loading already-generated dataset from cache: {dataset_path}")
+                    return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                        dataset_path=dataset_path,
+                        keep_in_memory=self.keep_generated_datasets_in_memory,
+                    )
             logger.info(f"building huggingface dataset cache at: {dataset_path}")
             dataset = parser_config.generate_hf_messages_dataset(
                 named_split=named_split,
@@ -780,6 +786,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         append_answer: bool = True,
         merge_system_with_user: bool = False,
         keep_original_data: bool = False,
+        force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace messages dataset object for a given subset name.
 
@@ -795,6 +802,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             merge_system_with_user: whether to merge the system message with the user message (used
                 when working with e.g. o1/o3/o4, which do not support custom system prompts).
             keep_original_data: whether to keep the original data inside the output samples.
+            force_regenerate: whether to rebuild caches even if they already exist.
 
         Returns:
              The HuggingFace dataset object.
@@ -807,6 +815,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         tokenizer: transformers.PreTrainedTokenizer,
         model_max_seq_len: int,
         num_proc: int = 4,
+        force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset of tokenized examples for supervised training.
 
@@ -821,6 +830,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             tokenizer: the tokenizer to use for tokenization.
             model_max_seq_len: the maximum sequence length supported by the tokenizer/model.
             num_proc: the number of processes to use for dataset preparation.
+            force_regenerate: whether to rebuild caches even if they already exist.
 
         Returns:
             The HuggingFace dataset object.
@@ -839,6 +849,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
                 subset_name=subset_name,
                 append_answer=True,
                 keep_original_data=keep_original_data,
+                force_regenerate=force_regenerate,
             )
             for subset_name in actual_subset_names
         ]
@@ -875,6 +886,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             num_proc=num_proc,
             keep_extra_fields=keep_original_data,
             cache_settings=cache_settings,
+            force_rebuild=force_regenerate,
         )
 
     def get_openai_messages_dataset(

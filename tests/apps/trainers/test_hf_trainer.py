@@ -107,6 +107,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             tokenizer: typing.Any,
             model_max_seq_len: int,
             keep_extra_fields: list[str] | bool | None = None,
+            force_regenerate: bool = False,
         ) -> _FakePreparedDataset:
             include_sample_data = subset_name != "train"
             if isinstance(keep_extra_fields, (list, tuple, set)):
@@ -120,6 +121,7 @@ def test_train_configures_trainer_and_saves_artifacts(
                     "max_seq_len": model_max_seq_len,
                     "keep_extra_fields": keep_extra_fields,
                     "include_sample_data": include_sample_data,
+                    "force_regenerate": force_regenerate,
                 },
             )
             subset_rows = prepared_rows_by_subset[subset_name]
@@ -313,6 +315,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             "max_seq_len": 64,
             "keep_extra_fields": None,
             "include_sample_data": False,
+            "force_regenerate": False,
         },
         {
             "subset_name": "valid",
@@ -320,6 +323,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             "max_seq_len": 64,
             "keep_extra_fields": None,
             "include_sample_data": True,
+            "force_regenerate": False,
         },
     ]
     assert raw_datasets == []
@@ -701,6 +705,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             tokenizer: transformers.PreTrainedTokenizer,
             model_max_seq_len: int,
             keep_extra_fields: list[str] | bool | None = None,
+            force_regenerate: bool = False,
         ) -> datasets.Dataset:
             keep_original_data = subset_name != "train"
             if isinstance(keep_extra_fields, (list, tuple, set)):
@@ -718,6 +723,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
                 max_seq_len=model_max_seq_len,
                 num_proc=1,
                 keep_extra_fields=keep_original_data,
+                force_rebuild=force_regenerate,
             )
 
     def _build_tiny_model() -> transformers.GPT2LMHeadModel:

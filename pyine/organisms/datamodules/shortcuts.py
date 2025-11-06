@@ -319,6 +319,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         append_answer: bool = True,
         merge_system_with_user: bool = False,
         keep_original_data: bool = False,
+        force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset object for a given subset name."""
         if not self._is_setup_complete():
@@ -334,6 +335,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
                 "source_data": self.config.lmdb_paths,  # defer instantiation to the generator due to pickling
                 "traces": subset_traces,
             },
+            force_regenerate=force_regenerate,
         )
 
     @typing.override

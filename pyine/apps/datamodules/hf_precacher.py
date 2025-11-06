@@ -33,9 +33,10 @@ class PrecacherConfig(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
-    # @@@@@ TODO: add option to clear all caches first? (clean run?)
     include_eval_subsets: bool = False
     """Whether to pre-build caches for evaluation subsets defined by the datamodule."""
+    force_regenerate: bool = False
+    """Whether to force regeneration of all caches."""
     max_seq_len_override: int | None = pydantic.Field(
         default=None,
         description=(
@@ -95,9 +96,10 @@ async def main(
         for subset in subsets_to_precache:
             logger.info(f"caching {subset} dataset...")
             _ = datamodule.get_hf_tokenized_examples_dataset(
-                subset_name="train",
+                subset_name=subset,
                 tokenizer=tokenizer,
                 model_max_seq_len=max_seq_len,
+                force_regenerate=precache_config.force_regenerate,
             )
         logger.info("tokenized dataset caches built successfully")
     finally:
