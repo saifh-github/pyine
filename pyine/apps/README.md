@@ -17,6 +17,7 @@ Dataset preparation:
 
 - Splits: [`pyine/apps/splits/dataset_splitter.py`](./splits/dataset_splitter.py)
 - Traces & deltas writer: [`pyine/apps/write/dataset_writer.py`](./write/dataset_writer.py)
+- HuggingFace dataset precacher: [`pyine/apps/data/hf_precacher.py`](./data/hf_precacher.py)
 
 Trace annotation:
 
@@ -120,6 +121,51 @@ For instruction on how to generate the PyINE 10s10t v1 dataset based on TACO, se
 
 ______________________________________________________________________
 
+### HuggingFace dataset precacher
+
+**Script:** [`pyine/apps/data/hf_precacher.py`](./data/hf_precacher.py)
+
+**Main use:** pre-generates datamodule caches (metadata, HF message datasets, tokenized examples)
+before training runs to ensure faster, non-blocking trainer startups. This is especially useful for
+distributed training scenarios where cache generation on multiple ranks can cause conflicts.
+
+**Listing available experiment configs:**
+
+```bash
+python -m pyine.apps.data.hf_precacher --help
+```
+
+**Examples:**
+
+```bash
+# precache datasets for a registered experiment (train and validation subsets only)
+python -m pyine.apps.data.hf_precacher +experiment=exp_name
+
+# precache with evaluation subsets included
+python -m pyine.apps.data.hf_precacher \
+  +experiment=exp_name \
+  precache_config.include_eval_subsets=true
+
+# force regeneration of all caches
+python -m pyine.apps.data.hf_precacher \
+  +experiment=exp_name \
+  precache_config.force_regenerate=true
+
+# override max sequence length for tokenization
+python -m pyine.apps.data.hf_precacher \
+  +experiment=exp_name \
+  precache_config.max_seq_len_override=2048
+```
+
+**Outputs and layout:**
+
+- Caches are stored in subdirectories of the path specified by `pyine.utils.filesystem.get_data_cache_path`.
+- The precacher uses the same datamodule configuration as the HF trainer, ensuring consistency between
+  precaching and training runs.
+- All generated caches include metadata files for reproducibility and cache invalidation.
+
+______________________________________________________________________
+
 ### Trace annotation (prompt chains over traces)
 
 **Script:** [`pyine/apps/annotate/trace_annot_generator.py`](./annotate/trace_annot_generator.py)
@@ -189,11 +235,11 @@ repairs in a cache-backed JSON file (saved by default in `<PYINE_DATA_CACHE>`).
 ```bash
 # rewrite every malformed problem under the repackaged dataset root
 python -m pyine.apps.traces.taco_trace_failure_analyzer \
-    --problem-dir data/TACO/repackaged/2025-03-31-v01
+    --problem-dir data/TACO/repackaged/<version>
 
 # target a handful of individual problems
 python -m pyine.apps.traces.taco_trace_failure_analyzer \
-    --problem-dir data/TACO/repackaged/2025-03-31-v01 \
+    --problem-dir data/TACO/repackaged/<version> \
     --problem 014084.json \
     --problem 017304.json
 ```

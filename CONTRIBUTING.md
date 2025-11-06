@@ -43,7 +43,7 @@ For project setup instructions, refer to the top-level [README](./README.md).
    - Run a single test file or pattern:
      - `pytest tests/path/to/test_file.py -q`
      - `pytest -k "token or expression" -q`
-   - Coverage (optional, to make sure it stays adequate): `make cov-all`
+   - Coverage (optional, to make sure it stays adequate): `make coverage`
 
 5. Open a PR:
 

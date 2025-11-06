@@ -159,10 +159,13 @@ def get_installed_packages() -> list[str]:
 
 
 def get_params_hash(*args: typing.Any, **kwargs: typing.Any) -> str:
-    """Computes and returns the hash (md5 checksum) of a given set of parameters.
+    """Computes and returns the hash (SHA1 checksum) of a given set of parameters.
 
     Args:
-        Any combination of parameters that are hashable via their string representation.
+        *args: Positional arguments to include in the hash computation. Converted to strings
+            using their repr() representation.
+        **kwargs: Keyword arguments to include in the hash computation. Converted to strings
+            using their repr() representation.
 
     Returns:
         The hashing result as a string of hexadecimal digits.

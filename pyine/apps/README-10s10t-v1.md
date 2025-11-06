@@ -22,7 +22,7 @@ python -m pyine.apps.splits.dataset_splitter split \
     --progress
 ```
 
-This should create a binary file at `<project_root>/data/splits/TACO-split.bin` used in subsequent
+This should create a binary file at `<PYINE_DATA_ROOT>/splits/TACO-split.bin` used in subsequent
 commands.
 
 ## Step 2: Generate a dataset partition (if not already done)
@@ -43,7 +43,7 @@ python -m pyine.apps.splits.dataset_splitter partition \
     --format=yaml
 ```
 
-This should create 26 partitions in `<project_root>/data/splits/` named as follows:
+This should create 26 partitions in `<PYINE_DATA_ROOT>/splits/` named as follows:
 
 ```
     TACO-split.problem_ids.000001of000026.yaml
@@ -61,7 +61,7 @@ comes from). We also set some hard caps on the size of the tracing results, and 
 code to be traced as well (this will be useful for later evaluations).
 
 For convenience (and copy-pasting pleasure), we specify all 26 script execution commands below. The
-results should be saved under `<project_root>/data/traces/TACO/10s10t.<part_id>.<date>.lmdb` and
+results should be saved under `<PYINE_DATA_ROOT>/traces/TACO/10s10t.<part_id>.<date>.lmdb` and
 each file should be roughly 500MB (its content is already compressed).
 
 ```bash

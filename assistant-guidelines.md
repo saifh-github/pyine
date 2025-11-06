@@ -15,16 +15,16 @@ referenced via paths or environment variables.
 
 ## Build, Test, and Development Commands
 
-Use `uv pip install -e ".[dev]"` (or `pip install -e ".[dev]"`) after activating a virtualenv. Run
-`make info` to discover helper tasks. `make check` executes the full pre-commit suite, while
-`make test` runs the default pytest selection (`-k "not slow"`). Use `make test-all` for
-exhaustive runs and `make coverage` when you need HTML and XML coverage artifacts under
-`logs/coverage/`.
+Use `uv sync --extra dev` after creating a virtual environment with `uv venv` (or simply run
+`make install` to set up everything automatically). Run `make info` to discover helper tasks.
+`make check` executes the full pre-commit suite, while `make test` runs the default pytest
+selection (`-m "not (slow or integration)"`). Use `make test-all` for exhaustive runs and
+`make coverage` when you need HTML and XML coverage artifacts under `logs/coverage/`.
 
 ## Coding Style & Naming Conventions
 
-Code targets Python 3.12. Format with `black` (120-char lines) and sort imports via `isort`; both
-run automatically through pre-commit. Linting relies on `flake8`, so keep modules idiomatic:
+Code targets Python 3.12. Format with `ruff` (120-char lines); formatting and import sorting run
+automatically through pre-commit. Linting relies on `ruff` and `pyright`, so keep modules idiomatic:
 4-space indentation, descriptive snake_case for functions/modules, PascalCase for classes. Use
 type annotations, and use lightweight dataclasses where practical (or ideally pydantic models when
 validation is useful). Keep secrets out of version control.
@@ -47,7 +47,7 @@ import pyine.data.traces.dataset_writer as trace_dataset_writer
 import pyine.utils.reprod
 ```
 
-Sort imports the way isort would, i.e. standard packages first, then a separate block for 3rd party
+Sort imports the way ruff would, i.e. standard packages first, then a separate block for 3rd party
 packages, and then another block for local (project) imports.
 
 Use the google doctstring format inside generated docstrings.

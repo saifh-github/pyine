@@ -17,8 +17,9 @@ ______________________________________________________________________
 | `pyine/configs/`   | Hydra experiment configs, shared model/datamodule definitions, and config templates referenced by the apps. See [`pyine/configs/README.md`](./pyine/configs/README.md) for more info. |
 | `pyine/organisms/` | Data abstractions (datasets, samples, execution traces) and orchestration helpers used to help build model organisms.                                                                 |
 | `pyine/prompts/`   | Prompt chains, templates, and logging utilities for LLM-based annotation or evaluation runs; see [`pyine/prompts/README.md`](pyine/prompts/README.md) for more info.                  |
+| `pyine/evals/`     | Evaluation logic, metrics, and task definitions for benchmarking model organisms on various code execution tasks.                                                                     |
 | `pyine/utils/`     | Shared utilities (I/O, logging, environment helpers) that support multiple domains.                                                                                                   |
-| `pyine/data/`      | Dataset interfaces, data loaders, repackagers, and helper scripts for managing datasets.                                                                                              |
+| `pyine/data/`      | Dataset interfaces, data loaders, repackagers, and domain-specific modules (TACO, traces, deltas) for managing and processing datasets.                                               |
 | `tests/`           | Pytest suites mirroring the package layout to keep coverage close to the implementation.                                                                                              |
 | `notebooks/`       | Exploratory analyses, visualizations, and walkthrough notebooks; see [`notebooks/README.md`](./notebooks/README.md) for more info.                                                    |
 | `data`             | Default location where dataset are expected to be stored. Can be changed so that large datasets live outside the repo; see [`.env.template`](./.env.template) for overrides.          |
