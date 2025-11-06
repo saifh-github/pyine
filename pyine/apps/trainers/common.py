@@ -47,12 +47,12 @@ def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
     if hydra_cfg is None:
         return
     # check if we're in multirun mode (sweep)
-    hydra_mode = getattr(hydra_cfg.mode, "value", None)
+    hydra_mode = getattr(hydra_cfg.mode, "value", None)  # type: ignore[reportUnknownMemberType]
     is_multirun = hydra_mode == RunMode.MULTIRUN or str(hydra_mode or "") == str(RunMode.MULTIRUN)
     if not is_multirun:
         return
     # check if the sweeper is the wandb sweeper
-    sweeper_cfg = getattr(hydra_cfg.sweeper, "_target_", None)
+    sweeper_cfg = getattr(hydra_cfg.sweeper, "_target_", None)  # type: ignore[reportUnknownMemberType]
     if sweeper_cfg is not None and "wandb" in str(sweeper_cfg).lower():
         # wandb sweeper requires wandb logging to be enabled
         if not config.use_wandb_logging:
