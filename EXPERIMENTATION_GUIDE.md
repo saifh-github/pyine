@@ -286,6 +286,7 @@ hydra:
         name: eval/loss
         goal: minimize
     params:
+      # the `config.<...>` prefixes correspond to the nested structure of args in your app
       config.training_args_config.learning_rate:
         distribution: "log_uniform_values"
         min: 1.0e-3

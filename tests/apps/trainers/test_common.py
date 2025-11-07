@@ -667,8 +667,7 @@ def test_prepare_resume_artifacts_auto_resume_config_mismatch(
         trainer_common.prepare_resume_artifacts(config, runtime)
 
 
-# @pytest.mark.slow
-# @pytest.mark.integration
+@pytest.mark.integration
 def test_validate_wandb_sweeper_requirements(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
