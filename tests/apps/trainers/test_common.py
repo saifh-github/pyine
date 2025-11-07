@@ -3,6 +3,10 @@ import pathlib
 import types
 import typing
 
+import hydra
+import hydra.core.utils
+import hydra_zen
+import omegaconf
 import pydantic
 import pytest
 
@@ -663,90 +667,87 @@ def test_prepare_resume_artifacts_auto_resume_config_mismatch(
         trainer_common.prepare_resume_artifacts(config, runtime)
 
 
-def test_validate_wandb_sweeper_requirements_not_initialized(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that validation passes when Hydra is not initialized."""
-    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
-    fake_instance = types.SimpleNamespace(is_initialized=lambda: False)
-    monkeypatch.setattr(
-        trainer_common.hydra.core.global_hydra.GlobalHydra,
-        "instance",
-        lambda: fake_instance,
-    )
-    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
-
-
-def test_validate_wandb_sweeper_requirements_not_multirun(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that validation passes when not in multirun mode."""
-    from hydra.types import RunMode
-
-    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
-    fake_hydra_cfg = types.SimpleNamespace(
-        mode=types.SimpleNamespace(value=RunMode.RUN),
-        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
-    )
-    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
-    monkeypatch.setattr(
-        trainer_common.hydra.core.global_hydra.GlobalHydra,
-        "instance",
-        lambda: fake_instance,
-    )
-    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
-
-
-def test_validate_wandb_sweeper_requirements_multirun_without_wandb_sweeper(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that validation passes when in multirun mode but not using wandb sweeper."""
-    from hydra.types import RunMode
-
-    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
-    fake_hydra_cfg = types.SimpleNamespace(
-        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
-        sweeper=types.SimpleNamespace(_target_="hydra._internal.core_plugins.basic_sweeper.BasicSweeper"),
-    )
-    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
-    monkeypatch.setattr(
-        trainer_common.hydra.core.global_hydra.GlobalHydra,
-        "instance",
-        lambda: fake_instance,
-    )
-    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
-
-
-def test_validate_wandb_sweeper_requirements_wandb_sweeper_with_logging_enabled(
+# @pytest.mark.slow
+# @pytest.mark.integration
+def test_validate_wandb_sweeper_requirements(
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test that validation passes when using wandb sweeper with wandb logging enabled."""
-    from hydra.types import RunMode
+    validation_called = []
+    monkeypatch.setenv("WANDB_MODE", "offline")
 
-    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=True)
-    fake_hydra_cfg = types.SimpleNamespace(
-        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
-        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
-    )
-    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
-    monkeypatch.setattr(
-        trainer_common.hydra.core.global_hydra.GlobalHydra,
-        "instance",
-        lambda: fake_instance,
-    )
-    trainer_common.validate_wandb_sweeper_requirements(config)  # should not raise
+    def test_task(cfg: omegaconf.DictConfig) -> dict[str, bool]:
+        """Task function that tests the validation."""
+        assert cfg.dummy_param in [1, 2, 3]
+        app_config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=cfg.use_wandb_logging)
+        trainer_common.validate_wandb_sweeper_requirements(app_config)
+        validation_called.append(True)
+        return {"success": True}
 
-
-def test_validate_wandb_sweeper_requirements_wandb_sweeper_without_logging_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test that validation raises error when using wandb sweeper without wandb logging."""
-    from hydra.types import RunMode
-
-    config = _build_app_config(DummyDatamoduleConfig(), use_wandb_logging=False)
-    fake_hydra_cfg = types.SimpleNamespace(
-        mode=types.SimpleNamespace(value=RunMode.MULTIRUN),
-        sweeper=types.SimpleNamespace(_target_="hydra_plugins.hydra_wandb_sweeper.wandb_sweeper.WandbSweeper"),
+    test_task_config = hydra_zen.make_config(
+        use_wandb_logging=False,
+        dummy_param=0,  # this default should always be overridden in the sweeps below
     )
-    fake_instance = types.SimpleNamespace(is_initialized=lambda: True, hydra=fake_hydra_cfg)
-    monkeypatch.setattr(
-        trainer_common.hydra.core.global_hydra.GlobalHydra,
-        "instance",
-        lambda: fake_instance,
+    # with basic sweeper, wandb logging is not required even in multirun
+    sweep_dir1 = tmp_path / "sweep1"
+    job_returns = hydra_zen.launch(
+        config=test_task_config,
+        task_function=test_task,
+        overrides=[
+            "use_wandb_logging=false",
+            "hydra.mode=MULTIRUN",
+            f"hydra.sweep.dir={sweep_dir1}",
+            "dummy_param=1,2,3",
+        ],
+        multirun=True,
+        version_base="1.3",
     )
-    with pytest.raises(ValueError, match="hydra-wandb-sweeper.*config.use_wandb_logging must be set to True"):
-        trainer_common.validate_wandb_sweeper_requirements(config)
+    # should complete successfully:
+    assert len(job_returns) == 1  # list of list of job outputs (peculiarity of regular sweeps...)
+    assert len(job_returns[0]) == 3  # three expected outputs for that grid sweep
+    assert all(jr.return_value["success"] for jr in job_returns[0])
+    assert len(validation_called) == 3
+    validation_called.clear()
+
+    # with wandb sweeper, if we don't setup wandb logging, we get an exception
+    sweep_dir2 = tmp_path / "sweep2"
+    with pytest.raises(Exception):  # noqa: B017
+        _ = hydra_zen.launch(
+            config=test_task_config,
+            task_function=test_task,
+            overrides=[
+                "use_wandb_logging=false",
+                "hydra.mode=MULTIRUN",
+                "hydra/sweeper=wandb",  # use sweep config from plugin directly
+                f"hydra.sweep.dir={sweep_dir2}",
+                "hydra.sweeper.wandb_sweep_config.name=some_sweep",
+                "hydra.sweeper.wandb_sweep_config.method=grid",
+                "hydra.sweeper.wandb_sweep_config.budget=3",
+                "+hydra.sweeper.params.dummy_param=[1,2,3]",
+            ],
+            multirun=True,
+            version_base="1.3",
+        )
+    assert len(validation_called) == 0
+
+    # however, if we do set up wandb logging, all should be OK
+    sweep_dir3 = tmp_path / "sweep3"
+    job_returns = hydra_zen.launch(
+        config=test_task_config,
+        task_function=test_task,
+        overrides=[
+            "use_wandb_logging=true",
+            "hydra.mode=MULTIRUN",
+            "hydra/sweeper=wandb",  # use sweep config from plugin directly
+            f"hydra.sweep.dir={sweep_dir3}",
+            "hydra.sweeper.wandb_sweep_config.name=some_sweep",
+            "hydra.sweeper.wandb_sweep_config.method=grid",
+            "hydra.sweeper.wandb_sweep_config.budget=3",
+            "+hydra.sweeper.params.dummy_param=[1,2,3]",
+        ],
+        multirun=True,
+        version_base="1.3",
+    )
+    assert len(job_returns) == 3  # list of job outputs
+    assert all(jr.status == hydra.core.utils.JobStatus.COMPLETED for jr in job_returns)
+    assert len(validation_called) == 3

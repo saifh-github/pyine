@@ -43,8 +43,7 @@ hydra:
         distribution: "log_uniform_values"
         min: 1.0e-3
         max: 1.0e-5
-      config.training_args_config.gradient_accumulation_steps:
-        values: [2, 4, 6, 8]
+      config.training_args_config.gradient_accumulation_steps: [2, 4, 6, 8]
 
 config:
   base_model: Qwen/Qwen2.5-Coder-7B-Instruct

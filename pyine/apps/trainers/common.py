@@ -7,7 +7,6 @@ import shutil
 import time
 import typing
 
-import hydra.core.global_hydra
 import pydantic
 import transformers
 
@@ -38,23 +37,21 @@ def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
     Raises:
         ValueError: If using wandb sweeper without wandb logging enabled.
     """
-    from hydra.core.global_hydra import GlobalHydra
+    from hydra.core.hydra_config import HydraConfig
     from hydra.types import RunMode
 
-    if not hydra.core.global_hydra.GlobalHydra.instance().is_initialized():
+    if not HydraConfig.initialized():
+        return  # hydra not running, nothing to check
+    hydra_cfg = HydraConfig.get()
+    hydra_mode = getattr(hydra_cfg, "mode", None)
+    if hydra_mode is None or hydra_mode != RunMode.MULTIRUN:
+        return  # hydra not running in multirun (sweep) mode
+    hydra_sweeper = getattr(hydra_cfg, "sweeper", None)
+    if hydra_sweeper is None:
         return
-    hydra_cfg = GlobalHydra.instance().hydra
-    if hydra_cfg is None:
-        return
-    # check if we're in multirun mode (sweep)
-    hydra_mode = getattr(hydra_cfg.mode, "value", None)  # type: ignore[reportUnknownMemberType]
-    is_multirun = hydra_mode == RunMode.MULTIRUN or str(hydra_mode or "") == str(RunMode.MULTIRUN)
-    if not is_multirun:
-        return
-    # check if the sweeper is the wandb sweeper
-    sweeper_cfg = getattr(hydra_cfg.sweeper, "_target_", None)  # type: ignore[reportUnknownMemberType]
-    if sweeper_cfg is not None and "wandb" in str(sweeper_cfg).lower():
-        # wandb sweeper requires wandb logging to be enabled
+    sweeper_target = getattr(hydra_sweeper, "_target_", None)
+    sweeper_config = getattr(hydra_sweeper, "wandb_sweep_config", None)
+    if (sweeper_target is not None and "wandb" in str(sweeper_target).lower()) or sweeper_config is not None:
         if not config.use_wandb_logging:
             raise ValueError(
                 "When using the hydra-wandb-sweeper (multirun with wandb sweeper), "

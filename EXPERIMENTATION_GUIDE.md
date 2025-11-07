@@ -239,6 +239,78 @@ For more details, see [`pyine/apps/README.md`](./pyine/apps/README.md#trainers).
 
 ______________________________________________________________________
 
+### Step 6b: Run Hyperparameter Sweeps (Optional)
+
+For hyperparameter tuning, you can use Hydra's multirun functionality with the `hydra-wandb-sweeper`
+plugin to launch and track multiple training runs with different hyperparameter configurations.
+Remember to set `config.use_wandb_logging=true` (required for sweep tracking). See also the wandb
+[documentation on sweeps](https://docs.wandb.ai/models/sweeps) for more information on sweep
+settings.
+
+**Running a sweep:** for simple sweeps, you can specify arguments directly on the command line:
+
+```bash
+# basic random sweep example:
+python -m pyine.apps.trainers.hf_trainer \
+  --multirun \
+  hydra.mode=MULTIRUN \
+  +experiment=<your_experiment_name> \
+  hydra/sweeper=wandb \
+  hydra.sweeper.wandb_sweep_config.name=some_sweep, \
+  hydra.sweeper.wandb_sweep_config.method=random, \
+  hydra.sweeper.wandb_sweep_config.budget=10, \
+  +hydra.sweeper.params.dummy_param=[1,2,3,4,5], \
+  +hydra.sweeper.params.learning_rate=[1.0e-5,2.0e-5,5.0e-5]
+```
+
+**Using a sweep configuration file:** for more complex sweeps, define a `hydra/sweeper` section
+in your experiment configuration itself, and set all required values there; for example:
+
+```yaml
+# @package _global_
+defaults:
+  - override /config: base
+  # ...
+  - override /hydra/sweeper: wandb_sweeper_base  # inherits some defaults from project configs
+  - _self_
+
+# ...
+
+hydra:
+  sweeper:
+    wandb_sweep_config:
+      name: "some sweep name"
+      description: "some description"
+      method: bayes  # options: grid, random, bayes
+      metric:
+        name: eval/loss
+        goal: minimize
+    params:
+      config.training_args_config.learning_rate:
+        distribution: "log_uniform_values"
+        min: 1.0e-3
+        max: 1.0e-5
+      config.training_args_config.gradient_accumulation_steps: [2, 4, 6, 8]
+```
+
+Then run:
+
+```bash
+python -m pyine.apps.trainers.hf_trainer \
+  --multirun \
+  hydra.mode=MULTIRUN \
+  +experiment=<your_experiment_name>
+```
+
+**Remember:**
+
+- Trainer sweeps require `config.use_wandb_logging=true`; the apps will raise an error otherwise;
+- All runs in a sweep are logged to Weights & Biases under a sweep project;
+- Sweep results can be visualized in the W&B dashboard;
+- You can monitor and control sweeps via the W&B web interface.
+
+______________________________________________________________________
+
 ### Step 7: Evaluate the Model Organism
 
 Evaluate your trained model organism to confirm it possesses the desired bias or behavior.
