@@ -27,7 +27,7 @@ class RuntimeConfig(pydantic.BaseModel):
     """Name of the experiment; used for output artifact naming and logging."""
     run_name: str = pydantic.Field("${now:%Y%m%d-%H%M%S}", frozen=True)
     """Name of the run; used for output artifact naming and logging."""
-    run_group: str | None = pydantic.Field(None, frozen=True)
+    run_group: str | None = pydantic.Field(default="${hydra:runtime.exp_name}", frozen=True)
     """Group name for the run; used for grouping/filtering in wandb e.g. for distributed/K-fold runs."""
     app_name: str = pydantic.Field(default="${hydra:job.name}", frozen=True)  # don't override!
     """Name of the application/script/launcher used for this runtime."""
@@ -116,7 +116,7 @@ class RuntimeConfig(pydantic.BaseModel):
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
         default_kwargs: dict[str, typing.Any] = {
-            "name": f"{self.exp_name}-{self.run_name}",
+            "name": self.run_name,
             "notes": self.notes,
             "tags": sorted(set(self.tags)) if self.tags else None,
             "group": self.run_group,

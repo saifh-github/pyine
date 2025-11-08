@@ -22,7 +22,7 @@ runtime:
 hydra:
   sweeper:
     wandb_sweep_config:
-      name: "${runtime.exp_name}/demo-sweep" # the name of the sweep, displayed in the W&B UI
+      name: "${runtime.exp_name}"
       method: random # the hyperparam sweep search strategy
       metric:
         name: eval/loss
