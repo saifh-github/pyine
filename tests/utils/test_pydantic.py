@@ -1,8 +1,10 @@
 import dataclasses
+import json
 import pathlib
 import types
 import typing
 
+import omegaconf
 import pydantic
 import pytest
 import yaml
@@ -14,6 +16,22 @@ import pyine.utils.pydantic as pyd
 class MyModel(pydantic.BaseModel):
     a: int
     b: str
+
+
+def test_dictconfig_serializes_to_plain_dict() -> None:
+    data = {"alpha": 1, "nested": {"value": 2}}
+    cfg = omegaconf.OmegaConf.create(data)
+
+    class Holder(pydantic.BaseModel):
+        cfg: omegaconf.DictConfig
+
+    model = Holder(cfg=cfg)
+    dumped = model.model_dump()
+    assert isinstance(model.cfg, omegaconf.DictConfig)
+    assert isinstance(dumped["cfg"], dict)
+    assert dumped["cfg"] == data
+    dumped_json = json.loads(model.model_dump_json())
+    assert dumped_json["cfg"] == data
 
 
 def setup_function(

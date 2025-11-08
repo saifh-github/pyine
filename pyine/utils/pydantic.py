@@ -11,11 +11,95 @@ import typing
 
 import omegaconf
 import pydantic
+import pydantic.json
+import pydantic.json_schema
+import pydantic_core
 import yaml
 
 import pyine.utils.portability
 
 logger = logging.getLogger(__name__)
+
+
+def _dictconfig_plain_serializer(
+    value: typing.Any,
+) -> typing.Any:
+    """Return a JSON-serializable representation for DictConfig instances.
+
+    Args:
+        value: Object given to Pydantic during serialization.
+
+    Returns:
+        A primitive container when the input is a DictConfig, otherwise the original value.
+    """
+    if isinstance(value, omegaconf.DictConfig):
+        container = omegaconf.OmegaConf.to_container(value, resolve=True)
+        return typing.cast("dict[str, typing.Any]", container)
+    return value
+
+
+def _dictconfig_core_schema(
+    cls: type[omegaconf.DictConfig],
+    source: typing.Any,
+    handler: pydantic.GetCoreSchemaHandler,
+) -> pydantic_core.core_schema.CoreSchema:
+    """Expose DictConfig handling for Pydantic validation and serialization.
+
+    Pydantic invokes this hook while building schemas for any models referencing DictConfig.
+
+    Args:
+        cls: DictConfig type provided by Pydantic.
+        source: Original source annotation.
+        handler: Callback to fetch the default schema for standard dicts.
+
+    Returns:
+        A CoreSchema accepting both DictConfig and plain dict inputs while serializing to primitives.
+    """
+    dict_schema = handler(dict[str, typing.Any])
+    python_schema = pydantic_core.core_schema.union_schema(
+        [
+            pydantic_core.core_schema.is_instance_schema(omegaconf.DictConfig),
+            dict_schema,
+        ],
+    )
+    return pydantic_core.core_schema.json_or_python_schema(
+        json_schema=dict_schema,
+        python_schema=python_schema,
+        serialization=pydantic_core.core_schema.plain_serializer_function_ser_schema(
+            _dictconfig_plain_serializer,
+            when_used="always",
+        ),
+    )
+
+
+def _dictconfig_json_schema(
+    cls: type[omegaconf.DictConfig],
+    _core_schema: pydantic_core.core_schema.CoreSchema,
+    handler: pydantic.GetJsonSchemaHandler,
+) -> pydantic.json_schema.JsonSchemaValue:
+    """Provide the JSON schema representation for DictConfig fields.
+
+    Args:
+        cls: DictConfig type provided by Pydantic.
+        _core_schema: Core schema produced by `_dictconfig_core_schema`.
+        handler: Callback used to derive the JSON schema.
+
+    Returns:
+        JSON schema describing a standard dictionary.
+    """
+    return handler(pydantic_core.core_schema.dict_schema())
+
+
+def _install_dictconfig_serialization_support() -> None:
+    """Register OmegaConf DictConfig support across all Pydantic models."""
+    omegaconf.DictConfig.__get_pydantic_core_schema__ = classmethod(_dictconfig_core_schema)  # type: ignore[reportAttributeAccessIssue]
+    omegaconf.DictConfig.__get_pydantic_json_schema__ = classmethod(_dictconfig_json_schema)  # type: ignore[reportAttributeAccessIssue]
+    if hasattr(pydantic.json, "ENCODERS_BY_TYPE"):
+        pydantic.json.ENCODERS_BY_TYPE[omegaconf.DictConfig] = _dictconfig_plain_serializer
+        pydantic.json.ENCODERS_BY_TYPE[omegaconf.dictconfig.DictConfig] = _dictconfig_plain_serializer
+
+
+_install_dictconfig_serialization_support()
 
 
 class PydanticYAMLLoader(yaml.SafeLoader):
