@@ -5,7 +5,6 @@ import hydra
 import hydra.conf
 import hydra.core.plugins
 import hydra_zen
-import omegaconf
 
 import pyine.configs.schemas
 import pyine.configs.searchpath
@@ -93,36 +92,32 @@ def get_sweeper_configs(
     """Generates and returns sweeper configs for hydra zen storage."""
     import hydra_plugins.hydra_wandb_sweeper.config as sweeper_config
 
-    wandb_sweep_struct = omegaconf.OmegaConf.structured(sweeper_config.WandbConfig)
-    wandb_sweep_cfg = typing.cast(
-        "omegaconf.DictConfig",
-        omegaconf.OmegaConf.create(omegaconf.OmegaConf.to_container(wandb_sweep_struct, resolve=False)),
-    )
-    wandb_sweep_cfg["name"] = "${runtime.exp_name}/sweep"
-    wandb_sweep_cfg["_convert_"] = "object"
-    base_wandb_sweep_config = pyine.configs.schemas.ConfigDescription(
+    base_wandb_sweep_config = pyine.configs.utils.make_config_description(
+        sweeper_config.WandbConfig,
         name="wandb_sweep_base",
         group=f"{group}/wandb_sweep_config",
         description="Base wandb sweep config combining plugin defaults with runtime args.",
-        config=wandb_sweep_cfg,
+        config={
+            "name": "${runtime.exp_name}/sweep",
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
-    wandb_sweeper_struct = omegaconf.OmegaConf.structured(sweeper_config.WandbSweeperConf)
-    wandb_sweeper_cfg = typing.cast(
-        "omegaconf.DictConfig",
-        omegaconf.OmegaConf.create(omegaconf.OmegaConf.to_container(wandb_sweeper_struct, resolve=False)),
-    )
-    wandb_sweeper_cfg["_convert_"] = "object"
-    wandb_sweeper_cfg["hydra_defaults"] = [
-        "_self_",
-        {"wandb_sweep_config": "wandb_sweep_base"},
-    ]
-    base_wandb_sweeper_config = pyine.configs.schemas.ConfigDescription(
+    base_wandb_sweeper_config = pyine.configs.utils.make_config_description(
+        sweeper_config.WandbSweeperConf,
         name="wandb_sweeper_base",
         group=group,
         description="Base wandb sweeper configuration combining plugin defaults with runtime args.",
-        config=wandb_sweeper_cfg,
+        config={
+            "wandb_sweep_config": base_wandb_sweep_config.config,
+            "params": {},
+            # -------------
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
     )
-    return [base_wandb_sweep_config, base_wandb_sweeper_config]
+    return [base_wandb_sweeper_config]
 
 
 def get_base_store_and_configs(

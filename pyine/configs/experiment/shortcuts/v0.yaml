@@ -23,7 +23,6 @@ hydra:
   sweeper:
     wandb_sweep_config:
       name: "${runtime.exp_name}/demo-sweep" # the name of the sweep, displayed in the W&B UI
-      description: "demo sweep"
       method: random # the hyperparam sweep search strategy
       metric:
         name: eval/loss

@@ -280,7 +280,6 @@ hydra:
   sweeper:
     wandb_sweep_config:
       name: "some sweep name"
-      description: "some description"
       method: bayes  # options: grid, random, bayes
       metric:
         name: eval/loss
