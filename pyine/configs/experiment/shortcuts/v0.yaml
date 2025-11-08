@@ -22,7 +22,7 @@ runtime:
 hydra:
   sweeper:
     wandb_sweep_config:
-      name: "${runtime.exp_name}"
+      name: "${runtime.exp_name}-sweep"
       method: random # the hyperparam sweep search strategy
       metric:
         name: eval/loss

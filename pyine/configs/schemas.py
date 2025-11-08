@@ -1,9 +1,11 @@
 import collections.abc
 import logging
-import os
 import pathlib
 import typing
 
+import hydra.core.hydra_config
+import hydra.errors
+import hydra.types
 import hydra_zen.typing
 import omegaconf
 import pydantic
@@ -54,7 +56,9 @@ class RuntimeConfig(pydantic.BaseModel):
     """W&B run object created for this runtime (may be None if wandb logging is disabled).
 
     This attribute is not instantiated when the runtime config is created: instead, it is
-    instantiated when the `init_wandb` method is called (which is application-specific).
+    instantiated when the `init_wandb` method is called (which is application-specific). It may
+    also have been created prior to the launch of the application itself, e.g. by a sweep manager,
+    in which case this is just a reference to the existing run object.
     """
 
     @property
@@ -63,6 +67,20 @@ class RuntimeConfig(pydantic.BaseModel):
         output_dir_path = pathlib.Path(self.output_dir).expanduser().resolve()
         assert output_dir_path.is_dir(), "output run directory should have been auto-created?"
         return output_dir_path
+
+    @pydantic.computed_field
+    @property
+    def hydra_runtime_config(self) -> omegaconf.DictConfig | None:
+        """Returns the active Hydra runtime config if available, otherwise None."""
+        hydra_config_cls = hydra.core.hydra_config.HydraConfig
+        if not hydra_config_cls.initialized():
+            return None
+        try:
+            config = hydra_config_cls.get()
+        except (hydra.errors.HydraException, ValueError):
+            return None
+        assert isinstance(config, omegaconf.DictConfig)
+        return config.copy()
 
     @pydantic.computed_field
     @property
@@ -104,32 +122,52 @@ class RuntimeConfig(pydantic.BaseModel):
             return None
         return pathlib.Path(self.wandb_run.dir)
 
+    def _is_using_wandb_sweeper(self) -> bool:
+        """Returns whether the run was launched by a wandb sweeper."""
+        if self.hydra_runtime_config is None:
+            return False
+        if self.hydra_runtime_config.mode != hydra.types.RunMode.MULTIRUN:
+            return False
+        sweeper_target = self.hydra_runtime_config.sweeper._target_
+        return "WandbSweeper" in sweeper_target
+
     def init_wandb(
         self,
         **init_kwargs: typing.Any,
     ) -> str:
-        """Initializes W&B logging for this run and returns the run ID.
+        """Initializes W&B logging for this run (if needed) and returns the run ID.
 
-        Note: for distributed setups, you might want to only initialize wandb once (on the 'rank 0'
-        node) if you wish to aggregate results across all nodes yourself.
+        Notes:
+            - For distributed setups, you might want to only initialize wandb once (on the 'rank 0'
+              node) if you wish to aggregate results across all nodes yourself.
+            - When conducting sweeps with the hydra wandb sweeper, we will NOT be instantiating a
+              wandb run object here as the sweeper will do that for us. Instead, we will simply
+              fetch the run object from wandb.
         """
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
-        default_kwargs: dict[str, typing.Any] = {
-            "name": self.run_name,
-            "notes": self.notes,
-            "tags": sorted(set(self.tags)) if self.tags else None,
-            "group": self.run_group,
-            "job_type": self.app_name,
-            "dir": self.output_dir_path,
-            # TODO: could set run id based on e.g. slurm id here if needed
-        }
-        default_kwargs.update(init_kwargs)
-        self.wandb_run = wandb.init(**default_kwargs)
+        if self._is_using_wandb_sweeper():
+            init_kwargs.pop("config", None)
+            if init_kwargs:
+                logger.warning("wandb init kwargs are ignored when using wandb sweeper")
+            assert wandb.run is not None, "wandb run should have been created by sweeper"
+            self.wandb_run = wandb.run
+        else:
+            default_kwargs: dict[str, typing.Any] = {
+                "name": self.run_name,
+                "notes": self.notes,
+                "tags": sorted(set(self.tags)) if self.tags else None,
+                "group": self.run_group,
+                "job_type": self.app_name,
+                "dir": self.output_dir_path,
+                # TODO: could set run id based on e.g. slurm id here if needed
+            }
+            default_kwargs.update(init_kwargs)
+            self.wandb_run = wandb.init(**default_kwargs)
         assert self.wandb_run.id == self.wandb_run_id
         wandb_run_obj = typing.cast("typing.Any", self.wandb_run)
-        offline = "offline " if getattr(wandb_run_obj, "offline", False) else ""
-        run_info_str = f"initialized {offline} wandb run '{wandb_run_obj.name}'\n\tid: {wandb_run_obj.id}"
+        offline = "offline " if getattr(wandb_run_obj, "offline", False) else " "
+        run_info_str = f"initialized {offline}wandb run '{wandb_run_obj.name}'\n\tid: {wandb_run_obj.id}"
         run_url = getattr(wandb_run_obj, "url", None)
         if run_url is not None:
             run_info_str += f"\n\turl: {run_url}"
@@ -182,42 +220,6 @@ class RuntimeConfig(pydantic.BaseModel):
         }
         base_reinit_args.update(resume_kwargs or {})
         self.wandb_run = wandb.init(**base_reinit_args)
-
-    @pydantic.computed_field
-    @property
-    def hydra_job_name(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_JOB_NAME")
-
-    @pydantic.computed_field
-    @property
-    def hydra_job_num(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_JOB_NUM")
-
-    @pydantic.computed_field
-    @property
-    def hydra_parent_job_name(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_PARENT_JOB_NAME")
-
-    @pydantic.computed_field
-    @property
-    def hydra_parent_job_num(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_PARENT_JOB_NUM")
-
-    @pydantic.computed_field
-    @property
-    def hydra_sweep_id(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_SWEEP_ID")
-
-    @pydantic.computed_field
-    @property
-    def hydra_stack_trace_depth(self) -> str | None:
-        """Returns the Hydra job name."""
-        return os.environ.get("HYDRA_STACK_TRACE_DEPTH")
 
     def finalize(self) -> None:
         """Finalizes the run by e.g. closing the wandb run if one exists."""

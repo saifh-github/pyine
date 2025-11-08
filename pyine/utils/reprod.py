@@ -24,8 +24,10 @@ import wandb
 
 import pyine.utils.distrib as distrib_utils
 import pyine.utils.portability as portab_utils
+import pyine.utils.pydantic as pydantic_utils
 
 _ = portab_utils  # always used for yaml path dump fixer (triggered at import time)
+_ = pydantic_utils  # always used for pydantic serialization hooks registration
 
 if typing.TYPE_CHECKING:
     import pyine.configs.schemas  # noqa
@@ -47,24 +49,6 @@ def get_python_version() -> str:
 def get_platform_name() -> str:
     """Returns a print-friendly platform name that can be used for logs / data tagging."""
     return str(platform.uname())
-
-
-def get_hydra_runtime_metadata() -> dict[str, str]:
-    """Collect Hydra-related runtime metadata from environment variables."""
-    env_to_key = {
-        "HYDRA_JOB_NAME": "hydra_job_name",
-        "HYDRA_JOB_NUM": "hydra_job_num",
-        "HYDRA_PARENT_JOB_NAME": "hydra_parent_job_name",
-        "HYDRA_PARENT_JOB_NUM": "hydra_parent_job_num",
-        "HYDRA_SWEEP_ID": "hydra_sweep_id",
-        "HYDRA_STACK_TRACE_DEPTH": "hydra_stack_trace_depth",
-    }
-    metadata: dict[str, str] = {}
-    for env_key, meta_key in env_to_key.items():
-        value = os.environ.get(env_key)
-        if value:
-            metadata[meta_key] = value
-    return metadata
 
 
 def get_timestamp(time_since_epoch: float | None = None) -> str:
@@ -319,8 +303,6 @@ def get_reprod_metadata(
                 "world_size": distrib_utils.get_world_size(default=-1),
             }
         )
-    if with_hydra_info:
-        reprod_metadata["hydra"] = json.dumps(get_hydra_runtime_metadata())
     return reprod_metadata
 
 
@@ -404,6 +386,7 @@ def entrypoint_setup(
             if persist_runtime_artifacts:
                 print(f"{config_name} config:")
                 rich.print_json(data=curr_config, indent=2)
+                sys.stdout.flush()
             app_config_dict[config_name] = curr_config
         if runtime_config.dry_run:
             if persist_runtime_artifacts:
@@ -498,12 +481,14 @@ def log_configs(
 
     print("reprod metadata:")
     rich.print_json(data=reprod_metadata, indent=2)
+    sys.stdout.flush()
     output_metadata_path = runtime_config.output_dir_path / f"reprod_metadata{log_extension}"
     output_metadata_path.write_text(json.dumps(reprod_metadata, indent=2))
     logger.info(f"reprod metadata saved to: {output_metadata_path}")
 
     print("runtime info:")
     rich.print_json(data=runtime_config.model_dump(mode="json"), indent=2)
+    sys.stdout.flush()
     output_runtime_path = runtime_config.output_dir_path / f"runtime{log_extension}"
     output_runtime_path.write_text(runtime_config.model_dump_json(indent=2))
     logger.info(f"runtime info saved to: {output_runtime_path}")
