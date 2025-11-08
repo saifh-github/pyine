@@ -1,5 +1,6 @@
 import collections.abc
 import logging
+import os
 import pathlib
 import typing
 
@@ -160,6 +161,7 @@ class RuntimeConfig(pydantic.BaseModel):
                 "group": self.run_group,
                 "job_type": self.app_name,
                 "dir": self.output_dir_path,
+                "mode": os.environ.get("WANDB_MODE", None),
                 # TODO: could set run id based on e.g. slurm id here if needed
             }
             default_kwargs.update(init_kwargs)
