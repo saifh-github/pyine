@@ -40,8 +40,8 @@ hydra:
     params:
       config.training_args_config.learning_rate:
         distribution: "log_uniform_values"
-        min: 1.0e-3
-        max: 1.0e-5
+        min: 1.0e-5
+        max: 1.0e-3
       config.training_args_config.gradient_accumulation_steps: [2, 4, 6, 8]
 
 config:
