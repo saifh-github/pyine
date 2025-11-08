@@ -14,6 +14,7 @@ import pyine.apps.trainers.common as trainer_common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
+import tests.env_checks
 
 
 class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
@@ -668,6 +669,10 @@ def test_prepare_resume_artifacts_auto_resume_config_mismatch(
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(
+    tests.env_checks.WANDB_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
+    reason="WandB API key or network not available; cannot check sweeps integration",
+)
 def test_validate_wandb_sweeper_requirements(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

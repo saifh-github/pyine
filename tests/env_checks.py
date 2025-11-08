@@ -36,18 +36,10 @@ def has_taco_traces_dataset_split() -> bool:
     return path.exists()
 
 
-TACO_DATASET_MISSING = not has_taco_dataset()
-TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
-TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
-
-
 def has_hf_access_token() -> bool:
     """Return True if a Hugging Face user access token is available."""
     token = os.environ.get("HF_TOKEN", None)
     return token is not None and len(token) > 0
-
-
-HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
 
 
 def has_openai_api_key() -> bool:
@@ -56,7 +48,10 @@ def has_openai_api_key() -> bool:
     return key is not None and len(key) > 0
 
 
-OPENAI_API_KEY_MISSING = not has_openai_api_key()
+def has_wandb_api_key() -> bool:
+    """Return True if a W&B API key is available."""
+    key = os.environ.get("WANDB_API_KEY", None)
+    return key is not None and len(key) > 0
 
 
 def _read_bool_env(
@@ -98,4 +93,10 @@ def has_network_access() -> bool:
         return False
 
 
+TACO_DATASET_MISSING = not has_taco_dataset()
+TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
+TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
+HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
+OPENAI_API_KEY_MISSING = not has_openai_api_key()
+WANDB_API_KEY_MISSING = not has_wandb_api_key()
 NETWORK_UNAVAILABLE = not has_network_access()
