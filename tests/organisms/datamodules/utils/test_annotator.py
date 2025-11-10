@@ -866,7 +866,7 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
             "model": "gpt-4o-mini",
         },
         prompt_config=prompt_types.PromptBuildConfig(
-            prompt_name="hints/docs",
+            prompt_name="hints/stubs",
         ),
         target_indices=target_indices,
         min_results_per_item=1,
@@ -881,4 +881,4 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
     assert report.total_samples == len(target_indices)
     assert report.skipped_samples >= 0
     assert report.total_tokens_exchanged > 0
-    assert temp_db.list_prompt_names() == ["code_summary", "hints/docs"]
+    assert temp_db.list_prompt_names() == ["code_summary", "hints/stubs"]
