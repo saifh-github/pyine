@@ -677,8 +677,9 @@ def test_validate_wandb_sweeper_requirements(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # note: sweeps do NOT offer an offline mode, so stuff gets logged online: runs land in a test-specific project
+    monkeypatch.setenv("WANDB_PROJECT", "pyine-tests")
     validation_called = []
-    monkeypatch.setenv("WANDB_MODE", "offline")
 
     def test_task(cfg: omegaconf.DictConfig) -> dict[str, bool]:
         """Task function that tests the validation."""
