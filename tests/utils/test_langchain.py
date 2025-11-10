@@ -44,6 +44,8 @@ def test_capture_llm_handler_manual_event_sequence() -> None:
     assert handler.get_latest_event("missing") is None  # noqa
 
 
+@pytest.mark.integration
+@pytest.mark.openai
 @pytest.mark.skipif(
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available",

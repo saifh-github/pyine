@@ -9,6 +9,9 @@ import tests.env_checks
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.openai
 @pytest.mark.skipif(
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available; cannot check annotator app",

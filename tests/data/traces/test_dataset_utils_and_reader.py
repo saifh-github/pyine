@@ -189,6 +189,8 @@ def test_iterator_auto_overrides_missing_keeps_default(tmp_path: pathlib.Path, m
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.timeout(120)  # 2 minutes should be plenty, otherwise tracing is failing for all snippets
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
@@ -228,6 +230,8 @@ def test_mini_taco_traces_dataset(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.timeout(120)  # 2 minutes should be plenty, otherwise tracing is failing for all snippets
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,

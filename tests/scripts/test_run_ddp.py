@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.integration
 class TestRunDdpScript:
     """Integration-style tests that exercise the Bash launcher in realistic scenarios."""
 

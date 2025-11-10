@@ -83,7 +83,9 @@ packages = ["pyine"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow to run due to data/compute (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "integration: marks end-to-end or cross-service tests that rely on external resources/APIs (deselect with '-m \"not integration\"')",
+    "dataset: marks tests that require large local datasets (e.g. TACO) to be present (deselect with '-m \"not dataset\"')",
+    "openai: marks tests that exercise the live OpenAI API and require network access plus OPENAI_API_KEY (deselect with '-m \"not openai\"')",
 ]
 filterwarnings = [
     # until hydra-zen fixes their pydantic v1 warnings, we need this (currently using 0.15.0)

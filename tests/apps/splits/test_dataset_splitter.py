@@ -12,6 +12,8 @@ import tests.env_checks
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check dataset split",
@@ -44,6 +46,8 @@ def test_main_split_taco_micro_subset(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
     reason="TACO traces dataset split is missing, cannot check problem partitioning",
@@ -79,6 +83,8 @@ def test_main_partition_with_taco_split(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check dataset split",

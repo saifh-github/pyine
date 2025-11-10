@@ -60,6 +60,8 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
@@ -128,6 +130,8 @@ def test_shortcuts_datamodule_integration(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
@@ -166,6 +170,8 @@ def test_shortcuts_datamodule_predefined_split(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",

@@ -279,6 +279,8 @@ class TestBuildFromDatasetReader:
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot build test cases cache",

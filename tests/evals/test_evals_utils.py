@@ -182,6 +182,8 @@ def test_category_metrics_callback_streaming(tmp_path: pathlib.Path) -> None:
             assert metrics_second_pass[key] == value
 
 
+@pytest.mark.integration
+@pytest.mark.openai
 @pytest.mark.skipif(
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",

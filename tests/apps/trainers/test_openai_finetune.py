@@ -259,6 +259,9 @@ async def test_main_skip_fine_tuning_updates_wandb(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.openai
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,

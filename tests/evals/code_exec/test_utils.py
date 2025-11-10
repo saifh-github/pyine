@@ -142,6 +142,8 @@ def test_tags_include_exec_type() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.openai
 @pytest.mark.skipif(
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",
@@ -189,6 +191,8 @@ async def test_outcome_evaluator_large_batch_base_config(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.openai
 @pytest.mark.skipif(
     tests.env_checks.OPENAI_API_KEY_MISSING or tests.env_checks.NETWORK_UNAVAILABLE,
     reason="OpenAI API key or network not available; cannot run OpenAI-backed evaluation.",

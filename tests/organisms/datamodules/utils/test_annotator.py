@@ -800,6 +800,9 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.openai
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     tests.env_checks.TACO_TRACES_DATASET_MISSING,

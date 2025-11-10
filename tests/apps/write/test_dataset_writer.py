@@ -28,6 +28,8 @@ def test_main_write_traces_dry_run(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
     reason="TACO dataset is missing, cannot check trace dataset writer app",

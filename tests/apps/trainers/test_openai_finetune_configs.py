@@ -13,6 +13,8 @@ import pyine.utils.reprod
 import tests.env_checks as env_checks
 
 
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",
@@ -50,6 +52,8 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
     )
 
 
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.skipif(
     env_checks.TACO_TRACES_DATASET_MISSING,
     reason="TACO traces dataset is missing, cannot check sample generation",

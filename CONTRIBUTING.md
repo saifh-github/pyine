@@ -53,7 +53,7 @@ For project setup instructions, refer to the top-level [README](./README.md).
 
 ### Coding conventions
 
-- Type hints are required; use typing and collections.abc for abstract types, and prefer Python 3.12+ type annotations.
+- Type hints are required; use `typing` and `collections.abc` for abstract types, and prefer Python 3.12+ type annotations.
 - Docstrings use Google style. Keep them concise and helpful. Provide examples for important public APIs.
 - Imports:
   - Prefer explicit imports (`import some_package; some_package.y()`); avoid `from some_package import y` when possible.
@@ -62,21 +62,24 @@ For project setup instructions, refer to the top-level [README](./README.md).
 - Use f-strings for formatting.
 - Avoid excessive try/except; allow exceptions to propagate unless handling is required for control flow or context.
 - Functions with multiple args: put each argument and the return type on its own line for readability.
-- Tests:
-  - Use pytest, fixtures for shared setup, and keep tests isolated.
-  - Aim for stable tests by seeding randomness and eliminating time/dependency flakiness.
-  - Write separate tests per module/class/function as appropriate.
-  - Prefer small, synthetic inputs over large datasets; use temp dirs/files created at runtime when possible.
 
 ### Testing and reliability
 
-- Unit tests: required for new features, bug fixes, and major refactors. Cover main positive and negative paths.
-- Integration tests: add when behavior spans modules or requires realistic execution flows.
-- Regression tests: when fixing a bug, reproduce it with a failing test first.
+- Use pytest, fixtures for shared setup, and keep tests isolated.
+- Aim for stable tests by seeding randomness and eliminating time/dependency flakiness.
+- Write separate tests per app/module/class/function as appropriate:
+  - Unit tests: required for new features, bug fixes, and major refactors.
+  - Integration tests: add when behavior spans modules or requires realistic execution flows.
+  - Regression tests: when fixing a bug, reproduce it with a failing test first.
+- Prefer small, synthetic inputs over large datasets; use temp dirs/files created at runtime when possible.
 - Determinism:
   - Seed all PRNGs used in tests.
   - Avoid relying on system time/timeouts unless strictly necessary; if you do, keep margins generous to reduce flakes and guard with clear assertions.
-- Marking tests: properly mark tests as 'slow' when they take more than a few seconds to run.
+- Marking tests: use shared pytest markers so the right suites can be selected quickly.
+  - `slow`: mark anything that regularly takes more than a few seconds or needs heavy compute. `make test` automatically deselects these.
+  - `integration`: tag end-to-end flows that wire multiple services together (CLI launchers, Hydra configs, dataset writers, etc.). These are skipped by default unless explicitly requested (e.g., `pytest -m integration` or `make test-all`).
+  - `dataset`: pair with the above when a test needs local corpora like the TACO datasets or other large artifacts to be present; deselect with `-m "not dataset"` when running without those assets.
+  - `openai`: apply in addition to `integration` when a test reaches the real OpenAI API. These require `OPENAI_API_KEY` and outbound network access; deselect with `-m "not openai"`.
 - Skipping tests: if your tests depend on some environment resource (e.g. a dataset), allow the test to be skipped if that resource is unavailable. See the `tests.env_checks` for examples.
 
 ### Error handling and logging

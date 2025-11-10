@@ -204,6 +204,8 @@ print("all done")
 
 
 @pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
 @pytest.mark.timeout(120)  # 2 minutes should be plenty, otherwise tracing is failing for all snippets
 @pytest.mark.skipif(
     tests.env_checks.TACO_DATASET_MISSING,
