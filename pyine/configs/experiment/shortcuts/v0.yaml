@@ -1,6 +1,6 @@
 # @package _global_
 
-# meant for the hf trainer; @@@@@ TODO: convert to python module w/ hydra zen registration
+# meant for the hf trainer only
 
 defaults:
   - override /config: base
