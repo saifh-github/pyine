@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import signal
 import threading
 import time
@@ -24,6 +25,8 @@ __all__ = [
     "GracefulShutdownManager",
     "ShutdownRequest",
 ]
+
+_SIGNAL_ENV_VAR = "PYINE_ENABLE_GRACEFUL_SHUTDOWN_SIGNALS"
 
 
 @dataclasses.dataclass(slots=True, frozen=True)
@@ -96,6 +99,13 @@ class GracefulShutdownManager:
         """Install SIGINT/SIGTERM handlers on the main process."""
         if self._handlers_installed:
             return
+        env_value = os.getenv(_SIGNAL_ENV_VAR)
+        if env_value is not None:
+            normalized_value = env_value.strip().lower()
+            if normalized_value in {"0", "false", "no", "off"}:
+                if threading.current_thread() is not threading.main_thread():
+                    self._log.debug("skipping signal handler registration outside the main thread")
+                    return
         if not pyine.utils.distrib.is_main_process():
             self._log.debug("skipping signal handler registration on non-main process")
             return
