@@ -6,6 +6,7 @@ defaults:
   - override /config: base
   - override /config/datamodule_config: TACO_10s10t_v1_part1to4
   - override /config/training_args_config: train_default
+  - override /hydra/launcher: joblib  # to make sure ddp/signals are supported in sweep runs
   - override /hydra/sweeper: wandb_sweeper_base  # enable wandb sweeps
   - _self_
 
@@ -20,7 +21,7 @@ runtime:
   dry_run: False
 
 hydra:
-  sweeper:
+  sweeper:  # override settings for wandb sweeps when launching the app in multirun mode
     wandb_sweep_config:
       name: "${runtime.exp_name}-sweep"
       method: random # the hyperparam sweep search strategy
@@ -30,7 +31,7 @@ hydra:
       count: 1 # number of function evaluations to perform per agent
       num_agents: 1 # number of agents to launch in a batch until budget is reached;
       # note: num_agents above could be increased if we used slurm launcher (submitit)
-      budget: 100 # total number of agents to launch
+      budget: 10 # total number of agents to launch
       max_run_failure_rate: 0.0 # max authorized failure rate for a batch of wandb agents' runs
       max_agent_failure_rate: 0.0 # max authorized failure rate for a batch of launched wandb agents
       early_terminate:
@@ -43,7 +44,16 @@ hydra:
         min: 1.0e-5
         max: 1.0e-3
       config.training_args_config.gradient_accumulation_steps: [2, 4, 6, 8]
-
+  launcher:  # override default launcher settings to make sure sweep runs are ddp/signal-compatible
+    n_jobs: 1 # max number of jobs to run in parallel; 1 = sequential (no parallelism)
+    prefer: processes  # hint that we prefer processes (to avoid threading/signal issues)
+    verbose: 1 # joblib verbosity; 0 is silent, and higher values show progress messages
+    timeout: null # timeout (in seconds) for each batch of jobs; null means no timeout
+    pre_dispatch: 1 # how many jobs to pre-dispatch to workers before the main loop starts
+    batch_size: auto  # number of tasks sent to each worker; "auto" lets joblib adaptively choose
+    temp_folder: null # dir for temp files / memmapped arrays to share large data between processes
+    max_nbytes: null
+    mmap_mode: r
 config:
   base_model: Qwen/Qwen2.5-Coder-7B-Instruct
   # @@@@ TODO: 4-bit quant + paged optim using bitsandbytes?
