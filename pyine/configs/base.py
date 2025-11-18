@@ -133,7 +133,7 @@ def get_base_store_and_configs(
             ),
             sweep=hydra.conf.SweepDir(
                 dir=f"{output_dir_root}/sweeps/{app_name}/${{runtime.exp_name}}/${{runtime.run_name}}",
-                subdir="${oc.select:hydra:job.num,\"0\"}",
+                subdir="${oc.select:hydra.job.num,\"default\"}",
             ),
             job=hydra.conf.JobConf(name=app_name),
             callbacks={
