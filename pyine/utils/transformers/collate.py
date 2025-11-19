@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc
+import dataclasses
 import logging
 import math
 import typing
@@ -19,8 +20,34 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CollatorBatchLogRecord",
+    "CollatorStage",
+    "CollatorBatchLogHandler",
     "PaddingCollatorWithPromptMask",
 ]
+
+CollatorStage = typing.Literal["train", "eval", "predict"]
+"""Logical stage of the collator (train/eval/predict)."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CollatorBatchLogRecord:
+    """Record of batch stats for logging."""
+
+    stage: CollatorStage
+    """Logical stage of the collator when the batch was prepared (train/eval/predict)."""
+    batch_size: int
+    """Batch size."""
+    padded_seq_len: int
+    """Padded sequence length."""
+    padding_ratio: float
+    """Ratio of padding tokens in the batch."""
+    non_ignored_label_ratio: float
+    """Ratio of non-ignored tokens in the batch (i.e., excluding padding)."""
+
+
+type CollatorBatchLogHandler = collections.abc.Callable[[CollatorBatchLogRecord], None]
+"""Callable logging per-batch stats (stage, batch size, padded len, ratios)."""
 
 
 def _collect_extra_fields_from_batch(
@@ -93,6 +120,8 @@ class PaddingCollatorWithPromptMask:
             the inputs. If falsy/None, no extra fields are forwarded.
         ignore_index: Label value used to mask prompt and padding positions in the returned
             ``labels`` tensor.
+        batch_log_handler: Optional callable used to log per-batch stats (stage, batch size,
+            padded sequence length). When None, logging is disabled.
     """
 
     # @@@@@@ TODO: add support for packing? sort for min-pad batches? (or just toggle group_by_length in trainer args?)
@@ -106,6 +135,7 @@ class PaddingCollatorWithPromptMask:
         pad_to_multiple_of: int | None = None,
         keep_extra_fields: list[str] | bool | None = None,
         ignore_index: int = default_ignore_index,
+        batch_log_handler: CollatorBatchLogHandler | None = None,
     ) -> None:
         """Initializes the collator."""
         self.max_length = max_length
@@ -118,6 +148,8 @@ class PaddingCollatorWithPromptMask:
             )
         self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
+        self._batch_log_handler = batch_log_handler
+        self._stage: CollatorStage = "train"
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if not isinstance(pad_token_id, int):
             raise ValueError("tokenizer must expose an integer pad token")
@@ -130,6 +162,13 @@ class PaddingCollatorWithPromptMask:
         if not isinstance(padding_side, str):
             raise ValueError("tokenizer must expose a string padding side")
         self._padding_side = padding_side
+
+    def set_stage(
+        self,
+        stage: CollatorStage,
+    ) -> None:
+        """Update the logical stage (train/eval/predict) for batch logging."""
+        self._stage = stage
 
     def __call__(
         self,
@@ -236,13 +275,22 @@ class PaddingCollatorWithPromptMask:
             attention_masks.append(attention_mask)
             prompt_lengths.append(prompt_len)
             input_lengths.append(input_len)
+        input_ids_tensor = torch.tensor(input_ids_list, dtype=torch.long)
+        attention_mask_tensor = torch.tensor(attention_masks, dtype=torch.long)
+        labels_tensor = torch.tensor(labels_list, dtype=torch.long)
         batch_dict: dict[str, typing.Any] = {
-            "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
-            "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
-            "labels": torch.tensor(labels_list, dtype=torch.long),
+            "input_ids": input_ids_tensor,
+            "attention_mask": attention_mask_tensor,
+            "labels": labels_tensor,
             "prompt_len": prompt_lengths,
             "input_len": input_lengths,
         }
+        self._log_batch_stats(
+            batch_size=len(to_batch),
+            padded_seq_len=input_ids_tensor.size(1),
+            attention_mask=attention_mask_tensor,
+            labels=labels_tensor,
+        )
         # carry over targeted (or all) metadata fields with the input batch order
         extra_fields = _collect_extra_fields_from_batch(
             batch_data=to_batch,
@@ -252,3 +300,28 @@ class PaddingCollatorWithPromptMask:
         )
         batch_dict.update(extra_fields)
         return typing.cast("ExampleBatchTensors", batch_dict)
+
+    def _log_batch_stats(
+        self,
+        *,
+        batch_size: int,
+        padded_seq_len: int,
+        attention_mask: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> None:
+        """Logs batch stats (stage, batch size, padded sequence length, ratios) if needed."""
+        if self._batch_log_handler is None:
+            return
+        total_tokens = max(batch_size * padded_seq_len, 1)
+        valid_tokens = int(attention_mask.sum().item())
+        padding_ratio = 1.0 - (valid_tokens / total_tokens)
+        non_ignored = int((labels != self.ignore_index).sum().item())
+        non_ignored_ratio = non_ignored / total_tokens
+        record = CollatorBatchLogRecord(
+            stage=self._stage,
+            batch_size=batch_size,
+            padded_seq_len=padded_seq_len,
+            padding_ratio=padding_ratio,
+            non_ignored_label_ratio=non_ignored_ratio,
+        )
+        self._batch_log_handler(record)

@@ -202,3 +202,41 @@ def test_padding_collator_invalid_prompt_len_raises(
     ]
     with pytest.raises(ValueError, match="invalid prompt_len"):
         collator(features)
+
+
+def test_padding_collator_logs_batch_statistics(
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    records: list[pyine.utils.transformers.collate.CollatorBatchLogRecord] = []
+
+    def _capture(record: pyine.utils.transformers.collate.CollatorBatchLogRecord) -> None:
+        records.append(record)
+
+    collator = pyine.utils.transformers.collate.PaddingCollatorWithPromptMask(
+        tokenizer=simple_tokenizer,
+        max_length=6,
+        always_pad_to_max_length=True,
+        batch_log_handler=_capture,
+    )
+    features = [
+        {"input_ids": [1, 2, 3], "prompt_len": 2},
+        {"input_ids": [4, 5], "prompt_len": 1},
+    ]
+    collator(features)
+    collator.set_stage("eval")
+    collator(
+        [
+            {"input_ids": [6, 7, 8, 9], "prompt_len": 3},
+        ]
+    )
+    assert len(records) == 2
+    assert records[0].stage == "train"
+    assert records[0].batch_size == 2
+    assert records[0].padded_seq_len == 6
+    assert records[0].padding_ratio == pytest.approx(7 / 12)
+    assert records[0].non_ignored_label_ratio == pytest.approx(2 / 12)
+    assert records[1].stage == "eval"
+    assert records[1].batch_size == 1
+    assert records[1].padded_seq_len == 6
+    assert records[1].padding_ratio == pytest.approx(2 / 6)
+    assert records[1].non_ignored_label_ratio == pytest.approx(1 / 6)

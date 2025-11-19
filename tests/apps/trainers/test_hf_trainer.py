@@ -12,6 +12,7 @@ import transformers
 import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
 import pyine.evals.utils
+import pyine.utils.transformers
 
 
 class _FakePreparedDataset:
@@ -39,6 +40,35 @@ class _FakePreparedDataset:
         if isinstance(item, str):
             return [row[item] for row in self._rows if item in row]
         return self._rows[item]
+
+
+def _install_collator_stub(
+    config: types.SimpleNamespace,
+    *,
+    collator_factory: typing.Callable[[typing.Any, int, typing.Any | None], typing.Any] | None = None,
+) -> list[dict[str, typing.Any]]:
+    """Attach a get_collator method to a simple config and capture invocation metadata."""
+
+    collator_calls: list[dict[str, typing.Any]] = []
+
+    def _get_collator(
+        tokenizer: typing.Any,
+        max_seq_len: int,
+        wandb_run: typing.Any | None = None,
+    ) -> typing.Any:
+        collator_calls.append(
+            {
+                "tokenizer": tokenizer,
+                "max_seq_len": max_seq_len,
+                "wandb_run": wandb_run,
+            }
+        )
+        if collator_factory is None:
+            return "collator"
+        return collator_factory(tokenizer, max_seq_len, wandb_run)
+
+    config.get_collator = _get_collator
+    return collator_calls
 
 
 def test_train_configures_trainer_and_saves_artifacts(
@@ -228,18 +258,13 @@ def test_train_configures_trainer_and_saves_artifacts(
         lambda *_args, **_kwargs: 64,
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "PaddingCollatorWithPromptMask",
-        lambda *_args, **_kwargs: "collator",
-    )
-    monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.transformers,
         "TrainingArguments",
         fake_training_arguments,
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.transformers,
-        "Trainer",
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "TrainerWrapper",
         fake_trainer_factory,
     )
     fake_dm = _FakeDataModule()
@@ -293,10 +318,12 @@ def test_train_configures_trainer_and_saves_artifacts(
         datamodule_config=_FakeDatamoduleConfig(cache_dir=cache_root),
         gradient_checkpointing=True,
         use_wandb_logging=True,
+        collator_batch_logging=False,
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
     )
+    collator_calls = _install_collator_stub(config)
 
     trainer = pyine.apps.trainers.hf_trainer.train(
         datamodule=fake_dm,
@@ -344,6 +371,170 @@ def test_train_configures_trainer_and_saves_artifacts(
         {"code_type": "refactor"},
     ]
     assert trainer.trained
+    assert collator_calls and collator_calls[0]["wandb_run"] is runtime.wandb_run
+
+
+def test_train_enables_wandb_batch_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    class _FakeDataModule:
+        def get_hf_tokenized_examples_dataset(
+            self,
+            subset_name: str,
+            tokenizer: typing.Any,
+            model_max_seq_len: int,
+            **_: typing.Any,
+        ) -> _FakePreparedDataset:
+            del subset_name
+            del tokenizer
+            del model_max_seq_len
+            rows = [
+                {
+                    "input_ids": [1, 2],
+                    "attention_mask": [1, 1],
+                    "labels": [1, 2],
+                    "sample_data": {"code_type": "bugfix"},
+                },
+            ]
+            return _FakePreparedDataset(rows)
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.config = types.SimpleNamespace(use_cache=True)
+            self.gradient_checkpointing_enabled = False
+
+        def gradient_checkpointing_enable(self) -> None:
+            self.gradient_checkpointing_enabled = True
+
+    class _FakeTokenizer:
+        pass
+
+    class _FakeTrainingArgsConfig:
+        def __init__(self) -> None:
+            self.do_train = True
+
+        def model_dump(self) -> dict[str, object]:
+            return {"output_dir": "ignored"}
+
+    class _FakeWandbRun:
+        def __init__(self) -> None:
+            self.logged: list[tuple[dict[str, typing.Any], bool]] = []
+
+        def define_metric(self, *args: object, **kwargs: object) -> None:
+            del args
+            del kwargs
+
+        def log(
+            self,
+            data: dict[str, typing.Any],
+            commit: bool = True,
+        ) -> None:
+            self.logged.append((data, commit))
+
+    class _FakeTrainer:
+        def __init__(self, **kwargs: typing.Any) -> None:
+            self.kwargs = kwargs
+            self.trained = False
+
+        def train(self, **kwargs: typing.Any) -> str:
+            self.train_kwargs = kwargs
+            self.trained = True
+            return "done"
+
+    fake_trainer_instance = _FakeTrainer()
+
+    def fake_trainer_factory(**kwargs: typing.Any) -> _FakeTrainer:
+        fake_trainer_instance.kwargs = kwargs
+        return fake_trainer_instance
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "infer_effective_max_seq_len",
+        lambda *_args, **_kwargs: 32,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "TrainingArguments",
+        lambda **kwargs: types.SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "TrainerWrapper",
+        fake_trainer_factory,
+    )
+
+    runtime = types.SimpleNamespace(wandb_run=_FakeWandbRun(), finalize=lambda: None)
+    config = types.SimpleNamespace(
+        training_args_config=_FakeTrainingArgsConfig(),
+        datamodule_config=types.SimpleNamespace(),
+        gradient_checkpointing=False,
+        use_wandb_logging=True,
+        collator_batch_logging=True,
+        output_dir=str(tmp_path / "artifact"),
+        get_model=lambda: _FakeModel(),
+        get_tokenizer=lambda: _FakeTokenizer(),
+    )
+
+    captured_handlers: list[typing.Callable[[pyine.utils.transformers.CollatorBatchLogRecord], None]] = []
+
+    def _collator_factory(
+        tokenizer: typing.Any,
+        max_seq_len: int,
+        wandb_run: typing.Any | None = None,
+    ) -> typing.Any:
+        del tokenizer
+        del max_seq_len
+        assert wandb_run is runtime.wandb_run
+
+        def _handler(record: pyine.utils.transformers.CollatorBatchLogRecord) -> None:
+            wandb_run.log(
+                {
+                    f"collator/{record['stage']}/batch_size": record["batch_size"],
+                    f"collator/{record['stage']}/padded_seq_len": record["padded_seq_len"],
+                    f"collator/{record['stage']}/padding_ratio": record["padding_ratio"],
+                    f"collator/{record['stage']}/non_ignored_label_ratio": record["non_ignored_label_ratio"],
+                },
+                commit=False,
+            )
+
+        captured_handlers.append(_handler)
+        return types.SimpleNamespace(batch_logger=_handler)
+
+    collator_calls = _install_collator_stub(config, collator_factory=_collator_factory)
+
+    trainer = pyine.apps.trainers.hf_trainer.train(
+        datamodule=_FakeDataModule(),
+        config=config,
+        runtime=runtime,
+        resume_artifacts=None,
+    )
+    assert trainer is fake_trainer_instance
+    assert trainer.trained
+    assert collator_calls and collator_calls[0]["wandb_run"] is runtime.wandb_run
+    assert captured_handlers
+
+    handler = captured_handlers[0]
+    handler(
+        {
+            "stage": "train",
+            "batch_size": 4,
+            "padded_seq_len": 128,
+            "padding_ratio": 0.2,
+            "non_ignored_label_ratio": 0.1,
+        }
+    )
+    assert runtime.wandb_run.logged == [
+        (
+            {
+                "collator/train/batch_size": 4,
+                "collator/train/padded_seq_len": 128,
+                "collator/train/padding_ratio": 0.2,
+                "collator/train/non_ignored_label_ratio": 0.1,
+            },
+            False,
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -757,7 +948,18 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
                 self._cache_dir.mkdir(parents=True, exist_ok=True)
                 return self._cache_dir
 
-        return types.SimpleNamespace(
+        def _build_collator(
+            tokenizer: typing.Any,
+            max_seq_len: int,
+            wandb_run: typing.Any | None = None,
+        ) -> typing.Any:
+            del wandb_run
+            return pyine.utils.transformers.PaddingCollatorWithPromptMask(
+                tokenizer=tokenizer,
+                max_length=max_seq_len,
+            )
+
+        config = types.SimpleNamespace(
             training_args_config=_TinyTrainingArgsConfig(output_dir=output_dir, max_steps=max_steps),
             datamodule_config=_TinyDatamoduleConfig(cache_dir=output_dir / "tokenized_cache"),
             gradient_checkpointing=False,
@@ -766,6 +968,8 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             get_model=_build_tiny_model,
             get_tokenizer=_SimpleTokenizer,
         )
+        _install_collator_stub(config, collator_factory=_build_collator)
+        return config
 
     train_conversations = [
         {
@@ -806,7 +1010,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
 
     runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
 
-    original_trainer_cls = transformers.Trainer
+    original_trainer_cls = pyine.utils.transformers.TrainerWrapper
     recorded_steps: list[int] = []
     stop_after = {"value": None}
 
@@ -836,8 +1040,8 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             self.add_callback(_RecordingCallback())
 
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.transformers,
-        "Trainer",
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "TrainerWrapper",
         _RecordingTrainer,
     )
 

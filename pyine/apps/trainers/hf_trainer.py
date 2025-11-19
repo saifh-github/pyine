@@ -96,6 +96,11 @@ def train(
     tokenizer = config.get_tokenizer()
     model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
     logger.info(f"effective max_seq_len={model_max_seq_len}")
+    collator = config.get_collator(
+        tokenizer=tokenizer,
+        max_seq_len=model_max_seq_len,
+        wandb_run=runtime.wandb_run if runtime is not None else None,
+    )
 
     # convert conversation-style rows into flat, tokenized examples for training/valid
     logger.info("preparing train dataset...")
@@ -109,13 +114,6 @@ def train(
         subset_name="valid",
         tokenizer=tokenizer,
         model_max_seq_len=model_max_seq_len,
-    )
-
-    # the collator pads to fixed length and masks labels for prompt tokens
-    collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
-        tokenizer,
-        max_length=model_max_seq_len,
-        # pad_to_multiple_of=32,  # @@@@ TODO test speed with and without?
     )
     valid_sample_categories = _extract_sample_categories_from_dataset(valid_ds)
     assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
@@ -147,13 +145,13 @@ def train(
     ):
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
-    trainer = transformers.Trainer(
+    trainer = pyine.utils.transformers.TrainerWrapper(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=valid_ds,
         processing_class=tokenizer,
-        data_collator=typing.cast("transformers.DataCollator", collator),
+        data_collator=collator,
         compute_metrics=eval_metrics_callback,
         callbacks=[milestone_logger, eval_metrics_callback],
     )

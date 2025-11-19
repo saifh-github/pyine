@@ -15,6 +15,7 @@ import pydantic
 import torch
 import torch.distributed.elastic.multiprocessing.errors
 import transformers
+import wandb
 
 import pyine.apps.trainers.common
 import pyine.configs.base
@@ -40,6 +41,21 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = pydantic.Field(
         ...,  # MISSING! MANDATORY!
         description="Training arguments wrapper for the `transformers.TrainingArguments` class.",
+    )
+
+    # --------------- collator settings ---------------
+
+    collator_always_pad_to_max_length: bool = pydantic.Field(
+        default=False,
+        description="Whether to always pad batches to the max sequence length supported by the model.",
+    )
+    collator_pad_to_multiple_of: int | None = pydantic.Field(
+        default=None,  # 32,  # @@@@ TODO test speed with and without?
+        description="If set, the collator will pad the sequence length to a multiple of this value.",
+    )
+    collator_batch_logging: bool = pydantic.Field(
+        default=True,
+        description="Log per-batch collator stats (batch size / padded length) to wandb when enabled.",
     )
 
     # --------------- model settings ---------------
@@ -124,6 +140,15 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
             return None
         return {"": "mps"} if torch.backends.mps.is_available() else "auto"
 
+    def get_collator(
+        self,
+        tokenizer: transformers.PreTrainedTokenizer,
+        max_seq_len: int,
+        wandb_run: wandb.Run | None = None,
+    ) -> transformers.DataCollator:
+        """Returns the data collator to use for training/evaluations."""
+        return instantiate_collator(self, tokenizer=tokenizer, max_seq_len=max_seq_len, wandb_run=wandb_run)
+
     def get_tokenizer(self) -> transformers.PreTrainedTokenizer:
         """Returns the tokenizer to use that is linked to the targeted base model."""
         return instantiate_tokenizer(self)
@@ -151,6 +176,43 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         training_args.pop("output_dir", None)
         training_args.pop("do_predict", None)
         return data
+
+
+def instantiate_collator(
+    config: HFTrainerAppMainConfig,
+    tokenizer: transformers.PreTrainedTokenizer,
+    max_seq_len: int,
+    wandb_run: wandb.Run | None = None,
+) -> transformers.DataCollator:
+    """Instantiates and returns the data collator tied to the config's tokenizer."""
+    logger.info(f"setting up data collator for: {config.base_model}")
+    collator_batch_log_handler: pyine.utils.transformers.CollatorBatchLogHandler | None = None
+    if config.collator_batch_logging and wandb_run is not None:
+        logger.debug("setting up collator batch stats logging to wandb run")
+
+        def _log_collator_batch(record: pyine.utils.transformers.CollatorBatchLogRecord) -> None:
+            rank = pyine.utils.distrib.get_global_rank()
+            metric_prefix = f"collator/{record.stage}/rank{rank}"
+            wandb_run.log(  # type: ignore[reportUnknownMemberType]
+                {
+                    f"{metric_prefix}/batch_size": record.batch_size,
+                    f"{metric_prefix}/padded_seq_len": record.padded_seq_len,
+                    f"{metric_prefix}/padding_ratio": record.padding_ratio,
+                    f"{metric_prefix}/non_ignored_label_ratio": record.non_ignored_label_ratio,
+                },
+                commit=False,
+            )
+
+        collator_batch_log_handler = _log_collator_batch
+
+    collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
+        tokenizer=tokenizer,
+        max_length=max_seq_len,
+        always_pad_to_max_length=config.collator_always_pad_to_max_length,
+        pad_to_multiple_of=config.collator_pad_to_multiple_of,
+        batch_log_handler=collator_batch_log_handler,
+    )
+    return typing.cast("transformers.DataCollator", collator)
 
 
 def instantiate_tokenizer(
