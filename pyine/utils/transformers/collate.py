@@ -56,7 +56,15 @@ def _collect_extra_fields_from_batch(
         keys_to_forward = [key for key in keep_extra_fields if key not in expected_field_names]
     extra_fields: dict[str, list[typing.Any]] = {}
     for key in keys_to_forward:
-        extra_fields[key] = [data[key] for data in batch_data]
+        values: list[typing.Any] = []
+        for idx, sample in enumerate(batch_data):
+            if key not in sample:
+                raise ValueError(
+                    f"extra field '{key}' is missing from sample index {idx}; "
+                    "provide the field for all batched items or disable keep_extra_fields"
+                )
+            values.append(sample[key])
+        extra_fields[key] = values
     return extra_fields
 
 
@@ -104,6 +112,10 @@ class PaddingCollatorWithPromptMask:
         self.always_pad_to_max_length = always_pad_to_max_length
         assert pad_to_multiple_of is None or pad_to_multiple_of > 0, "pad_to_multiple_of must be > 0"
         self.pad_to_multiple_of = int(pad_to_multiple_of) if pad_to_multiple_of else None
+        if self.pad_to_multiple_of is not None and self.pad_to_multiple_of > self.max_length:
+            raise ValueError(
+                f"pad_to_multiple_of ({self.pad_to_multiple_of}) cannot exceed max_length ({self.max_length})"
+            )
         self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
@@ -170,6 +182,11 @@ class PaddingCollatorWithPromptMask:
             # truncate if necessary according to tokenizer's truncation_side
             orig_ids = typing.cast("list[int]", data["input_ids"])
             prompt_len = int(data["prompt_len"]) if "prompt_len" in data else len(orig_ids)
+            if prompt_len < 0 or prompt_len > len(orig_ids):
+                raise ValueError(
+                    f"invalid prompt_len={prompt_len}; "
+                    f"value must be between 0 and the sequence length ({len(orig_ids)})"
+                )
             response_len = len(orig_ids) - prompt_len
             if len(orig_ids) > effective_max_length:
                 overflow = len(orig_ids) - effective_max_length

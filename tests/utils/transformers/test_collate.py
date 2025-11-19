@@ -144,3 +144,61 @@ def test_padding_collator_with_multiple_of_32() -> None:
     assert batch["input_ids"].shape == (1, 64)
     assert batch["input_ids"][0].tolist() == list(range(6, 70))
     assert batch["prompt_len"][0] == 25
+
+
+def test_padding_collator_rejects_pad_multiple_greater_than_max(
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    with pytest.raises(ValueError, match="pad_to_multiple_of"):
+        pyine.utils.transformers.collate.PaddingCollatorWithPromptMask(
+            tokenizer=simple_tokenizer,
+            max_length=8,
+            pad_to_multiple_of=16,
+        )
+
+
+def test_padding_collator_forwards_extra_fields(
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    collator = pyine.utils.transformers.collate.PaddingCollatorWithPromptMask(
+        tokenizer=simple_tokenizer,
+        max_length=6,
+        keep_extra_fields=True,
+    )
+    features = [
+        {"input_ids": [1, 2], "prompt_len": 1, "meta": {"id": "a"}, "identifier": "first"},
+        {"input_ids": [3, 4, 5], "prompt_len": 2, "meta": {"id": "b"}, "identifier": "second"},
+    ]
+    batch = collator(features)
+    assert batch["meta"] == [{"id": "a"}, {"id": "b"}]
+    assert batch["identifier"] == ["first", "second"]
+
+
+def test_padding_collator_missing_extra_field_raises(
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    collator = pyine.utils.transformers.collate.PaddingCollatorWithPromptMask(
+        tokenizer=simple_tokenizer,
+        max_length=6,
+        keep_extra_fields=["meta"],
+    )
+    features = [
+        {"input_ids": [1, 2], "prompt_len": 1, "meta": "available"},
+        {"input_ids": [3, 4, 5], "prompt_len": 2},
+    ]
+    with pytest.raises(ValueError, match="extra field 'meta'"):
+        collator(features)
+
+
+def test_padding_collator_invalid_prompt_len_raises(
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    collator = pyine.utils.transformers.collate.PaddingCollatorWithPromptMask(
+        tokenizer=simple_tokenizer,
+        max_length=4,
+    )
+    features = [
+        {"input_ids": [1, 2, 3], "prompt_len": 5},
+    ]
+    with pytest.raises(ValueError, match="invalid prompt_len"):
+        collator(features)
