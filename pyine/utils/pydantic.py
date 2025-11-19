@@ -571,6 +571,17 @@ def model_from_callable(
             return ...
         return raw_default
 
+    def _extra_behavior() -> typing.Any:
+        if model_config is not None:
+            assert isinstance(model_config, dict)
+            extra_value = model_config.get("extra")
+            if extra_value is not None:
+                return extra_value
+        base_config = getattr(base, "model_config", None)
+        if isinstance(base_config, dict):
+            return base_config.get("extra")  # type: ignore[reportUnknownMemberType]
+        return getattr(base_config, "extra", None)
+
     field_definitions: dict[str, tuple[typing.Any, typing.Any]] = {}
     for p in sig.parameters.values():
         if include and p.name not in include:
@@ -578,11 +589,11 @@ def model_from_callable(
         if exclude and p.name in exclude:
             continue
         if p.kind is inspect.Parameter.VAR_POSITIONAL:
-            # *args → tuple[Any, ...]
+            # *args -> tuple[Any, ...]
             anno = tuple[typing.Any, ...]
             default = ()
         elif p.kind is inspect.Parameter.VAR_KEYWORD:
-            # **kwargs → dict[str, Any]
+            # **kwargs -> dict[str, Any]
             if not include_kwargs:
                 continue
             anno = dict[str, typing.Any]
@@ -592,6 +603,22 @@ def model_from_callable(
             raw_default = ... if p.default is inspect.Signature.empty else default_overrides.get(p.name, p.default)
             default = _normalize_default(p.name, raw_default)
         field_definitions[p.name] = (anno, default)
+    override_order: list[str] = []
+    for override_map in (default_overrides, type_overrides):
+        for key in override_map:
+            if key not in override_order:
+                override_order.append(key)
+    missing_override_fields = [key for key in override_order if key not in field_definitions]
+    if missing_override_fields:
+        extra_behavior = _extra_behavior()
+        if extra_behavior == "allow":
+            for key in missing_override_fields:
+                anno = type_overrides.get(key, typing.Any)
+                default = _normalize_default(key, default_overrides.get(key, ...))
+                field_definitions[key] = (anno, default)
+        else:
+            missing_fields_csv = ", ".join(sorted(missing_override_fields))
+            raise ValueError(f"Overrides provided for unknown parameters: {missing_fields_csv}")
     callable_name = getattr(fn, "__name__", type(fn).__name__)
     model_name = name or f"{callable_name}ParamsConfig"
     if module_for_created_model is None:

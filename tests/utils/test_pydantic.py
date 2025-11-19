@@ -665,3 +665,24 @@ class TestModelFromCallable:
         # validation should enforce int type
         with pytest.raises(pydantic.ValidationError):
             model_cls(a=1, c="not_an_int")
+
+    def test_overrides_require_existing_fields_unless_extra_allowed(self) -> None:
+        with pytest.raises(ValueError, match="unknown parameters: missing"):
+            pyd.model_from_callable(
+                f_basic,
+                default_overrides={"missing": "value"},
+                model_config=pydantic.ConfigDict(extra="forbid"),
+            )
+
+    def test_overrides_add_new_fields_when_extra_allowed(self) -> None:
+        model_cls = pyd.model_from_callable(
+            f_basic,
+            default_overrides={"new_flag": True},
+            type_overrides={"new_flag": bool},
+            model_config=pydantic.ConfigDict(extra="allow"),
+        )
+        assert "new_flag" in model_cls.model_fields
+        instance = model_cls(a=3)
+        assert instance.new_flag is True
+        overridden = model_cls(a=4, new_flag=False)
+        assert overridden.new_flag is False
