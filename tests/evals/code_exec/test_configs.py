@@ -9,7 +9,7 @@ import torch
 
 import pyine.evals.code_exec.configs
 import pyine.evals.common
-import tests.utils.test_transformers
+import tests.utils.transformers.utils
 
 
 class _FakeSample:
@@ -521,7 +521,7 @@ async def test_evaluate_hf_model_generates_results(
     )
     result = await config.evaluate_hf_model(
         model=_FakeModel(),
-        tokenizer=tests.utils.test_transformers.SimpleTokenizer(),
+        tokenizer=tests.utils.transformers.utils.SimpleTokenizer(),
         datamodule=_FakeConversationDataModule(),
         eval_subset_name="subset",
         verbose=True,
