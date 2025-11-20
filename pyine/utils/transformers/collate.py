@@ -105,6 +105,17 @@ class _TrainerStageSwapCallback(transformers.TrainerCallback):
         self._collator = collator
 
     @typing.override
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Called at the beginning of training."""
+        self._collator.set_stage("train")
+
+    @typing.override
     def on_epoch_begin(
         self,
         args: transformers.TrainingArguments,
