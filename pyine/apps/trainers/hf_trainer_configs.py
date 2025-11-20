@@ -197,6 +197,7 @@ def instantiate_collator(
         pad_to_multiple_of=config.collator_pad_to_multiple_of,
         batch_log_handler=collator_batch_log_handler,
     )
+    collator.set_stage("train")
     return typing.cast("transformers.DataCollator", collator)
 
 
