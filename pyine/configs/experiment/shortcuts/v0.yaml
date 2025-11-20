@@ -54,6 +54,7 @@ hydra:
     temp_folder: null # dir for temp files / memmapped arrays to share large data between processes
     max_nbytes: null
     mmap_mode: r
+
 config:
   base_model: Qwen/Qwen2.5-Coder-7B-Instruct
   # @@@@ TODO: 4-bit quant + paged optim using bitsandbytes?
@@ -64,6 +65,7 @@ config:
     keep_generated_datasets_in_memory: False
     # max_solution_count: 1
     # ------------
+  collator_hard_seq_length_cap: 4096
   training_args_config:
     do_train: True
     do_predict: False

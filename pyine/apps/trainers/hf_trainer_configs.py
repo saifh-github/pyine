@@ -49,6 +49,10 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         default=False,
         description="Whether to always pad batches to the max sequence length supported by the model.",
     )
+    collator_hard_seq_length_cap: int | None = pydantic.Field(
+        default=None,
+        description="If set, the collator will cap sequence length to the min of this value or the model's cap.",
+    )
     collator_pad_to_multiple_of: int | None = pydantic.Field(
         default=None,  # 32,  # @@@@ TODO test speed with and without?
         description="If set, the collator will pad the sequence length to a multiple of this value.",
@@ -190,6 +194,9 @@ def instantiate_collator(
     if config.collator_batch_logging and wandb_run is not None:
         logger.debug("setting up collator batch stats logging to wandb run")
         collator_batch_log_handler = wandb_run
+    if config.collator_hard_seq_length_cap is not None:
+        max_seq_len = min(max_seq_len, config.collator_hard_seq_length_cap)
+        logger.debug(f"setting up hard seq length cap: {max_seq_len=}")
     collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
         tokenizer=tokenizer,
         max_length=max_seq_len,
