@@ -229,6 +229,7 @@ def test_shortcuts_datamodule_examples_round_trip(
         max_length=model_max_seq_len,
         keep_extra_fields=True,
     )
+    collator.set_stage("train")
     collator_batch_size = min(len(examples_ds), 4)
     data_loader = torch.utils.data.DataLoader(
         examples_ds,
