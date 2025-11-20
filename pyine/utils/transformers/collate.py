@@ -98,7 +98,12 @@ def _collect_extra_fields_from_batch(
 
 
 class _TrainerStageSwapCallback(transformers.TrainerCallback):
-    """Callback used by the trainer to inform the collator of the current stage."""
+    """Callback used by the trainer to inform the collator of the current stage.
+
+    Note: the collator stats are not reliable because the training/evaluation stage callbacks are
+    not reliably called by the HuggingFace trainer BEFORE the app logic switches between the two
+    states. As a consequence, the collator will sometimes log new stage stats for the previous stage.
+    """
 
     def __init__(self, collator: PaddingCollatorWithPromptMask) -> None:
         """Initializes the callback."""
@@ -115,27 +120,36 @@ class _TrainerStageSwapCallback(transformers.TrainerCallback):
         """Called at the beginning of training."""
         self._collator.set_stage("train")
 
-    @typing.override
-    def on_epoch_begin(
+    def on_step_begin(
         self,
         args: transformers.TrainingArguments,
         state: transformers.TrainerState,
         control: transformers.TrainerControl,
         **_: typing.Any,
     ) -> None:
-        """Called at the beginning of each epoch."""
-        self._collator.set_stage("train")
+        """Called at the beginning of each training step."""
+        self._collator.set_stage("train")  # in case it's not already done (might be late by 1 step)
+
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Called after an evaluation phase."""
+        self._collator.set_stage("train")  # go BACK to training, evaluation is done
 
     @typing.override
-    def on_epoch_end(
+    def on_prediction_step(
         self,
         args: transformers.TrainingArguments,
         state: transformers.TrainerState,
         control: transformers.TrainerControl,
         **_: typing.Any,
     ) -> None:
-        """Called at the end of each epoch."""
-        self._collator.set_stage("eval")  # validation/predict runs next
+        """Called at the end of each prediction step."""
+        self._collator.set_stage("eval")  # in case it's not already done (might be late by 1 step)
 
 
 class PaddingCollatorWithPromptMask:
@@ -213,17 +227,22 @@ class PaddingCollatorWithPromptMask:
         """Returns the trainer callback used by this collator to switch between train/eval stages."""
         return self._trainer_callback
 
-    def _get_metrics_prefix(self) -> str:
+    @property
+    def _metrics_prefix(self) -> str:
         """Returns the prefix to use for logging metrics with this collator."""
         assert self._stage is not None, "collator stage not set"
         rank = pyine.utils.distrib.get_global_rank()
         return f"collator/{self._stage}/rank{rank}"
 
+    @property
+    def _step_metric_name(self) -> str:
+        """Returns the name of the metric used for logging the collate step index."""
+        return f"{self._metrics_prefix}/collate_step"
+
     def _define_metrics(self) -> None:
         """Defines metrics for logging per-batch stats (stage, batch size, padded len, ratios)."""
         if isinstance(self._batch_log_handler, wandb.Run):
-            prefix = self._get_metrics_prefix()
-            collate_step_metric = f"{prefix}/collate_step"
+            prefix = self._metrics_prefix
             for metric_name in [
                 f"{prefix}/batch_size",
                 f"{prefix}/padded_seq_len",
@@ -233,7 +252,7 @@ class PaddingCollatorWithPromptMask:
                 self._batch_log_handler.define_metric(
                     name=metric_name,
                     summary="mean",
-                    step_metric=collate_step_metric,
+                    step_metric=self._step_metric_name,
                 )
 
     def set_stage(
@@ -247,7 +266,12 @@ class PaddingCollatorWithPromptMask:
         self._stage = stage
         if stage not in self._stage_steps:
             self._define_metrics()
-            self._stage_steps[stage] = 0
+            if isinstance(self._batch_log_handler, wandb.Run):
+                default_step_idx = self._batch_log_handler.summary.get(self._step_metric_name, 0)  # type: ignore[reportUnknownVariableType, reportUnknownMemberType]
+                assert isinstance(default_step_idx, int) and default_step_idx >= 0, "unexpected step index"
+            else:
+                default_step_idx = 0
+            self._stage_steps[stage] = default_step_idx
 
     def __call__(
         self,
@@ -401,10 +425,10 @@ class PaddingCollatorWithPromptMask:
         non_ignored = int((labels != self.ignore_index).sum().item())
         non_ignored_ratio = non_ignored / total_tokens
         if isinstance(self._batch_log_handler, wandb.Run):
-            metric_prefix = self._get_metrics_prefix()
+            metric_prefix = self._metrics_prefix
             self._batch_log_handler.log(  # type: ignore[reportUnknownMemberType]
                 {
-                    f"{metric_prefix}/collate_step": self._stage_steps[self._stage],
+                    self._step_metric_name: self._stage_steps[self._stage],
                     f"{metric_prefix}/batch_size": batch_size,
                     f"{metric_prefix}/padded_seq_len": padded_seq_len,
                     f"{metric_prefix}/padding_ratio": padding_ratio,
