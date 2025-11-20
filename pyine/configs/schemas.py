@@ -30,7 +30,7 @@ class RuntimeConfig(pydantic.BaseModel):
     """Name of the experiment; used for output artifact naming and logging."""
     run_name: str = pydantic.Field("${now:%Y%m%d-%H%M%S}", frozen=True)
     """Name of the run; used for output artifact naming and logging."""
-    run_group: str | None = pydantic.Field(default="${hydra:runtime.exp_name}", frozen=True)
+    run_group: str | None = pydantic.Field(default="${runtime.exp_name}", frozen=True)
     """Group name for the run; used for grouping/filtering in wandb e.g. for distributed/K-fold runs."""
     app_name: str = pydantic.Field(default="${hydra:job.name}", frozen=True)  # don't override!
     """Name of the application/script/launcher used for this runtime."""
