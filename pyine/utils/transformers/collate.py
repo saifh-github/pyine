@@ -38,6 +38,8 @@ class CollatorBatchLogRecord:
 
     stage: CollatorStage
     """Logical stage of the collator when the batch was prepared (train/eval/predict)."""
+    step: int
+    """Collate step index (recorded by the collator itself) when the batch was prepared."""
     batch_size: int
     """Batch size."""
     padded_seq_len: int
@@ -152,7 +154,7 @@ class PaddingCollatorWithPromptMask:
         self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
         self._batch_log_handler = batch_log_handler
-        self._stage: CollatorStage = "train"
+        self._stage: CollatorStage | None = None
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if not isinstance(pad_token_id, int):
             raise ValueError("tokenizer must expose an integer pad token")
@@ -165,13 +167,41 @@ class PaddingCollatorWithPromptMask:
         if not isinstance(padding_side, str):
             raise ValueError("tokenizer must expose a string padding side")
         self._padding_side = padding_side
+        self._stage_steps: dict[CollatorStage, int] = {}
+
+    def _get_metrics_prefix(self) -> str:
+        """Returns the prefix to use for logging metrics with this collator."""
+        assert self._stage is not None, "collator stage not set"
+        rank = pyine.utils.distrib.get_global_rank()
+        return f"collator/{self._stage}/rank{rank}"
+
+    def _define_metrics(self) -> None:
+        """Defines metrics for logging per-batch stats (stage, batch size, padded len, ratios)."""
+        if isinstance(self._batch_log_handler, wandb.Run):
+            prefix = self._get_metrics_prefix()
+            collate_step_metric = f"{prefix}/collate_step"
+            for metric_name in [
+                f"{prefix}/batch_size",
+                f"{prefix}/padded_seq_len",
+                f"{prefix}/padding_ratio",
+                f"{prefix}/non_ignored_label_ratio",
+            ]:
+                self._batch_log_handler.define_metric(
+                    name=metric_name,
+                    summary="mean",
+                    step_metric=collate_step_metric,
+                )
 
     def set_stage(
         self,
         stage: CollatorStage,
     ) -> None:
         """Update the logical stage (train/eval/predict) for batch logging."""
+        logger.debug(f"collator stage set to {stage}")
         self._stage = stage
+        if stage not in self._stage_steps:
+            self._define_metrics()
+            self._stage_steps[stage] = 0
 
     def __call__(
         self,
@@ -193,6 +223,8 @@ class PaddingCollatorWithPromptMask:
 
         The returned dictionary will also carry over any extra fields specified in the initialization.
         """
+        if self._stage is None:
+            raise ValueError("collator stage not set")
         input_ids_list: list[list[int]] = []
         labels_list: list[list[int]] = []
         attention_masks: list[list[int]] = []
@@ -313,7 +345,9 @@ class PaddingCollatorWithPromptMask:
         labels: torch.Tensor,
     ) -> None:
         """Logs batch stats (stage, batch size, padded sequence length, ratios) if needed."""
+        assert self._stage is not None, "collator stage not set"
         if self._batch_log_handler is None:
+            self._stage_steps[self._stage] += 1
             return
         total_tokens = max(batch_size * padded_seq_len, 1)
         valid_tokens = int(attention_mask.sum().item())
@@ -321,10 +355,10 @@ class PaddingCollatorWithPromptMask:
         non_ignored = int((labels != self.ignore_index).sum().item())
         non_ignored_ratio = non_ignored / total_tokens
         if isinstance(self._batch_log_handler, wandb.Run):
-            rank = pyine.utils.distrib.get_global_rank()
-            metric_prefix = f"collator/{self._stage}/rank{rank}"
+            metric_prefix = self._get_metrics_prefix()
             self._batch_log_handler.log(  # type: ignore[reportUnknownMemberType]
                 {
+                    f"{metric_prefix}/collate_step": self._stage_steps[self._stage],
                     f"{metric_prefix}/batch_size": batch_size,
                     f"{metric_prefix}/padded_seq_len": padded_seq_len,
                     f"{metric_prefix}/padding_ratio": padding_ratio,
@@ -335,9 +369,11 @@ class PaddingCollatorWithPromptMask:
         else:
             record = CollatorBatchLogRecord(
                 stage=self._stage,
+                step=self._stage_steps[self._stage],
                 batch_size=batch_size,
                 padded_seq_len=padded_seq_len,
                 padding_ratio=padding_ratio,
                 non_ignored_label_ratio=non_ignored_ratio,
             )
             self._batch_log_handler(record)
+        self._stage_steps[self._stage] += 1
