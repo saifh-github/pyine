@@ -7,7 +7,9 @@ import math
 import typing
 
 import torch
+import wandb
 
+import pyine.utils.distrib
 from pyine.utils.transformers.constants import default_ignore_index
 from pyine.utils.transformers.data import (
     ExampleBatchTensors,
@@ -120,8 +122,9 @@ class PaddingCollatorWithPromptMask:
             the inputs. If falsy/None, no extra fields are forwarded.
         ignore_index: Label value used to mask prompt and padding positions in the returned
             ``labels`` tensor.
-        batch_log_handler: Optional callable used to log per-batch stats (stage, batch size,
-            padded sequence length). When None, logging is disabled.
+        batch_log_handler: Optional callable or wandb Run used to log per-batch stats (stage,
+            batch size, padded sequence length, and padding/label ratios). When None, logging is
+            disabled.
     """
 
     # @@@@@@ TODO: add support for packing? sort for min-pad batches? (or just toggle group_by_length in trainer args?)
@@ -135,7 +138,7 @@ class PaddingCollatorWithPromptMask:
         pad_to_multiple_of: int | None = None,
         keep_extra_fields: list[str] | bool | None = None,
         ignore_index: int = default_ignore_index,
-        batch_log_handler: CollatorBatchLogHandler | None = None,
+        batch_log_handler: CollatorBatchLogHandler | wandb.Run | None = None,
     ) -> None:
         """Initializes the collator."""
         self.max_length = max_length
@@ -317,11 +320,24 @@ class PaddingCollatorWithPromptMask:
         padding_ratio = 1.0 - (valid_tokens / total_tokens)
         non_ignored = int((labels != self.ignore_index).sum().item())
         non_ignored_ratio = non_ignored / total_tokens
-        record = CollatorBatchLogRecord(
-            stage=self._stage,
-            batch_size=batch_size,
-            padded_seq_len=padded_seq_len,
-            padding_ratio=padding_ratio,
-            non_ignored_label_ratio=non_ignored_ratio,
-        )
-        self._batch_log_handler(record)
+        if isinstance(self._batch_log_handler, wandb.Run):
+            rank = pyine.utils.distrib.get_global_rank()
+            metric_prefix = f"collator/{self._stage}/rank{rank}"
+            self._batch_log_handler.log(  # type: ignore[reportUnknownMemberType]
+                {
+                    f"{metric_prefix}/batch_size": batch_size,
+                    f"{metric_prefix}/padded_seq_len": padded_seq_len,
+                    f"{metric_prefix}/padding_ratio": padding_ratio,
+                    f"{metric_prefix}/non_ignored_label_ratio": non_ignored_ratio,
+                },
+                commit=False,
+            )
+        else:
+            record = CollatorBatchLogRecord(
+                stage=self._stage,
+                batch_size=batch_size,
+                padded_seq_len=padded_seq_len,
+                padding_ratio=padding_ratio,
+                non_ignored_label_ratio=non_ignored_ratio,
+            )
+            self._batch_log_handler(record)

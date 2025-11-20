@@ -186,25 +186,10 @@ def instantiate_collator(
 ) -> transformers.DataCollator:
     """Instantiates and returns the data collator tied to the config's tokenizer."""
     logger.info(f"setting up data collator for: {config.base_model}")
-    collator_batch_log_handler: pyine.utils.transformers.CollatorBatchLogHandler | None = None
+    collator_batch_log_handler: wandb.Run | None = None
     if config.collator_batch_logging and wandb_run is not None:
         logger.debug("setting up collator batch stats logging to wandb run")
-
-        def _log_collator_batch(record: pyine.utils.transformers.CollatorBatchLogRecord) -> None:
-            rank = pyine.utils.distrib.get_global_rank()
-            metric_prefix = f"collator/{record.stage}/rank{rank}"
-            wandb_run.log(  # type: ignore[reportUnknownMemberType]
-                {
-                    f"{metric_prefix}/batch_size": record.batch_size,
-                    f"{metric_prefix}/padded_seq_len": record.padded_seq_len,
-                    f"{metric_prefix}/padding_ratio": record.padding_ratio,
-                    f"{metric_prefix}/non_ignored_label_ratio": record.non_ignored_label_ratio,
-                },
-                commit=False,
-            )
-
-        collator_batch_log_handler = _log_collator_batch
-
+        collator_batch_log_handler = wandb_run
     collator = pyine.utils.transformers.PaddingCollatorWithPromptMask(
         tokenizer=tokenizer,
         max_length=max_seq_len,
