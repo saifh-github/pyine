@@ -7,6 +7,7 @@ import math
 import typing
 
 import torch
+import transformers
 import wandb
 
 import pyine.utils.distrib
@@ -15,9 +16,6 @@ from pyine.utils.transformers.data import (
     ExampleBatchTensors,
     _parse_keep_extra_fields_config,  # type: ignore[reportPrivateUsage]
 )
-
-if typing.TYPE_CHECKING:
-    import transformers
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +26,8 @@ __all__ = [
     "PaddingCollatorWithPromptMask",
 ]
 
-CollatorStage = typing.Literal["train", "eval", "predict"]
-"""Logical stage of the collator (train/eval/predict)."""
+CollatorStage = typing.Literal["train", "eval"]
+"""Logical stage of the collator (train/eval)."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -97,6 +95,36 @@ def _collect_extra_fields_from_batch(
             values.append(sample[key])
         extra_fields[key] = values
     return extra_fields
+
+
+class _TrainerStageSwapCallback(transformers.TrainerCallback):
+    """Callback used by the trainer to inform the collator of the current stage."""
+
+    def __init__(self, collator: PaddingCollatorWithPromptMask) -> None:
+        """Initializes the callback."""
+        self._collator = collator
+
+    @typing.override
+    def on_epoch_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Called at the beginning of each epoch."""
+        self._collator.set_stage("train")
+
+    @typing.override
+    def on_epoch_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Called at the end of each epoch."""
+        self._collator.set_stage("eval")  # validation/predict runs next
 
 
 class PaddingCollatorWithPromptMask:
@@ -168,6 +196,11 @@ class PaddingCollatorWithPromptMask:
             raise ValueError("tokenizer must expose a string padding side")
         self._padding_side = padding_side
         self._stage_steps: dict[CollatorStage, int] = {}
+        self._trainer_callback = _TrainerStageSwapCallback(self)
+
+    def get_trainer_callback(self) -> transformers.TrainerCallback:
+        """Returns the trainer callback used by this collator to switch between train/eval stages."""
+        return self._trainer_callback
 
     def _get_metrics_prefix(self) -> str:
         """Returns the prefix to use for logging metrics with this collator."""
@@ -196,7 +229,9 @@ class PaddingCollatorWithPromptMask:
         self,
         stage: CollatorStage,
     ) -> None:
-        """Update the logical stage (train/eval/predict) for batch logging."""
+        """Update the logical stage (train/eval) for batch logging."""
+        if stage == self._stage:
+            return
         logger.debug(f"collator stage set to {stage}")
         self._stage = stage
         if stage not in self._stage_steps:
@@ -364,7 +399,7 @@ class PaddingCollatorWithPromptMask:
                     f"{metric_prefix}/padding_ratio": padding_ratio,
                     f"{metric_prefix}/non_ignored_label_ratio": non_ignored_ratio,
                 },
-                commit=False,
+                commit=False,  # prevents messing up with step count increments in trainer
             )
         else:
             record = CollatorBatchLogRecord(

@@ -6,7 +6,6 @@ from . import constants as _constants
 from . import data as _data
 from . import generation as _generation
 from . import models as _models
-from . import trainer as _trainer
 from .callbacks import *  # noqa: F403
 from .checkpoints import *  # noqa: F403
 from .collate import *  # noqa: F403
@@ -15,7 +14,6 @@ from .constants import *  # noqa: F403
 from .data import *  # noqa: F403
 from .generation import *  # noqa: F403
 from .models import *  # noqa: F403
-from .trainer import *  # noqa: F403
 
 __all__: list[str] = []
 __all__.extend(_callbacks.__all__)
@@ -26,4 +24,3 @@ __all__.extend(_constants.__all__)
 __all__.extend(_data.__all__)
 __all__.extend(_generation.__all__)
 __all__.extend(_models.__all__)
-__all__.extend(_trainer.__all__)

@@ -145,7 +145,12 @@ def train(
     ):
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
-    trainer = pyine.utils.transformers.TrainerWrapper(
+    callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
+    if hasattr(collator, "get_trainer_callback"):
+        collator_callback = collator.get_trainer_callback()  # type: ignore[reportFunctionMemberAccess]
+        assert isinstance(collator_callback, transformers.TrainerCallback)
+        callbacks.append(collator_callback)
+    trainer = transformers.Trainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
@@ -153,7 +158,7 @@ def train(
         processing_class=tokenizer,
         data_collator=collator,
         compute_metrics=eval_metrics_callback,
-        callbacks=[milestone_logger, eval_metrics_callback],
+        callbacks=callbacks,
     )
     train_kwargs: dict[str, typing.Any] = {}
     if resume_artifacts is not None:

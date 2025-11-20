@@ -263,8 +263,8 @@ def test_train_configures_trainer_and_saves_artifacts(
         fake_training_arguments,
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "TrainerWrapper",
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
         fake_trainer_factory,
     )
     fake_dm = _FakeDataModule()
@@ -459,8 +459,8 @@ def test_train_enables_wandb_batch_logging(
         lambda **kwargs: types.SimpleNamespace(**kwargs),
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "TrainerWrapper",
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
         fake_trainer_factory,
     )
 
@@ -1010,7 +1010,6 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
 
     runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
 
-    original_trainer_cls = pyine.utils.transformers.TrainerWrapper
     recorded_steps: list[int] = []
     stop_after = {"value": None}
 
@@ -1030,7 +1029,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
                 control.should_training_stop = True
             return control
 
-    class _RecordingTrainer(original_trainer_cls):
+    class _RecordingTrainer(transformers.Trainer):
         def __init__(
             self,
             *args: typing.Any,
@@ -1040,8 +1039,8 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             self.add_callback(_RecordingCallback())
 
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
-        "TrainerWrapper",
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
         _RecordingTrainer,
     )
 
