@@ -4,10 +4,10 @@ import collections.abc
 import dataclasses
 import logging
 import math
+import os
 import typing
 
 import torch
-import transformers
 import wandb
 
 import pyine.utils.distrib
@@ -17,27 +17,24 @@ from pyine.utils.transformers.data import (
     _parse_keep_extra_fields_config,  # type: ignore[reportPrivateUsage]
 )
 
+if typing.TYPE_CHECKING:
+    import transformers
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CollatorBatchLogRecord",
-    "CollatorStage",
     "CollatorBatchLogHandler",
     "PaddingCollatorWithPromptMask",
 ]
-
-CollatorStage = typing.Literal["train", "eval"]
-"""Logical stage of the collator (train/eval)."""
 
 
 @dataclasses.dataclass(frozen=True)
 class CollatorBatchLogRecord:
     """Record of batch stats for logging."""
 
-    stage: CollatorStage
-    """Logical stage of the collator when the batch was prepared (train/eval/predict)."""
-    step: int
-    """Collate step index (recorded by the collator itself) when the batch was prepared."""
+    stage: str | None
+    """Logical stage of the collator when the batch was prepared, if specified (e.g. train/valid/...)."""
     batch_size: int
     """Batch size."""
     padded_seq_len: int
@@ -97,61 +94,6 @@ def _collect_extra_fields_from_batch(
     return extra_fields
 
 
-class _TrainerStageSwapCallback(transformers.TrainerCallback):
-    """Callback used by the trainer to inform the collator of the current stage.
-
-    Note: the collator stats are not reliable because the training/evaluation stage callbacks are
-    not reliably called by the HuggingFace trainer BEFORE the app logic switches between the two
-    states. As a consequence, the collator will sometimes log new stage stats for the previous stage.
-    """
-
-    def __init__(self, collator: PaddingCollatorWithPromptMask) -> None:
-        """Initializes the callback."""
-        self._collator = collator
-
-    @typing.override
-    def on_train_begin(
-        self,
-        args: transformers.TrainingArguments,
-        state: transformers.TrainerState,
-        control: transformers.TrainerControl,
-        **_: typing.Any,
-    ) -> None:
-        """Called at the beginning of training."""
-        self._collator.set_stage("train")
-
-    def on_step_begin(
-        self,
-        args: transformers.TrainingArguments,
-        state: transformers.TrainerState,
-        control: transformers.TrainerControl,
-        **_: typing.Any,
-    ) -> None:
-        """Called at the beginning of each training step."""
-        self._collator.set_stage("train")  # in case it's not already done (might be late by 1 step)
-
-    def on_evaluate(
-        self,
-        args: transformers.TrainingArguments,
-        state: transformers.TrainerState,
-        control: transformers.TrainerControl,
-        **_: typing.Any,
-    ) -> None:
-        """Called after an evaluation phase."""
-        self._collator.set_stage("train")  # go BACK to training, evaluation is done
-
-    @typing.override
-    def on_prediction_step(
-        self,
-        args: transformers.TrainingArguments,
-        state: transformers.TrainerState,
-        control: transformers.TrainerControl,
-        **_: typing.Any,
-    ) -> None:
-        """Called at the end of each prediction step."""
-        self._collator.set_stage("eval")  # in case it's not already done (might be late by 1 step)
-
-
 class PaddingCollatorWithPromptMask:
     """Pads/truncates inputs and builds labels masking out prompt tokens.
 
@@ -177,9 +119,12 @@ class PaddingCollatorWithPromptMask:
             the inputs. If falsy/None, no extra fields are forwarded.
         ignore_index: Label value used to mask prompt and padding positions in the returned
             ``labels`` tensor.
-        batch_log_handler: Optional callable or wandb Run used to log per-batch stats (stage,
-            batch size, padded sequence length, and padding/label ratios). When None, logging is
-            disabled.
+        batch_log_handler: Optional callable used to log per-batch stats (stage, batch size, padded
+            sequence length, and padding/label ratios).
+        wandb_run_or_init_kwargs: Optional W&B init kwargs (for a run to resume/connect to) or wandb
+            run to log per-batch stats to.
+        init_stage: Logical stage where this collator will be applied by default, unless changed;
+            could be e.g. 'train', 'valid', etc.
     """
 
     # @@@@@@ TODO: add support for packing? sort for min-pad batches? (or just toggle group_by_length in trainer args?)
@@ -193,7 +138,9 @@ class PaddingCollatorWithPromptMask:
         pad_to_multiple_of: int | None = None,
         keep_extra_fields: list[str] | bool | None = None,
         ignore_index: int = default_ignore_index,
-        batch_log_handler: CollatorBatchLogHandler | wandb.Run | None = None,
+        batch_log_handler: CollatorBatchLogHandler | None = None,
+        wandb_run_or_init_kwargs: wandb.Run | dict[str, typing.Any] | None = None,
+        init_stage: str | None = None,
     ) -> None:
         """Initializes the collator."""
         self.max_length = max_length
@@ -207,7 +154,13 @@ class PaddingCollatorWithPromptMask:
         self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
         self.ignore_index = ignore_index
         self._batch_log_handler = batch_log_handler
-        self._stage: CollatorStage | None = None
+        if isinstance(wandb_run_or_init_kwargs, dict):
+            self._wandb_init_kwargs = wandb_run_or_init_kwargs
+            self._wandb_run_obj: wandb.Run | None = None  # will be prepared on first use given the init kwargs
+        else:
+            self._wandb_init_kwargs = None
+            self._wandb_run_obj = wandb_run_or_init_kwargs
+        self._stage: str | None = init_stage
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if not isinstance(pad_token_id, int):
             raise ValueError("tokenizer must expose an integer pad token")
@@ -220,58 +173,60 @@ class PaddingCollatorWithPromptMask:
         if not isinstance(padding_side, str):
             raise ValueError("tokenizer must expose a string padding side")
         self._padding_side = padding_side
-        self._stage_steps: dict[CollatorStage, int] = {}
-        self._trainer_callback = _TrainerStageSwapCallback(self)
-
-    def get_trainer_callback(self) -> transformers.TrainerCallback:
-        """Returns the trainer callback used by this collator to switch between train/eval stages."""
-        return self._trainer_callback
 
     @property
     def _metrics_prefix(self) -> str:
         """Returns the prefix to use for logging metrics with this collator."""
-        assert self._stage is not None, "collator stage not set"
-        rank = pyine.utils.distrib.get_global_rank()
-        return f"collator/{self._stage}/rank{rank}"
+        if self._stage is None:
+            return "collator"
+        return f"collator/{self._stage}"
 
     @property
-    def _step_metric_name(self) -> str:
-        """Returns the name of the metric used for logging the collate step index."""
-        return f"{self._metrics_prefix}/collate_step"
+    def _use_wandb(self) -> bool:
+        """Returns whether this collator is configured to log per-batch stats to wandb."""
+        return self._wandb_run_obj is not None or self._wandb_init_kwargs is not None
 
-    def _define_metrics(self) -> None:
-        """Defines metrics for logging per-batch stats (stage, batch size, padded len, ratios)."""
-        if isinstance(self._batch_log_handler, wandb.Run):
-            prefix = self._metrics_prefix
-            for metric_name in [
-                f"{prefix}/batch_size",
-                f"{prefix}/padded_seq_len",
-                f"{prefix}/padding_ratio",
-                f"{prefix}/non_ignored_label_ratio",
-            ]:
-                self._batch_log_handler.define_metric(
-                    name=metric_name,
-                    summary="mean",
-                    step_metric=self._step_metric_name,
-                )
+    @property
+    def _wandb_run(self) -> wandb.Run:
+        """Returns the wandb run associated with this collator, from the initially provided run id."""
+        assert self._use_wandb, "cannot get wandb run; collator is not configured to log per-batch stats to wandb"
+        if self._wandb_run_obj is None:
+            if self._wandb_init_kwargs is None:
+                raise ValueError("cannot get wandb run; _wandb_init_kwargs is None")
+            if "id" not in self._wandb_init_kwargs:
+                raise ValueError("cannot get wandb run; _wandb_init_kwargs does not contain 'id'")
+            wandb_run_id = self._wandb_init_kwargs["id"]
+            curr_rank = pyine.utils.distrib.get_global_rank()
+            process_label = f"rank_{curr_rank}_pid_{os.getpid()}"
+            logger.debug(f"getting wandb run object for id={wandb_run_id} on process {process_label}...")
+            init_kwargs = self._wandb_init_kwargs.copy()
+            init_kwargs.update(
+                {
+                    "job_type": "collate",
+                    # TODO: @@@@@@ fix this;
+                    #       as of 2025-11-20 and wandb 0.22.3, this init seems to hang indefinitely in workers
+                    "settings": wandb.Settings(
+                        mode="shared",
+                        init_timeout=300,
+                        x_label=process_label,
+                        x_primary=False,
+                        x_update_finish_state=False,
+                    ),
+                }
+            )
+            self._wandb_run_obj = wandb.init(**init_kwargs)
+            logger.debug(f"connected to wandb run on process {process_label} (url={self._wandb_run_obj.url})")
+        return self._wandb_run_obj
 
     def set_stage(
         self,
-        stage: CollatorStage,
+        stage: str | None,
     ) -> None:
         """Update the logical stage (train/eval) for batch logging."""
         if stage == self._stage:
             return
         logger.debug(f"collator stage set to {stage}")
         self._stage = stage
-        if stage not in self._stage_steps:
-            self._define_metrics()
-            if isinstance(self._batch_log_handler, wandb.Run):
-                default_step_idx = self._batch_log_handler.summary.get(self._step_metric_name, 0)  # type: ignore[reportUnknownVariableType, reportUnknownMemberType]
-                assert isinstance(default_step_idx, int) and default_step_idx >= 0, "unexpected step index"
-            else:
-                default_step_idx = 0
-            self._stage_steps[stage] = default_step_idx
 
     def __call__(
         self,
@@ -293,8 +248,6 @@ class PaddingCollatorWithPromptMask:
 
         The returned dictionary will also carry over any extra fields specified in the initialization.
         """
-        if self._stage is None:
-            raise ValueError("collator stage not set")
         input_ids_list: list[list[int]] = []
         labels_list: list[list[int]] = []
         attention_masks: list[list[int]] = []
@@ -415,35 +368,31 @@ class PaddingCollatorWithPromptMask:
         labels: torch.Tensor,
     ) -> None:
         """Logs batch stats (stage, batch size, padded sequence length, ratios) if needed."""
-        assert self._stage is not None, "collator stage not set"
-        if self._batch_log_handler is None:
-            self._stage_steps[self._stage] += 1
+        # if we are NOT doing any batch stats logging, just return
+        if self._batch_log_handler is None and not self._use_wandb:
             return
+        # otherwise, prep the batch stats and log them
         total_tokens = max(batch_size * padded_seq_len, 1)
         valid_tokens = int(attention_mask.sum().item())
         padding_ratio = 1.0 - (valid_tokens / total_tokens)
         non_ignored = int((labels != self.ignore_index).sum().item())
         non_ignored_ratio = non_ignored / total_tokens
-        if isinstance(self._batch_log_handler, wandb.Run):
+        if self._use_wandb:
             metric_prefix = self._metrics_prefix
-            self._batch_log_handler.log(  # type: ignore[reportUnknownMemberType]
+            self._wandb_run.log(  # type: ignore[reportUnknownMemberType]
                 {
-                    self._step_metric_name: self._stage_steps[self._stage],
                     f"{metric_prefix}/batch_size": batch_size,
                     f"{metric_prefix}/padded_seq_len": padded_seq_len,
                     f"{metric_prefix}/padding_ratio": padding_ratio,
                     f"{metric_prefix}/non_ignored_label_ratio": non_ignored_ratio,
                 },
-                commit=False,  # prevents messing up with step count increments in trainer
             )
-        else:
+        if self._batch_log_handler is not None:
             record = CollatorBatchLogRecord(
                 stage=self._stage,
-                step=self._stage_steps[self._stage],
                 batch_size=batch_size,
                 padded_seq_len=padded_seq_len,
                 padding_ratio=padding_ratio,
                 non_ignored_label_ratio=non_ignored_ratio,
             )
             self._batch_log_handler(record)
-        self._stage_steps[self._stage] += 1

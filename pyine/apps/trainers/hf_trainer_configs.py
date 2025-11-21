@@ -190,10 +190,19 @@ def instantiate_collator(
 ) -> transformers.DataCollator:
     """Instantiates and returns the data collator tied to the config's tokenizer."""
     logger.info(f"setting up data collator for: {config.base_model}")
-    collator_batch_log_handler: wandb.Run | None = None
+    wandb_run_or_init_kwargs: wandb.Run | dict[str, typing.Any] | None = None
     if config.collator_batch_logging and wandb_run is not None:
         logger.debug("setting up collator batch stats logging to wandb run")
-        collator_batch_log_handler = wandb_run
+        # TODO: @@@@ figure out if passing a run object is ideal; see notes in collator impl
+        #       (mp-init hangs as of wandb 0.22.3; passing the object causes race conditions
+        #        and unreliable logs instead, as some values will be continuously overwritten)
+        wandb_run_or_init_kwargs = wandb_run
+        # wandb_run_or_init_kwargs = {
+        #     "project": wandb_run.project,
+        #     "entity": wandb_run.entity,
+        #     "id": wandb_run.id,
+        #     "dir": wandb_run.dir,
+        # }
     if config.collator_hard_seq_length_cap is not None:
         max_seq_len = min(max_seq_len, config.collator_hard_seq_length_cap)
         logger.debug(f"setting up hard seq length cap: {max_seq_len=}")
@@ -202,9 +211,8 @@ def instantiate_collator(
         max_length=max_seq_len,
         always_pad_to_max_length=config.collator_always_pad_to_max_length,
         pad_to_multiple_of=config.collator_pad_to_multiple_of,
-        batch_log_handler=collator_batch_log_handler,
+        wandb_run_or_init_kwargs=wandb_run_or_init_kwargs,
     )
-    collator.set_stage("train")
     return typing.cast("transformers.DataCollator", collator)
 
 

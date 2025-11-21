@@ -364,6 +364,8 @@ def entrypoint_setup(
         # initialize the prompt-related utilities
         _ = pyine.prompts.get_framework_prompt_manager()
         _ = pyine.prompts.get_framework_db()
+        if use_wandb_logging:
+            wandb.setup()
         # enforce the spawn start method for multiprocessing functions/pools
         pyine.utils.concurrency.ensure_spawn_start_method()
         setup_fn._executed = True

@@ -18,7 +18,6 @@ def test_padding_collator_masks_prompt_and_padding(
     ]
     with pytest.raises(ValueError, match="stage not set"):
         _ = collator(features)
-    collator.set_stage("train")
     batch = collator(features)
     assert batch["input_ids"].shape == (2, 6)
     assert batch["attention_mask"].tolist() == [[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 1]]
@@ -41,7 +40,6 @@ def test_padding_collator_both_sides_pad() -> None:
     features = [
         {"input_ids": [1, 2, 3], "prompt_len": 2},
     ]
-    collator.set_stage("train")
     batch = collator(features)
     # if we provide a single sequence as input, no padding should occur
     assert batch["input_ids"].shape == (1, 3)
@@ -70,7 +68,6 @@ def test_padding_collator_both_sides_pad() -> None:
         always_pad_to_max_length=True,
         ignore_index=-100,
     )
-    collator2.set_stage("train")
     batch = collator2(features)
     assert batch["input_ids"].shape == (2, 6)
     assert batch["input_ids"].tolist() == [[1, 2, 3, 0, 0, 0], [4, 5, 6, 7, 0, 0]]
@@ -89,7 +86,6 @@ def test_padding_collator_both_sides_trunc() -> None:
     features = [
         {"input_ids": [1, 2, 3, 4, 5, 6, 7], "prompt_len": 3},
     ]
-    collator.set_stage("train")
     batch = collator(features)
     # right truncation: keep first 5 tokens [1, 2, 3, 4, 5]
     assert batch["input_ids"].tolist() == [[1, 2, 3, 4, 5]]
@@ -104,7 +100,6 @@ def test_padding_collator_both_sides_trunc() -> None:
         max_length=5,
         ignore_index=-100,
     )
-    collator2.set_stage("train")
     batch = collator2(features)
     assert batch["input_ids"].tolist() == [[3, 4, 5, 6, 7]]
     assert batch["prompt_len"] == [1]  # shrank since we truncated from left
@@ -131,7 +126,6 @@ def test_padding_collator_with_multiple_of_32() -> None:
         {"input_ids": list(range(23)), "prompt_len": 23},
         {"input_ids": list(range(31)), "prompt_len": 31},
     ]
-    collator.set_stage("train")
     batch = collator(features)
     assert batch["input_ids"].shape == (2, 32)
     assert batch["input_ids"][0][:9].tolist() == [0] * 9
@@ -177,7 +171,6 @@ def test_padding_collator_forwards_extra_fields(
         {"input_ids": [1, 2], "prompt_len": 1, "meta": {"id": "a"}, "identifier": "first"},
         {"input_ids": [3, 4, 5], "prompt_len": 2, "meta": {"id": "b"}, "identifier": "second"},
     ]
-    collator.set_stage("train")
     batch = collator(features)
     assert batch["meta"] == [{"id": "a"}, {"id": "b"}]
     assert batch["identifier"] == ["first", "second"]
@@ -195,7 +188,6 @@ def test_padding_collator_missing_extra_field_raises(
         {"input_ids": [1, 2], "prompt_len": 1, "meta": "available"},
         {"input_ids": [3, 4, 5], "prompt_len": 2},
     ]
-    collator.set_stage("train")
     with pytest.raises(ValueError, match="extra field 'meta'"):
         collator(features)
 
@@ -210,7 +202,6 @@ def test_padding_collator_invalid_prompt_len_raises(
     features = [
         {"input_ids": [1, 2, 3], "prompt_len": 5},
     ]
-    collator.set_stage("train")
     with pytest.raises(ValueError, match="invalid prompt_len"):
         collator(features)
 

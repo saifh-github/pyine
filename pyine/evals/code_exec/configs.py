@@ -357,14 +357,14 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             wandb_run.define_metric(
                 name=metric_name,
                 summary="max",  # outcome eval metrics are always max here (i.e. accuracy_*)
-                step_metric="global_step",
+                step_metric="train/global_step",  # the global step for the run, logged by the hf trainer
             )  # noqa
         for metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():
             metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
             wandb_run.define_metric(
                 name=metric_name,
                 summary="mean",  # token usage metrics make sense as averaged over full runs
-                step_metric="global_step",
+                step_metric="train/global_step",  # the global step for the run, logged by the hf trainer
             )  # noqa
 
     @typing.override

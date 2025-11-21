@@ -146,10 +146,6 @@ def train(
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
-    if hasattr(collator, "get_trainer_callback"):
-        collator_callback = collator.get_trainer_callback()  # type: ignore[reportFunctionMemberAccess]
-        assert isinstance(collator_callback, transformers.TrainerCallback)
-        callbacks.append(collator_callback)
     trainer = transformers.Trainer(
         model=model,
         args=training_args,

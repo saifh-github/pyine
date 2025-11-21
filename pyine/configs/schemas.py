@@ -12,6 +12,7 @@ import omegaconf
 import pydantic
 import wandb
 
+import pyine.utils.distrib
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,8 @@ class RuntimeConfig(pydantic.BaseModel):
             assert wandb.run is not None, "wandb run should have been created by sweeper"
             self.wandb_run = wandb.run
         else:
+            curr_rank = pyine.utils.distrib.get_global_rank()
+            is_main_process = pyine.utils.distrib.is_main_process(curr_rank)
             default_kwargs: dict[str, typing.Any] = {
                 "name": self.run_name,
                 "notes": self.notes,
@@ -162,6 +165,12 @@ class RuntimeConfig(pydantic.BaseModel):
                 "job_type": self.app_name,
                 "dir": self.output_dir_path,
                 "mode": os.environ.get("WANDB_MODE", None),
+                "settings": wandb.Settings(
+                    mode="shared",
+                    x_label=f"rank_{curr_rank}",
+                    x_primary=is_main_process,
+                    x_update_finish_state=is_main_process,
+                ),
                 # TODO: could set run id based on e.g. slurm id here if needed
             }
             default_kwargs.update(init_kwargs)
