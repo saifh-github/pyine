@@ -177,6 +177,24 @@ class TestSampleBuilderPartialSamples:
         assert sample.expected_output == str(tr.expected_output)
 
 
+class TestSampleFilteringConfig:
+    def test_any_filtering_enabled_flag(self) -> None:
+        cfg_disabled = SampleFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        assert not cfg_disabled.any_filtering_enabled
+        cfg_with_limit = SampleFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=5,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        assert cfg_with_limit.any_filtering_enabled
+
+
 class TestSampleBuilderFiltering:
     def test_filtering_by_step_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # first, get all traces without filtering
@@ -248,6 +266,38 @@ class TestSampleBuilderFiltering:
         stats = sb_filtered.get_stats()
         assert "filtering/filtered_by_step_count" in stats
         assert "filtering/filtered_by_var_length" in stats
+
+    def test_filtering_by_code_line_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        line_counts = {
+            idx: len(small_fake_reader[idx].code_string.splitlines()) for idx in range(len(small_fake_reader))
+        }
+        unique_counts = sorted(set(line_counts.values()))
+        line_threshold = unique_counts[0] if len(unique_counts) == 1 else unique_counts[0] + 1
+        cfg = SampleFilteringConfig(max_code_line_count=line_threshold)
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        expected_indices = {idx for idx, count in line_counts.items() if count < line_threshold}
+        assert len(expected_indices) < len(line_counts)
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        assert kept_indices == expected_indices
+        assert len(sb_filtered) == len(expected_indices)
+
+    def test_filtering_by_code_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        code_lengths = {idx: len(small_fake_reader[idx].code_string) for idx in range(len(small_fake_reader))}
+        unique_lengths = sorted(set(code_lengths.values()))
+        length_threshold = unique_lengths[0] if len(unique_lengths) == 1 else unique_lengths[0] + 1
+        cfg = SampleFilteringConfig(max_code_length=length_threshold)
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        expected_indices = {idx for idx, size in code_lengths.items() if size < length_threshold}
+        assert len(expected_indices) < len(code_lengths)
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        assert kept_indices == expected_indices
+        assert len(sb_filtered) == len(expected_indices)
 
     def test_no_filtering_when_config_is_none(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # when no filtering config is provided, all traces should be kept

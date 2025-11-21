@@ -117,6 +117,9 @@ class PaddingCollatorWithPromptMask:
         keep_extra_fields: Additional keys to carry over from input examples to the output batch.
             If a list, only those keys are forwarded. If True, forwards all fields present in
             the inputs. If falsy/None, no extra fields are forwarded.
+        drop_overflowing_examples: If True, any examples whose length exceeds the effective max
+            sequence length and where truncation would also eliminate the entire prompt/reponse
+            will be DROPPED from the batch. Otherwise, an exception is raised.
         ignore_index: Label value used to mask prompt and padding positions in the returned
             ``labels`` tensor.
         batch_log_handler: Optional callable used to log per-batch stats (stage, batch size, padded
@@ -137,6 +140,7 @@ class PaddingCollatorWithPromptMask:
         always_pad_to_max_length: bool = False,
         pad_to_multiple_of: int | None = None,
         keep_extra_fields: list[str] | bool | None = None,
+        drop_overflowing_examples: bool = False,
         ignore_index: int = default_ignore_index,
         batch_log_handler: CollatorBatchLogHandler | None = None,
         wandb_run_or_init_kwargs: wandb.Run | dict[str, typing.Any] | None = None,
@@ -152,6 +156,7 @@ class PaddingCollatorWithPromptMask:
                 f"pad_to_multiple_of ({self.pad_to_multiple_of}) cannot exceed max_length ({self.max_length})"
             )
         self._forward_all_fields, self._keep_extra_fields = _parse_keep_extra_fields_config(keep_extra_fields)
+        self.drop_overflowing_examples = drop_overflowing_examples
         self.ignore_index = ignore_index
         self._batch_log_handler = batch_log_handler
         if isinstance(wandb_run_or_init_kwargs, dict):
@@ -289,6 +294,8 @@ class PaddingCollatorWithPromptMask:
                 overflow = len(orig_ids) - effective_max_length
                 if self._truncation_side == "left":
                     if overflow >= prompt_len:
+                        if self.drop_overflowing_examples:
+                            continue
                         raise ValueError(
                             "found an example with a max length overflow g.e. to the prompt length "
                             f"({overflow=}, {prompt_len=}, {response_len=}, and {effective_max_length=})"
@@ -297,6 +304,8 @@ class PaddingCollatorWithPromptMask:
                     prompt_len = prompt_len - overflow
                 else:  # truncation_side == "right"
                     if overflow >= response_len:
+                        if self.drop_overflowing_examples:
+                            continue
                         raise ValueError(
                             "found an example with a max length overflow g.e. to the response length "
                             f"({overflow=}, {prompt_len=}, {response_len=}, and {effective_max_length=})"
@@ -333,6 +342,8 @@ class PaddingCollatorWithPromptMask:
             attention_masks.append(attention_mask)
             prompt_lengths.append(prompt_len)
             input_lengths.append(input_len)
+        if not input_ids_list:
+            raise ValueError("no valid examples found in batch; all dropped/overflowing?")
         input_ids_tensor = torch.tensor(input_ids_list, dtype=torch.long)
         attention_mask_tensor = torch.tensor(attention_masks, dtype=torch.long)
         labels_tensor = torch.tensor(labels_list, dtype=torch.long)

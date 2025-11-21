@@ -332,14 +332,28 @@ class SampleFilteringConfig(pydantic.BaseModel):
     """Pydantic model configuration (freezes the dataclass)."""
 
     max_trace_steps: int | None = pydantic.Field(default=10_000, ge=1)
-    """Maximum number of (valid, in-scope) execution steps allowed in a trace; exceeding traces are skipped."""
+    """Maximum number of (valid, in-scope) execution steps allowed in a trace; exceeding samples are skipped."""
+    max_code_line_count: int | None = pydantic.Field(default=1000, ge=1)
+    """Maximum number of code lines allowed; exceeding samples are skipped."""
+    max_code_length: int | None = pydantic.Field(default=10_000, ge=1)
+    """Maximum length (in chars) of code strings; exceeding samples are skipped."""
     max_args_length: int | None = pydantic.Field(default=1000, ge=1)
-    """Maximum combined length (in chars) of inputs and expected outputs; exceeding traces are skipped."""
+    """Maximum combined length (in chars) of inputs and expected outputs; exceeding samples are skipped."""
+
+    @property
+    def any_filtering_enabled(self) -> bool:
+        """Returns whether any filtering is enabled in this config."""
+        return (
+            self.max_trace_steps is not None
+            or self.max_code_line_count is not None
+            or self.max_code_length is not None
+            or self.max_args_length is not None
+        )
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> "SampleFilteringConfig":
         """Validates the content of the config beyond basic validation."""
-        if self.max_trace_steps is None and self.max_args_length is None:
+        if not self.any_filtering_enabled:
             logger.warning("SampleFilteringConfig has no active filters; all traces will pass filtering")
         return self
 
@@ -487,11 +501,12 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
         filtering_config: SampleFilteringConfig,
     ) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
         """Filters traces based on the filtering configuration."""
-        if filtering_config.max_trace_steps is None and filtering_config.max_args_length is None:
+        if not filtering_config.any_filtering_enabled:
             logger.debug("no filtering criteria to apply, keeping all traces")
             return traces
         filtered_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         filtered_by_step_count = 0
+        filtered_by_code_length = 0
         filtered_by_var_length = 0
         for trace_meta in traces:
             if (
@@ -506,6 +521,14 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                 combined_length = len(inputs_str) + len(expected_output_str)
                 if combined_length > filtering_config.max_args_length:
                     filtered_by_var_length += 1
+                    continue
+            if filtering_config.max_code_line_count is not None:
+                if len(trace_meta.code_string.splitlines()) >= filtering_config.max_code_line_count:
+                    filtered_by_code_length += 1
+                    continue
+            if filtering_config.max_code_length is not None:
+                if len(trace_meta.code_string) >= filtering_config.max_code_length:
+                    filtered_by_code_length += 1
                     continue
             filtered_traces.append(trace_meta)
         logger.debug(
