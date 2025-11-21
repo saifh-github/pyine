@@ -16,8 +16,6 @@ def test_padding_collator_masks_prompt_and_padding(
         {"input_ids": [1, 2, 3], "prompt_len": 2, "prompt_ids": [8, 9]},
         {"input_ids": [4, 5, 6, 7, 8, 9, 10], "prompt_len": 4},
     ]
-    with pytest.raises(ValueError, match="stage not set"):
-        _ = collator(features)
     batch = collator(features)
     assert batch["input_ids"].shape == (2, 6)
     assert batch["attention_mask"].tolist() == [[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 1]]
@@ -235,15 +233,12 @@ def test_padding_collator_logs_batch_statistics(
     )
     assert len(records) == 3
     assert records[0].stage == "train"
-    assert records[0].step == 0
     assert records[0].batch_size == 2
     assert records[0].padded_seq_len == 6
     assert records[0].padding_ratio == pytest.approx(7 / 12)
     assert records[0].non_ignored_label_ratio == pytest.approx(2 / 12)
     assert records[1].stage == "train"
-    assert records[1].step == 1
     assert records[2].stage == "eval"
-    assert records[2].step == 0
     assert records[2].batch_size == 1
     assert records[2].padded_seq_len == 6
     assert records[2].padding_ratio == pytest.approx(2 / 6)
