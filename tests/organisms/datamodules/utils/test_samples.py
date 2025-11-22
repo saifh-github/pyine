@@ -182,16 +182,12 @@ class TestSampleFilteringConfig:
         cfg_disabled = SampleFilteringConfig(
             max_trace_steps=None,
             max_code_line_count=None,
+            max_code_line_length=None,
             max_code_length=None,
             max_args_length=None,
         )
         assert not cfg_disabled.any_filtering_enabled
-        cfg_with_limit = SampleFilteringConfig(
-            max_trace_steps=None,
-            max_code_line_count=5,
-            max_code_length=None,
-            max_args_length=None,
-        )
+        cfg_with_limit = SampleFilteringConfig(max_code_line_length=5)
         assert cfg_with_limit.any_filtering_enabled
 
 
@@ -295,6 +291,30 @@ class TestSampleBuilderFiltering:
         )
         expected_indices = {idx for idx, size in code_lengths.items() if size < length_threshold}
         assert len(expected_indices) < len(code_lengths)
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        assert kept_indices == expected_indices
+        assert len(sb_filtered) == len(expected_indices)
+
+    def test_filtering_by_code_line_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        line_length_map = {
+            idx: max(len(line) for line in (small_fake_reader[idx].code_string.splitlines() or [""]))
+            for idx in range(len(small_fake_reader))
+        }
+        unique_lengths = sorted(set(line_length_map.values()))
+        if len(unique_lengths) == 1:
+            base_length = unique_lengths[0]
+            if base_length <= 1:
+                pytest.skip("cannot set max_code_line_length below 1 to exercise filtering for this dataset")
+            length_threshold = base_length - 1
+        else:
+            length_threshold = unique_lengths[0]
+        cfg = SampleFilteringConfig(max_code_line_length=length_threshold)
+        sb_filtered = SampleBuilder(
+            source_data=[small_fake_reader],
+            filtering_config=cfg,
+        )
+        expected_indices = {idx for idx, size in line_length_map.items() if size <= length_threshold}
+        assert len(expected_indices) < len(line_length_map)
         kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
         assert kept_indices == expected_indices
         assert len(sb_filtered) == len(expected_indices)

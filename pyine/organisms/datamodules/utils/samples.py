@@ -326,7 +326,7 @@ class SampleSelectionConfig(pydantic.BaseModel):
 
 
 class SampleFilteringConfig(pydantic.BaseModel):
-    """Configuration class specifying arguments to filter traces based on their properties."""
+    """Configuration class specifying arguments to filter samples based on their properties."""
 
     model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
@@ -335,6 +335,8 @@ class SampleFilteringConfig(pydantic.BaseModel):
     """Maximum number of (valid, in-scope) execution steps allowed in a trace; exceeding samples are skipped."""
     max_code_line_count: int | None = pydantic.Field(default=1000, ge=1)
     """Maximum number of code lines allowed; exceeding samples are skipped."""
+    max_code_line_length: int | None = pydantic.Field(default=1000, ge=1)
+    """Maximum length (in chars) of a single code line; exceeding samples are skipped."""
     max_code_length: int | None = pydantic.Field(default=10_000, ge=1)
     """Maximum length (in chars) of code strings; exceeding samples are skipped."""
     max_args_length: int | None = pydantic.Field(default=1000, ge=1)
@@ -346,6 +348,7 @@ class SampleFilteringConfig(pydantic.BaseModel):
         return (
             self.max_trace_steps is not None
             or self.max_code_line_count is not None
+            or self.max_code_line_length is not None
             or self.max_code_length is not None
             or self.max_args_length is not None
         )
@@ -524,6 +527,11 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                     continue
             if filtering_config.max_code_line_count is not None:
                 if len(trace_meta.code_string.splitlines()) >= filtering_config.max_code_line_count:
+                    filtered_by_code_length += 1
+                    continue
+            if filtering_config.max_code_line_length is not None:
+                max_line_len = max(len(line) for line in trace_meta.code_string.splitlines())
+                if max_line_len > filtering_config.max_code_line_length:
                     filtered_by_code_length += 1
                     continue
             if filtering_config.max_code_length is not None:
