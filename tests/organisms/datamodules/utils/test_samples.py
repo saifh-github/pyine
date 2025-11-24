@@ -450,6 +450,10 @@ print(x)
             self.expected_output = ""
             self.traced_steps = steps
 
+        @property
+        def valid_step_count(self) -> int:
+            return len([s for s in self.traced_steps if s is not None])
+
     @pytest.fixture()
     def nested_call_trace(
         self,

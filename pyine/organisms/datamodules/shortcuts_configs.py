@@ -116,12 +116,12 @@ def _get_default_sample_builder_overrides_for_subset(
     resulting config suitable for the given subset. If no overrides are defined, an empty dict
     will be returned.
     """
-    if subset_name in ["train", "val", "valid"]:
+    if subset_name in ["train"]:
         return {
-            "filtering_config": {},  # SampleFilteringConfig
+            "filtering_config": {},  # SampleFilteringConfig; inherits from default config
             "selection_config": _get_default_sample_builder_selection_config(),  # SampleSelectionConfig
-            "transform_config": {  # SampleTransformConfig
-                "transform_strategy": "never",  # @@@@@@ TODO consider switching to 'if_too_long'?
+            "transform_config": {  # SampleTransformConfig; inherits from default config
+                "transform_strategy": "never",  # @@@@@@@ update to hybrid
             },
         }
     # no specific overrides for this subset

@@ -167,7 +167,7 @@ class SampleData(typing.NamedTuple):
     """Entrypoint name used when executing a target function (may be empty if irrelevant/unused)."""
     first_line: int
     """First execution line in the code string (should be 0 for full execs, non-zero for partial execs)."""
-    last_line: int
+    last_line: int  # @@@@@ TODO: go back and verify that the first/last lines are defined and used correctly
     """Last potential execution line in the code string (should be total number of code lines for full execs)."""
     inputs: str
     """Provided input args (for full execution or function calls), or intermediary state (for partial execs)."""
@@ -239,29 +239,35 @@ class SampleTransformConfig(pydantic.BaseModel):
     """Strategy deciding when to create partial samples (see type docstring for more info)."""
     too_long_total_steps_threshold: int = pydantic.Field(default=10_000, ge=1)
     """Minimum total trace steps threshold to treat a trace as 'too long'."""
-    too_long_valid_steps_threshold: int = pydantic.Field(default=1000, ge=1)
+    too_long_valid_steps_threshold: int = pydantic.Field(default=5_000, ge=1)
     """Minimum valid (code-string-related) steps to treat a trace as 'too long'."""
     too_long_code_lines_threshold: int = pydantic.Field(default=500, ge=1)
     """Minimum code lines to treat a trace as 'too long' for 'if_too_long'/'hybrid'."""
     functions_fallback_to_segments: bool = False
     """Whether to fallback to segments when unable to target a function call as a partial sample."""
-    max_partial_trace_steps: int | None = pydantic.Field(default=None, ge=1)
-    """Optional cap on partial sample step count (not used in decision, passed to sample builder)."""
-    min_partial_trace_steps: int | None = pydantic.Field(default=1, ge=1)
+    max_partial_trace_steps: int | float | None = pydantic.Field(default=None)
+    """Optional cap on partial sample step count (not used in decision, passed to sample builder).
+
+    If an integer, it is interpreted as a hard limit on the number of steps for the sample. If a
+    float, it is interpreted as a fraction of the total number of steps in each trace.
+    """
+    min_partial_trace_steps: int = pydantic.Field(default=1, ge=1)
     """Optional minimum partial sample step count (not used in decision, passed to sample builder)."""
-    max_inputs_str_length: int | None = pydantic.Field(default=1000, ge=0)
+    max_inputs_str_length: int | None = pydantic.Field(
+        default=500, ge=0
+    )  # @@@@@@@@@@@@@@ need full stack vars as input
     """Optional cap on inputs string length to use in partial samples (if any).
 
     Not used in decision, but passed to sample builder. This is verified after a partial sample has
-    been generated, and thus provides a 'soft rule' that will determine whether to fallback to the
-    original 'full' sample (despite it potentially being too long according to other thresholds).
+    been generated, and thus provides a 'soft rule' that will determine whether to reject the
+    partial sample and potentially fallback to the original 'full' sample.
     """
-    max_output_str_length: int | None = pydantic.Field(default=1000, ge=0)
+    max_output_str_length: int | None = pydantic.Field(default=500, ge=0)
     """Optional cap on expected outputs string length to use in partial samples (if any).
 
     Not used in decision, but passed to sample builder. This is verified after a partial sample has
-    been generated, and thus provides a 'soft rule' that will determine whether to fallback to the
-    original 'full' sample (despite it potentially being too long according to other thresholds).
+    been generated, and thus provides a 'soft rule' that will determine whether to reject the
+    partial sample and potentially fallback to the original 'full' sample.
     """
     combine_local_and_global_vars_for_partial_samples: bool = True
     """Whether to combine local variables and global variables into a single set for partial samples."""
@@ -871,6 +877,14 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
         )
         return not (exceeds_input_cap or exceeds_output_cap)
 
+    def _get_max_partial_trace_steps(self, trace_data: pyine.utils.code.execution.TraceResult) -> int:
+        """Returns the maximum number of steps allowed in a partial trace."""
+        max_partial_trace_steps = self.transform_config.max_partial_trace_steps or 1.0
+        if isinstance(max_partial_trace_steps, float):
+            max_partial_trace_steps = int(max_partial_trace_steps * trace_data.valid_step_count)
+        assert max_partial_trace_steps > 0, "max partial trace steps must be positive"
+        return max_partial_trace_steps
+
     def _pick_output_type(
         self,
         trace_data: pyine.utils.code.execution.TraceResult,
@@ -943,6 +957,7 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                 and step.trace_key.object != pyine.utils.code.execution.EXEC_MODULE_OBJ_NAME
             ):
                 candidate_events.append((step_idx, step))
+        max_partial_trace_steps = self._get_max_partial_trace_steps(trace_data)
         # iterate through all candidates until a good one is found
         while candidate_events:
             curr_candidate_idx = int(rng.integers(0, len(candidate_events)))
@@ -985,16 +1000,10 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
             assert function_output_str is not None
             # determine step count, i.e. the number of valid events between function call and return
             call_step_count = sum(step is not None for step in trace_data.traced_steps[call_event_idx:return_event_idx])
-            if (
-                self.transform_config.max_partial_trace_steps
-                and call_step_count > self.transform_config.max_partial_trace_steps
-            ):
+            if call_step_count > max_partial_trace_steps:
                 # enforce step cap: if exceeded, skip this candidate
                 continue
-            if (
-                self.transform_config.min_partial_trace_steps
-                and call_step_count < self.transform_config.min_partial_trace_steps
-            ):
+            if call_step_count < self.transform_config.min_partial_trace_steps:
                 # enforce step minimum threshold: if not met, skip this candidate
                 continue
             call_args_str = repr(call_event.arguments)
@@ -1058,6 +1067,7 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
         if target_output_type == "next_step_key":
             raise NotImplementedError  # @@@@ TODO
         # TODO @@@@@: try to target specific blocks? (if/else blocks? loops?)
+        max_partial_trace_steps = self._get_max_partial_trace_steps(trace_data)
         # build candidate event lists contiguous within a single frame at any depth; on CALL, skip callee contents
         candidate_event_lists: list[list[TraceEvent]] = []
         current_depth = 0  # track call depth; assume first non-None event is a CALL
@@ -1081,7 +1091,7 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                     curr_events = depth_collectors[current_depth]
                     assert curr_events is not None
                     range_step_count = len(curr_events) - 1
-                    if range_step_count >= (self.transform_config.min_partial_trace_steps or 1):
+                    if range_step_count >= self.transform_config.min_partial_trace_steps:
                         candidate_event_lists.append(curr_events)
                     depth_collectors[current_depth] = None
                 current_depth -= 1
@@ -1099,11 +1109,8 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
             if len(range_steps) <= 1:
                 continue
             # determine segment step count, i.e. the number of events to keep in the range
-            if self.transform_config.max_partial_trace_steps:
-                max_step_count = min(self.transform_config.max_partial_trace_steps, len(range_steps) - 1)
-            else:
-                max_step_count = len(range_steps) - 1
-            min_step_count = self.transform_config.min_partial_trace_steps or 1
+            max_step_count = min(max_partial_trace_steps, len(range_steps) - 1)
+            min_step_count = self.transform_config.min_partial_trace_steps
             if max_step_count < min_step_count:
                 continue
             target_step_count = int(rng.integers(min_step_count, max_step_count + 1))
