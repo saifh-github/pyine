@@ -102,6 +102,13 @@ class TraceDatasetWriterConfig(pydantic.BaseModel):
             description="Maximum number of tests to trace per solution. If None, no maximum.",
         ),
     ]
+    pick_random_tests_per_solution: typing.Annotated[
+        bool,
+        pydantic.Field(
+            default=True,
+            description="Whether to randomly pick tests per solution instead of the first N tests.",
+        ),
+    ]
     max_tests_args_length: typing.Annotated[
         pydantic.PositiveInt | None,
         pydantic.Field(
@@ -513,10 +520,11 @@ def _get_test_tuples(
         candidate_test_tuples = [
             test_tuple
             for test_tuple in candidate_test_tuples
-            if (
-                len(str(test_tuple.inputs)) < config.max_tests_args_length
-                and len(str(test_tuple.outputs)) < config.max_tests_args_length
-            )
+            if len(str(test_tuple.inputs)) + len(str(test_tuple.outputs)) < config.max_tests_args_length
+        ]
+    if config.pick_random_tests_per_solution:
+        return [
+            candidate_test_tuples[idx] for idx in np.random.permutation(len(candidate_test_tuples))[:max_test_count]
         ]
     return candidate_test_tuples[:max_test_count]
 
@@ -780,7 +788,6 @@ def _fetch_augmented_code_to_trace(
 def _process_solutions(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solutions: list[pyine.data.traces.dataset_utils.Solution],
-    test_tuples: list[TestTuple],
     config: TraceDatasetWriterConfig,
     log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
@@ -792,7 +799,6 @@ def _process_solutions(
                 _process_one_solution,
                 problem=problem,
                 solution=solution,
-                test_tuples=test_tuples,
                 config=config,
                 log_fn=log_fn,
                 fail_log_path=fail_log_path,
@@ -800,7 +806,7 @@ def _process_solutions(
             for solution in solutions
         ],
         use_processes=False,  # using thread since tracing itself occurs in processes (and blocks)
-        use_shared_pool=False,  # avoid using a shared pool at this level (one used at trace level)
+        use_shared_pool=True,
     )
     results = typing.cast("list[TraceResultBatch | None]", raw_results)
     if not (len(results) == len(errors) == len(solutions)):
@@ -834,12 +840,16 @@ def _process_solutions(
 def _process_one_solution(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solution: pyine.data.traces.dataset_utils.Solution,
-    test_tuples: list[TestTuple],
     config: TraceDatasetWriterConfig,
     log_fn: typing.Callable[[str], None],
     fail_log_path: pathlib.Path | None,
 ) -> TraceResultBatch:  # str(TraceId) -> trace results dump, for writing to disk
     """Processes one solution to a coding problem; returns a dict of trace results to write to disk."""
+    # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs to use for tracing)
+    test_tuples = _get_test_tuples(problem=problem, config=config)
+    if not test_tuples:
+        log_fn(f"{solution}: no valid test case found")
+        return {}
     # first step: for all test cases, run the ORIGINAL SOLUTION CODE, and see which test succeeds/fails
     orig_code_to_trace = [
         TraceRequest(
@@ -985,11 +995,6 @@ def write_dataset(
             if err_msg is not None:
                 log(err_msg)
                 continue
-            # prepare the array of test case tuples (i.e. the list of inputs/outputs pairs to use)
-            test_tuples = _get_test_tuples(problem=problem, config=config)
-            if not test_tuples:
-                log(f"{problem}: no valid test case found")
-                continue
             # identify which solutions are near-duplicates by clustering, and keep one solution per cluster
             code_dupe_clusters = pyine.utils.code.validation.find_near_duplicate_code_clusters(
                 code_strings=[s.code for s in solutions],
@@ -1012,7 +1017,6 @@ def write_dataset(
             traces_to_write = _process_solutions(
                 problem=problem,
                 solutions=solutions_to_trace,
-                test_tuples=test_tuples,
                 config=config,
                 log_fn=log,
                 fail_log_path=fail_log_path,

@@ -123,6 +123,13 @@ def main() -> None:
     help="Maximum number of tests per solution (hard cap, may discard picked candidates, None = no max).",
 )
 @click.option(
+    "--pick-random-tests-per-solution/--no-pick-random-tests-per-solution",
+    "pick_random_tests_per_solution",
+    default=True,
+    show_default=True,
+    help=("Whether to pick tests randomly per solution (True) instead of uniformly and and ordered (False)."),
+)
+@click.option(
     "--max-tests-args-length",
     "max_tests_args_length",
     type=int,
@@ -269,6 +276,7 @@ def traces(
     max_output_traces: int | None,
     max_solutions_per_problem: int | None,
     max_tests_per_solution: int | None,
+    pick_random_tests_per_solution: bool,
     max_tests_args_length: int | None,
     max_trace_events_per_line: int | None,
     max_trace_var_repr_length: int | None,
@@ -321,6 +329,7 @@ def traces(
         max_output_traces=max_output_traces,
         max_solutions_per_problem=max_solutions_per_problem,
         max_tests_per_solution=max_tests_per_solution,
+        pick_random_tests_per_solution=pick_random_tests_per_solution,
         max_tests_args_length=max_tests_args_length,
         max_trace_events_per_line=max_trace_events_per_line,
         max_trace_var_repr_length=max_trace_var_repr_length,

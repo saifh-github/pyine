@@ -340,7 +340,7 @@ class SampleFilteringConfig(pydantic.BaseModel):
     max_code_length: int | None = pydantic.Field(default=10_000, ge=1)
     """Maximum length (in chars) of code strings; exceeding samples are skipped."""
     max_args_length: int | None = pydantic.Field(default=1000, ge=1)
-    """Maximum combined length (in chars) of inputs and expected outputs; exceeding samples are skipped."""
+    """Maximum length (in chars) of inputs or expected outputs; exceeding samples are skipped."""
 
     @property
     def any_filtering_enabled(self) -> bool:
@@ -541,12 +541,15 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
             filtered_traces.append(trace_meta)
         logger.debug(
             f"trace filtering: kept {len(filtered_traces)}/{len(traces)} traces "
-            f"(filtered {filtered_by_step_count} by step count, {filtered_by_var_length} by var length)"
+            f"(filtered {filtered_by_step_count} by step count,"
+            f" {filtered_by_code_length} by code length,"
+            f" {filtered_by_var_length} by var length)"
         )
         self._filtering_stats = {
             "total_traces": len(traces),
             "kept_traces": len(filtered_traces),
             "filtered_by_step_count": filtered_by_step_count,
+            "filtered_by_code_length": filtered_by_code_length,
             "filtered_by_var_length": filtered_by_var_length,
         }
         return filtered_traces
@@ -576,7 +579,7 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                 cousin_traces[augmentless_id]["original"].append(trace.trace_id)
                 continue
             # the only types of augmented traces that we might expect from a trace dataset are:
-            #   - traces with code hints or issues (exception 'hints/stubs': those CANNOT ever be traced)
+            #   - traces with code hints or issues (exception 'stubs': those CANNOT be traced)
             #   - obfuscated code traces (the only time we ever obfuscate code is in the dataset writer)
             assert not _is_multi_augmented(trace.tags), (
                 "current implementation does not support multi-augmented traces; "
@@ -627,32 +630,11 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
             orig_trace_id,
             trace_map,
         ) in cousin_traces.items():  # for each cousin trace cluster...
-            assert orig_trace_id in trace_lut, "augmentless id not found in trace lut?"
+            # @@@@@@@ update target type w/ "for each available" based on config
             target_type = _draw_type(selection_config.input_type_prob_map, rng)  # draw the sample type...
             assert target_type is not None, "unexpected default fallback for input type draw"
-            target_trace_meta = trace_lut[orig_trace_id]  # might override this below if targeted obfs code
-            if target_type == "original":
-                # keep the original trace as-is, with no code snippet override
-                assert target_type in trace_map, "missing orig trace in source data?"
-                assert len(trace_map[target_type]) == 1 and trace_map[target_type][0] == orig_trace_id
-                output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
-                continue
-            if target_type.startswith("obfuscated"):
-                if "obfuscated" in trace_map:  # if we already possess the required obfuscated code
-                    assert len(trace_map["obfuscated"]) == 1, "unexpected obfuscated trace count?"
-                    target_trace_meta = trace_lut[trace_map["obfuscated"][0]]
-                    if target_type == "obfuscated":
-                        # keep that trace as-is with no override
-                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "obfuscated"))
-                        continue
-                else:
-                    # we are missing obfuscated code and we cannot generate it here
-                    # (we would need to load more problem data to do it properly)
-                    if selection_config.fallback_to_orig:
-                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
-                    continue
             if target_type in trace_map and trace_map[target_type]:
-                # if the augmentation we are looking for already exists, just pick a corresponding trace and use it
+                # if the target type we are looking for already exists, just pick a corresponding trace and use it
                 if selection_config.choice_strategy == "random":
                     picked_idx = int(rng.integers(0, len(trace_map[target_type])))
                     picked_trace_id = trace_map[target_type][picked_idx]
@@ -660,78 +642,90 @@ class SampleBuilder(torch.utils.data.Dataset[SampleData]):
                     picked_trace_id = sorted(trace_map[target_type], key=lambda tid: str(tid))[-1]
                 else:
                     raise NotImplementedError("unsupported random selection strategy")
-                # keep that trace as-is with no override under the assumption that the traced code is already augmented
+                # keep that trace as-is with no override under the assumption that the traced code reflects the target
                 output_selections.append(_TraceSampleSelectionResult(trace_lut[picked_trace_id], target_type))
                 continue
-            if target_type not in trace_map or not trace_map[target_type]:
-                # if the augmentation we are looking for does not exist, generate it using prompt result db lookups
-                if not selection_config.allow_db_lookups:
-                    # if db lookups are disabled, go no further
-                    if selection_config.fallback_to_orig:
-                        output_selections.append(_TraceSampleSelectionResult(target_trace_meta, "original"))
-                    continue
-                # first, determine the strategy to look up previously generated prompt results for the target type
-                augment_is_soluton_specific = target_type in _solution_specific_augment_types
-                augment_is_trace_specific = target_type in _trace_specific_augment_types
-                # now, go and fetch the required records to assemble the selected sample result
-                if augment_is_soluton_specific:
-                    # relevant prompt result db entries should be attached to the parent solution id
-                    if target_type == "stubbed":
+            # if the target we are looking for does not exist, maybe generate it using prompt result db lookups
+            # first, determine the strategy to look up previously generated prompt results for the target type
+            target_is_soluton_specific = target_type in _solution_specific_augment_types
+            target_is_trace_specific = target_type in _trace_specific_augment_types
+            target_is_obfuscated = "obfuscated" in target_type
+            # now, go and fetch relevant records for the target sample type
+            target_trace_id: TraceIdType | None = None
+            target_trace_meta: pyine.data.traces.dataset_utils.TraceMetadata | None = None
+            records: list[pyine.prompts.PromptResultRecord] = []
+            if target_is_obfuscated:
+                if "obfuscated" in trace_map and trace_map["obfuscated"]:
+                    target_trace_id = trace_map["obfuscated"][0]
+                    target_trace_meta = trace_lut[target_trace_id]
+            elif orig_trace_id in trace_lut:
+                target_trace_id = orig_trace_id
+                target_trace_meta = trace_lut[orig_trace_id]
+            if target_is_soluton_specific:
+                # relevant prompt result db entries should be attached to the parent solution id
+                solution_id = orig_trace_id.get_parent_identifier()
+                assert isinstance(solution_id, pyine.data.traces.dataset_utils.SolutionIdentifier)
+                if target_type == "stubbed":
+                    if selection_config.allow_db_lookups:
                         records = prompt_result_db.get_by_identifier(
-                            identifier=str(target_trace_meta.solution_id),
+                            identifier=str(solution_id),
                             prompt_name="hints/stubs",
                         )
-                    else:
-                        assert target_type == "bugged", "branching logic error"
-                        records = prompt_result_db.get_by_identifier(identifier=str(target_trace_meta.solution_id))
-                        records = [
-                            rec  # keep records that match any kind of issue/bug except 'issues/docs'
-                            for rec in records
-                            if (
-                                rec.prompt_name is not None
-                                and rec.prompt_name.startswith("issues/")
-                                and rec.prompt_name != "issues/docs"  # reserved for 'misleading' augm types
-                            )
-                        ]
-                elif augment_is_trace_specific:
-                    # relevant prompt result db entries should be attached to the trace id itself
-                    records = prompt_result_db.get_by_identifier(identifier=str(target_trace_meta.trace_id))
-                    if "hinted" in target_type:
-                        records = [
-                            r for r in records if r.prompt_name.startswith("hints/") and r.prompt_name != "hints/stubs"
-                        ]
-                    elif "misleading" in target_type:
-                        records = [r for r in records if r.prompt_name == "issues/docs"]
-                    else:
-                        raise NotImplementedError(f"missing trace-specific branching logic for: {target_type}")
+                elif target_type == "bugged":
+                    if selection_config.allow_db_lookups:
+                        records = prompt_result_db.get_by_identifier(identifier=str(solution_id))
+                    records = [
+                        rec  # keep records that match any kind of issue/bug except 'issues/docs'
+                        for rec in records
+                        if (
+                            rec.prompt_name is not None
+                            and rec.prompt_name.startswith("issues/")
+                            and rec.prompt_name != "issues/docs"  # reserved for 'misleading' augm types
+                        )
+                    ]
                 else:
-                    raise NotImplementedError(f"missing augment handling for: {target_type}")
-                # given the records we have found...
-                if not records:
-                    # no database match found
-                    if selection_config.fallback_to_orig:
-                        output_selections.append(_TraceSampleSelectionResult(trace_lut[orig_trace_id], "original"))
-                    continue
-                potential_code_snippet_overrides = [r.result for r in records]  # kept in order, last = most recent
-                if selection_config.choice_strategy == "random":
-                    picked_code_override_idx = int(rng.integers(0, len(potential_code_snippet_overrides)))
-                elif selection_config.choice_strategy == "latest":
-                    picked_code_override_idx = -1
+                    assert target_type == "obfuscated", "unexpected target type"
+                    # if obfuscated traces are not already part of the trace dataset, we can't do anything
+                    pass
+            elif target_is_trace_specific:
+                # relevant prompt result db entries should be attached to the target trace id itself
+                if target_trace_id is not None and selection_config.allow_db_lookups:
+                    records = prompt_result_db.get_by_identifier(identifier=str(target_trace_id))
+                if "hinted" in target_type:
+                    records = [
+                        r for r in records if r.prompt_name.startswith("hints/") and r.prompt_name != "hints/stubs"
+                    ]
+                elif "misleading" in target_type:
+                    records = [r for r in records if r.prompt_name == "issues/docs"]
                 else:
-                    raise NotImplementedError
-                # append the resulting sample, but with the code snippet override from the database
-                # (note: in these cases, the only valid sample output type will be 'program_output',
-                #  as we cannot correctly deduce anything trace-related without re-tracing entirely)
-                output_selections.append(
-                    _TraceSampleSelectionResult(
-                        trace_meta=target_trace_meta,
-                        code_type=target_type,
-                        code_override=potential_code_snippet_overrides[picked_code_override_idx],
-                    )
-                )
+                    raise NotImplementedError(f"missing trace-specific branching logic for: {target_type}")
+            # given the records we have found (if any)...
+            if not records or not target_trace_meta:
+                # if no database match found
+                if selection_config.fallback_to_orig and "original" in trace_map and trace_map["original"]:
+                    assert trace_map["original"][0] == orig_trace_id, "unexpected trace id mismatch"
+                    orig_trace_meta = trace_lut[orig_trace_id]
+                    output_selections.append(_TraceSampleSelectionResult(orig_trace_meta, "original"))
                 continue
-            raise NotImplementedError(f"missing augment handling for: {target_type}")
-        logger.debug(f"trace selection strategy kept {len(output_selections)} samples for {len(traces)} traces")
+            potential_code_snippet_overrides = [r.result for r in records]  # kept in order, last = most recent
+            if selection_config.choice_strategy == "random":
+                picked_code_override_idx = int(rng.integers(0, len(potential_code_snippet_overrides)))
+            elif selection_config.choice_strategy == "latest":
+                picked_code_override_idx = -1
+            else:
+                raise NotImplementedError
+            # append the resulting sample, but with the code snippet override from the database
+            # (note: in prompt-db-augmented cases, the only valid sample output type will be
+            #  'program_output', as we cannot deduce anything trace-related without re-tracing entirely)
+            output_selections.append(
+                _TraceSampleSelectionResult(
+                    trace_meta=target_trace_meta,
+                    code_type=target_type,
+                    code_override=potential_code_snippet_overrides[picked_code_override_idx],
+                )
+            )
+            continue
+        logger.debug(f"sample selection picked {len(output_selections)} samples over {len(traces)} traces")
         if output_selections:
             code_type_counts = collections.Counter([s.code_type for s in output_selections])
             output_types_str = "\n\t".join([f"{k}: {c}" for k, c in code_type_counts.items()])
