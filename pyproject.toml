@@ -39,8 +39,10 @@ dependencies = [
     "pandas>=2.3.2,<3.0.0",
     "peft>=0.17.1,<1.0.0",
     "pydantic>=2.11.7,<3.0.0",
+    "pyright>=1.1.407",
     "python-dotenv>=1.1.1,<2.0.0",
     "python-minifier>=2.11.3,<3.0.0",
+    "radon>=6.0.1",
     "rich>=14.1.0,<15.0.0",
     "ruff>=0.13.2,<1.0.0",
     "tiktoken>=0.11.0,<1.0.0",
@@ -51,7 +53,6 @@ dependencies = [
     "unidiff>=0.7.5,<0.8.0",
     "wandb>=0.22.3,<1.0.0",
     # @@@@ TODO: add install instructions for flash-attn?
-    "pyright>=1.1.407",
 ]
 
 [project.optional-dependencies]

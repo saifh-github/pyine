@@ -25,6 +25,10 @@ Trace analysis and repair:
 
 - Problem data (I/O) rewrite pipeline: [`pyine/apps/traces/taco_trace_failure_analyzer.py`](traces/taco_trace_failure_analyzer.py)
 
+Code complexity analysis:
+
+- LLM code prediction vs complexity: [`pyine/apps/code_execution_complexity/run_experiment.py`](./code_execution_complexity/run_experiment.py)
+
 Training/evaluation (Hydra-based apps):
 
 - HuggingFace trainer: [`pyine/apps/trainers/hf_trainer.py`](./trainers/hf_trainer.py)
@@ -244,6 +248,38 @@ python -m pyine.apps.traces.taco_trace_failure_analyzer \
 
 Repairs are appended to any already-existing cache file (or the custom path supplied via
 `--override-log`), making the run resilient to interruptions.
+
+______________________________________________________________________
+
+### Code execution prediction vs complexity
+
+**Script:** [`pyine/apps/code_execution_complexity/run_experiment.py`](./code_execution_complexity/run_experiment.py)
+
+Evaluates LLM accuracy on predicting Python code execution outputs and correlates performance with
+code complexity metrics (cyclomatic complexity, Halstead metrics, maintainability index).
+
+**Examples:**
+
+```bash
+# Basic experiment run
+python -m pyine.apps.code_execution_complexity.run_experiment \
+    --experiment-name baseline \
+    --num-snippets 50 \
+    --num-tests 4
+
+# Custom models and dataset
+python -m pyine.apps.code_execution_complexity.run_experiment \
+    --experiment-name gpt5_eval \
+    --predictor-model gpt-5 \
+    --grader-model gpt-4o-mini \
+    --dataset-path data/TACO/repackaged/2025-03-31-v01
+```
+
+**Outputs and layout:**
+
+- Results saved to `<PYINE_LOGS_ROOT>/code_exec_complexity_results/<experiment_name>/<run_name>/`.
+- Each run creates `results.json` (predictions with complexity metrics) and `metadata.json`.
+- Checkpointing enabled: rerunning with same experiment name/seed continues from last position.
 
 ______________________________________________________________________
 
