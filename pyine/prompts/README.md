@@ -23,7 +23,7 @@ ______________________________________________________________________
 from pyine.prompts import list_prompts, get_prompt_template
 
 print(list_prompts())
-# e.g. ["callable_analysis", "code_analysis", "code_execution", "code_summary", "hints/stubs", ...]
+# e.g. ["callable_analysis", "code_analysis", "code_execution", "code_summary", "code_stubbing", ...]
 pt = get_prompt_template("code_analysis")  # default version unless specified
 text = pt.format(code='print("Hello")')  # provide input arguments for the prompt here
 print(text)

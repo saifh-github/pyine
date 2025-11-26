@@ -207,7 +207,6 @@ class TraceIdentifier(SolutionIdentifier):
             return False
         augment_category = self.augment_category
         assert augment_category is not None
-        assert augment_category != "hints_stubs", "how can we have a stubbed trace? (those can't be executed)"
         return augment_category.startswith("hints_") or "hinted" in augment_category
 
     @functools.cached_property

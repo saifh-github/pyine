@@ -392,7 +392,7 @@ def _default_identifier_resolver(
     """
     prompts_where_solution_gives_identifier = [
         "code_summary",
-        "hints/stubs",
+        "code_stubbing",
         "issues/iterators",
         "issues/todos",
     ]
@@ -428,7 +428,7 @@ def _default_group_resolver(
     """
     prompts_where_problem_gives_group = [
         "code_summary",
-        "hints/stubs",
+        "code_stubbing",
         "issues/iterators",
         "issues/todos",
     ]
@@ -472,7 +472,7 @@ def _default_input_variables_builder(
     if config.prompt_config.prompt_name == "code_summary":
         # this is the simplest case: nothing more to do here
         return output
-    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
+    is_stub_prompting = config.prompt_config.prompt_name == "code_stubbing"
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
@@ -484,12 +484,12 @@ def _default_input_variables_builder(
 
     # -------- early returns for invalid / unnecessary augments --------
 
-    if is_hint_prompting and not is_stub_prompting and (trace_id.is_hinted or trace_id.is_misleading):
+    if is_hint_prompting and (trace_id.is_hinted or trace_id.is_misleading):
         return None  # skip; it makes little sense to generate hints on top of hints?
     if is_mislead_prompting and (trace_id.is_misleading or trace_id.is_hinted):
         return None  # skip; it might get confusing when both valid and misleading hints are involved
-    if is_stub_prompting and trace_id.is_bugged:
-        return None  # we probably should not try to generate stubs on buggy code (cannot verify anything)
+    if is_stub_prompting and (trace_id.is_bugged or trace_id.is_misleading or trace_id.is_hinted):
+        return None  # we probably should not try to generate stubs on modified code (cannot verify anything)
     if is_issue_prompting and not is_mislead_prompting and trace_id.is_bugged:
         return None  # adding more bugs on top of bugs just make the bugs less subtle (so less useful?)
     if trace_id.is_obfuscated and ((is_issue_prompting and not is_mislead_prompting) or is_stub_prompting):
@@ -509,7 +509,7 @@ def _default_input_variables_builder(
             output[CODE_SUMMARY_TOKEN] = code_summary_records[-1].result
 
     # only provide inputs/outputs for prompts that are test-specific
-    if (is_hint_prompting and not is_stub_prompting) or is_mislead_prompting:
+    if is_hint_prompting or is_mislead_prompting:
         output["inputs"] = str(trace.inputs)
         output["expected_output"] = str(trace.expected_output)  # default expected output (prior to potential modifs)
 
@@ -517,7 +517,6 @@ def _default_input_variables_builder(
 
     should_apply_misleading = is_mislead_prompting or (
         is_hint_prompting
-        and not is_stub_prompting
         and config.augment_config.is_misleading_enabled
         and np.random.random() < config.augment_config.misleading_augment_prob
     )
@@ -542,7 +541,7 @@ def _default_input_variables_builder(
 
     # -------- special case: generating hints on buggy code, where code is not already buggy --------
 
-    if ((is_hint_prompting and not is_stub_prompting) or is_mislead_prompting) and (
+    if (is_hint_prompting or is_mislead_prompting) and (
         config.augment_config.is_bugged_hinting_enabled and not trace_id.is_bugged
     ):
         # try to fetch a buggy version of the code string for the hint generation prompt
@@ -604,8 +603,8 @@ def _default_tags_builder(
         output_tags.append(f"augment:{trace_id.augment_category}")  # prior trace augment tag
 
     # add new augment-related tags below
-    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/") and not is_stub_prompting
+    is_stub_prompting = config.prompt_config.prompt_name == "code_stubbing"
+    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
     if is_stub_prompting or is_hint_prompting or is_mislead_prompting or is_bug_prompting:
@@ -748,7 +747,7 @@ def _default_output_validator(
     Implements known rules for some prompts, but if an unsupported prompt is used, the result will
     always be accepted as-is (i.e., no validation is performed).
     """
-    if config.prompt_config.prompt_name == "hints/stubs":
+    if config.prompt_config.prompt_name == "code_stubbing":
         # special handling for this one: it's not supposed to 'still work', so forget tracing it
         assert "augment:stubbed" in tags, "missing augment tag for stubbed code"
         return True
@@ -857,8 +856,8 @@ class AnnotationReport:
 
 supported_prompts_for_trace_dataset_annotation = [
     "code_summary",
+    "code_stubbing",
     "hints/docs",
-    "hints/stubs",
     "hints/tests",
     # ... add more hints prompt names here if we build new ones
     "issues/docs",

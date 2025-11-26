@@ -16,13 +16,13 @@ def get_prompt_template(
     context_variables: dict[str, typing.Any] | None = None,
     examples_block_variables: dict[str, typing.Any] | None = None,
 ) -> "pyine.prompts.types.PromptTemplate":
-    """Returns the prompt template for the hinting-via-stubs prompt (manager module override).
+    """Returns the prompt template for the code stubbing prompt (manager module override).
 
     Note: this implementation appropriately fills in all relevant partial variables, if any.
     """
     import pyine.prompts.manager
 
-    prompt_config = pyine.prompts.manager.get_prompt_config("hints/stubs", version=version)
+    prompt_config = pyine.prompts.manager.get_prompt_config("code_stubbing", version=version)
     return prompt_config.create_prompt_template(
         use_chat_template=use_chat_template,
         include_examples=include_examples,

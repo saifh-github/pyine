@@ -421,7 +421,7 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         prompt_records[solution_identifier] = [
             FakePromptResult(
                 identifier=solution_identifier,
-                prompt_name="hints/stubs",
+                prompt_name="code_stubbing",
                 result=f"def solution_{solution_idx}():\n    raise NotImplementedError('stubbed')\n",
             )
         ]
