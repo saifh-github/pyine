@@ -419,11 +419,47 @@ class PromptResultDB:
         finally:
             conn.close()
 
-    def count_records(self) -> int:
-        """Return the total number of records stored in the database."""
+    def count_entries(
+        self,
+        *,
+        identifier: str | None = None,
+        group: str | None = None,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
+    ) -> int:
+        """Count records matching the provided filters.
+
+        This is a fast lookup that uses indexed columns and returns only the count,
+        avoiding the overhead of fetching and parsing full records.
+
+        Args:
+            identifier: If provided, count only records with this identifier.
+            group: If provided, count only records in this group.
+            prompt_name: If provided, filter by prompt name.
+            prompt_version: If provided, filter by prompt version (requires prompt_name).
+
+        Returns:
+            Number of matching records.
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+        sql: list[str] = ["SELECT COUNT(*) FROM items WHERE 1=1"]
+        params: list[typing.Any] = []
+        if identifier is not None:
+            sql.append("AND identifier = ?")
+            params.append(identifier)
+        if group is not None:
+            sql.append('AND "group" = ?')
+            params.append(group)
+        if prompt_name is not None:
+            sql.append("AND prompt_name = ?")
+            params.append(prompt_name)
+        if prompt_version is not None:
+            sql.append("AND prompt_version = ?")
+            params.append(prompt_version)
         conn = self._connect()
         try:
-            row = conn.execute("SELECT COUNT(*) FROM items").fetchone()
+            row = conn.execute(" ".join(sql), params).fetchone()
             return int(row[0]) if row is not None else 0
         finally:
             conn.close()

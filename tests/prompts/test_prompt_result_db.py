@@ -47,7 +47,7 @@ def test_store_and_fetch_by_identifier(db: PromptResultDB) -> None:
         tags=["a", "x"],
     )
     assert v2 == 2
-    assert db.count_records() == 2
+    assert db.count_entries() == 2
     assert db.list_prompt_names() == ["summary"]
     # fetch all versions for the identifier
     all_for_id = db.get_by_identifier("id1")
@@ -483,3 +483,41 @@ def test_get_all_results_ordering_and_filters(
         ("id_a", "pa_new"),
         ("id_b", "pb"),
     ]
+
+
+def test_count_entries(db: PromptResultDB) -> None:
+    # empty db
+    assert db.count_entries() == 0
+    assert db.count_entries(identifier="nonexistent") == 0
+    # insert test data
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt_version="v1", prompt="p", result="r")
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt_version="v2", prompt="p", result="r")
+    db.store(identifier="id1", group="g2", prompt_name="pn2", prompt_version="v1", prompt="p", result="r")
+    db.store(identifier="id2", group="g1", prompt_name="pn1", prompt_version="v1", prompt="p", result="r")
+    db.store(identifier="id3", prompt="p", result="r")  # no group or prompt_name
+    # total count
+    assert db.count_entries() == 5
+    # filter by identifier
+    assert db.count_entries(identifier="id1") == 3
+    assert db.count_entries(identifier="id2") == 1
+    assert db.count_entries(identifier="id3") == 1
+    assert db.count_entries(identifier="nonexistent") == 0
+    # filter by group
+    assert db.count_entries(group="g1") == 3
+    assert db.count_entries(group="g2") == 1
+    assert db.count_entries(group="nonexistent") == 0
+    # filter by prompt_name
+    assert db.count_entries(prompt_name="pn1") == 3
+    assert db.count_entries(prompt_name="pn2") == 1
+    assert db.count_entries(prompt_name="nonexistent") == 0
+    # filter by prompt_name + prompt_version
+    assert db.count_entries(prompt_name="pn1", prompt_version="v1") == 2
+    assert db.count_entries(prompt_name="pn1", prompt_version="v2") == 1
+    # combined filters
+    assert db.count_entries(identifier="id1", group="g1") == 2
+    assert db.count_entries(identifier="id1", prompt_name="pn1") == 2
+    assert db.count_entries(identifier="id1", group="g1", prompt_name="pn1", prompt_version="v1") == 1
+    assert db.count_entries(group="g1", prompt_name="pn1") == 3
+    # error case: prompt_version without prompt_name
+    with pytest.raises(ValueError):
+        db.count_entries(prompt_version="v1")
