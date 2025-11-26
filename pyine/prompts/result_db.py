@@ -422,10 +422,10 @@ class PromptResultDB:
     def count_entries(
         self,
         *,
-        identifier: str | None = None,
-        group: str | None = None,
-        prompt_name: PromptNameType | None = None,
-        prompt_version: PromptVersionType | None = None,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
     ) -> int:
         """Count records matching the provided filters.
 
@@ -433,30 +433,41 @@ class PromptResultDB:
         avoiding the overhead of fetching and parsing full records.
 
         Args:
-            identifier: If provided, count only records with this identifier.
-            group: If provided, count only records in this group.
-            prompt_name: If provided, filter by prompt name.
-            prompt_version: If provided, filter by prompt version (requires prompt_name).
+            identifier: If provided, count only records matching this identifier or any in the list.
+            group: If provided, count only records matching this group or any in the list.
+            prompt_name: If provided, filter by prompt name(s).
+            prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
 
         Returns:
             Number of matching records.
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
+
+        def _add_filter(
+            column: str,
+            value: str | list[str] | None,
+            sql: list[str],
+            params: list[typing.Any],
+        ) -> None:
+            if value is None:
+                return
+            if isinstance(value, list):
+                if not value:  # empty list = no filter
+                    return
+                placeholders = ",".join("?" * len(value))
+                sql.append(f"AND {column} IN ({placeholders})")
+                params.extend(value)
+            else:
+                sql.append(f"AND {column} = ?")
+                params.append(value)
+
         sql: list[str] = ["SELECT COUNT(*) FROM items WHERE 1=1"]
         params: list[typing.Any] = []
-        if identifier is not None:
-            sql.append("AND identifier = ?")
-            params.append(identifier)
-        if group is not None:
-            sql.append('AND "group" = ?')
-            params.append(group)
-        if prompt_name is not None:
-            sql.append("AND prompt_name = ?")
-            params.append(prompt_name)
-        if prompt_version is not None:
-            sql.append("AND prompt_version = ?")
-            params.append(prompt_version)
+        _add_filter("identifier", identifier, sql, params)
+        _add_filter('"group"', group, sql, params)
+        _add_filter("prompt_name", prompt_name, sql, params)
+        _add_filter("prompt_version", prompt_version, sql, params)
         conn = self._connect()
         try:
             row = conn.execute(" ".join(sql), params).fetchone()

@@ -521,3 +521,29 @@ def test_count_entries(db: PromptResultDB) -> None:
     # error case: prompt_version without prompt_name
     with pytest.raises(ValueError):
         db.count_entries(prompt_version="v1")
+    # list filters: identifier
+    assert db.count_entries(identifier=["id1", "id2"]) == 4
+    assert db.count_entries(identifier=["id1", "id3"]) == 4
+    assert db.count_entries(identifier=["id2", "id3"]) == 2
+    assert db.count_entries(identifier=["nonexistent1", "nonexistent2"]) == 0
+    # list filters: group
+    assert db.count_entries(group=["g1", "g2"]) == 4
+    assert db.count_entries(group=["g1"]) == 3
+    # list filters: prompt_name
+    assert db.count_entries(prompt_name=["pn1", "pn2"]) == 4
+    assert db.count_entries(prompt_name=["pn1", "nonexistent"]) == 3
+    # list filters: prompt_version (with prompt_name)
+    assert db.count_entries(prompt_name="pn1", prompt_version=["v1", "v2"]) == 3
+    assert db.count_entries(prompt_name=["pn1", "pn2"], prompt_version=["v1"]) == 3
+    # combined list filters
+    assert db.count_entries(identifier=["id1", "id2"], group=["g1"]) == 3
+    assert db.count_entries(identifier=["id1"], prompt_name=["pn1", "pn2"]) == 3
+    # mixed: single string + list
+    assert db.count_entries(identifier="id1", group=["g1", "g2"]) == 3
+    assert db.count_entries(identifier=["id1", "id2"], group="g1") == 3
+    assert db.count_entries(identifier=["id1", "id2"], prompt_name="pn1") == 3
+    assert db.count_entries(group="g1", prompt_name=["pn1", "pn2"]) == 3
+    # empty list = no filter
+    assert db.count_entries(identifier=[]) == 5
+    assert db.count_entries(identifier=[], group=[]) == 5
+    assert db.count_entries(identifier="id1", group=[]) == 3
