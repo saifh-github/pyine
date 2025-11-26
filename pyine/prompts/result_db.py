@@ -419,6 +419,7 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    @typing.overload
     def count_entries(
         self,
         *,
@@ -426,7 +427,29 @@ class PromptResultDB:
         group: str | list[str] | None = None,
         prompt_name: PromptNameType | list[PromptNameType] | None = None,
         prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
-    ) -> int:
+        breakdown: typing.Literal[False] = ...,
+    ) -> int: ...
+
+    @typing.overload
+    def count_entries(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[True],
+    ) -> dict[tuple[str, ...], int]: ...
+
+    def count_entries(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: bool = False,
+    ) -> int | dict[tuple[str, ...], int]:
         """Count records matching the provided filters.
 
         This is a fast lookup that uses indexed columns and returns only the count,
@@ -437,12 +460,18 @@ class PromptResultDB:
             group: If provided, count only records matching this group or any in the list.
             prompt_name: If provided, filter by prompt name(s).
             prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
+            breakdown: If True, return a dict mapping filter value tuples to counts instead of
+                a total count. Tuple order is (identifier, group, prompt_name, prompt_version),
+                including only columns that were filtered with non-empty lists.
 
         Returns:
-            Number of matching records.
+            Total count when breakdown=False, or dict mapping filter tuples to counts when breakdown=True.
         """
         if prompt_name is None and prompt_version is not None:
             raise ValueError("prompt_version specified without prompt_name")
+
+        # Track which columns have list filters for GROUP BY
+        list_filter_columns: list[str] = []
 
         def _add_filter(
             column: str,
@@ -458,20 +487,31 @@ class PromptResultDB:
                 placeholders = ",".join("?" * len(value))
                 sql.append(f"AND {column} IN ({placeholders})")
                 params.extend(value)
+                list_filter_columns.append(column)
             else:
                 sql.append(f"AND {column} = ?")
                 params.append(value)
 
-        sql: list[str] = ["SELECT COUNT(*) FROM items WHERE 1=1"]
+        where_clauses: list[str] = []
         params: list[typing.Any] = []
-        _add_filter("identifier", identifier, sql, params)
-        _add_filter('"group"', group, sql, params)
-        _add_filter("prompt_name", prompt_name, sql, params)
-        _add_filter("prompt_version", prompt_version, sql, params)
+        _add_filter("identifier", identifier, where_clauses, params)
+        _add_filter('"group"', group, where_clauses, params)
+        _add_filter("prompt_name", prompt_name, where_clauses, params)
+        _add_filter("prompt_version", prompt_version, where_clauses, params)
+
+        if breakdown and list_filter_columns:
+            select_cols = ", ".join(list_filter_columns)
+            sql = f"SELECT {select_cols}, COUNT(*) FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += f" GROUP BY {select_cols}"
+        else:
+            sql = "SELECT COUNT(*) FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+
         conn = self._connect()
         try:
-            row = conn.execute(" ".join(sql), params).fetchone()
-            return int(row[0]) if row is not None else 0
+            rows = conn.execute(sql, params).fetchall()
+            if breakdown and list_filter_columns:
+                return {tuple(row[:-1]): int(row[-1]) for row in rows}
+            return int(rows[0][0]) if rows else 0
         finally:
             conn.close()
 

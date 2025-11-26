@@ -547,3 +547,25 @@ def test_count_entries(db: PromptResultDB) -> None:
     assert db.count_entries(identifier=[]) == 5
     assert db.count_entries(identifier=[], group=[]) == 5
     assert db.count_entries(identifier="id1", group=[]) == 3
+    # breakdown=True with single list filter
+    breakdown = db.count_entries(identifier=["id1", "id2", "id3"], breakdown=True)
+    assert breakdown == {("id1",): 3, ("id2",): 1, ("id3",): 1}
+    breakdown = db.count_entries(group=["g1", "g2"], breakdown=True)
+    assert breakdown == {("g1",): 3, ("g2",): 1}
+    breakdown = db.count_entries(prompt_name=["pn1", "pn2"], breakdown=True)
+    assert breakdown == {("pn1",): 3, ("pn2",): 1}
+    # breakdown=True with multiple list filters
+    breakdown = db.count_entries(identifier=["id1", "id2"], group=["g1", "g2"], breakdown=True)
+    assert breakdown == {("id1", "g1"): 2, ("id1", "g2"): 1, ("id2", "g1"): 1}
+    breakdown = db.count_entries(identifier=["id1"], prompt_name=["pn1", "pn2"], breakdown=True)
+    assert breakdown == {("id1", "pn1"): 2, ("id1", "pn2"): 1}
+    # breakdown=True with mixed single string + list (only list columns in tuple)
+    breakdown = db.count_entries(identifier="id1", group=["g1", "g2"], breakdown=True)
+    assert breakdown == {("g1",): 2, ("g2",): 1}
+    # breakdown=True with no list filters returns int (falls back to total)
+    assert db.count_entries(identifier="id1", breakdown=True) == 3
+    # breakdown=True with empty results
+    breakdown = db.count_entries(identifier=["nonexistent"], breakdown=True)
+    assert breakdown == {}
+    # breakdown=False still works (default)
+    assert db.count_entries(identifier=["id1", "id2"], breakdown=False) == 4
