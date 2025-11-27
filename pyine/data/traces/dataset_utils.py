@@ -155,9 +155,27 @@ class TraceIdentifier(SolutionIdentifier):
     test_idx: int
     """Index identifying the test values used to create this trace (within the source dataset)."""
     augment_category: str | None = None
-    """Category of augmentation used to create the code behind this trace (if any)."""
+    """Category of augmentation used to create the code behind this trace (if any).
+
+    Note: this string can contain multiple categories separated by a plus sign (+), for example
+    "hints_docs+issues_todos" if the code contains both doc hints and bugs caused by TODOs. The
+    augmentation categories may also not always correspond to a specific prompt type; these can
+    include "obfuscated" and "misleading" for example. Use this string as a hint for filtering only.
+    """
     augment_idx: int | None = None
     """Index identifying the augmented instance used to create this trace (if any)."""
+
+    def __post_init__(self) -> None:
+        """Validates the augmentation information."""
+        if self.augment_category is not None or self.augment_idx is not None:
+            assert self.augment_category is not None and self.augment_idx is not None, (
+                "if augmentation is present, both augment category and index must be present"
+            )
+            assert isinstance(self.augment_category, str), "augment category must be a string"
+            assert isinstance(self.augment_idx, int), "augment index must be an integer"
+            assert self.augment_category == self.get_clean_augment_category(self.augment_category), (
+                f"augm category should have been cleaned up: {self.augment_category}"
+            )
 
     def _get_augmentless_repr(self) -> str:
         """Returns a string representation of this identifier without the augmentation information."""
@@ -171,29 +189,20 @@ class TraceIdentifier(SolutionIdentifier):
     @functools.cached_property
     def is_augmented(self) -> bool:
         """Returns whether this trace is based on 'augmented' (modified) code."""
-        if self.augment_category is not None or self.augment_idx is not None:
-            assert self.augment_category is not None and self.augment_idx is not None, (
-                "if augmentation is present, both augment category and index must be present"
-            )
-            assert not any(c in self.augment_category for c in ("/", ",", " ", ":")), (
-                f"augm category should have been cleaned up: {self.augment_category}"
-            )
-            return True
-        return False
+        return self.augment_category is not None
 
     @functools.cached_property
     def is_bugged(self) -> bool:
         """Returns whether this trace is based on bugged code.
 
         The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
-        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        definitions (see `pyine.organisms.datamodules.samples`).
         """
         if not self.is_augmented:
             return False
-        augment_category = self.augment_category
-        assert augment_category is not None
-        return (augment_category.startswith("issues_") and augment_category != "issues_docs") or (
-            "bugged" in augment_category
+        augment_categories = self.augment_category.split("+")
+        return any(
+            (cat.startswith("issues_") and cat != "issues_docs") or ("bugged" in cat) for cat in augment_categories
         )
 
     @functools.cached_property
@@ -201,35 +210,32 @@ class TraceIdentifier(SolutionIdentifier):
         """Returns whether this trace is based on code with helpful hints about code execution.
 
         The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
-        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        definitions (see `pyine.organisms.datamodules.samples`).
         """
         if not self.is_augmented:
             return False
-        augment_category = self.augment_category
-        assert augment_category is not None
-        return augment_category.startswith("hints_") or "hinted" in augment_category
+        augment_categories = self.augment_category.split("+")
+        return any(cat.startswith("hints_") or "hinted" in cat for cat in augment_categories)
 
     @functools.cached_property
     def is_misleading(self) -> bool:
         """Returns whether this trace is based on code with misleading hints about code execution.
 
         The checked names herein relate to prompt definitions (see `pyine.prompts`) and sample type
-        definitions (see `pyine.organisms.datamodules.utils.samples`).
+        definitions (see `pyine.organisms.datamodules.samples`).
         """
         if not self.is_augmented:
             return False
-        augment_category = self.augment_category
-        assert augment_category is not None
-        return augment_category == "issues_docs" or "misleading" in augment_category
+        augment_categories = self.augment_category.split("+")
+        return any(cat == "issues_docs" or "misleading" in cat for cat in augment_categories)
 
     @functools.cached_property
     def is_obfuscated(self) -> bool:
         """Returns whether this trace is based on obfuscated code."""
         if not self.is_augmented:
             return False
-        augment_category = self.augment_category
-        assert augment_category is not None
-        return "obfuscated" in augment_category
+        augment_categories = self.augment_category.split("+")
+        return any("obfuscated" in cat for cat in augment_categories)
 
     @staticmethod
     def get_clean_augment_category(proposed: str) -> str:
@@ -315,7 +321,7 @@ class CodingProblem(pydantic.BaseModel):
     errors might not be recoverable.
     """
     is_banned: bool
-    """Whether this problem is banned from being traced (due to a data/processing issue)."""
+    """Whether this problem is banned from being traced (due to a data/processing error)."""
 
     def __str__(self) -> str:
         """Returns a string representation of the coding problem based on its identifier."""
@@ -357,7 +363,7 @@ class Solution(pydantic.BaseModel):
     analysis_results: CodeAnalysisResponse
     """Advanced code analysis results for this solution's code."""
     is_banned: bool
-    """Whether this solution is banned from being traced (due to a data/processing issue)."""
+    """Whether this solution is banned from being traced (due to a data/processing error)."""
 
     def __str__(self) -> str:
         """Returns a string representation of the solution based on its identifier."""
@@ -394,7 +400,7 @@ class Solution(pydantic.BaseModel):
         ) and self.analysis_results.output_type in ("stdout", "no-output", "callable")
 
     def should_discard(self) -> bool:
-        """Returns whether this problem should be discarded due to issues or complexity."""
+        """Returns whether this problem should be discarded due to errors or complexity."""
         return (
             self.is_banned
             or (self.analysis_errors is not None and len(self.analysis_errors) > 0)

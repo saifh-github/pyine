@@ -516,6 +516,7 @@ def _unsafe_execute_and_trace_code(
     max_var_repr_length: int | None = None,
     timeout_seconds: float = 60,
     seed: int | None = 42,
+    request_metadata: str | None = None,
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
@@ -543,6 +544,7 @@ def _unsafe_execute_and_trace_code(
             variable. Above this cap, a `TracingCapError` will be raised.
         timeout_seconds: The maximum number of seconds to allow for code execution.
         seed: The seed to use for random number generation. Defaults to 42.
+        request_metadata: Additional metadata to include in the trace result (if any).
 
     Returns:
         A `TraceResult` instance containing the execution results.
@@ -792,6 +794,7 @@ def _unsafe_execute_and_trace_code(
     reprod_metadata["max_var_repr_length"] = str(max_var_repr_length)
     reprod_metadata["timeout_seconds"] = str(timeout_seconds)
     reprod_metadata["seed"] = str(seed)
+    reprod_metadata["request_metadata"] = str(request_metadata)
     if return_value is not None:
         trace_tags.append(TraceTagType.HAS_RETURN_VALUE.value)
     if caught_exception is not None:

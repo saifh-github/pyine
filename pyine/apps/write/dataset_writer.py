@@ -234,11 +234,11 @@ def main() -> None:
     help="Specifies whether to generate an obfuscated (yet still documented) version of each solution.",
 )
 @click.option(
-    "--fetch-augmented-solutions",
-    "fetch_augmented_solutions",
+    "--fetch-augmentations",
+    "fetch_augmentations",
     type=str,
     multiple=True,
-    help="Specifies the (max) number of augmented solutions to fetch from the db for a specific prompt name.",
+    help="Specifies the (max) number of augmentations to also fetch from the prompt result db, for each trace.",
 )
 @click.option(
     "--prompt-result-db-path",
@@ -290,7 +290,7 @@ def traces(
     problem_data_overrides: str | None,
     reformat_code_strings: bool,
     generate_obfuscated_solutions: bool,
-    fetch_augmented_solutions: typing.Sequence[str],
+    fetch_augmentations: typing.Sequence[str],
     prompt_result_db_path: pathlib.Path | None,
     verbose: bool,
     force: bool,
@@ -298,10 +298,10 @@ def traces(
 ) -> None:
     """Write a traces dataset from a specified source dataset according to the given configuration."""
     pyine.utils.reprod.entrypoint_setup()
-    fetch_augmented_solutions_dict: dict[str, int] = {}
-    for tupl_str in fetch_augmented_solutions:
+    fetch_augmentations_dict: dict[str, int] = {}
+    for tupl_str in fetch_augmentations:
         if "=" not in tupl_str or tupl_str.count("=") != 1:
-            raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}")
+            raise click.BadParameter(f"invalid augmentation fetch tuple: {tupl_str}")
         prompt_name, fetch_count = tupl_str.split("=")
         if prompt_name not in pyine.prompts.get_framework_prompt_manager().list_prompts():
             raise click.BadParameter(f"invalid prompt name: {prompt_name}")
@@ -309,7 +309,7 @@ def traces(
             _ = int(fetch_count)
         except ValueError as exc:
             raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}") from exc
-        fetch_augmented_solutions_dict[prompt_name] = int(fetch_count)
+        fetch_augmentations_dict[prompt_name] = int(fetch_count)
     default_serialization_config = pyine.data.utils.lmdb_io.SerializationConfig(
         method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
         compression_kwargs={"level": 3},
@@ -345,7 +345,7 @@ def traces(
         allow_banned_samples=False,
         allow_imperfect_solutions=True,
         generate_obfuscated_solutions=generate_obfuscated_solutions,
-        fetch_augmented_solutions=fetch_augmented_solutions_dict,
+        fetch_augmentations=fetch_augmentations_dict,
         prompt_result_db_path=str(prompt_result_db_path) if prompt_result_db_path is not None else None,
         test_output_compare_options=pyine.utils.code.output_compare.get_default_comparison_config(),
         writer_serialization_config=default_serialization_config,
