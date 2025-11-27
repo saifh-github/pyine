@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
 import json
 import logging
 import pathlib
@@ -141,6 +142,32 @@ class PromptResultRecord(pydantic.BaseModel):
         default_factory=lambda: typing.cast("list[str]", []),
     )
     """Tags associated with this record."""
+
+    @property
+    def record_uid(self) -> str:
+        """Human-readable unique identifier for this record, useful for debugging and analysis.
+
+        Combines semantic fields (identifier, prompt_name, prompt_version) with a timestamp
+        and a short content hash to produce a string that is highly likely to be unique
+        across the database while remaining readable.
+
+        Format: {identifier}[_{prompt_name}][_{prompt_version}]_{timestamp}_{hash}
+        Example: "sample_123_code_summary_v1_20241126-143022_a3f2bc"
+
+        Note: This is not a guaranteed unique key (the database row ID serves that purpose),
+        but collisions are extremely unlikely due to the 6-character hash suffix (~16 million
+        combinations) derived from the prompt and result content.
+        """
+        parts = [self.identifier]
+        if self.prompt_name:
+            parts.append(str(self.prompt_name))
+        if self.prompt_version:
+            parts.append(str(self.prompt_version))
+        ts = self.creation_meta.created_at.strftime("%Y%m%d-%H%M%S")
+        parts.append(ts)
+        content_hash = hashlib.sha256((self.prompt + self.result).encode()).hexdigest()[:6]
+        parts.append(content_hash)
+        return "_".join(parts)
 
 
 class PromptResultDB:

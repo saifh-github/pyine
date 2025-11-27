@@ -485,6 +485,40 @@ def test_get_all_results_ordering_and_filters(
     ]
 
 
+def test_record_uid() -> None:
+    # Full record with prompt_name and prompt_version
+    rec = PromptResultRecord(
+        identifier="sample_123",
+        prompt_name="code_summary",
+        prompt_version="v1",
+        prompt="Summarize this",
+        result="This is a summary",
+        creation_meta=CreationMeta(created_at=datetime.datetime(2024, 11, 26, 14, 30, 22, tzinfo=datetime.UTC)),
+    )
+    uid = rec.record_uid
+    assert uid.startswith("sample_123_code_summary_v1_20241126-143022_")
+    assert len(uid.split("_")[-1]) == 6  # hash suffix
+    # Record without prompt_name/prompt_version
+    rec2 = PromptResultRecord(
+        identifier="doc_456",
+        prompt="Do something",
+        result="Done",
+        creation_meta=CreationMeta(created_at=datetime.datetime(2024, 11, 26, 15, 0, 0, tzinfo=datetime.UTC)),
+    )
+    uid2 = rec2.record_uid
+    assert uid2.startswith("doc_456_20241126-150000_")
+    # Different content = different hash
+    rec3 = PromptResultRecord(
+        identifier="sample_123",
+        prompt_name="code_summary",
+        prompt_version="v1",
+        prompt="Summarize this",
+        result="Different summary",
+        creation_meta=CreationMeta(created_at=datetime.datetime(2024, 11, 26, 14, 30, 22, tzinfo=datetime.UTC)),
+    )
+    assert rec.record_uid != rec3.record_uid  # same metadata, different content
+
+
 def test_count_entries(db: PromptResultDB) -> None:
     # empty db
     assert db.count_entries() == 0
