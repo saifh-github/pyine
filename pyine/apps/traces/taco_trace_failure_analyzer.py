@@ -22,11 +22,12 @@ import openai
 import orjson
 
 import pyine.data.taco.dataset_utils
+import pyine.data.traces.common
 import pyine.data.traces.dataset_utils
-import pyine.data.traces.dataset_writer
 import pyine.prompts
 import pyine.prompts.configs.input_output_rewrite
 import pyine.prompts.result_db
+import pyine.utils.code.output_compare
 import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
@@ -272,14 +273,12 @@ def _collect_problem_paths(
 def output_compare(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solutions: list[pyine.data.traces.dataset_utils.Solution],
-    trace_writer_config: pyine.data.traces.dataset_writer.TraceDatasetWriterConfig,
 ) -> bool:
     """Check whether a problem's tests validate against its reference solutions.
 
     Args:
         problem: Coding problem with proposed tests.
         solutions: Reference solutions to validate against.
-        trace_writer_config: Configuration used for trace execution.
 
     Returns:
         bool: True if all tests pass for at least one reference solution.
@@ -292,6 +291,10 @@ def output_compare(
 
     total_tests = len(problem.test_inout_pairs)
 
+    # rely on default configurations for tracing + output comparisons
+    tracing_config = pyine.data.traces.common.TracingConfig()
+    output_compare_config = pyine.utils.code.output_compare.get_default_comparison_config()
+
     for solution in solutions[:MAX_SOLUTIONS_TO_TRY]:
         correct = 0
         for test_idx, (inputs, outputs) in enumerate(problem.test_inout_pairs):
@@ -301,7 +304,7 @@ def output_compare(
                 augment_category="bug",
                 augment_idx=0,
             )
-            code_to_trace = pyine.data.traces.dataset_writer.TraceRequest(
+            code_to_trace = pyine.data.traces.common.TraceRequest(
                 code_string=solution.code,
                 entrypoint_name=entrypoint_name,
                 trace_id=trace_id,
@@ -309,9 +312,10 @@ def output_compare(
                 test_outputs=outputs,
             )
             try:
-                _trace_result, compare_result = pyine.data.traces.dataset_writer.trace_code_snippet(
+                _trace_result, compare_result = pyine.data.traces.common.trace_code_snippet(
                     code_snippet=code_to_trace,
-                    config=trace_writer_config,
+                    tracing_config=tracing_config,
+                    output_compare_config=output_compare_config,
                 )
             except Exception:
                 break
@@ -357,10 +361,6 @@ def run_input_output_rewrite(
         pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
     ] = pyine.prompts.TypedPromptResultFetcher(
         result_type=pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
-    )
-
-    trace_writer_config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig.model_validate(
-        {"source_dataset_name": "TACO"}
     )
 
     problem_iterator: pyine.data.traces.dataset_utils.CodingProblemIterator
@@ -425,7 +425,7 @@ def run_input_output_rewrite(
         starter_code = raw_problem_data.get("starter_code") or ""
         first_solution = _get_first_solution_code(raw_problem_data)
 
-        if output_compare(coding_problem, solutions, trace_writer_config):
+        if output_compare(coding_problem, solutions):
             logger.info(f"already valid: {problem_filename}")
             continue
 
@@ -450,7 +450,7 @@ def run_input_output_rewrite(
                 continue
 
             candidate_problem = _make_candidate_problem(coding_problem, response)
-            if output_compare(candidate_problem, solutions, trace_writer_config):
+            if output_compare(candidate_problem, solutions):
                 new_io = {
                     "inputs": response.inputs,
                     "outputs": response.outputs,

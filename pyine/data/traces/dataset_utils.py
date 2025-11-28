@@ -187,6 +187,11 @@ class TraceIdentifier(SolutionIdentifier):
         return self.from_string(augmentless_repr)
 
     @functools.cached_property
+    def split_augment_categories(self) -> list[str]:
+        """Splits the augmentation category string into its individual components."""
+        return self.augment_category.split("+") if self.augment_category is not None else []
+
+    @functools.cached_property
     def is_augmented(self) -> bool:
         """Returns whether this trace is based on 'augmented' (modified) code."""
         return self.augment_category is not None
@@ -200,9 +205,9 @@ class TraceIdentifier(SolutionIdentifier):
         """
         if not self.is_augmented:
             return False
-        augment_categories = self.augment_category.split("+")
         return any(
-            (cat.startswith("issues_") and cat != "issues_docs") or ("bugged" in cat) for cat in augment_categories
+            (cat.startswith("issues_") and cat != "issues_docs") or ("bugged" in cat)
+            for cat in self.split_augment_categories
         )
 
     @functools.cached_property
@@ -214,8 +219,7 @@ class TraceIdentifier(SolutionIdentifier):
         """
         if not self.is_augmented:
             return False
-        augment_categories = self.augment_category.split("+")
-        return any(cat.startswith("hints_") or "hinted" in cat for cat in augment_categories)
+        return any(cat.startswith("hints_") or "hinted" in cat for cat in self.split_augment_categories)
 
     @functools.cached_property
     def is_misleading(self) -> bool:
@@ -226,16 +230,14 @@ class TraceIdentifier(SolutionIdentifier):
         """
         if not self.is_augmented:
             return False
-        augment_categories = self.augment_category.split("+")
-        return any(cat == "issues_docs" or "misleading" in cat for cat in augment_categories)
+        return any(cat == "issues_docs" or "misleading" in cat for cat in self.split_augment_categories)
 
     @functools.cached_property
     def is_obfuscated(self) -> bool:
         """Returns whether this trace is based on obfuscated code."""
         if not self.is_augmented:
             return False
-        augment_categories = self.augment_category.split("+")
-        return any("obfuscated" in cat for cat in augment_categories)
+        return any("obfuscated" in cat for cat in self.split_augment_categories)
 
     @staticmethod
     def get_clean_augment_category(proposed: str) -> str:
@@ -512,18 +514,17 @@ class TraceMetadata:
         out_tags = [t for t in self.tags if t.startswith("augment:")]
         if out_tags:
             assert self.trace_id.is_augmented, "how can be have augment tags without augmentation?"
-            augm_category = self.trace_id.augment_category
-            assert f"augment:{augm_category}" in out_tags, " inconsistent augm tags usage"
+            assert all(f"augment:{cat}" in out_tags for cat in self.trace_id.split_augment_categories), (
+                "inconsistent augm tags usage"
+            )
         else:
-            assert self.trace_id.augment_category is None
+            assert self.trace_id.augment_category is None, "unexpected augment category without tags"
         return out_tags
 
     @functools.cached_property
     def is_augmented(self) -> bool:
         """Returns whether this trace is augmented."""
-        is_augmented = len(self.augment_tags) > 0
-        assert is_augmented == self.trace_id.is_augmented
-        return is_augmented
+        return self.trace_id.is_augmented
 
 
 class TraceDatasetMetadata(pydantic.BaseModel):
@@ -555,13 +556,14 @@ class TraceDatasetMetadata(pydantic.BaseModel):
             assert trace_meta.trace_id not in seen_trace_ids, f"duplicate trace id: {trace_meta.trace_id}"
             seen_trace_ids.add(trace_meta.trace_id)
             if trace_meta.trace_id.is_augmented:
-                augm_type = trace_meta.trace_id.augment_category
-                if augm_type not in self.augment_types:
-                    raise ValueError(f"unexpected trace augment type: {augm_type}")
-                assert trace_meta.is_augmented and trace_meta.augment_tags
-                assert any(t == f"augment:{augm_type}" for t in trace_meta.augment_tags), (
-                    "augment type is not in the trace tags; this should not happen?"
-                )
+                augm_categories = trace_meta.trace_id.split_augment_categories
+                for augm_cat in augm_categories:
+                    if augm_cat not in self.augment_types:
+                        raise ValueError(f"unexpected trace augment type: {augm_cat}")
+                    assert trace_meta.is_augmented and trace_meta.augment_tags
+                    assert any(t == f"augment:{augm_cat}" for t in trace_meta.augment_tags), (
+                        "augment type is not in the trace tags; this should not happen?"
+                    )
             else:
                 assert not trace_meta.is_augmented
         leftover_trace_ids = {trace_meta.trace_id for trace_meta in self.leftover_traces}
