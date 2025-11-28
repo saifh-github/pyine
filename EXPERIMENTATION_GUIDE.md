@@ -529,7 +529,7 @@ Evaluation typically runs automatically at the end of training. To run standalon
 python -m pyine.apps.trainers.hf_trainer \
   +experiment=<your_experiment_name> \
   config.training_args_config.do_train=false \
-  config.training_args_config.do_eval=true
+  config.training_args_config.do_predict=true
 ```
 
 **For OpenAI models:**
