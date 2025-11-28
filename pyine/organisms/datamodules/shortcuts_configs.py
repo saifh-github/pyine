@@ -477,6 +477,23 @@ def _get_taco_configs(
         outputs.append(
             pyine.configs.utils.make_config_description(
                 ShortcutBiasDataModuleConfig,
+                name="TACO_10s10t_v1_part1to13",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset consisting of parts 1 to 13 (of 26, so about 50%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a subset that can be useful for medium-sized"
+                    "experiments, and should be quite representative of the full dataset's distribution."
+                ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths[0:13],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                ShortcutBiasDataModuleConfig,
                 name="TACO_10s10t_v1_part1to4",
                 group=datamodule_base_config.group,
                 description=(

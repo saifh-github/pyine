@@ -239,7 +239,211 @@ For more details, see [`pyine/apps/README.md`](./pyine/apps/README.md#trainers).
 
 ______________________________________________________________________
 
-### Step 6b: Run Hyperparameter Sweeps (Optional)
+### Step 6b - W&B Agents: Run Hyperparameter Sweeps (Optional)
+
+For hyperparameter tuning, you can use WandB's native sweep functionality with distributed agents
+to efficiently explore hyperparameter spaces across multiple GPUs. This approach uses WandB's
+centralized sweep server to coordinate parallel agent clients, enabling sophisticated search
+strategies like Bayesian optimization.
+
+For more information, see the official WandB [documentation on sweeps](https://docs.wandb.ai/models/sweeps).
+
+#### Initial Setup
+
+Before running sweeps, ensure WandB is properly configured:
+
+```bash
+# Login to WandB (only needed once)
+uv run wandb login
+
+# Follow the prompts to authenticate with your API key
+```
+
+#### Creating a Sweep Configuration
+
+Define your sweep in a YAML configuration file (e.g., [pyine/configs/experiment/original/wandb_sweep_config.yaml](pyine/configs/experiment/original/wandb_sweep_config.yaml)):
+
+```yaml
+# Refs: https://docs.wandb.ai/models/sweeps
+
+program: pyine/apps/trainers/hf_trainer.py  # entry point to start running the code
+name: PyINE-ParallelSweep  # wandb project name for the sweep
+method: random  # search strategy: grid, random, or bayes
+metric:  # metric to optimize
+  name: eval/loss
+  goal: minimize
+
+parameters:  # search space definition
+  config.lora_config.r:
+    values: [4, 8, 16]
+  config.lora_config.lora_alpha:
+    values: [8, 16, 32, 64]
+  config.training_args_config.learning_rate:
+    distribution: "log_uniform_values"
+    min: 1.0e-6
+    max: 1.0e-3
+  config.training_args_config.gradient_accumulation_steps:
+    values: [2, 4, 6, 8]
+  config.training_args_config.warmup_ratio:
+    values: [0.03, 0.06, 0.1]
+  config.training_args_config.max_grad_norm:
+    values: [0.5, 1.0, 2.0]
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "+experiment=original/v0_50perc_dataset_qwen3.yaml"
+  - ${args_no_hyphens}
+```
+
+**Key configuration elements:**
+
+- `program`: Entry point script for training
+- `method`: Search strategy (`grid`, `random`, or `bayes`)
+- `metric`: Metric to optimize with goal (`minimize` or `maximize`)
+- `parameters`: Hyperparameter search space (supports discrete values, ranges, and distributions)
+- `command`: Command template for running each trial
+
+#### Launching a Sweep
+
+Create a new sweep on the WandB server:
+
+```bash
+# Initialize the sweep and get a sweep ID
+uv run wandb sweep pyine/configs/experiment/original/wandb_sweep_config.yaml
+
+# Output will include a sweep ID like: lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4
+```
+
+The sweep ID format is: `<entity>/<project>/<sweep_id>`
+
+#### Running Sweep Agents
+
+**Option A: Single Agent (Local)**
+
+Run a single agent on a specific GPU:
+
+```bash
+# Run agent on GPU 0
+CUDA_VISIBLE_DEVICES=0 uv run wandb agent <sweep-id>
+```
+
+**Option B: Multiple Agents (Cluster with Automated tmux Sessions)**
+
+For distributed sweeps across multiple GPUs and cluster nodes, use the provided automation script from the login node. This script automatically creates tmux sessions for each GPU node, with 8 panes per node (one per GPU).
+
+First, create a command template file (e.g., [scripts/my_command.sh](scripts/my_command.sh)) that defines what each agent should execute:
+
+```bash
+cd ${REPO_ROOT} && CUDA_VISIBLE_DEVICES=${CUDA_DEVICE} uv run wandb agent ${SWEEP_ID}
+```
+
+The template supports the following variables:
+
+- `${REPO_ROOT}`: Repository root path
+- `${CUDA_DEVICE}`: CUDA device index (0-7)
+- `${SWEEP_ID}`: WandB sweep ID
+- `${TARGET_GPU}`: GPU node number
+
+Then launch agents across one or more GPU nodes:
+
+```bash
+# Launch agents on multiple GPU nodes
+bash ./scripts/launch_wandb_agents.sh <SWEEP_ID> \
+  --cmd-file <command_template_file> \
+  --repo-root <repository_path> \
+  <node_index_1> [node_index_2] ... [node_index_N]
+
+# Example: Launch on GPU nodes 1, 2, and 3
+bash ./scripts/launch_wandb_agents.sh \
+  lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 \
+  --cmd-file ./scripts/my_command.sh \
+  --repo-root /scratch/a.palmas/code-interp-benchmark \
+  1 2 3
+
+# Example: Launch on a single GPU node (node 1)
+bash ./scripts/launch_wandb_agents.sh \
+  lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 \
+  --cmd-file ./scripts/my_command.sh \
+  --repo-root /scratch/a.palmas/code-interp-benchmark \
+  1
+```
+
+**What the script does:**
+
+1. Creates a separate tmux session for each specified GPU node (`wandb_sweep_gpu<N>`)
+2. Each session contains 8 panes arranged in a 2×4 grid
+3. Each pane automatically:
+   - SSHs into the target GPU node (`ssh gpu0<N>`)
+   - Navigates to the repository root
+   - Launches a WandB agent on a specific GPU (CUDA_VISIBLE_DEVICES=0-7)
+4. All agents connect to the same centralized WandB sweep server
+
+**Managing tmux sessions:**
+
+```bash
+# List all active sessions
+tmux list-sessions
+
+# Attach to a specific GPU node's session
+tmux attach-session -t wandb_sweep_gpu1
+
+# Detach from a session (while inside tmux)
+# Press: Ctrl+b then d
+
+# Switch between sessions (while inside tmux)
+# Press: Ctrl+b then s
+
+# Kill a specific session
+tmux kill-session -t wandb_sweep_gpu1
+
+# Kill all sweep sessions
+tmux kill-session -t wandb_sweep_gpu1
+tmux kill-session -t wandb_sweep_gpu2
+# ... etc
+```
+
+**Option C: Manual Parallel Agents**
+
+Manually launch agents in separate terminals/sessions:
+
+```bash
+# Terminal 1 (GPU 0)
+CUDA_VISIBLE_DEVICES=0 uv run wandb agent <sweep-id>
+
+# Terminal 2 (GPU 1)
+CUDA_VISIBLE_DEVICES=1 uv run wandb agent <sweep-id>
+
+# ... and so on
+```
+
+#### Managing Sweeps
+
+Monitor and control your sweep:
+
+```bash
+# View sweep status in WandB dashboard (automatically opens in browser)
+# Or navigate to: https://wandb.ai/<entity>/<project>/sweeps/<sweep_id>
+
+# Stop a running sweep
+uv run wandb sweep --stop <sweep-id>
+
+# Stop all agents (they will finish current runs and exit)
+```
+
+**Remember:**
+
+- All agents pull hyperparameter configurations from the centralized WandB sweep server
+- Agents automatically fetch new configurations when they complete a run
+- Multiple agents can run in parallel, even across different machines
+- Sweep results are automatically logged and visualized in the W&B dashboard
+- You can start/stop agents at any time without affecting the sweep
+- Bayesian optimization improves search strategy based on completed runs
+
+______________________________________________________________________
+
+### Step 6b - Hydra Multirun/Joblib: Run Hyperparameter Sweeps (Optional)
 
 For hyperparameter tuning, you can use Hydra's multirun functionality with the `hydra-wandb-sweeper`
 plugin to launch and track multiple training runs with different hyperparameter configurations.

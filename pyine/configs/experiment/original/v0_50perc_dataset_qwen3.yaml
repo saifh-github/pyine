@@ -1,0 +1,17 @@
+# @package _global_
+
+# meant for the hf trainer only
+
+defaults:
+  - original/v0
+  - override /config/datamodule_config: TACO_10s10t_v1_part1to13
+  - _self_
+
+runtime:
+  exp_name: original/v0_50perc_dataset_qwen3_4B
+  run_name: "${runtime.exp_name}_${now:%Y%m%d_%H%M%S}"
+
+config:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  training_args_config:
+    max_steps: 20000

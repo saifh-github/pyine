@@ -1,0 +1,139 @@
+# @package _global_
+
+# meant for the hf trainer only
+
+defaults:
+  - override /config: base
+  - override /config/datamodule_config: TACO_10s10t_v1_part1to4
+  - override /config/training_args_config: train_default
+  #- override /hydra/launcher: joblib  # to make sure ddp/signals are supported in sweep runs
+  #- override /hydra/sweeper: wandb_sweeper_base  # enable wandb sweeps
+  - _self_
+
+runtime:
+  exp_name: original/v0
+  run_name: "${runtime.exp_name}"
+  # run_name not specified, will use YMD_HMS timestamp
+  # run_group not specified, can be added online later
+  # notes not specified, can be added online later
+  tags:
+    - "model:${config.base_model}"
+  seed: 0
+  dry_run: False
+
+#hydra:
+#  sweeper:  # override settings for wandb sweeps when launching the app in multirun mode
+#    wandb_sweep_config:
+#      name: "${runtime.exp_name}-sweep"
+#      method: random # the hyperparam sweep search strategy
+#      metric:
+#        name: eval/loss
+#        goal: minimize
+#      count: 1 # number of function evaluations to perform per agent
+#      num_agents: 1 # number of agents to launch in a batch until budget is reached;
+#      # note: num_agents above could be increased if we used slurm launcher (submitit)
+#      budget: 100 # total number of agents to launch
+#      max_run_failure_rate: 0.0 # max authorized failure rate for a batch of wandb agents' runs
+#      max_agent_failure_rate: 0.0 # max authorized failure rate for a batch of launched wandb agents
+#      early_terminate:
+#        type: hyperband # the only supported stopping criteria, for now
+#        min_iter: 50
+#        eta: 2 # bracket multiplier schedule
+#    params:
+#      config.training_args_config.learning_rate:
+#        distribution: "log_uniform_values"
+#        min: 1.0e-5
+#        max: 1.0e-3
+#      config.training_args_config.gradient_accumulation_steps: [2, 4, 6, 8]
+#  launcher:  # override default launcher settings to make sure sweep runs are ddp/signal-compatible
+#    n_jobs: 1 # max number of jobs to run in parallel; 1 = sequential (no parallelism)
+#    prefer: processes  # hint that we prefer processes (to avoid threading/signal issues)
+#    verbose: 1 # joblib verbosity; 0 is silent, and higher values show progress messages
+#    timeout: null # timeout (in seconds) for each batch of jobs; null means no timeout
+#    pre_dispatch: 1 # how many jobs to pre-dispatch to workers before the main loop starts
+#    batch_size: auto  # number of tasks sent to each worker; "auto" lets joblib adaptively choose
+#    temp_folder: null # dir for temp files / memmapped arrays to share large data between processes
+#    max_nbytes: null
+#    mmap_mode: r
+
+config:
+  use_wandb_logging: true
+  base_model: Qwen/Qwen2.5-Coder-7B-Instruct
+  # @@@@ TODO: 4-bit quant + paged optim using bitsandbytes?
+  auto_model_config:
+    use_cache: False  # disable cache during training (auto-re-enabled during evals)
+  datamodule_config:
+    datamodule_class_path: pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule
+    datamodule_name: null
+    dataparser_config_overrides:
+      train:
+        filtering_config: {}
+        selection_config:
+          choice_strategy: random
+          input_type_prob_map:
+            original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+      valid:
+        filtering_config: {}
+        selection_config:
+          choice_strategy: random
+          input_type_prob_map:
+            original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+    # ------------
+    keep_generated_datasets_in_memory: False
+    # max_solution_count: 1
+    # ------------
+  collator_hard_seq_length_cap: 4096
+  training_args_config:
+    do_train: True
+    do_predict: False
+    # ------------
+    per_device_train_batch_size: 2  # increase if seq len is short enough?
+    per_device_eval_batch_size: 4
+    gradient_accumulation_steps: 8
+    learning_rate: 2e-4  # LoRA likes higher LR
+    weight_decay: 0.05
+    lr_scheduler_type: "cosine"
+    warmup_ratio: 0.03
+    gradient_checkpointing: True
+    gradient_checkpointing_kwargs:
+      use_reentrant: False
+    optim: "adamw_torch_fused"
+    max_grad_norm: 1.0 #0.3
+    # ------------
+    max_steps: 10000
+    logging_steps: 1
+    eval_strategy: "steps"
+    eval_steps: 500
+    save_strategy: "steps"
+    save_steps: 500
+    save_total_limit: 3
+    dataloader_num_workers: 4
+    dataloader_pin_memory: False
+    # use_liger_kernel: True
+    #group_by_length: True
+    #metric_for_best_model: "eval_loss"
+    #greater_is_better: False
+    include_tokens_per_second: True
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
+  evals_config:  # for final generation evals
+    eval_batch_size: 24
