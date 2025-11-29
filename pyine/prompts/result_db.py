@@ -23,7 +23,6 @@ import pyine.utils.reprod
 from pyine.prompts.types import PromptChainBuildConfig, PromptNameType, PromptVersionType  # noqa
 
 logger = logging.getLogger(__name__)
-T = typing.TypeVar("T")
 
 
 def _reload_metadata(raw: str | None) -> dict[str, pydantic.JsonValue]:
@@ -446,6 +445,60 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    def _build_filter_clauses(
+        self,
+        identifier: str | list[str] | None,
+        group: str | list[str] | None,
+        prompt_name: PromptNameType | list[PromptNameType] | None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None,
+    ) -> tuple[list[str], list[typing.Any], list[str]]:
+        """Build WHERE clause components for filtering queries.
+
+        Args:
+            identifier: Filter by identifier(s).
+            group: Filter by group(s).
+            prompt_name: Filter by prompt name(s).
+            prompt_version: Filter by prompt version(s).
+
+        Returns:
+            Tuple of (where_clauses, params, list_filter_columns) where:
+            - where_clauses: List of "AND column = ?" or "AND column IN (...)" strings
+            - params: List of parameter values for the placeholders
+            - list_filter_columns: List of column names that had list filters (for GROUP BY)
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+
+        list_filter_columns: list[str] = []
+
+        def _add_filter(
+            column: str,
+            value: str | list[str] | None,
+            clauses: list[str],
+            params: list[typing.Any],
+        ) -> None:
+            if value is None:
+                return
+            if isinstance(value, list):
+                if not value:  # empty list = no filter
+                    return
+                placeholders = ",".join("?" * len(value))
+                clauses.append(f"AND {column} IN ({placeholders})")
+                params.extend(value)
+                list_filter_columns.append(column)
+            else:
+                clauses.append(f"AND {column} = ?")
+                params.append(value)
+
+        where_clauses: list[str] = []
+        params: list[typing.Any] = []
+        _add_filter("identifier", identifier, where_clauses, params)
+        _add_filter('"group"', group, where_clauses, params)
+        _add_filter("prompt_name", prompt_name, where_clauses, params)
+        _add_filter("prompt_version", prompt_version, where_clauses, params)
+
+        return where_clauses, params, list_filter_columns
+
     @typing.overload
     def count_entries(
         self,
@@ -494,37 +547,9 @@ class PromptResultDB:
         Returns:
             Total count when breakdown=False, or dict mapping filter tuples to counts when breakdown=True.
         """
-        if prompt_name is None and prompt_version is not None:
-            raise ValueError("prompt_version specified without prompt_name")
-
-        # Track which columns have list filters for GROUP BY
-        list_filter_columns: list[str] = []
-
-        def _add_filter(
-            column: str,
-            value: str | list[str] | None,
-            sql: list[str],
-            params: list[typing.Any],
-        ) -> None:
-            if value is None:
-                return
-            if isinstance(value, list):
-                if not value:  # empty list = no filter
-                    return
-                placeholders = ",".join("?" * len(value))
-                sql.append(f"AND {column} IN ({placeholders})")
-                params.extend(value)
-                list_filter_columns.append(column)
-            else:
-                sql.append(f"AND {column} = ?")
-                params.append(value)
-
-        where_clauses: list[str] = []
-        params: list[typing.Any] = []
-        _add_filter("identifier", identifier, where_clauses, params)
-        _add_filter('"group"', group, where_clauses, params)
-        _add_filter("prompt_name", prompt_name, where_clauses, params)
-        _add_filter("prompt_version", prompt_version, where_clauses, params)
+        where_clauses, params, list_filter_columns = self._build_filter_clauses(
+            identifier, group, prompt_name, prompt_version
+        )
 
         if breakdown and list_filter_columns:
             select_cols = ", ".join(list_filter_columns)
@@ -539,6 +564,50 @@ class PromptResultDB:
             if breakdown and list_filter_columns:
                 return {tuple(row[:-1]): int(row[-1]) for row in rows}
             return int(rows[0][0]) if rows else 0
+        finally:
+            conn.close()
+
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+    ) -> list[list[str]]:
+        """Retrieve tags for all records matching the provided filters.
+
+        Args:
+            identifier: If provided, match only records with this identifier or any in the list.
+            group: If provided, match only records in this group or any in the list.
+            prompt_name: If provided, filter by prompt name(s).
+            prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
+
+        Returns:
+            List of tag lists, one per matched record. Each inner list contains the tags
+            for that record (empty list if the record has no tags). Order corresponds to
+            database order (by created_at ASC, id ASC).
+        """
+        where_clauses, params, _ = self._build_filter_clauses(identifier, group, prompt_name, prompt_version)
+
+        sql = "SELECT tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+        sql += " ORDER BY created_at ASC, id ASC"
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+            result: list[list[str]] = []
+            for row in rows:
+                raw_tags = row[0]
+                if raw_tags:
+                    loaded = orjson.loads(raw_tags)
+                    if isinstance(loaded, list):
+                        result.append([str(t) for t in loaded])
+                    else:
+                        result.append([])
+                else:
+                    result.append([])
+            return result
         finally:
             conn.close()
 

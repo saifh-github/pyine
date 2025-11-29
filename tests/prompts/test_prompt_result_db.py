@@ -584,6 +584,10 @@ def test_count_entries(db: PromptResultDB) -> None:
     # breakdown=True with single list filter
     breakdown = db.count_entries(identifier=["id1", "id2", "id3"], breakdown=True)
     assert breakdown == {("id1",): 3, ("id2",): 1, ("id3",): 1}
+    # breakdown=True with single-element list (should still return dict, not int)
+    breakdown = db.count_entries(identifier=["id1"], breakdown=True)
+    assert breakdown == {("id1",): 3}
+    assert isinstance(breakdown, dict)  # explicitly verify it's a dict, not int
     breakdown = db.count_entries(group=["g1", "g2"], breakdown=True)
     assert breakdown == {("g1",): 3, ("g2",): 1}
     breakdown = db.count_entries(prompt_name=["pn1", "pn2"], breakdown=True)
@@ -603,3 +607,56 @@ def test_count_entries(db: PromptResultDB) -> None:
     assert breakdown == {}
     # breakdown=False still works (default)
     assert db.count_entries(identifier=["id1", "id2"], breakdown=False) == 4
+
+
+def test_get_tags(db: PromptResultDB) -> None:
+    # empty db
+    assert db.get_tags() == []
+    assert db.get_tags(identifier="nonexistent") == []
+    # insert test data with various tag configurations
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt="p", result="r", tags=["a", "b"])
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt="p", result="r", tags=["c"])
+    db.store(identifier="id1", group="g2", prompt_name="pn2", prompt="p", result="r", tags=[])
+    db.store(identifier="id2", group="g1", prompt_name="pn1", prompt="p", result="r", tags=["d", "e", "f"])
+    db.store(identifier="id3", prompt="p", result="r")  # no tags at all (None)
+    # get all tags
+    all_tags = db.get_tags()
+    assert len(all_tags) == 5
+    assert all_tags[0] == ["a", "b"]
+    assert all_tags[1] == ["c"]
+    assert all_tags[2] == []  # empty tags
+    assert all_tags[3] == ["d", "e", "f"]
+    assert all_tags[4] == []  # None tags -> empty list
+    # filter by identifier
+    tags = db.get_tags(identifier="id1")
+    assert len(tags) == 3
+    assert tags[0] == ["a", "b"]
+    assert tags[1] == ["c"]
+    assert tags[2] == []
+    tags = db.get_tags(identifier="id2")
+    assert tags == [["d", "e", "f"]]
+    tags = db.get_tags(identifier="id3")
+    assert tags == [[]]
+    # filter by group
+    tags = db.get_tags(group="g1")
+    assert len(tags) == 3
+    assert tags == [["a", "b"], ["c"], ["d", "e", "f"]]
+    # filter by prompt_name
+    tags = db.get_tags(prompt_name="pn1")
+    assert tags == [["a", "b"], ["c"], ["d", "e", "f"]]
+    tags = db.get_tags(prompt_name="pn2")
+    assert tags == [[]]
+    # list filters
+    tags = db.get_tags(identifier=["id1", "id2"])
+    assert len(tags) == 4
+    assert tags == [["a", "b"], ["c"], [], ["d", "e", "f"]]
+    tags = db.get_tags(group=["g1", "g2"])
+    assert len(tags) == 4
+    # combined filters
+    tags = db.get_tags(identifier="id1", group="g1")
+    assert tags == [["a", "b"], ["c"]]
+    # nonexistent filter
+    assert db.get_tags(identifier="nonexistent") == []
+    # error case: prompt_version without prompt_name
+    with pytest.raises(ValueError):
+        db.get_tags(prompt_version="v1")
