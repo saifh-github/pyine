@@ -660,3 +660,30 @@ def test_get_tags(db: PromptResultDB) -> None:
     # error case: prompt_version without prompt_name
     with pytest.raises(ValueError):
         db.get_tags(prompt_version="v1")
+    # breakdown=True with single list filter
+    breakdown = db.get_tags(identifier=["id1", "id2"], breakdown=True)
+    assert ("id1",) in breakdown
+    assert ("id2",) in breakdown
+    assert breakdown[("id1",)] == [["a", "b"], ["c"], []]
+    assert breakdown[("id2",)] == [["d", "e", "f"]]
+    # breakdown=True with single-element list (still returns dict)
+    breakdown = db.get_tags(identifier=["id2"], breakdown=True)
+    assert breakdown == {("id2",): [["d", "e", "f"]]}
+    assert isinstance(breakdown, dict)
+    # breakdown=True with multiple list filters
+    breakdown = db.get_tags(identifier=["id1", "id2"], group=["g1", "g2"], breakdown=True)
+    assert ("id1", "g1") in breakdown
+    assert ("id1", "g2") in breakdown
+    assert ("id2", "g1") in breakdown
+    assert breakdown[("id1", "g1")] == [["a", "b"], ["c"]]
+    assert breakdown[("id1", "g2")] == [[]]
+    assert breakdown[("id2", "g1")] == [["d", "e", "f"]]
+    # breakdown=True with no list filters returns flat list
+    tags = db.get_tags(identifier="id1", breakdown=True)
+    assert tags == [["a", "b"], ["c"], []]
+    # breakdown=True with empty results
+    breakdown = db.get_tags(identifier=["nonexistent"], breakdown=True)
+    assert breakdown == {}
+    # breakdown=False still works (default)
+    tags = db.get_tags(identifier=["id1", "id2"], breakdown=False)
+    assert tags == [["a", "b"], ["c"], [], ["d", "e", "f"]]

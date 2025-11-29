@@ -567,6 +567,16 @@ class PromptResultDB:
         finally:
             conn.close()
 
+    @staticmethod
+    def _parse_tags(raw_tags: str | None) -> list[str]:
+        """Parse raw JSON tags string into a list of strings."""
+        if raw_tags:
+            loaded = orjson.loads(raw_tags)
+            if isinstance(loaded, list):
+                return [str(t) for t in loaded]
+        return []
+
+    @typing.overload
     def get_tags(
         self,
         *,
@@ -574,7 +584,29 @@ class PromptResultDB:
         group: str | list[str] | None = None,
         prompt_name: PromptNameType | list[PromptNameType] | None = None,
         prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
-    ) -> list[list[str]]:
+        breakdown: typing.Literal[False] = ...,
+    ) -> list[list[str]]: ...
+
+    @typing.overload
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[True],
+    ) -> dict[tuple[str, ...], list[list[str]]]: ...
+
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: bool = False,
+    ) -> list[list[str]] | dict[tuple[str, ...], list[list[str]]]:
         """Retrieve tags for all records matching the provided filters.
 
         Args:
@@ -582,32 +614,40 @@ class PromptResultDB:
             group: If provided, match only records in this group or any in the list.
             prompt_name: If provided, filter by prompt name(s).
             prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
+            breakdown: If True, return a dict mapping filter value tuples to lists of tag lists
+                instead of a flat list. Tuple order is (identifier, group, prompt_name, prompt_version),
+                including only columns that were filtered with non-empty lists.
 
         Returns:
-            List of tag lists, one per matched record. Each inner list contains the tags
-            for that record (empty list if the record has no tags). Order corresponds to
-            database order (by created_at ASC, id ASC).
+            List of tag lists when breakdown=False, or dict mapping filter tuples to lists of
+            tag lists when breakdown=True. Each inner list contains the tags for one record
+            (empty list if the record has no tags).
         """
-        where_clauses, params, _ = self._build_filter_clauses(identifier, group, prompt_name, prompt_version)
+        where_clauses, params, list_filter_columns = self._build_filter_clauses(
+            identifier, group, prompt_name, prompt_version
+        )
 
-        sql = "SELECT tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
-        sql += " ORDER BY created_at ASC, id ASC"
+        if breakdown and list_filter_columns:
+            select_cols = ", ".join(list_filter_columns)
+            sql = f"SELECT {select_cols}, tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += " ORDER BY created_at ASC, id ASC"
+        else:
+            sql = "SELECT tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += " ORDER BY created_at ASC, id ASC"
 
         conn = self._connect()
         try:
             rows = conn.execute(sql, params).fetchall()
-            result: list[list[str]] = []
-            for row in rows:
-                raw_tags = row[0]
-                if raw_tags:
-                    loaded = orjson.loads(raw_tags)
-                    if isinstance(loaded, list):
-                        result.append([str(t) for t in loaded])
-                    else:
-                        result.append([])
-                else:
-                    result.append([])
-            return result
+            if breakdown and list_filter_columns:
+                result_dict: dict[tuple[str, ...], list[list[str]]] = {}
+                for row in rows:
+                    key = tuple(row[:-1])
+                    tags = self._parse_tags(row[-1])
+                    if key not in result_dict:
+                        result_dict[key] = []
+                    result_dict[key].append(tags)
+                return result_dict
+            return [self._parse_tags(row[0]) for row in rows]
         finally:
             conn.close()
 
