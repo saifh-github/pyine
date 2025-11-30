@@ -566,9 +566,9 @@ async def test_supported_prompts_prepare_input_variables(
     if prompt_name == "code_summary":
         assert "target_summary_word_count:20" in tags
     else:
-        assert "augment:has_code_description" in tags
+        assert "sample_code_description:1" in tags
     if expected_augment_tag is None:
-        assert not any(tag.startswith("augment:") for tag in tags if tag != "augment:has_code_description")
+        assert not any(tag.startswith("augment:") for tag in tags)
     else:
         assert expected_augment_tag in tags
 
@@ -624,7 +624,7 @@ async def test_bugged_hint_prompt_uses_buggy_code(
     assert input_vars["inputs"] == str(trace.inputs)
     assert input_vars["expected_output"] == str(trace.expected_output)
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
+    assert "sample_code_description:1" in tags
     assert "augment:bugged_hinted" in tags
     assert captured["prompt_name"] == "hints/docs"
 
@@ -714,7 +714,7 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
     assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
     assert input_vars["expected_output"] == str({"alt": "value"})
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
+    assert "sample_code_description:1" in tags
     assert "augment:misleading" not in tags
     assert "augment:bugged_misleading" in tags
     assert captured["prompt_name"] == "issues/docs"
@@ -789,7 +789,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
     assert input_vars["code"] == trace.code_string
 
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
+    assert "sample_code_description:1" in tags
     assert "augment:misleading" in tags
     assert "augment:bugged" not in tags
     assert "llm_provider:openai" in tags

@@ -7,9 +7,8 @@ import transformers
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
+import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.shortcuts_configs
-import pyine.organisms.datamodules.utils.samples
-import pyine.organisms.datamodules.utils.transforms
 import pyine.utils.reprod
 import pyine.utils.transformers
 import tests.env_checks
@@ -38,12 +37,12 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
         ],
         dataparser_config_overrides={
             "train": {
-                "transform_config": pyine.organisms.datamodules.utils.samples.SampleTransformConfig(
-                    transform_strategy="hybrid",
-                    output_type_prob_map={
-                        "program_output": 0.5,
-                        "frame_variables": 0.1,
-                        "function_return": 0.4,
+                "transform_config": pyine.organisms.datamodules.samples.SampleTransformConfig(
+                    transform_strategy=pyine.organisms.datamodules.samples.SampleTransformStrategy.hybrid,
+                    predict_type_prob_map={
+                        pyine.organisms.datamodules.samples.SamplePredictType.program_output: 0.5,
+                        pyine.organisms.datamodules.samples.SamplePredictType.frame_variables: 0.1,
+                        pyine.organisms.datamodules.samples.SamplePredictType.function_return: 0.4,
                     },
                 ),
             },  # other subsets will default to never producing partial samples

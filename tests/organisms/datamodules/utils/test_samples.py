@@ -6,15 +6,23 @@ import pytest_mock
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.prompts
 import pyine.utils.code.execution as exec_utils
 import tests.env_checks
-from pyine.organisms.datamodules.utils.samples import (
+from pyine.organisms.datamodules.samples import (
     SampleBuilder,
-    SampleFilteringConfig,
+    SampleCodeType,
+    SampleCodeTypeSet,
+    SamplePredictType,
     SampleSelectionConfig,
     SampleTransformConfig,
+    SampleTransformStrategy,
+    TraceFilteringConfig,
+)
+from pyine.organisms.datamodules.samples.transform import (
+    _get_code_segment_sample,
+    _get_function_call_sample,
 )
 from tests.utils.fake_dataset_readers import FakeTraceDataConfig, FakeTraceDatasetReader
 
@@ -70,7 +78,7 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     targets = make_targets(small_fake_reader, [0, 1, 2])
     sb = SampleBuilder(source_data=[small_fake_reader], traces=targets)
     assert len(sb) == len(targets)
-    for st in sb.selected_traces:
+    for st in sb.selection_results:
         t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
@@ -81,7 +89,7 @@ def test_trace_targeting(small_fake_reader: FakeTraceDatasetReader) -> None:
     assert len(expected_traces) == len(small_fake_reader)
     sb2 = SampleBuilder(source_data=small_fake_reader)
     assert len(sb2) == len(expected_traces)
-    for st in sb2.selected_traces:
+    for st in sb2.selection_results:
         t = st.trace_meta
         assert t.identifier in small_fake_reader.trace_keys
         assert small_fake_reader.trace_keys.index(t.identifier) == t.index
@@ -93,10 +101,14 @@ class TestSampleBuilderFullSamples:
     def test_full_trace_when_never(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            transform_strategy="never",
-            output_type_prob_map={},
+            transform_strategy=SampleTransformStrategy.never,
+            predict_type_prob_map={},
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
+        sb = SampleBuilder(
+            source_data=[small_fake_reader],
+            traces=targets,
+            transform_config=cfg,
+        )
         assert len(sb) == 1
         sample = sb[0]
         tr = small_fake_reader[0]
@@ -104,7 +116,7 @@ class TestSampleBuilderFullSamples:
         assert sample.identifier == tr.identifier
         assert sample.code == tr.code_string
         assert isinstance(sample.description, str)
-        assert sample.output_type == "program_output"
+        assert sample.predict_type == "program_output"
         assert sample.inputs == str(tr.inputs)
         assert sample.expected_output == str(tr.expected_output)
         # boundaries
@@ -119,10 +131,10 @@ class TestSampleBuilderPartialSamples:
     def test_partial_sample_basic(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            transform_strategy="always",
+            transform_strategy=SampleTransformStrategy.always,
             max_partial_trace_steps=3,
-            output_type_prob_map={
-                "frame_variables": 1.0,
+            predict_type_prob_map={
+                SamplePredictType.frame_variables: 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
@@ -136,15 +148,15 @@ class TestSampleBuilderPartialSamples:
         # sample has content and steps
         assert isinstance(sample.inputs, str)
         assert isinstance(sample.expected_output, str)
-        assert isinstance(sample.output_type, str) and sample.output_type == "frame_variables"
+        assert isinstance(sample.predict_type, str) and sample.predict_type == "frame_variables"
         assert sample.trace_step_count > 0
 
     def test_partial_sample_function_call(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            transform_strategy="always",
-            output_type_prob_map={
-                "function_return": 1.0,
+            transform_strategy=SampleTransformStrategy.always,
+            predict_type_prob_map={
+                SamplePredictType.function_return: 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
@@ -157,29 +169,31 @@ class TestSampleBuilderPartialSamples:
         # sample has content and steps
         assert isinstance(sample.inputs, str)
         assert isinstance(sample.expected_output, str)
-        assert isinstance(sample.output_type, str) and sample.output_type == "function_return"
+        assert isinstance(sample.predict_type, str) and sample.predict_type == "function_return"
         assert sample.trace_step_count > 0
 
     def test_caps_enforced_and_fallback(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         targets = make_targets(small_fake_reader, [0])
         cfg = SampleTransformConfig(
-            transform_strategy="always",
+            transform_strategy=SampleTransformStrategy.always,
             max_inputs_str_length=0,  # any non-empty inputs will exceed -> partial skipped
-            output_type_prob_map={
-                "frame_variables": 1.0,
+            predict_type_prob_map={
+                SamplePredictType.frame_variables: 1.0,
             },
         )
         sb = SampleBuilder(source_data=[small_fake_reader], traces=targets, transform_config=cfg)
         sample = sb[0]
         # since caps reject partial sample, we should have fallen back to full program output
-        assert sample.output_type == "program_output"
+        assert sample.predict_type == "program_output"
         tr = small_fake_reader[0]
         assert sample.expected_output == str(tr.expected_output)
 
 
 class TestSampleFilteringConfig:
     def test_any_filtering_enabled_flag(self) -> None:
-        cfg_disabled = SampleFilteringConfig(
+        cfg_disabled = TraceFilteringConfig(
+            seed=0,
+            max_trace_families=None,
             max_trace_steps=None,
             max_code_line_count=None,
             max_code_line_length=None,
@@ -187,7 +201,7 @@ class TestSampleFilteringConfig:
             max_args_length=None,
         )
         assert not cfg_disabled.any_filtering_enabled
-        cfg_with_limit = SampleFilteringConfig(max_code_line_length=5)
+        cfg_with_limit = TraceFilteringConfig(max_code_line_length=5)
         assert cfg_with_limit.any_filtering_enabled
 
 
@@ -198,7 +212,7 @@ class TestSampleBuilderFiltering:
         total_traces = len(sb_no_filter)
         assert total_traces > 0
         # now apply a very restrictive step count filter (should filter out some/all traces)
-        cfg = SampleFilteringConfig(max_trace_steps=5)
+        cfg = TraceFilteringConfig(max_trace_steps=5)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
@@ -206,23 +220,23 @@ class TestSampleBuilderFiltering:
         # should have fewer traces (or same if all traces were already below threshold)
         assert len(sb_filtered) <= total_traces
         # verify that all remaining traces satisfy the filter
-        for st in sb_filtered.selected_traces:
+        for st in sb_filtered.selection_results:
             tr = small_fake_reader[st.trace_meta.index]
             assert tr.valid_step_count <= 5
         # check that stats are available
         stats = sb_filtered.get_stats()
-        assert "filtering/total_traces" in stats
-        assert "filtering/kept_traces" in stats
-        assert "filtering/filtered_by_step_count" in stats
-        assert stats["filtering/total_traces"] == total_traces
-        assert stats["filtering/kept_traces"] == len(sb_filtered)
+        assert "orig_trace_count" in stats
+        assert "kept_trace_count" in stats
+        assert "filtered/by_step_count" in stats
+        assert stats["orig_trace_count"] == total_traces
+        assert stats["kept_trace_count"] == len(sb_filtered)
 
     def test_filtering_by_var_repr_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # get all traces without filtering
         sb_no_filter = SampleBuilder(source_data=[small_fake_reader])
         total_traces = len(sb_no_filter)
         # apply a very restrictive var repr length filter
-        cfg = SampleFilteringConfig(max_args_length=10)
+        cfg = TraceFilteringConfig(max_args_length=10)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
@@ -230,7 +244,7 @@ class TestSampleBuilderFiltering:
         # should have fewer traces (or same if all were already below threshold)
         assert len(sb_filtered) <= total_traces
         # verify that all remaining traces satisfy the filter
-        for st in sb_filtered.selected_traces:
+        for st in sb_filtered.selection_results:
             tr = small_fake_reader[st.trace_meta.index]
             inputs_str = str(tr.inputs)
             expected_output_str = str(tr.expected_output)
@@ -238,11 +252,11 @@ class TestSampleBuilderFiltering:
             assert combined_length <= 10
         # check stats
         stats = sb_filtered.get_stats()
-        assert "filtering/filtered_by_var_length" in stats
+        assert "filtered/by_var_length" in stats
 
     def test_filtering_both_criteria(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         # apply both filters at once
-        cfg = SampleFilteringConfig(
+        cfg = TraceFilteringConfig(
             max_trace_steps=100,
             max_args_length=500,
         )
@@ -251,7 +265,7 @@ class TestSampleBuilderFiltering:
             filtering_config=cfg,
         )
         # verify all remaining traces satisfy both criteria
-        for st in sb_filtered.selected_traces:
+        for st in sb_filtered.selection_results:
             tr = small_fake_reader[st.trace_meta.index]
             assert tr.valid_step_count <= 100
             inputs_str = str(tr.inputs)
@@ -260,8 +274,8 @@ class TestSampleBuilderFiltering:
             assert combined_length <= 500
         # check that stats reflect both filters
         stats = sb_filtered.get_stats()
-        assert "filtering/filtered_by_step_count" in stats
-        assert "filtering/filtered_by_var_length" in stats
+        assert "filtered/by_step_count" in stats
+        assert "filtered/by_var_length" in stats
 
     def test_filtering_by_code_line_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         line_counts = {
@@ -269,14 +283,14 @@ class TestSampleBuilderFiltering:
         }
         unique_counts = sorted(set(line_counts.values()))
         line_threshold = unique_counts[0] if len(unique_counts) == 1 else unique_counts[0] + 1
-        cfg = SampleFilteringConfig(max_code_line_count=line_threshold)
+        cfg = TraceFilteringConfig(max_code_line_count=line_threshold)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
         )
         expected_indices = {idx for idx, count in line_counts.items() if count < line_threshold}
         assert len(expected_indices) < len(line_counts)
-        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selection_results}
         assert kept_indices == expected_indices
         assert len(sb_filtered) == len(expected_indices)
 
@@ -284,14 +298,14 @@ class TestSampleBuilderFiltering:
         code_lengths = {idx: len(small_fake_reader[idx].code_string) for idx in range(len(small_fake_reader))}
         unique_lengths = sorted(set(code_lengths.values()))
         length_threshold = unique_lengths[0] if len(unique_lengths) == 1 else unique_lengths[0] + 1
-        cfg = SampleFilteringConfig(max_code_length=length_threshold)
+        cfg = TraceFilteringConfig(max_code_length=length_threshold)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
         )
         expected_indices = {idx for idx, size in code_lengths.items() if size < length_threshold}
         assert len(expected_indices) < len(code_lengths)
-        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selection_results}
         assert kept_indices == expected_indices
         assert len(sb_filtered) == len(expected_indices)
 
@@ -308,14 +322,14 @@ class TestSampleBuilderFiltering:
             length_threshold = base_length - 1
         else:
             length_threshold = unique_lengths[0]
-        cfg = SampleFilteringConfig(max_code_line_length=length_threshold)
+        cfg = TraceFilteringConfig(max_code_line_length=length_threshold)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
         )
         expected_indices = {idx for idx, size in line_length_map.items() if size <= length_threshold}
         assert len(expected_indices) < len(line_length_map)
-        kept_indices = {st.trace_meta.index for st in sb_filtered.selected_traces}
+        kept_indices = {st.trace_meta.index for st in sb_filtered.selection_results}
         assert kept_indices == expected_indices
         assert len(sb_filtered) == len(expected_indices)
 
@@ -324,7 +338,7 @@ class TestSampleBuilderFiltering:
         sb_default = SampleBuilder(source_data=[small_fake_reader])
         sb_empty_config = SampleBuilder(
             source_data=[small_fake_reader],
-            filtering_config=SampleFilteringConfig(),
+            filtering_config=TraceFilteringConfig(),
         )
         # both should have the same number of traces
         assert len(sb_default) == len(sb_empty_config)
@@ -346,16 +360,16 @@ class TestSampleBuilderRealData:
         if len(taco_reader) < 1000:
             pytest.skip("TACO traces dataset is too small, skipping sample generation test")
         cfg = SampleTransformConfig(
-            transform_strategy="hybrid",
+            transform_strategy=SampleTransformStrategy.hybrid,
             functions_fallback_to_segments=True,
             max_partial_trace_steps=100,
             min_partial_trace_steps=5,
             max_inputs_str_length=1000,
             max_output_str_length=1000,
-            output_type_prob_map={
-                "program_output": 0.5,
-                "frame_variables": 0.1,
-                "function_return": 0.4,
+            predict_type_prob_map={
+                SamplePredictType.program_output: 0.5,
+                SamplePredictType.frame_variables: 0.1,
+                SamplePredictType.function_return: 0.4,
             },
         )
         sb = SampleBuilder(
@@ -377,7 +391,7 @@ class TestSampleBuilderRealData:
                 assert sample.code == trace_data.code_string
             assert isinstance(sample.description, str)
             code_lines = sample.code.splitlines()
-            if sample.output_type == "program_output":
+            if sample.predict_type == "program_output":
                 assert sample.first_line == 0
                 assert sample.last_line == len(code_lines)
                 assert sample.inputs == str(trace_data.inputs)
@@ -390,7 +404,7 @@ class TestSampleBuilderRealData:
                 assert len(sample.expected_output) <= cfg.max_output_str_length
                 assert 0 < sample.trace_step_count < trace_data.valid_step_count
                 assert cfg.min_partial_trace_steps <= sample.trace_step_count <= cfg.max_partial_trace_steps
-                if sample.output_type == "frame_variables":
+                if sample.predict_type == "frame_variables":
                     assert 0 < sample.first_line < len(code_lines)
                     assert 0 < sample.last_line <= len(code_lines)
                 else:  # function_return
@@ -466,49 +480,44 @@ print(x)
         # 4 RETURN foo
         # 5 LINE main
         # 6 RETURN main
-        steps: list[TestPrivateSampleMethods._FakeEvent] = []
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.CALL, 0, self._FakeKey("main", 1)))
-        steps.append(
+        steps: list[TestPrivateSampleMethods._FakeEvent] = [
+            self._FakeEvent(exec_utils.TraceEventType.CALL, 0, self._FakeKey("main", 1)),
             self._FakeEvent(
                 exec_utils.TraceEventType.LINE,
-                1,
-                self._FakeKey("main", 2),
+                step_idx=1,
+                key=self._FakeKey("main", 2),
                 local_vars={"x": 1},
-            )
-        )
-        steps.append(
+            ),
             self._FakeEvent(
                 exec_utils.TraceEventType.CALL,
-                2,
-                self._FakeKey("foo", 3),
+                step_idx=2,
+                key=self._FakeKey("foo", 3),
                 arguments=(1,),
-            )
-        )
-        steps.append(
+            ),
             self._FakeEvent(
                 exec_utils.TraceEventType.LINE,
-                3,
-                self._FakeKey("foo", 101),
+                step_idx=3,
+                key=self._FakeKey("foo", 101),
                 local_vars={"y": 2},
-            )
-        )
-        steps.append(
+            ),
             self._FakeEvent(
                 exec_utils.TraceEventType.RETURN,
-                4,
-                self._FakeKey("foo", 103),
+                step_idx=4,
+                key=self._FakeKey("foo", 103),
                 return_value=5,
-            )
-        )
-        steps.append(
+            ),
             self._FakeEvent(
                 exec_utils.TraceEventType.LINE,
-                5,
-                self._FakeKey("main", 5),
+                step_idx=5,
+                key=self._FakeKey("main", 5),
                 local_vars={"x": 6},
-            )
-        )
-        steps.append(self._FakeEvent(exec_utils.TraceEventType.RETURN, 6, self._FakeKey("main", 6)))
+            ),
+            self._FakeEvent(
+                exec_utils.TraceEventType.RETURN,
+                step_idx=6,
+                key=self._FakeKey("main", 6),
+            ),
+        ]
         return TestPrivateSampleMethods._FakeTrace(steps=steps)
 
     def test_get_code_segment_sample_skips_inner_calls(
@@ -522,18 +531,19 @@ print(x)
             max_partial_trace_steps=3,
         )
         # traces can be empty since we call private methods directly; reader is only used to pass __init__ checks
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], transform_config=cfg)
-        sample = sb._get_code_segment_sample(
+        sample = _get_code_segment_sample(
             trace_data=nested_call_trace,
             trace_meta=mocker.MagicMock(),
-            trace_code_type="original",
-            target_output_type="frame_variables",
+            trace_code_type=SampleCodeTypeSet.create_default(),
+            code_summary="potato",
+            transform_config=cfg,
             rng=np.random.default_rng(seed=0),
         )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
-        assert sample.output_type == "frame_variables"
+        assert sample.description == "potato"
+        assert sample.predict_type == SamplePredictType.frame_variables
         assert 2 <= sample.first_line <= 5
         assert 3 <= sample.last_line <= 6
         assert 1 <= sample.trace_step_count <= 3
@@ -549,17 +559,19 @@ print(x)
         cfg = SampleTransformConfig(
             min_partial_trace_steps=1,
         )
-        sb = SampleBuilder(source_data=[small_fake_reader], traces=[], transform_config=cfg)
-        sample = sb._get_function_call_sample(
+        sample = _get_function_call_sample(
             trace_data=nested_call_trace,
             trace_meta=mocker.MagicMock(),
-            trace_code_type="original",
+            trace_code_type=SampleCodeTypeSet.create_default(),
+            code_summary="potato",
+            transform_config=cfg,
             rng=np.random.default_rng(seed=0),
         )
         assert sample is not None
         assert sample.identifier == nested_call_trace.identifier
         assert sample.code == nested_call_trace.code_string
-        assert sample.output_type == "function_return"
+        assert sample.description == "potato"
+        assert sample.predict_type == SamplePredictType.function_return
         assert sample.entrypoint == "foo"
         # since we didn't provide code_blocks mapping, first/last line should equal the call site line
         assert sample.first_line == sample.last_line == 3
@@ -588,8 +600,8 @@ def test_code_summary_is_used_from_prompt_db(
     )
     # build SampleBuilder pointing to our temporary DB; force full samples to simplify checks
     cfg = SampleTransformConfig(
-        transform_strategy="never",
-        output_type_prob_map={},
+        transform_strategy=SampleTransformStrategy.never,
+        predict_type_prob_map={},
     )
     sb = SampleBuilder(
         source_data=[small_fake_reader],
@@ -614,27 +626,28 @@ def test_code_summary_is_used_from_prompt_db(
 
 
 class TestSelectTraces:
-    def test_select_traces_original_and_obfuscated_skip(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+    def test_select_traces_original_and_obfuscated_skip(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+    ) -> None:
         # original: should keep all clusters (no augmented variants exist => one per trace)
         sb_original = SampleBuilder(
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
-                choice_strategy="latest",
-                input_type_prob_map={"original": 1.0},
+                code_type_prob_map={SampleCodeTypeSet.create_default(): 1.0},
             ),
         )
-        selected_traces_meta = [s.trace_meta for s in sb_original.selected_traces]
-        code_input_types = [s.code_type for s in sb_original.selected_traces]
-        assert len(selected_traces_meta) == len(small_fake_reader)
+        selection_results_meta = [s.trace_meta for s in sb_original.selection_results]
+        code_input_types = [s.code_type for s in sb_original.selection_results]
+        assert len(selection_results_meta) == len(small_fake_reader)
         assert set(code_input_types) == {"original"}
-        code_overrides = [s.code_override for s in sb_original.selected_traces]
+        code_overrides = [s.code_override for s in sb_original.selection_results]
         assert all(ovr is None for ovr in code_overrides)
         # obfuscated: none present and no DB fallback for obfuscation => skip everything
         sb_obf = SampleBuilder(
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
-                choice_strategy="latest",
-                input_type_prob_map={"obfuscated": 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.obfuscated)): 1.0},
             ),
         )
         assert len(sb_obf) == 0
@@ -643,8 +656,7 @@ class TestSelectTraces:
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
                 allow_db_lookups=False,
-                choice_strategy="latest",
-                input_type_prob_map={"hinted": 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.hinted)): 1.0},
             ),
         )
         assert len(sb_no_db) == 0
@@ -696,17 +708,16 @@ class TestSelectTraces:
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
                 allow_db_lookups=True,
-                choice_strategy="latest",
-                input_type_prob_map={"hinted": 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.hinted)): 1.0},
             ),
             prompt_result_db_path=str(db_path),
         )
         # only one cluster should have hints in DB => length 1
         assert len(sb_hinted) == 1
-        assert sb_hinted.selected_traces[0].code_type == "hinted"
-        assert sb_hinted.selected_traces[0].code_override == "hint_v2"  # latest
+        assert sb_hinted.selection_results[0].code_type == "hinted"
+        assert sb_hinted.selection_results[0].code_override == "hint_v2"  # latest
         assert (
-            sb_hinted.selected_traces[0].trace_meta.identifier == trace_id_str
+            sb_hinted.selection_results[0].trace_meta.identifier == trace_id_str
         )  # same original trace (override applies at use time)
         # bugged + random => for the selected solution, there are as many clusters as test cases
         # only clusters matching the solution id should be selected; others skipped
@@ -715,20 +726,19 @@ class TestSelectTraces:
             selection_config=SampleSelectionConfig(
                 seed=0,
                 allow_db_lookups=True,
-                choice_strategy="random",
-                input_type_prob_map={"bugged": 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.bugged)): 1.0},
             ),
             prompt_result_db_path=str(db_path),
         )
         # figure how many tests exist for that solution in the fake reader (two by fixture config)
         # i.e., number of clusters that share the same parent solution id
         expected_bugged_clusters = sum(
-            1 for t in sb_bugged.selected_traces if str(t.trace_meta.solution_id) == sol_id_str
+            1 for t in sb_bugged.selection_results if str(t.trace_meta.solution_id) == sol_id_str
         )
         # no other solution has DB bug records, so the builder should contain only those clusters
         assert len(sb_bugged) == expected_bugged_clusters
-        assert all(str(t.trace_meta.solution_id) == sol_id_str for t in sb_bugged.selected_traces)
-        code_input_types = [s.code_type for s in sb_bugged.selected_traces]
+        assert all(str(t.trace_meta.solution_id) == sol_id_str for t in sb_bugged.selection_results)
+        code_input_types = [s.code_type for s in sb_bugged.selection_results]
         assert set(code_input_types) == {"bugged"}
-        code_overrides = [s.code_override for s in sb_bugged.selected_traces]
+        code_overrides = [s.code_override for s in sb_bugged.selection_results]
         assert all(ovr in {"bug_A", "bug_B"} for ovr in code_overrides)

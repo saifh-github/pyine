@@ -10,7 +10,7 @@ import pydantic
 
 import pyine.data.utils.filter_rules
 import pyine.evals.utils
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.utils.code.output_compare
 import pyine.utils.llm_providers
 
@@ -85,7 +85,7 @@ class CodeExecEvalArtifact(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=True)
     """Pydantic model configuration (immutable)."""
 
-    sample: pyine.organisms.datamodules.utils.samples.SampleData
+    sample: pyine.organisms.datamodules.samples.SampleData
     """Sample data associated with the prediction."""
     eval_result: SampleEval
     """Evaluation result associated with the prediction."""
@@ -155,7 +155,7 @@ class OutcomeEvaluator:
         self,
         predicted: str,
         expected: str,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float | LLMScoreFuture:
         """Returns the LLM-based score (or future for that score) for a given prediction."""
@@ -172,14 +172,14 @@ class OutcomeEvaluator:
                     self._invoke_llm_grader_async(
                         predicted=predicted,
                         expected=expected,
-                        execution_type=execution_type,
+                        predict_type=predict_type,
                         config=config,
                     )
                 )
         return self._invoke_llm_grader_sync(
             predicted=predicted,
             expected=expected,
-            execution_type=execution_type,
+            predict_type=predict_type,
             config=config,
         )
 
@@ -187,7 +187,7 @@ class OutcomeEvaluator:
         self,
         predicted: str,
         expected: str,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float:
         """Helper to invoke the LLM grader asynchronously."""
@@ -200,7 +200,7 @@ class OutcomeEvaluator:
         response = await self._llm_grader_chain_config.ainvoke(
             predicted=predicted,
             expected=expected,
-            execution_type=execution_type,
+            predict_type=predict_type,
             **invoke_kwargs,
         )
         return _decode_response(typing.cast("LLMGraderResponse", response))
@@ -209,7 +209,7 @@ class OutcomeEvaluator:
         self,
         predicted: str,
         expected: str,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         config: langchain_core.runnables.RunnableConfig | None = None,
     ) -> float:
         """Helper to invoke the LLM grader synchronously."""
@@ -222,7 +222,7 @@ class OutcomeEvaluator:
         response = self._llm_grader_chain_config.invoke(
             predicted=predicted,
             expected=expected,
-            execution_type=execution_type,
+            predict_type=predict_type,
             **invoke_kwargs,
         )
         return _decode_response(typing.cast("LLMGraderResponse", response))
@@ -232,7 +232,7 @@ class OutcomeEvaluator:
         identifier: str,
         predicted: str,
         expected: str,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         tags: list[str] | None = None,
     ) -> None:
         """Evaluate and cache artifacts for a single sample.
@@ -241,7 +241,7 @@ class OutcomeEvaluator:
             identifier: Unique sample id associated with the executed code snippet.
             predicted: Model prediction string that we hope is the same as the expected result.
             expected: Ground-truth string that corresponds to the expected execution result.
-            execution_type: Type of execution outcome that had to be predicted.
+            predict_type: Type of execution prediction that is expected for this sample.
             tags: Arbitrary metadata (tags, difficulty, etc.).
         """
         hard_match = expected.strip() == predicted.strip() if self.strip_hard_checks else expected == predicted
@@ -251,11 +251,11 @@ class OutcomeEvaluator:
             llm_score = self.get_llm_grader_score(
                 expected=expected,
                 predicted=predicted,
-                execution_type=execution_type,
+                predict_type=predict_type,
             )
         computed_tags: list[str] = tags.copy() if tags is not None else []
-        if not any(tag.startswith("execution_type:") for tag in computed_tags):
-            computed_tags.append(f"execution_type:{execution_type}")
+        if not any(tag.startswith("sample_predict_type:") for tag in computed_tags):
+            computed_tags.append(f"sample_predict_type:{predict_type}")
         self.results.append(
             SampleEval(
                 identifier=identifier,
@@ -273,7 +273,7 @@ class OutcomeEvaluator:
         identifiers: list[str],
         predicted_list: list[str],
         expected_list: list[str],
-        execution_type: list[str] | str = "unknown",
+        predict_type: list[str] | str = "unknown",
         tags: list[list[str]] | None = None,
     ) -> None:
         """Vectorized add; computes and caches artifacts for a batch.
@@ -284,20 +284,20 @@ class OutcomeEvaluator:
             raise ValueError("identifiers, expected_list, and predicted_list must have equal lengths")
         if tags is not None and len(tags) != len(identifiers):
             raise ValueError("tags array count must match identifiers length if provided.")
-        if isinstance(execution_type, list):
-            if len(execution_type) != len(identifiers):
-                raise ValueError("exec type list must match identifiers list length")
+        if isinstance(predict_type, list):
+            if len(predict_type) != len(identifiers):
+                raise ValueError("predict type list must match identifiers list length")
         else:
-            assert isinstance(execution_type, str), f"unexpected execution type: {type(execution_type)}"
-            execution_type = [execution_type] * len(identifiers)
-        for idx, (sid, pred, exp, etype) in enumerate(
-            zip(identifiers, predicted_list, expected_list, execution_type, strict=True)
+            assert isinstance(predict_type, str), f"unexpected predict type: {type(predict_type)}"
+            predict_type = [predict_type] * len(identifiers)
+        for idx, (sid, pred, exp, pred_type) in enumerate(
+            zip(identifiers, predicted_list, expected_list, predict_type, strict=True)
         ):
             self.add_sample(
                 identifier=sid,
                 predicted=pred,
                 expected=exp,
-                execution_type=etype,
+                predict_type=pred_type,
                 tags=(tags[idx] if tags is not None else None),
             )
 

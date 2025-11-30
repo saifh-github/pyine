@@ -36,7 +36,7 @@ def test_get_score_only_config_and_template() -> None:
     for var in ["expected_output", "predicted_output"]:
         assert var in template.input_variables
     rendered = template.format(
-        execution_type="program_output",
+        predict_type="program_output",
         expected_output="Hello, Bob",
         predicted_output="Hello Bob",
     )
@@ -61,7 +61,7 @@ def test_get_with_reasoning_config_and_template() -> None:
         "as per the required format above:\n"
     )
     rendered = template.format(
-        execution_type="function_return",
+        predict_type="function_return",
         expected_output="{'a': 1, 'b': 2}",
         predicted_output="{'b': 2, 'a': 1}",
     )
@@ -105,7 +105,7 @@ def test_pred_grader_infer_score_only() -> None:
     result = llm_grader_chain.invoke(
         predicted="Hello Bob",
         expected="Hello, Bob",
-        execution_type="program_output",
+        predict_type="program_output",
     )
     assert hasattr(result, "score")
     assert isinstance(result.score, float)
@@ -130,7 +130,7 @@ def test_pred_grader_infer_with_reasoning() -> None:
     result = llm_grader_chain.invoke(
         predicted="Hello Bob",
         expected="Hello, Bob",
-        execution_type="program_output",
+        predict_type="program_output",
     )
     assert hasattr(result, "score")
     assert 0.0 <= float(result.score) <= 1.0
@@ -159,7 +159,7 @@ async def test_pred_grader_infer_with_async_reasoning() -> None:
     result = await llm_grader_chain.ainvoke(
         predicted="Hello Bob",
         expected="Hello, Bob",
-        execution_type="program_output",
+        predict_type="program_output",
     )
     assert hasattr(result, "score")
     assert 0.0 <= float(result.score) <= 1.0

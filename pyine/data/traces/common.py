@@ -74,42 +74,16 @@ class TracingConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
 
-    max_trace_events_per_line: typing.Annotated[
-        pydantic.PositiveInt | None,
-        pydantic.Field(
-            default=None,
-            description="Maximum number of trace events per solution code line. If None, no maximum.",
-        ),
-    ]
-    max_trace_var_repr_length: typing.Annotated[
-        pydantic.PositiveInt | None,
-        pydantic.Field(
-            default=10_000,
-            description="Maximum length of variable representation strings, in characters.",
-        ),
-    ]
-    max_trace_valid_events: typing.Annotated[
-        pydantic.PositiveInt | None,
-        pydantic.Field(
-            default=20_000,
-            description="Maximum number of (valid, in-scope) events allowed per trace. If None, no maximum.",
-        ),
-    ]
-    execution_timeout_seconds: typing.Annotated[
-        float,
-        pydantic.Field(
-            default=10.0,
-            gt=0.0,
-            description="Timeout in seconds for each execution attempt. If exceeded, solution is skipped.",
-        ),
-    ]
-    execution_seed: typing.Annotated[
-        int | None,  # none = non-deterministic
-        pydantic.Field(
-            default=0,
-            description="Seed used to initialize internal RNGs during each execution attempt.",
-        ),
-    ]
+    max_trace_events_per_line: pydantic.PositiveInt | None = None
+    """Maximum number of trace events per solution code line. If None, no maximum."""
+    max_trace_var_repr_length: pydantic.PositiveInt | None = 10_000
+    """Maximum length of variable representation strings, in characters."""
+    max_trace_valid_events: pydantic.PositiveInt | None = 20_000
+    """Maximum number of (valid, in-scope) events allowed per trace. If None, no maximum."""
+    execution_timeout_seconds: pydantic.PositiveFloat = 10.0
+    """Timeout in seconds for each execution attempt. If exceeded, solution is skipped."""
+    execution_seed: int | None = 0  # none = non-deterministic
+    """"Seed used to initialize internal RNGs during each execution attempt."""
 
 
 TraceExecutionOutcome = tuple[

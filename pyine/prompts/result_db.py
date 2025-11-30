@@ -571,9 +571,9 @@ class PromptResultDB:
     def _parse_tags(raw_tags: str | None) -> list[str]:
         """Parse raw JSON tags string into a list of strings."""
         if raw_tags:
-            loaded = orjson.loads(raw_tags)
-            if isinstance(loaded, list):
-                return [str(t) for t in loaded]
+            loaded = typing.cast("list[str]", orjson.loads(raw_tags))
+            assert isinstance(loaded, list) and all(isinstance(s, str) for s in loaded)
+            return loaded
         return []
 
     @typing.overload

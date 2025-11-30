@@ -16,7 +16,7 @@ class _FakeSample:
     def __init__(self, identifier: str) -> None:
         self.identifier = identifier
         self.expected_output = f"expected-{identifier}"
-        self.output_type = "unknown"
+        self.predict_type = "unknown"
         self._tags = ["tag"]
 
     def _asdict(self) -> dict[str, str]:
@@ -133,12 +133,12 @@ async def test_evaluate_runnable_model_sequential(
         return iterable
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
         "SampleBuilder",
         _FakeSampleBuilder,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSample,
     )
@@ -281,12 +281,12 @@ async def test_evaluate_runnable_model_parallel(
         progress_reports.append(len(completed))
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
         "SampleBuilder",
         _FakeSampleBuilder,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSample,
     )
@@ -395,7 +395,7 @@ async def test_evaluate_hf_model_generates_results(
         identifier: str
         expected_output: str
         comma_separated_tags: str
-        output_type: str = "unknown"
+        predict_type: str = "unknown"
 
         def get_tag_list(self) -> list[str]:
             if not self.comma_separated_tags:
@@ -452,7 +452,7 @@ async def test_evaluate_hf_model_generates_results(
         return iterable
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.utils.samples,
+        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSampleData,
     )

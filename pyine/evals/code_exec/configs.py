@@ -19,7 +19,7 @@ import pyine.data.datamodule
 import pyine.evals.code_exec.utils
 import pyine.evals.common
 import pyine.evals.utils
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.utils.concurrency
 import pyine.utils.transformers
 
@@ -77,20 +77,20 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             CodeExecEvalResult: Aggregated metrics and captured prediction artifacts.
         """
         sample_generator = datamodule.get_parser(eval_subset_name)
-        assert isinstance(sample_generator, pyine.organisms.datamodules.utils.samples.SampleBuilder), (
+        assert isinstance(sample_generator, pyine.organisms.datamodules.samples.SampleBuilder), (
             "this code execution evaluator only supports sample builder-based parsers"
         )
         _log = logger.info if verbose else logger.debug
         evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**(self.evaluator_kwargs or {}))
         token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-        sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData] = {}
+        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData] = {}
         sample_idxs = list(range(len(sample_generator)))
         if not self.eval_runnable_config.parallel:
             _log(f"launching sequential runnable chain eval for '{eval_subset_name}' subset")
             wrapped_sample_idxs = tqdm.tqdm(sample_idxs, disable=not verbose, desc="evaluating")
             for sample_idx in wrapped_sample_idxs:
-                sample = sample_generator[sample_idx]
-                assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
+                sample: typing.Any = sample_generator[sample_idx]  # type: ignore[reportUnknownVariableType]
+                assert isinstance(sample, pyine.organisms.datamodules.samples.SampleData)
                 sample_data_store[sample.identifier] = sample
                 response = chain.invoke(sample._asdict())
                 assert isinstance(response, langchain_core.messages.AIMessage)
@@ -101,7 +101,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                     identifier=sample.identifier,
                     predicted=response_text,
                     expected=sample.expected_output,
-                    execution_type=sample.output_type,
+                    predict_type=sample.predict_type,
                     tags=sample.get_tag_list(),
                 )
                 token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
@@ -111,15 +111,15 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             max_in_flight_jobs = self.eval_runnable_config.max_in_flight_jobs
             async_metrics_compute_rate = self.eval_runnable_config.async_metrics_compute_rate
             logger.debug(f"({max_workers=}, {max_in_flight_jobs=}, {async_metrics_compute_rate=})")
-            sample_lut: dict[int, pyine.organisms.datamodules.utils.samples.SampleData] = {}
+            sample_lut: dict[int, pyine.organisms.datamodules.samples.SampleData] = {}
             prog_bar = tqdm.tqdm(total=len(sample_idxs), disable=not verbose, desc="waiting for results")
 
             def _submit_one(
                 sample_idx: int,
                 executor: concurrent.futures.Executor,
             ) -> concurrent.futures.Future[langchain_core.messages.AIMessage]:
-                sample = sample_generator[sample_idx]
-                assert isinstance(sample, pyine.organisms.datamodules.utils.samples.SampleData)
+                sample: typing.Any = sample_generator[sample_idx]  # type: ignore[reportUnknownVariableType]
+                assert isinstance(sample, pyine.organisms.datamodules.samples.SampleData)
                 assert sample_idx not in sample_lut
                 sample_lut[sample_idx] = sample
                 return executor.submit(
@@ -144,7 +144,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                     identifier=sample.identifier,
                     predicted=response_text,
                     expected=sample.expected_output,
-                    execution_type=sample.output_type,
+                    predict_type=sample.predict_type,
                     tags=sample.get_tag_list(),
                 )
                 prog_bar.update(1)
@@ -278,7 +278,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         )
         assert len(generation_results) == len(sorted_prompts_ds)
         token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-        sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData] = {}
+        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData] = {}
         _log("launching generation results analysis")
         wrapped_generation_results = tqdm.tqdm(
             generation_results,
@@ -294,8 +294,8 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             assert "sample_data" in orig_sample, "we asked to get the original data earlier"
             orig_sample_data = orig_sample["sample_data"]
             if isinstance(orig_sample_data, collections.abc.Mapping):
-                orig_sample_data = pyine.organisms.datamodules.utils.samples.SampleData(**orig_sample_data)
-            assert isinstance(orig_sample_data, pyine.organisms.datamodules.utils.samples.SampleData)
+                orig_sample_data = pyine.organisms.datamodules.samples.SampleData(**orig_sample_data)
+            assert isinstance(orig_sample_data, pyine.organisms.datamodules.samples.SampleData)
             sample_data_store[orig_sample_data.identifier] = orig_sample_data
             assert "prediction" in gen_result, "missing prediction output? (bad key?)"
             prediction = gen_result["prediction"]
@@ -308,7 +308,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 identifier=orig_sample_data.identifier,
                 predicted=prediction,
                 expected=orig_sample_data.expected_output,
-                execution_type=orig_sample_data.output_type,
+                predict_type=orig_sample_data.predict_type,
                 tags=orig_sample_data.get_tag_list(),
             )
             token_usage += pyine.evals.utils.TokenUsageInfo(
@@ -329,7 +329,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         self,
         evaluator: pyine.evals.code_exec.utils.OutcomeEvaluator,
         token_usage: pyine.evals.utils.TokenUsageInfo,
-        sample_data_store: dict[str, pyine.organisms.datamodules.utils.samples.SampleData],
+        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
     ) -> CodeExecEvalResult:
         """Finalizes the evaluation results by aggregating metrics and preparing captured prediction artifacts."""
         output_metrics = await pyine.evals.code_exec.utils.get_metrics(evaluator, token_usage)
@@ -467,7 +467,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 "subset",
                 "identifier",
                 "code_type",
-                "output_type",
+                "predict_type",
                 "inputs",
                 "expected_output",
                 "predicted_output",
@@ -482,7 +482,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 subset_name,
                 prediction.identifier,
                 str(prediction.sample.code_type),
-                str(prediction.sample.output_type),
+                str(prediction.sample.predict_type),
                 _truncate_text(prediction.sample.inputs, max_text_length),
                 _truncate_text(prediction.eval_result.expected, max_text_length),
                 _truncate_text(prediction.eval_result.predicted, max_text_length),

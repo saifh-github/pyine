@@ -541,8 +541,6 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     """List of leftover traces still unassigned after subset filtering and leftover split."""
     problem_assignments: dict[str, str]
     """Assignments of coding problems identifiers (str) to data subsets."""
-    augment_types: list[str]
-    """List of augmentation types (str) that were used in the dataset."""
     split_hash: str
     """Hash of the split file where the assignments were parsed from."""
 
@@ -558,8 +556,6 @@ class TraceDatasetMetadata(pydantic.BaseModel):
             if trace_meta.trace_id.is_augmented:
                 augm_categories = trace_meta.trace_id.split_augment_categories
                 for augm_cat in augm_categories:
-                    if augm_cat not in self.augment_types:
-                        raise ValueError(f"unexpected trace augment type: {augm_cat}")
                     assert trace_meta.is_augmented and trace_meta.augment_tags
                     assert any(t == f"augment:{augm_cat}" for t in trace_meta.augment_tags), (
                         "augment type is not in the trace tags; this should not happen?"

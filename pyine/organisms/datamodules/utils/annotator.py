@@ -19,6 +19,7 @@ import pyine.data.traces.common
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.caching
 import pyine.prompts.result_db
 import pyine.prompts.types
@@ -146,11 +147,7 @@ type AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]
 
 
 class AugmentedAnnotationOptions(pydantic.BaseModel):
-    """Options controlling augmented annotations (i.e. annotations that rely on previous annotations).
-
-    The types of 'augmentations' we support through these options are described in the docstring of
-    the `SampleInputType` type defined in the `pyine.organisms.datamodules.utils.samples` module.
-    """
+    """Options controlling augmented annotations (i.e. annotations that rely on previous annotations)."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
@@ -400,9 +397,17 @@ def _default_identifier_resolver(
     if config.prompt_config.prompt_name in prompts_where_solution_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-        solution_id_str = str(trace_id.get_parent_identifier())
-        if config.register_identifier(solution_id_str):
-            return solution_id_str
+        if trace_id.is_augmented:
+            # we can't keep/store the solution id along with the augment id, so we'll just store under trace id
+            # -> this will cause more entries to be generated than necessary, but it's the easiest fix
+            # -> it's better to be over-specific and fail some db lookups than add entries with silent augments
+            trace_id_str = str(trace.identifier)
+            if config.register_identifier(trace_id_str):
+                return trace_id_str
+        else:
+            solution_id_str = str(trace_id.get_parent_identifier())
+            if config.register_identifier(solution_id_str):
+                return solution_id_str
         return None
     prompts_where_trace_gives_identifier = [
         "hints/docs",
@@ -410,6 +415,7 @@ def _default_identifier_resolver(
         "issues/docs",
     ]
     if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
+        assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id_str = str(trace.identifier)
         if config.register_identifier(trace_id_str):
             return trace_id_str
@@ -545,6 +551,7 @@ def _default_input_variables_builder(
     if (is_hint_prompting or is_mislead_prompting) and (
         config.augment_config.is_bugged_hinting_enabled and not trace_id.is_bugged
     ):
+        assert not pyine.organisms.datamodules.samples.common.check_trace_code_is_test_case_specific(trace_id)
         # try to fetch a buggy version of the code string for the hint generation prompt
         for (
             bug_prompt_spec,
@@ -560,8 +567,12 @@ def _default_input_variables_builder(
                 }
             else:
                 bug_prompt_info = {"prompt_name": bug_prompt_spec}
+            if trace_id.is_augmented:
+                db_identifier = str(trace_id)
+            else:
+                db_identifier = str(trace_id.get_parent_identifier())
             buggy_code_records = config.get_prompt_result_db().get_by_identifier(
-                identifier=str(trace_id.get_parent_identifier()),
+                identifier=db_identifier,
                 **bug_prompt_info,
             )
             if buggy_code_records:
@@ -612,11 +623,11 @@ def _default_tags_builder(
     assert sum((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)) == 1
     if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
         output_tags.append("augment:misleading")
-    elif is_hint_prompting:
+    if is_hint_prompting:
         output_tags.append("augment:hinted")
-    elif is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
+    if is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
         output_tags.append("augment:bugged")
-    elif is_stub_prompting:
+    if is_stub_prompting:
         output_tags.append("augment:stubbed")
 
     # add prompt-specific tags below
@@ -730,14 +741,16 @@ def _default_output_validator(
             test_outputs=trace.expected_output,
             metadata="will not be kept, only for outcome eval purposes",
         )
+        trace_seed = trace.metadata["seed"]
+        assert trace_seed is None or isinstance(trace_seed, int), "invalid trace seed found in metadata"
         tracing_config = pyine.data.traces.common.TracingConfig(
             max_trace_valid_events=trace.max_valid_events,
             max_trace_var_repr_length=trace.max_var_repr_length,
             max_trace_events_per_line=trace.max_events_per_line,
             execution_timeout_seconds=config.validation_timeout_seconds,
-            execution_seed=trace.metadata["seed"],
+            execution_seed=trace_seed,
         )
-        trace_result, compare_result = pyine.data.traces.common.trace_code_snippet(
+        _, compare_result = pyine.data.traces.common.trace_code_snippet(
             code_snippet=trace_request,
             tracing_config=tracing_config,
             output_compare_config=pyine.utils.code.output_compare.get_default_comparison_config(),

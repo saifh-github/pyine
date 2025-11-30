@@ -5,8 +5,8 @@ import pytest
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
+import pyine.organisms.datamodules.samples as sample_utils
 import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
-import pyine.organisms.datamodules.utils.samples as sample_utils
 import pyine.prompts
 import pyine.utils.code.execution as execution_utils
 import pyine.utils.pydantic
@@ -219,13 +219,13 @@ def setup_builder(
 def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_hash = "fake-valid"
     original_identifier = "TACO/valid/p000001/s0000/t0000"
-    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:issues_generic:000"
+    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:generic:000"
     trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(
         [
             (original_identifier, ["subset:valid"]),
-            (hinted_identifier, ["subset:valid", "augment:issues_generic"]),
+            (hinted_identifier, ["subset:valid", "augment:generic"]),
         ]
     ):
         metadata, result = build_trace_artifacts(
@@ -251,7 +251,7 @@ def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) 
     assert selection.code_override is None
     sample = builder[0]
     assert sample.code_type == "original"
-    assert sample.output_type == "program_output"
+    assert sample.predict_type == "program_output"
     assert sample.has_code_override is False
 
 
@@ -274,8 +274,8 @@ def test_train_overrides_enable_random_hint_selection(
                     ["subset:train", "augment:obfuscated"],
                 ),
                 (
-                    f"{trace_identifier}/a:issues_generic:001",
-                    ["subset:train", "augment:issues_generic"],
+                    f"{trace_identifier}/a:generic:001",
+                    ["subset:train", "augment:generic"],
                 ),
             ]
         )
@@ -339,13 +339,13 @@ def test_train_overrides_enable_random_hint_selection(
         sample = builder_without_records[sample_idx]
         assert sample.identifier == picked_identifier
         assert sample.code_type == selected.code_type
-        assert sample.output_type == "program_output"
+        assert sample.predict_type == "program_output"
         assert sample.has_code_override is False
         assert not sample.description
         tags = sample.comma_separated_tags.split(",")
-        assert "augment:has_code_description" not in tags
+        assert "sample_code_description:0" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
-        assert "sample_output_type:program_output" in tags
+        assert "sample_predict_type:program_output" in tags
     assert saw_orig and saw_obfs
 
     builder_with_records = setup_builder(
@@ -389,7 +389,7 @@ def test_train_overrides_enable_random_hint_selection(
         sample = builder_with_records[sample_idx]
         assert sample.identifier == picked_identifier
         assert sample.code_type == selected.code_type
-        assert sample.output_type == "program_output"
+        assert sample.predict_type == "program_output"
         if selected.code_type in ["hinted", "obfuscated_hinted"]:
             assert sample.has_code_override is True
             assert sample.code in ["fake hinted code", "fake obfuscated + hinted code"]
@@ -401,9 +401,9 @@ def test_train_overrides_enable_random_hint_selection(
             ]
         assert sample.description == "some description of the code"
         tags = sample.comma_separated_tags.split(",")
-        assert "augment:has_code_description" in tags
+        assert "sample_code_description:1" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
-        assert "sample_output_type:program_output" in tags
+        assert "sample_predict_type:program_output" in tags
     assert saw_orig and saw_hinted and saw_obfs and saw_obfs_hinted
 
 
@@ -462,5 +462,5 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
             assert selection.code_override == expected_stubbed_code
             assert sample.code == expected_stubbed_code
             saw_stubbed = True
-        assert sample.output_type == "program_output"
+        assert sample.predict_type == "program_output"
     assert saw_stubbed

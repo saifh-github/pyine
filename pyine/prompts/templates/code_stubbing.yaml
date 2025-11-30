@@ -1,3 +1,4 @@
+# @@@@@@@ update stubbing w/ classic example just asking to pretend code is imported from another module
 __defines__:
   base_metadata: &base_metadata
     name: code_stubbing

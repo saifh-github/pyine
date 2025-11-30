@@ -479,7 +479,10 @@ def _get_traces_to_write(
     raw_results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
             functools.partial(
-                pyine.data.traces.common.trace_code_snippet,
+                typing.cast(
+                    "typing.Callable[..., pyine.data.traces.common.TraceExecutionOutcome]",
+                    pyine.data.traces.common.trace_code_snippet,
+                ),
                 code_snippet=code_snippet,
                 config=config,
             )
@@ -606,7 +609,9 @@ def _fetch_augmented_code_to_trace(
             identifier=str(solution.solution_id),
             prompt_name=prompt_name,
         )
-        picked_records = [prompt_records[idx] for idx in rng.permutation(len(prompt_records))[:fetch_count]]
+        picked_records: list[pyine.prompts.PromptResultRecord] = [
+            prompt_records[idx] for idx in rng.permutation(len(prompt_records))[:fetch_count]
+        ]
         augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
         for record_idx, record in enumerate(picked_records):
             _append_requests(

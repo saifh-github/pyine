@@ -2,6 +2,7 @@
 
 import contextlib
 import itertools
+import logging
 import pathlib
 import typing
 import warnings
@@ -16,9 +17,11 @@ import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
 import pyine.data.utils.splits
 import pyine.evals.common
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
+
+logger = logging.getLogger(__name__)
 
 
 def _get_datamodule_fully_qualified_name() -> str:
@@ -42,9 +45,8 @@ def _get_supported_subset_names() -> tuple[pyine.data.datamodule.SubsetNameType,
     output_subset_names: list[pyine.data.datamodule.SubsetNameType] = []
     for subset in _get_default_top_level_subsets():
         output_subset_names.append(subset)
-        for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType):
-            if suffix != "original":
-                output_subset_names.append(f"{subset}_{suffix}")
+        for code_type_set_str in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes():
+            output_subset_names.append(f"{subset}_{code_type_set_str}")
     return tuple(output_subset_names)
 
 
@@ -53,7 +55,7 @@ def _get_default_sampler_builder_config(
     seed: typing.Any,
     *,
     as_pydantic: typing.Literal[True],
-) -> pyine.organisms.datamodules.utils.samples.SampleBuilderConfig: ...
+) -> pyine.organisms.datamodules.samples.SampleBuilderConfig: ...
 
 
 @typing.overload
@@ -68,7 +70,7 @@ def _get_default_sampler_builder_config(
     seed: typing.Any,
     *,
     as_pydantic: bool = False,
-) -> dict[str, typing.Any] | pyine.organisms.datamodules.utils.samples.SampleBuilderConfig:
+) -> dict[str, typing.Any] | pyine.organisms.datamodules.samples.SampleBuilderConfig:
     """Returns the default configuration dictionary used to instantiate sampler builders.
 
     This configuration will be hierarchically overridden by subset-specific settings (see below).
@@ -78,8 +80,7 @@ def _get_default_sampler_builder_config(
         "selection_config": {  # SampleSelectionConfig
             "seed": seed,
             "allow_db_lookups": True,
-            "choice_strategy": "latest",
-            "input_type_prob_map": pyine.organisms.datamodules.utils.samples.get_default_code_input_type_prob_map(),
+            "code_type_prob_map": pyine.organisms.datamodules.samples.configs.get_default_code_type_prob_map(),
             "fallback_to_orig": False,
         },
         "transform_config": {  # SampleTransformConfig
@@ -88,15 +89,14 @@ def _get_default_sampler_builder_config(
         },
     }
     if as_pydantic:
-        return pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate({"params": config_params})
+        return pyine.organisms.datamodules.samples.SampleBuilderConfig.model_validate({"params": config_params})
     return config_params
 
 
 def _get_default_sample_builder_selection_config() -> dict[str, typing.Any]:
     """Returns the default selection config to be used for an arbitrary data subset."""
     return {  # SampleSelectionConfig
-        "choice_strategy": "random",
-        "input_type_prob_map": {
+        "code_type_prob_map": {
             "original": 0.75,
             "hinted": 0.05,
             "stubbed": 0.1,
@@ -241,21 +241,21 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     def _resolve_dataparser_config(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleBuilderConfig:
+    ) -> pyine.organisms.datamodules.samples.SampleBuilderConfig:
         """Returns the data parser configuration for the given subset name."""
         if subset_name not in self.subset_names:
             raise ValueError(f"invalid subset name: {subset_name}, expected one of: {self.subset_names}")
         parser_config = self.default_dataparser_config
         if isinstance(parser_config, dict):
-            parser_config = pyine.organisms.datamodules.utils.samples.SampleBuilderConfig.model_validate(parser_config)
+            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig.model_validate(parser_config)
         else:
             assert isinstance(parser_config, pyine.data.datamodule.BaseDataParserConfig)
             # convert BaseDataParserConfig to SampleBuilderConfig (may happen when instantiated via Hydra)
-            parser_config = pyine.organisms.datamodules.utils.samples.SampleBuilderConfig(
+            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig(
                 class_path=parser_config.class_path,
                 params=parser_config.params,
             )
-        assert isinstance(parser_config, pyine.organisms.datamodules.utils.samples.SampleBuilderConfig), (
+        assert isinstance(parser_config, pyine.organisms.datamodules.samples.SampleBuilderConfig), (
             f"unexpected type for default dataparser config: {type(parser_config)}"
         )
         if subset_name in self.dataparser_config_overrides and self.dataparser_config_overrides[subset_name]:
@@ -266,6 +266,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
             parser_config = parser_config.get_updated_spec(**config_overrides)
         special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
         if special_subset_overrides:
+            logger.info(f"overriding special subset params for subset {subset_name}: {special_subset_overrides}")
             parser_config = parser_config.get_updated_spec(**special_subset_overrides)
         return parser_config
 
@@ -283,7 +284,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
             return loader_config.get_updated_spec(**self.dataloader_config_overrides[loader_name])
         for prefix, suffix in itertools.product(
             known_loaders,
-            typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType),
+            pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes(),
         ):
             # check for potential parent matches
             if f"{prefix}_{suffix}" == loader_name and prefix in self.dataloader_config_overrides:
@@ -306,13 +307,13 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         for subset_name, overrides in self.dataparser_config_overrides.items():
             if overrides and any(
                 subset_name.endswith(f"_{suffix}")
-                for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
+                for suffix in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes()
             ):
                 raise ValueError(f"invalid subset name: {subset_name}, cannot override special parsers")
         for loader_name, overrides in self.dataloader_config_overrides.items():
             if overrides and any(
                 loader_name.endswith(f"_{suffix}")
-                for suffix in typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType)
+                for suffix in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes()
             ):
                 raise ValueError(f"invalid loader name: {loader_name}, cannot override special loaders")
         return self
@@ -346,7 +347,7 @@ def get_datamodule_config(
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
-    from pyine.organisms.datamodules.utils.samples import SampleBuilder
+    from pyine.organisms.datamodules.samples import SampleBuilder
     from pyine.utils.portability import get_fully_qualified_name
 
     config_kwargs = {

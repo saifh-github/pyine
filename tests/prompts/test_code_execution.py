@@ -26,8 +26,8 @@ def test_get_no_pressure_config_and_template() -> None:
     assert "Enter name: " in rendered_str and "```\nBob\n```" in rendered_str
 
 
-def test_get_unstructured_with_3_output_types_config_and_template() -> None:
-    prompt_version = "unstructured_with_3_output_types"
+def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
+    prompt_version = "unstructured_with_3_predict_types"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "code_execution"
@@ -36,7 +36,7 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
         "code_execution", version=prompt_version, include_examples=True
     )
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
-    core_vars = {"code", "output_type", "inputs"}
+    core_vars = {"code", "predict_type", "inputs"}
     assert core_vars.issubset(set(template.input_variables))
     assert template.optional_variables == ["description", "entrypoint"]
     template_str = template.template
@@ -45,7 +45,7 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
     rendered_prog = template.format(
         code='print("Hello, " + input("Enter name: "))',
         description="Greets a user by name.",
-        output_type="program_output",
+        predict_type="program_output",
         inputs="Bobby",
     )
     assert "Execution output type: program_output" in rendered_prog
@@ -56,7 +56,7 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
     rendered_vars = template.format(
         code="x=2\ny=3\nz=x+y",
         description="Adds two numbers.",
-        output_type="frame_variables",
+        predict_type="frame_variables",
         inputs="",
         first_line=1,
         last_line=3,
@@ -71,7 +71,7 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
         code="def add(a,b): return a+b\nresult = add(1,2)",
         description="Simple add function.",
         entrypoint="add",
-        output_type="function_return",
+        predict_type="function_return",
         inputs="a=1, b=2",
         first_line=1,
         last_line=1,
