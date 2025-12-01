@@ -180,7 +180,11 @@ def train(
             trainer.add_callback(shutdown_callback)  # type: ignore[reportUnknownMemberType]
         else:
             typing.cast("typing.Any", trainer).callbacks.append(shutdown_callback)
-    pyine.utils.distrib.barrier()
+    # TEMPORARY DEBUG: Comment out barrier to test if it's causing the hang
+    # pyine.utils.distrib.barrier()
+    rank = pyine.utils.distrib.get_global_rank(default=0)
+    world_size = pyine.utils.distrib.get_world_size(default=1)
+    logger.info(f"[RANK {rank}/{world_size}] about to start training")
     logger.info("starting training")
     start_time = time.time()
     trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
