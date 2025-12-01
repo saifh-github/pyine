@@ -497,16 +497,9 @@ def prepare_datamodule(
     """
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    logger.info(f"[RANK {rank}/{world_size}] calling dm.prepare_data()")
     dm.prepare_data()
-    logger.info(f"[RANK {rank}/{world_size}] entering barrier after prepare_data")
     pyine.utils.distrib.barrier()  # wait for all processes to finish preparing data
-    logger.info(f"[RANK {rank}/{world_size}] passed barrier, calling dm.setup()")
-    logger.warning(f"[RANK {rank}/{world_size}] ABOUT TO CALL dm.setup() - THIS IS A WARNING TO ENSURE IT PRINTS")
     dm.setup()
-    logger.warning(f"[RANK {rank}/{world_size}] COMPLETED dm.setup() - THIS IS A WARNING TO ENSURE IT PRINTS")
     if (
         config.use_wandb_logging
         and runtime is not None

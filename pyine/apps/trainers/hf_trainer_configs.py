@@ -220,40 +220,16 @@ def instantiate_tokenizer(
     config: HFTrainerAppMainConfig,
 ) -> transformers.PreTrainedTokenizer:
     """Instantiates and returns the tokenizer tied to the config's targeted base model."""
-    import pyine.utils.distrib
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    is_main = pyine.utils.distrib.is_main_process()
-    logger.info(f"[RANK {rank}/{world_size}] setting up tokenizer for: {config.base_model}")
+    logger.info(f"setting up tokenizer for: {config.base_model}")
     logger.debug(f"auto tokenizer config: {config.auto_tokenizer_config}")
-
-    # Rank 0 downloads first to avoid file conflicts
-    if is_main:
-        logger.info(f"[RANK {rank}] downloading/loading tokenizer (other ranks will wait)")
-        tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
-            pretrained_model_name_or_path=config.base_model,
-            set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
-            override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
-            override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
-            **config.auto_tokenizer_config,
-        )
-
-    # Wait for rank 0 to finish downloading
-    if world_size > 1:
-        logger.info(f"[RANK {rank}] waiting for rank 0 to finish downloading tokenizer")
-        pyine.utils.distrib.barrier()
-
-    # Now all other ranks can safely load from cache
-    if not is_main:
-        logger.info(f"[RANK {rank}] loading tokenizer from cache")
-        tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
-            pretrained_model_name_or_path=config.base_model,
-            set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
-            override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
-            override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
-            **config.auto_tokenizer_config,
-        )
-    logger.info(f"[RANK {rank}/{world_size}] tokenizer successfully created ({type(tokenizer).__name__})")
+    tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
+        pretrained_model_name_or_path=config.base_model,
+        set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
+        override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
+        override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
+        **config.auto_tokenizer_config,
+    )
+    logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
     logger.debug(f"tokenizer is_fast: {getattr(tokenizer, "is_fast", False)}")
     logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
     return tokenizer
@@ -265,11 +241,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     Note: this function will NOT load the model weights tied to the resume ckpt which might be
     specified in the app config; it only instantiates the base model with its pretrained weights.
     """
-    import pyine.utils.distrib
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    is_main = pyine.utils.distrib.is_main_process()
-    logger.info(f"[RANK {rank}/{world_size}] setting up model: {config.base_model}")
+    logger.info(f"setting up model: {config.base_model}")
     dtype, device_map = config.target_dtype, config.device_map
     model_kwargs: dict[str, typing.Any] = {
         "dtype": dtype,
@@ -290,42 +262,13 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     else:
         raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
     logger.debug(f"auto model config: {model_kwargs}")
-
-    # Rank 0 downloads first to avoid file conflicts
-    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT A: is_main={is_main}, world_size={world_size}")
-    if is_main:
-        logger.warning(f"[RANK {rank}] I AM MAIN RANK - downloading/loading model (other ranks will wait)")
-        logger.info(f"[RANK {rank}] downloading/loading model (other ranks will wait)")
-        base_model = typing.cast(
-            "transformers.PreTrainedModel",
-            transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
-                config.base_model,
-                **model_kwargs,
-            ),
-        )
-        logger.warning(f"[RANK {rank}] MAIN RANK FINISHED loading model")
-
-    # Wait for rank 0 to finish downloading
-    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT B: About to check world_size > 1")
-    if world_size > 1:
-        logger.warning(f"[RANK {rank}] CHECKPOINT C: world_size > 1, entering barrier")
-        logger.info(f"[RANK {rank}] waiting for rank 0 to finish downloading model")
-        pyine.utils.distrib.barrier()
-        logger.warning(f"[RANK {rank}] CHECKPOINT D: passed barrier")
-
-    # Now all other ranks can safely load from cache
-    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT E: is_main={is_main}")
-    if not is_main:
-        logger.warning(f"[RANK {rank}] I AM NON-MAIN RANK - loading model from cache")
-        logger.info(f"[RANK {rank}] loading model from cache")
-        base_model = typing.cast(
-            "transformers.PreTrainedModel",
-            transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
-                config.base_model,
-                **model_kwargs,
-            ),
-        )
-        logger.warning(f"[RANK {rank}] NON-MAIN RANK FINISHED loading model")
+    base_model = typing.cast(
+        "transformers.PreTrainedModel",
+        transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
+            config.base_model,
+            **model_kwargs,
+        ),
+    )
     model: transformers.PreTrainedModel = base_model
     if config.lora_config is not None:
         logger.info("  (setting up LoRA adapters)")
@@ -336,7 +279,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
             assert isinstance(config.lora_config, peft.LoraConfig)
             lora_peft_config = config.lora_config
         model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
-    logger.info(f"[RANK {rank}/{world_size}] model successfully created:\n{model}")
+    logger.info(f"model successfully created:\n{model}")
     model_config = getattr(model, "config", None)
     if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):
         logger.debug(f"model config: {model_config.to_json_string()}")

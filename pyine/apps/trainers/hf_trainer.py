@@ -90,11 +90,7 @@ def train(
     Returns:
         The instantiated trainer object containing a model that can be used for predictions.
     """
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    logger.warning(f"[RANK {rank}/{world_size}] ENTERED train() FUNCTION")
     assert config.training_args_config.do_train, "do_train must be True for training"
-    logger.warning(f"[RANK {rank}/{world_size}] ABOUT TO INSTANTIATE MODEL AND TOKENIZER")
     logger.info("instantiating model and tokenizer...")
     model = config.get_model()
     tokenizer = config.get_tokenizer()
@@ -184,11 +180,7 @@ def train(
             trainer.add_callback(shutdown_callback)  # type: ignore[reportUnknownMemberType]
         else:
             typing.cast("typing.Any", trainer).callbacks.append(shutdown_callback)
-    # TEMPORARY DEBUG: Comment out barrier to test if it's causing the hang
-    # pyine.utils.distrib.barrier()
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    logger.info(f"[RANK {rank}/{world_size}] about to start training")
+    pyine.utils.distrib.barrier()
     logger.info("starting training")
     start_time = time.time()
     trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
@@ -237,13 +229,8 @@ async def main(
             f"HuggingFace trainer requires a ConversationDataModule; received {type(datamodule).__name__}",
         )
 
-    rank = pyine.utils.distrib.get_global_rank(default=0)
-    world_size = pyine.utils.distrib.get_world_size(default=1)
-    logger.warning(f"[RANK {rank}/{world_size}] ENTERING GracefulShutdownManager CONTEXT")
     with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
-        logger.warning(f"[RANK {rank}/{world_size}] INSIDE GracefulShutdownManager, CHECKING do_train")
         if config.training_args_config.do_train:
-            logger.warning(f"[RANK {rank}/{world_size}] ABOUT TO CALL train()")
             trainer = train(
                 datamodule=datamodule,
                 config=config,
@@ -251,7 +238,6 @@ async def main(
                 resume_artifacts=resume_artifacts,
                 shutdown_manager=shutdown_manager,
             )
-            logger.warning(f"[RANK {rank}/{world_size}] COMPLETED train()")
             model = typing.cast(
                 "transformers.PreTrainedModel",
                 trainer.model,  # type: ignore[reportUnknownMemberType]
