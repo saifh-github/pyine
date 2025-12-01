@@ -292,7 +292,9 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
     logger.debug(f"auto model config: {model_kwargs}")
 
     # Rank 0 downloads first to avoid file conflicts
+    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT A: is_main={is_main}, world_size={world_size}")
     if is_main:
+        logger.warning(f"[RANK {rank}] I AM MAIN RANK - downloading/loading model (other ranks will wait)")
         logger.info(f"[RANK {rank}] downloading/loading model (other ranks will wait)")
         base_model = typing.cast(
             "transformers.PreTrainedModel",
@@ -301,14 +303,20 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
                 **model_kwargs,
             ),
         )
+        logger.warning(f"[RANK {rank}] MAIN RANK FINISHED loading model")
 
     # Wait for rank 0 to finish downloading
+    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT B: About to check world_size > 1")
     if world_size > 1:
+        logger.warning(f"[RANK {rank}] CHECKPOINT C: world_size > 1, entering barrier")
         logger.info(f"[RANK {rank}] waiting for rank 0 to finish downloading model")
         pyine.utils.distrib.barrier()
+        logger.warning(f"[RANK {rank}] CHECKPOINT D: passed barrier")
 
     # Now all other ranks can safely load from cache
+    logger.warning(f"[RANK {rank}/{world_size}] CHECKPOINT E: is_main={is_main}")
     if not is_main:
+        logger.warning(f"[RANK {rank}] I AM NON-MAIN RANK - loading model from cache")
         logger.info(f"[RANK {rank}] loading model from cache")
         base_model = typing.cast(
             "transformers.PreTrainedModel",
@@ -317,6 +325,7 @@ def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrained
                 **model_kwargs,
             ),
         )
+        logger.warning(f"[RANK {rank}] NON-MAIN RANK FINISHED loading model")
     model: transformers.PreTrainedModel = base_model
     if config.lora_config is not None:
         logger.info("  (setting up LoRA adapters)")

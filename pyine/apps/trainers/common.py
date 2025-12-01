@@ -504,7 +504,9 @@ def prepare_datamodule(
     logger.info(f"[RANK {rank}/{world_size}] entering barrier after prepare_data")
     pyine.utils.distrib.barrier()  # wait for all processes to finish preparing data
     logger.info(f"[RANK {rank}/{world_size}] passed barrier, calling dm.setup()")
+    logger.warning(f"[RANK {rank}/{world_size}] ABOUT TO CALL dm.setup() - THIS IS A WARNING TO ENSURE IT PRINTS")
     dm.setup()
+    logger.warning(f"[RANK {rank}/{world_size}] COMPLETED dm.setup() - THIS IS A WARNING TO ENSURE IT PRINTS")
     if (
         config.use_wandb_logging
         and runtime is not None
