@@ -324,13 +324,19 @@ def _fallback_barrier_if_needed() -> None:
             logger.warning(f"[FALLBACK BARRIER] rank={rank}, departure phase: {departure_count}/{world_size} ranks confirmed")
             last_departure_count = departure_count
         if departure_count >= world_size:
-            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all ranks confirmed, safe to cleanup")
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all ranks confirmed, waiting for grace period")
             break
         if time.monotonic() >= deadline:
             raise TimeoutError(
                 f"fallback barrier departure timed out waiting for {world_size} ranks (saw {departure_count})",
             )
         time.sleep(0.1)
+
+    # Grace period: Give all ranks time to observe the completion state before anyone deletes
+    # This prevents a race where the first rank to delete causes others to see incomplete state
+    grace_period = 1.0  # 1 second should be more than enough for all ranks to see completion
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, sleeping {grace_period}s before cleanup")
+    time.sleep(grace_period)
 
     # Now it's safe to delete files
     logger.warning(f"[FALLBACK BARRIER] rank={rank}, deleting rank files")
