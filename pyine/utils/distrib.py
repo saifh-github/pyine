@@ -150,8 +150,14 @@ def barrier() -> None:
     this helper performs a filesystem-based rendezvous until the process group is live, then falls
     back to the standard CUDA-aware barrier path.
     """
+    rank = get_global_rank(default=0)
+    world_size = get_world_size(default=1)
+    is_avail = torch.distributed.is_available()
+    is_init = torch.distributed.is_initialized()
+    logger.warning(f"[BARRIER] rank={rank}/{world_size}, torch.distributed: available={is_avail}, initialized={is_init}")
     logger.debug("synchronizing distributed processes")
     if torch.distributed.is_available() and torch.distributed.is_initialized():
+        logger.warning(f"[BARRIER] rank={rank} using torch.distributed.barrier()")
         device_ids = None
         if torch.cuda.is_available():
             backend = torch.distributed.get_backend()
@@ -163,8 +169,11 @@ def barrier() -> None:
                         torch.cuda.set_device(local_rank)
                     device_ids = [local_rank]
         torch.distributed.barrier(device_ids=device_ids)  # type: ignore[reportUnknownMemberType]
+        logger.warning(f"[BARRIER] rank={rank} passed torch.distributed.barrier()")
         return
+    logger.warning(f"[BARRIER] rank={rank} using fallback barrier")
     _fallback_barrier_if_needed()
+    logger.warning(f"[BARRIER] rank={rank} passed fallback barrier")
 
 
 def broadcast_object(
@@ -267,25 +276,38 @@ def _fallback_barrier_if_needed() -> None:
     """
     world_size = get_world_size(default=None)
     rank = get_global_rank(default=None)
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, world_size={world_size}")
     if world_size is None or world_size <= 1 or rank is None:
+        logger.warning(f"[FALLBACK BARRIER] SKIPPING: world_size={world_size}, rank={rank}")
         return
     barrier_idx = next(_FALLBACK_BARRIER_COUNTER)
-    job_dir = _resolve_barrier_root() / _fallback_job_token()
+    job_token = _fallback_job_token()
+    barrier_root = _resolve_barrier_root()
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, barrier_idx={barrier_idx}, job_token={job_token}, root={barrier_root}")
+    job_dir = barrier_root / job_token
     job_dir.mkdir(parents=True, exist_ok=True)
     barrier_dir = job_dir / f"{_FALLBACK_BARRIER_PREFIX}_{barrier_idx}"
     barrier_dir.mkdir(parents=True, exist_ok=True)
     rank_file = barrier_dir / f"rank_{rank}"
-    rank_file.touch(exist_ok=False)
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, creating rank file: {rank_file}")
+    rank_file.touch(exist_ok=True)
     deadline = time.monotonic() + _FALLBACK_BARRIER_TIMEOUT_SECONDS
+    last_participant_count = -1
     while True:
         participants = list(barrier_dir.iterdir())
-        if len(participants) >= world_size:
+        participant_count = len(participants)
+        if participant_count != last_participant_count:
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, waiting: {participant_count}/{world_size} participants present")
+            last_participant_count = participant_count
+        if participant_count >= world_size:
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all {world_size} participants present, exiting barrier")
             break
         if time.monotonic() >= deadline:
             raise TimeoutError(
-                f"fallback barrier timed out waiting for {world_size} ranks (saw {len(participants)})",
+                f"fallback barrier timed out waiting for {world_size} ranks (saw {participant_count})",
             )
         time.sleep(0.1)
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, deleting rank file")
     rank_file.unlink()
     with contextlib.suppress(OSError):
         barrier_dir.rmdir()
