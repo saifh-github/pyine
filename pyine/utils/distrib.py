@@ -291,6 +291,7 @@ def _fallback_barrier_if_needed() -> None:
     rank_file = barrier_dir / f"rank_{rank}"
     logger.warning(f"[FALLBACK BARRIER] rank={rank}, creating rank file: {rank_file}")
     rank_file.touch(exist_ok=True)
+    # Phase 1: Wait for all ranks to arrive
     deadline = time.monotonic() + _FALLBACK_BARRIER_TIMEOUT_SECONDS
     last_participant_count = -1
     while True:
@@ -300,15 +301,41 @@ def _fallback_barrier_if_needed() -> None:
             logger.warning(f"[FALLBACK BARRIER] rank={rank}, waiting: {participant_count}/{world_size} participants present")
             last_participant_count = participant_count
         if participant_count >= world_size:
-            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all {world_size} participants present, exiting barrier")
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all {world_size} participants present, proceeding to phase 2")
             break
         if time.monotonic() >= deadline:
             raise TimeoutError(
                 f"fallback barrier timed out waiting for {world_size} ranks (saw {participant_count})",
             )
         time.sleep(0.1)
-    logger.warning(f"[FALLBACK BARRIER] rank={rank}, deleting rank file")
-    rank_file.unlink()
+
+    # Phase 2: Create departure marker so others know we saw the completion
+    departure_file = barrier_dir / f"rank_{rank}_done"
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, creating departure marker")
+    departure_file.touch(exist_ok=True)
+
+    # Phase 3: Wait for all ranks to create departure markers
+    deadline = time.monotonic() + _FALLBACK_BARRIER_TIMEOUT_SECONDS
+    last_departure_count = -1
+    while True:
+        departure_markers = [f for f in barrier_dir.iterdir() if f.name.endswith("_done")]
+        departure_count = len(departure_markers)
+        if departure_count != last_departure_count:
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, departure phase: {departure_count}/{world_size} ranks confirmed")
+            last_departure_count = departure_count
+        if departure_count >= world_size:
+            logger.warning(f"[FALLBACK BARRIER] rank={rank}, all ranks confirmed, safe to cleanup")
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"fallback barrier departure timed out waiting for {world_size} ranks (saw {departure_count})",
+            )
+        time.sleep(0.1)
+
+    # Now it's safe to delete files
+    logger.warning(f"[FALLBACK BARRIER] rank={rank}, deleting rank files")
+    rank_file.unlink(missing_ok=True)
+    departure_file.unlink(missing_ok=True)
     with contextlib.suppress(OSError):
         barrier_dir.rmdir()
     with contextlib.suppress(OSError):
