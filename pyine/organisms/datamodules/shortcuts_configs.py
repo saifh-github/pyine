@@ -183,7 +183,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
     prompt_config: pyine.prompts.types.PromptBuildConfig = pyine.prompts.types.PromptBuildConfig(
-        prompt_name="code_execution",
+        prompt_name=pyine.prompts.PromptNames.CODE_EXECUTION,
         use_chat_template=True,
         include_examples=True,
         target_examples=None,  # all

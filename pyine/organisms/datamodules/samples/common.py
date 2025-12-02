@@ -390,14 +390,14 @@ def convert_to_comma_separated_tags(tags: list[str]) -> str:
 @functools.cache
 def get_prompt_names_relevant_to_sample_code_types() -> frozenset[str]:
     """Returns the set of prompt names that are relevant to sample code types."""
-    non_hints_or_issues_yet_relevant_names = ["code_stubbing"]
+    non_hints_or_issues_yet_relevant_names = [pyine.prompts.PromptNames.CODE_STUBBING]
     return frozenset(
         [
             prompt_name
             for prompt_name in pyine.prompts.manager.list_prompts()
             if (
-                prompt_name.startswith("issues")
-                or prompt_name.startswith("hints")
+                prompt_name.startswith(pyine.prompts.PromptNames.ISSUES_PREFIX)
+                or prompt_name.startswith(pyine.prompts.PromptNames.HINTS_PREFIX)
                 or prompt_name in non_hints_or_issues_yet_relevant_names
             )
         ]
@@ -421,23 +421,24 @@ def get_code_type_set_from_str(augm_type: str | None) -> frozenset[SampleCodeTyp
         return frozenset({converted_type})
     # compatibility mode: dissect potentially combined augment types, and handle prompt names
     found_types: set[SampleCodeType] = set()
+    patterns = pyine.data.traces.dataset_utils.AugmentPatterns
     # first, check the code types directly
-    if "obfuscated" in augm_type:
+    if patterns.OBFUSCATED in augm_type:
         found_types.add(SampleCodeType.obfuscated)
-    if "bugged" in augm_type:
+    if patterns.BUGGED_SUBSTRING in augm_type:
         found_types.add(SampleCodeType.bugged)
-    if "hinted" in augm_type:
+    if patterns.HINTED_SUBSTRING in augm_type:
         found_types.add(SampleCodeType.hinted)
-    if "misleading" in augm_type:
+    if patterns.MISLEADING in augm_type:
         found_types.add(SampleCodeType.misleading)
-    if "stubbed" in augm_type:
+    if patterns.STUBBED in augm_type:
         found_types.add(SampleCodeType.stubbed)
     # now, for backward compatibility and compatibility with trace datasets, check prompt names
-    prompt_name = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(augm_type)
-    has_misleading = "issues_docs" in prompt_name
-    has_bugs = "issues_" in prompt_name.replace("issues_docs", "")
-    has_hints = "hints_" in prompt_name
-    has_stubs = "code_stubbing" in prompt_name
+    prompt_name = pyine.data.traces.dataset_utils.AugmentPatterns.get_clean_augment_category(augm_type)
+    has_misleading = patterns.DOCS_EXCEPTION in prompt_name
+    has_bugs = patterns.BUGGED_PREFIX in prompt_name.replace(patterns.DOCS_EXCEPTION, "")
+    has_hints = patterns.HINTED_PREFIX in prompt_name
+    has_stubs = patterns.STUBBED_PREFIX in prompt_name
     if has_misleading:
         found_types.add(SampleCodeType.misleading)
     if has_bugs:

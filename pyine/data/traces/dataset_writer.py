@@ -256,7 +256,10 @@ class TraceDatasetWriterConfig(pyine.data.traces.common.TracingConfig):
         supported_augm_prompts = [
             prompt_name
             for prompt_name in pyine.prompts.manager.list_prompts()
-            if prompt_name.startswith("issues/") or prompt_name.startswith("hints/")
+            if (
+                prompt_name.startswith(pyine.prompts.PromptNames.ISSUES_PREFIX)
+                or prompt_name.startswith(pyine.prompts.PromptNames.HINTS_PREFIX)
+            )
         ]
         for prompt_name, fetch_count in self.fetch_augmentations.items():
             if prompt_name not in supported_augm_prompts:
@@ -593,7 +596,7 @@ def _fetch_augmented_code_to_trace(
             preserve_global_names=([problem.entrypoint_name] if problem.entrypoint_name else []),
         )
         _append_requests(
-            augment_category="obfuscated",
+            augment_category=pyine.data.traces.dataset_utils.AugmentPatterns.OBFUSCATED,
             augment_idx=0,  # obfuscation is unique, so always augment idx = 0
             code_string=obfuscated_code,
         )
@@ -610,7 +613,7 @@ def _fetch_augmented_code_to_trace(
         picked_records: list[pyine.prompts.PromptResultRecord] = [
             prompt_records[idx] for idx in rng.permutation(len(prompt_records))[:fetch_count]
         ]
-        augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
+        augm_category = pyine.data.traces.dataset_utils.AugmentPatterns.get_clean_augment_category(prompt_name)
         for record_idx, record in enumerate(picked_records):
             _append_requests(
                 augment_category=augm_category,
@@ -628,7 +631,7 @@ def _fetch_augmented_code_to_trace(
             )
             picked_records = [prompt_records[idx] for idx in rng.permutation(len(prompt_records))[:fetch_count]]
             parent_trace_id_obj = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(target_trace_id)
-            augm_category = pyine.data.traces.dataset_utils.TraceIdentifier.get_clean_augment_category(prompt_name)
+            augm_category = pyine.data.traces.dataset_utils.AugmentPatterns.get_clean_augment_category(prompt_name)
             if parent_trace_id_obj.is_augmented:
                 augm_category = f"{parent_trace_id_obj.augment_category}+{augm_category}"
             for record_idx, record in enumerate(picked_records):

@@ -885,4 +885,4 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
     assert report.total_samples == len(target_indices)
     assert report.skipped_samples >= 0
     assert report.total_tokens_exchanged > 0
-    assert temp_db.list_prompt_names() == ["code_summary", "code_stubbing"]
+    assert temp_db.list_prompt_names() == ["code_stubbing", "code_summary"]

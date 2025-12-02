@@ -21,6 +21,7 @@ __all__ = [
     "TraceExecutionOutcome",
     "TraceRequest",
     "TracingConfig",
+    "compare_execution_result",
     "trace_code_snippet",
 ]
 
@@ -93,6 +94,109 @@ TraceExecutionOutcome = tuple[
 """Alias for a tuple of (trace result, comparison result) for a given trace execution."""
 
 
+def compare_execution_result(
+    trace_result: pyine.utils.code.execution.TraceResult,
+    expected_output: typing.Any,
+    compare_options: pyine.utils.code.output_compare.CompareOptions,
+    has_entrypoint: bool,
+) -> pyine.utils.code.output_compare.CompareResult:
+    """Compare a trace execution result against expected output.
+
+    This function implements the comparison logic for determining if a traced execution produced
+    the expected output. It checks in order:
+      1. Exception output (if execution raised an exception);
+      2. Return value (if entrypoint was called or return value exists); and
+      3. Stdout output (fallback).
+
+    Args:
+        trace_result: The result from executing and tracing code.
+        expected_output: The expected output to compare against.
+        compare_options: Options controlling how comparison is performed.
+        has_entrypoint: Whether the code had a specific entrypoint function.
+
+    Returns:
+        A CompareResult indicating whether the output matched and why.
+
+    Raises:
+        Exception subclasses in DONT_CATCH_EXCEPTIONS: If the traced execution
+            raised an exception that should not be caught (e.g., TracingCapError).
+    """
+    comp = typing.cast(
+        "typing.Callable[[typing.Any, typing.Any], pyine.utils.code.output_compare.CompareResult]",
+        functools.partial(
+            pyine.utils.code.output_compare.compare,
+            options=compare_options,
+        ),
+    )
+    # will store the most useful test result (across all comparison cases)
+    default_test_result: pyine.utils.code.output_compare.CompareResult | None = None
+
+    if trace_result.exception is not None:
+        # make sure the exception is not one that we are never meant to catch here
+        dont_catch_exceptions = {str(t.__name__): t for t in pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS}
+        if trace_result.exception.type in dont_catch_exceptions:
+            # if it is such a case, it means the tracing process itself failed somehow, so we need to raise
+            exc = dont_catch_exceptions[trace_result.exception.type](trace_result.exception.message)
+            if trace_result.exception.origin:
+                exc.add_note(f"origin: {trace_result.exception.origin!r}")
+            else:
+                exc.add_note("origin: <unknown>")
+            if trace_result.exception.traceback:
+                exc.add_note("remote traceback:\n" + trace_result.exception.traceback)
+                raise exc from RemoteTracebackError(trace_result.exception.traceback)
+            raise exc
+        # the exec raised a catchable exception; the only way this was a 'success' is if we also expected one
+        exception_test_result = comp(str(trace_result.exception), str(expected_output))
+        if exception_test_result:
+            return exception_test_result  # we're done, we can leave already
+        exception_test_result.reason = f"execution raised unexpected exception: {trace_result.exception}"
+        if trace_result.exception.type == SystemExit.__name__:
+            # that was likely called on purpose, i.e. the program finished and produced something
+            # ...maybe it's the exit code or exception message itself we need to match?
+            exception_msg_test_result = comp(trace_result.exception.message, expected_output)
+            if exception_msg_test_result:
+                return exception_msg_test_result
+            exception_exit_code_test_result = comp(trace_result.return_value, expected_output)
+            if exception_exit_code_test_result:
+                return exception_exit_code_test_result
+            # if we get here, checks failed, maybe something was printed before exiting?
+            # (will jump to stdout checking logic below)
+            default_test_result = exception_test_result
+        else:
+            # other kinds of exception are probably unexpected, and did not match the expected output
+            return exception_test_result  # return the results immediately, pass or fail
+
+    if has_entrypoint or trace_result.return_value is not None:
+        # the executed code returned a value that SHOULD be the expected one
+        # (if the code had a specific entrypoint, this is the only possible outcome)
+        return_val_test_result = comp(trace_result.return_value, expected_output)
+        if return_val_test_result:
+            return return_val_test_result
+        if default_test_result is None:
+            return_val_test_result.reason = f"unexpected entrypoint return value: {return_val_test_result.reason}"
+            default_test_result = return_val_test_result
+
+    # last chance: if we get here, assume the value we need to check is a printed output (in stdout)
+    stdout_test_result = comp(trace_result.stdout, expected_output)
+    if stdout_test_result:
+        return stdout_test_result
+
+    # if the expected outputs are a list of strings, last-last fix attempt: merge them into a string
+    if isinstance(expected_output, list):
+        expected_list = typing.cast("list[typing.Any]", expected_output)
+        if all(isinstance(item, str) for item in expected_list):
+            expected_strings = typing.cast("list[str]", expected_list)
+            merged_stdout_result = comp(trace_result.stdout, "\n".join(expected_strings))
+            if merged_stdout_result:
+                return merged_stdout_result
+
+    if default_test_result is None:
+        stdout_test_result.reason = f"unexpected stdout output: {stdout_test_result.reason}"
+        default_test_result = stdout_test_result
+
+    return default_test_result
+
+
 def trace_code_snippet(
     code_snippet: TraceRequest,
     tracing_config: TracingConfig,
@@ -132,77 +236,10 @@ def trace_code_snippet(
             request_metadata=code_snippet.metadata,
             use_safe_execution=True,  # since this parent is running in a thread, we want to isolate the child
         )
-    comp = typing.cast(
-        "typing.Callable[[typing.Any, typing.Any], pyine.utils.code.output_compare.CompareResult]",
-        functools.partial(
-            pyine.utils.code.output_compare.compare,
-            options=output_compare_config,
-        ),
+    compare_result = compare_execution_result(
+        trace_result=trace_result,
+        expected_output=expected_for_compare,
+        compare_options=output_compare_config,
+        has_entrypoint=code_snippet.entrypoint_name is not None,
     )
-    default_test_result = None  # will store the most useful test result (across all comparison cases)
-    if trace_result.exception is not None:
-        # make sure the exception is not one that we are never meant to catch here
-        dont_catch_exceptions = {str(t.__name__): t for t in pyine.utils.code.execution.DONT_CATCH_EXCEPTIONS}
-        if trace_result.exception.type in dont_catch_exceptions:
-            # if it is such a case, it means the tracing process itself failed somehow, so we need to raise
-            exc = dont_catch_exceptions[trace_result.exception.type](trace_result.exception.message)
-            if trace_result.exception.origin:
-                origin_note = f"origin: {trace_result.exception.origin!r}"
-            else:
-                origin_note = "origin: <unknown>"
-            exc.add_note(origin_note)
-            if trace_result.exception.traceback:
-                exc.add_note("remote traceback:\n" + trace_result.exception.traceback)
-                raise exc from RemoteTracebackError(trace_result.exception.traceback)
-            raise exc
-        # the exec raised a catchable exception; the only way this was a 'success' is if we also expected one
-        exception_test_result = comp(str(trace_result.exception), str(expected_for_compare))
-        if exception_test_result:
-            return (
-                trace_result,
-                exception_test_result,
-            )  # we're done, we can leave already
-        exception_test_result.reason = f"execution raised unexpected exception: {trace_result.exception}"
-        if trace_result.exception.type == SystemExit.__name__:
-            # that was likely called on purpose, i.e. the program finished and produced something
-            # ...maybe it's the exit code or exception message itself we need to match?
-            exception_msg_test_result = comp(trace_result.exception.message, expected_for_compare)
-            if exception_msg_test_result:
-                return trace_result, exception_msg_test_result
-            exception_exit_code_test_result = comp(trace_result.return_value, expected_for_compare)
-            if exception_exit_code_test_result:
-                return trace_result, exception_exit_code_test_result
-            # if we get here, checks failed, maybe something was printed before exiting?
-            # (will jump to stdout checking logic below)
-            default_test_result = exception_test_result
-        else:
-            # other kinds of exception are probably unexpected, and did not match the expected output
-            return (
-                trace_result,
-                exception_test_result,
-            )  # return the results immediately, pass or fail
-    if code_snippet.entrypoint_name is not None or trace_result.return_value is not None:
-        # the executed code returned a value that SHOULD be the expected one
-        # (if the code had a specific entrypoint, this is the only possible outcome)
-        return_val_test_result = comp(trace_result.return_value, expected_for_compare)
-        if return_val_test_result:
-            return trace_result, return_val_test_result
-        if default_test_result is None:
-            return_val_test_result.reason = f"unexpected entrypoint return value: {return_val_test_result.reason}"
-            default_test_result = return_val_test_result
-    # last chance: if we get here, assume the value we need to check is a printed output (in stdout)
-    stdout_test_result = comp(trace_result.stdout, expected_for_compare)
-    if stdout_test_result:
-        return trace_result, stdout_test_result
-    # if the expected outputs are a list of strings, last-last fix attempt: merge them into a string
-    if isinstance(test_outputs, list):
-        test_outputs_list = typing.cast("list[typing.Any]", test_outputs)
-        if all(isinstance(item, str) for item in test_outputs_list):
-            test_output_strings = typing.cast("list[str]", test_outputs_list)
-            stdout_test_result = comp(trace_result.stdout, "\n".join(test_output_strings))
-            if stdout_test_result:
-                return trace_result, stdout_test_result
-    if default_test_result is None:
-        stdout_test_result.reason = f"unexpected stdout output: {stdout_test_result.reason}"
-        default_test_result = stdout_test_result
-    return trace_result, default_test_result
+    return trace_result, compare_result

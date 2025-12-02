@@ -21,6 +21,7 @@ import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
 import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.caching
+import pyine.prompts
 import pyine.prompts.result_db
 import pyine.prompts.types
 import pyine.utils.code.execution
@@ -31,6 +32,10 @@ import pyine.utils.llm_providers
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
+
+# aliases for brevity
+_AugPat = pyine.data.traces.dataset_utils.AugmentPatterns
+_PromptNames = pyine.prompts.PromptNames
 
 
 class IdentifierResolverType(typing.Protocol):
@@ -389,10 +394,10 @@ def _default_identifier_resolver(
     samples have already been annotated (or will be, in some in-flight job) and should be skipped.
     """
     prompts_where_solution_gives_identifier = [
-        "code_stubbing",
-        "code_summary",
-        "issues/iterators",
-        "issues/todos",
+        _PromptNames.CODE_STUBBING,
+        _PromptNames.CODE_SUMMARY,
+        _PromptNames.ISSUES_ITERATORS,
+        _PromptNames.ISSUES_TODOS,
     ]
     if config.prompt_config.prompt_name in prompts_where_solution_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -410,9 +415,9 @@ def _default_identifier_resolver(
                 return solution_id_str
         return None
     prompts_where_trace_gives_identifier = [
-        "hints/docs",
-        "hints/tests",
-        "issues/docs",
+        _PromptNames.HINTS_DOCS,
+        _PromptNames.HINTS_TESTS,
+        _PromptNames.ISSUES_DOCS,
     ]
     if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -435,17 +440,17 @@ def _default_group_resolver(
     an exception.
     """
     prompts_where_problem_gives_group = [
-        "code_stubbing",
-        "code_summary",
-        "issues/iterators",
-        "issues/todos",
+        _PromptNames.CODE_STUBBING,
+        _PromptNames.CODE_SUMMARY,
+        _PromptNames.ISSUES_ITERATORS,
+        _PromptNames.ISSUES_TODOS,
     ]
     if config.prompt_config.prompt_name in prompts_where_problem_gives_group:
         return str(problem.problem_id)
     prompts_where_solution_gives_group = [
-        "hints/docs",
-        "hints/tests",
-        "issues/docs",
+        _PromptNames.HINTS_DOCS,
+        _PromptNames.HINTS_TESTS,
+        _PromptNames.ISSUES_DOCS,
     ]
     if config.prompt_config.prompt_name in prompts_where_solution_gives_group:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -478,13 +483,15 @@ def _default_input_variables_builder(
     # initialize the vars dict with stuff that is generic/useful for all prompts
     output = {"code": trace.code_string}
     output.update(base_kwargs)  # update w/ whatever the caller may have provided
-    if config.prompt_config.prompt_name == "code_summary":
+    if config.prompt_config.prompt_name == _PromptNames.CODE_SUMMARY:
         # this is the simplest case: nothing more to do here
         return output
-    is_stub_prompting = config.prompt_config.prompt_name == "code_stubbing"
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
     if not any((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)):
         raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -509,7 +516,7 @@ def _default_input_variables_builder(
         # try to go and fetch the description for the parent solution (code summary) from db
         code_summary_records = config.get_prompt_result_db().get_by_identifier(
             identifier=str(trace_id.get_parent_identifier()),
-            prompt_name="code_summary",
+            prompt_name=_PromptNames.CODE_SUMMARY,
         )
         if code_summary_records:
             # always keep the latest description (this should not matter too much)
@@ -616,22 +623,24 @@ def _default_tags_builder(
         output_tags.extend({f"augment:{cat}" for cat in augm_categories})  # prior trace augment tags
 
     # add new augment-related tags below
-    is_stub_prompting = config.prompt_config.prompt_name == "code_stubbing"
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
     assert sum((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)) <= 1
     if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
-        output_tags.append("augment:misleading")
+        output_tags.append(_AugPat.TAG_MISLEADING)
     if is_hint_prompting:
-        output_tags.append("augment:hinted")
+        output_tags.append(_AugPat.TAG_HINTED)
     if is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-        output_tags.append("augment:bugged")
+        output_tags.append(_AugPat.TAG_BUGGED)
     if is_stub_prompting:
-        output_tags.append("augment:stubbed")
+        output_tags.append(_AugPat.TAG_STUBBED)
 
     # add prompt-specific tags below
-    if config.prompt_config.prompt_name == "code_summary":
+    if config.prompt_config.prompt_name == _PromptNames.CODE_SUMMARY:
         template_partial_vars = config.prompt_config.partial_vars or {}
         if "target_word_count" not in template_partial_vars:
             raise ValueError("missing 'target_word_count' in prompt template partial variables")
@@ -718,14 +727,16 @@ def _default_output_validator(
     Implements known rules for some prompts, but if an unsupported prompt is used, the result will
     always be accepted as-is (i.e., no validation is performed).
     """
-    is_stub_prompting = config.prompt_config.prompt_name == "code_stubbing"
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
     if is_stub_prompting:
         # special handling for this one: it's impossible to really execute it, so forget tracing it
         assert "augment:stubbed" in tags, "missing augment tag for stubbed code"
         return True
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
     if is_mislead_prompting or is_hint_prompting or is_bug_prompting:
         # for all of these, we will be tracing the newly generated code to see the results:
         # => for all bug types, we expect the execution output to NOT be the expected one;
@@ -813,14 +824,14 @@ class AnnotationReport:
 
 
 supported_prompts_for_trace_dataset_annotation = [
-    "code_stubbing",
-    "code_summary",
-    "hints/docs",
-    "hints/tests",
+    _PromptNames.CODE_STUBBING,
+    _PromptNames.CODE_SUMMARY,
+    _PromptNames.HINTS_DOCS,
+    _PromptNames.HINTS_TESTS,
     # ... add more hints prompt names here if we build new ones
-    "issues/docs",
-    "issues/iterators",
-    "issues/todos",
+    _PromptNames.ISSUES_DOCS,
+    _PromptNames.ISSUES_ITERATORS,
+    _PromptNames.ISSUES_TODOS,
     # ... add more issues prompt names here if we build new ones
 ]
 """List of supported prompts for trace dataset annotation.
@@ -869,7 +880,7 @@ async def annotate_trace_dataset(
         config.prompt_config.prompt_name,
         config.prompt_config.version,
     )
-    is_mislead_prompt = prompt_name == "issues/docs"
+    is_mislead_prompt = prompt_name == _PromptNames.ISSUES_DOCS
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
     if prompt_name not in supported_prompts_for_trace_dataset_annotation:

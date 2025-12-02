@@ -195,7 +195,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             if trace_meta.solution_id not in code_summaries_lut:
                 records = prompt_result_db.get_by_identifier(
                     identifier=str(trace_meta.solution_id),
-                    prompt_name="code_summary",
+                    prompt_name=pyine.prompts.names.PromptNames.CODE_SUMMARY,
                 )
                 if records:
                     # always take the latest summary that's available in the database

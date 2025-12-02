@@ -6,6 +6,7 @@ from .manager import (
     list_prompt_versions,
     list_prompts,
 )
+from .names import PromptNames
 from .result_db import (
     CreationMeta,
     PromptResultDB,
@@ -28,6 +29,8 @@ __all__ = [
     "PromptVersionType",
     "PromptBuildConfig",
     "PromptChainBuildConfig",
+    # names
+    "PromptNames",
     # manager
     "get_framework_prompt_manager",
     "list_prompts",
