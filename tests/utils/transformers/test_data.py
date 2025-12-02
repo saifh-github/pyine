@@ -170,3 +170,53 @@ def test_prepare_examples_from_conversations_cache_roundtrip(
         cache_settings=cache_settings,
     )
     assert len(second_ds) == len(first_ds)
+
+
+def test_prepare_generation_prompts_handles_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+    simple_tokenizer: tests.utils.transformers.utils.SimpleTokenizer,
+) -> None:
+    """Verify that cache hits don't cause issues.
+
+    When HuggingFace datasets caches the result of a map() call, the map function is not executed
+    on subsequent calls. This test simulates a cache hit and verifies the function handles it gracefully.
+    """
+    prompts = [
+        {"messages": [{"role": "user", "content": "Hello"}]},
+        {"messages": [{"role": "user", "content": "Hi there"}]},
+    ]
+    prompts_ds = datasets.Dataset.from_list(prompts)
+    # first, build the expected result so we can return it from the cache
+    first_result = data_utils.prepare_generation_prompts_from_dataset(
+        prompts_ds=prompts_ds,
+        tokenizer=simple_tokenizer,
+        max_seq_len=128,
+        keep_in_memory=True,
+    )
+    assert len(first_result) == 2
+    cached_dataset = first_result
+    # now patch the map() method to simulate a cache hit: return the cached dataset without calling map
+    original_map = datasets.Dataset.map
+    map_call_count = 0
+
+    def patched_map(
+        self: datasets.Dataset,
+        function: typing.Any,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> datasets.Dataset:
+        nonlocal map_call_count
+        map_call_count += 1
+        if map_call_count == 2:  # second map call is the _encode_prompts one
+            return cached_dataset  # simulate cache hit by returning cached result
+        return original_map(self, function, *args, **kwargs)
+
+    monkeypatch.setattr(datasets.Dataset, "map", patched_map)
+    # should succeed even when cache is hit (no assertion on sample_idx)
+    result = data_utils.prepare_generation_prompts_from_dataset(
+        prompts_ds=prompts_ds,
+        tokenizer=simple_tokenizer,
+        max_seq_len=128,
+        keep_in_memory=True,
+    )
+    assert len(result) == 2
