@@ -299,10 +299,11 @@ def output_compare(
         correct = 0
         for test_idx, (inputs, outputs) in enumerate(problem.test_inout_pairs):
             trace_id = pyine.data.traces.dataset_utils.TraceIdentifier(
-                **vars(solution.solution_id),
+                dataset=solution.solution_id.dataset,
+                subset=solution.solution_id.subset,
+                problem_idx=solution.solution_id.problem_idx,
+                solution_idx=solution.solution_id.solution_idx,
                 test_idx=test_idx,
-                augment_category="bug",
-                augment_idx=0,
             )
             code_to_trace = pyine.data.traces.common.TraceRequest(
                 code_string=solution.code,
