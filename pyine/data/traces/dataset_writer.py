@@ -4,8 +4,6 @@ This module contains a writer for a dataset of code execution traces.
 See the `write_dataset` function for more information.
 """
 
-# @@@@@@@ TODO write tests to see if this writer is truly deterministic (as expected)
-
 from __future__ import annotations
 
 import datetime

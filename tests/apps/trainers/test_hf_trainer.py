@@ -322,6 +322,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
+        sample_category_extraction_config=None,
     )
     collator_calls = _install_collator_stub(config)
 
@@ -361,7 +362,7 @@ def test_train_configures_trainer_and_saves_artifacts(
     ]
     assert len(metrics_callbacks) == 1
     metrics_callback = metrics_callbacks[0]
-    assert metrics_callback.data_sample_categories == [["bugfix"], [], ["refactor"]]
+    assert metrics_callback.data_sample_categories == [["code_type/bugfix"], [], ["code_type/refactor"]]
     assert trainer.compute_metrics is metrics_callback
     assert "sample_data" not in trainer.train_dataset.column_names
     assert "sample_data" in trainer.eval_dataset.column_names
@@ -474,6 +475,7 @@ def test_train_enables_wandb_batch_logging(
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
+        sample_category_extraction_config=None,
     )
 
     captured_handlers: list[typing.Callable[[pyine.utils.transformers.CollatorBatchLogRecord], None]] = []
@@ -967,6 +969,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             output_dir=str(output_dir),
             get_model=_build_tiny_model,
             get_tokenizer=_SimpleTokenizer,
+            sample_category_extraction_config=None,
         )
         _install_collator_stub(config, collator_factory=_build_collator)
         return config

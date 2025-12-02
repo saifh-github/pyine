@@ -222,3 +222,243 @@ def f(x):
     assert len(records) == 1
     info = pyine.evals.utils.parse_token_usage_from_response(records[0])
     assert info.total_tokens != "unknown" and info.total_tokens > 0
+
+
+class TestSampleCategoryExtractionConfig:
+    """Tests for SampleCategoryExtractionConfig."""
+
+    def test_default_config(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig()
+        assert pyine.evals.utils.SampleCategoryField.code_type in config.enabled_fields
+        assert pyine.evals.utils.SampleCategoryField.predict_type in config.enabled_fields
+        assert config.tag_prefixes is None
+
+    def test_custom_config(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset(
+                {
+                    pyine.evals.utils.SampleCategoryField.code_type,
+                    pyine.evals.utils.SampleCategoryField.tags,
+                }
+            ),
+            tag_prefixes=frozenset({"augment"}),
+        )
+        assert len(config.enabled_fields) == 2
+        assert config.tag_prefixes == frozenset({"augment"})
+
+
+class TestSampleCategoryExtractor:
+    """Tests for SampleCategoryExtractor."""
+
+    def test_extract_code_type_string(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"code_type": "original"}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["code_type/original"]
+
+    def test_extract_code_type_frozenset(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"code_type": frozenset({"obfuscated", "hinted"})}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["code_type/hinted_obfuscated"]  # sorted alphabetically
+
+    def test_extract_tags_all_prefixes(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.tags}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"comma_separated_tags": "augment:obfuscated,subset:train"}
+        categories = extractor.extract_categories(sample)
+        assert "tags/augment/obfuscated" in categories
+        assert "tags/subset/train" in categories
+        assert len(categories) == 2
+
+    def test_extract_tags_with_prefix_filter(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.tags}),
+            tag_prefixes=frozenset({"augment"}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"comma_separated_tags": "augment:obfuscated,subset:train"}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["tags/augment/obfuscated"]
+
+    def test_extract_predict_type_string(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.predict_type}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"predict_type": "program_output"}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["predict_type/program_output"]
+
+    def test_extract_has_code_override_true(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.has_code_override}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"has_code_override": True}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["has_code_override/true"]
+
+    def test_extract_has_code_override_false(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.has_code_override}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"has_code_override": False}
+        categories = extractor.extract_categories(sample)
+        assert categories == ["has_code_override/false"]
+
+    def test_extract_multiple_fields(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset(
+                {
+                    pyine.evals.utils.SampleCategoryField.code_type,
+                    pyine.evals.utils.SampleCategoryField.predict_type,
+                }
+            ),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"code_type": "original", "predict_type": "program_output"}
+        categories = extractor.extract_categories(sample)
+        assert "code_type/original" in categories
+        assert "predict_type/program_output" in categories
+        assert len(categories) == 2
+
+    def test_missing_field_returns_empty(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample: dict[str, str] = {}
+        categories = extractor.extract_categories(sample)
+        assert categories == []
+
+    def test_none_value_returns_empty(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"code_type": None}
+        categories = extractor.extract_categories(sample)
+        assert categories == []
+
+    def test_empty_tags_returns_empty(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.tags}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"comma_separated_tags": ""}
+        categories = extractor.extract_categories(sample)
+        assert categories == []
+
+    def test_tags_without_prefix(self) -> None:
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.tags}),
+        )
+        extractor = pyine.evals.utils.SampleCategoryExtractor(config)
+        sample = {"comma_separated_tags": "simple_tag,augment:complex"}
+        categories = extractor.extract_categories(sample)
+        assert "tags/simple_tag" in categories
+        assert "tags/augment/complex" in categories
+
+
+class TestExtractSampleCategoriesFromDataset:
+    """Tests for extract_sample_categories_from_dataset function."""
+
+    def test_none_dataset_returns_empty(self) -> None:
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(None)
+        assert result == []
+
+    def test_dataset_without_sample_data_column_returns_empty(self) -> None:
+        class MockDataset:
+            column_names = ["input_ids", "labels"]
+
+            def __len__(self) -> int:
+                return 5
+
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset())
+        assert result == []
+
+    def test_sequence_of_dicts_format(self) -> None:
+        class MockDataset:
+            column_names = ["sample_data"]
+
+            def __len__(self) -> int:
+                return 3
+
+            def __getitem__(self, key: str) -> list[dict[str, str]]:
+                if key == "sample_data":
+                    return [
+                        {"code_type": "original"},
+                        {"code_type": "obfuscated"},
+                        {"code_type": "hinted"},
+                    ]
+                raise KeyError(key)
+
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset(), config=config)
+        assert len(result) == 3
+        assert result[0] == ["code_type/original"]
+        assert result[1] == ["code_type/obfuscated"]
+        assert result[2] == ["code_type/hinted"]
+
+    def test_dict_column_format(self) -> None:
+        class MockDataset:
+            column_names = ["sample_data"]
+
+            def __len__(self) -> int:
+                return 3
+
+            def __getitem__(self, key: str) -> dict[str, list[str]]:
+                if key == "sample_data":
+                    return {"code_type": ["original", "obfuscated", "hinted"]}
+                raise KeyError(key)
+
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset(), config=config)
+        assert len(result) == 3
+        assert result[0] == ["code_type/original"]
+        assert result[1] == ["code_type/obfuscated"]
+        assert result[2] == ["code_type/hinted"]
+
+    def test_with_custom_config(self) -> None:
+        class MockDataset:
+            column_names = ["sample_data"]
+
+            def __len__(self) -> int:
+                return 2
+
+            def __getitem__(self, key: str) -> list[dict[str, str]]:
+                if key == "sample_data":
+                    return [
+                        {"code_type": "original", "predict_type": "program_output"},
+                        {"code_type": "obfuscated", "predict_type": "frame_variables"},
+                    ]
+                raise KeyError(key)
+
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset(
+                {
+                    pyine.evals.utils.SampleCategoryField.code_type,
+                    pyine.evals.utils.SampleCategoryField.predict_type,
+                }
+            ),
+        )
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset(), config=config)
+        assert len(result) == 2
+        assert "code_type/original" in result[0]
+        assert "predict_type/program_output" in result[0]
+        assert "code_type/obfuscated" in result[1]
+        assert "predict_type/frame_variables" in result[1]

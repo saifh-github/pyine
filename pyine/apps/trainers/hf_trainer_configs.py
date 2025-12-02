@@ -24,6 +24,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
+import pyine.evals.utils
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.distrib
 import pyine.utils.reprod
@@ -98,6 +99,16 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
         default=True,  # useful default for datasets with long system prompts that end with specific instructions
         description="Override whichever the tokenizer's default truncation side is to 'left'.",
+    )
+
+    # --------------- evaluation metrics settings ---------------
+
+    sample_category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = pydantic.Field(
+        default=None,
+        description=(
+            "Configuration for extracting sample categories from dataset fields for category-wise "
+            "metrics. If None, uses default categorization settings that should be somewhat informative."
+        ),
     )
 
     # --------------- utility/helper method ---------------
