@@ -384,10 +384,12 @@ def _get_taco_configs(
     taco_split_path = None
     with contextlib.suppress(FileNotFoundError):
         taco_split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
-    taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
-        source_dataset_name="TACO",
-        pattern="v1.3/10s10t.*of000026.*.lmdb",
-    )
+    taco_10s10t_v1_paths = None
+    with contextlib.suppress(FileNotFoundError):
+        taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
+            source_dataset_name="TACO",
+            pattern="v1.3/10s10t.*of000026.*.lmdb",
+        )
 
     # emit warnings for missing datasets (users should not be trying to launch experiments with these)
     if taco_latest_path is None:
