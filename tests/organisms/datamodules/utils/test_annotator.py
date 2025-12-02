@@ -214,7 +214,7 @@ async def _run_prompt_case(
         object.__setattr__(options, "_test_data_cache", test_cache)
 
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
         dry_run=False,
@@ -305,7 +305,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         force_generation=True,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )
@@ -384,7 +384,7 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )
@@ -458,7 +458,7 @@ async def test_bad_id_handling_increments_skips(
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )

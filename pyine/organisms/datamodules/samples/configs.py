@@ -1,6 +1,5 @@
 """Defines configuration classes for sample selection, filtering, and transformation."""
 
-import collections.abc
 import logging
 import typing
 
@@ -148,18 +147,42 @@ class SampleSelectionConfig(pydantic.BaseModel):
     def _validate_code_type_prob_map(
         cls,
         val: dict[SampleCodeTypeSet | typing.Iterable[SampleCodeType] | str, float],
-    ) -> dict[SampleCodeTypeSet, float]:
-        """Converts incoming prob map dict keys to code type sets before normal validation."""
+    ) -> dict[SampleCodeTypeSet | str, float]:
+        """Normalizes incoming prob map dict keys to string representation.
+
+        This keeps string keys in the config for hydra-zen serialization compatibility.
+        Use `get_code_type_prob_map_resolved()` to get a map with SampleCodeTypeSet keys.
+        """
         if isinstance(val, dict):  # type: ignore[reportUnnecessaryIsInstance]
-            out_dict: dict[SampleCodeTypeSet, float] = {}
+            out_dict: dict[SampleCodeTypeSet | str, float] = {}
             for key, prob in val.items():
                 if isinstance(key, str):
-                    key = SampleCodeTypeSet(get_code_type_set_from_str(key))
-                elif isinstance(key, collections.abc.Iterable):
-                    key = SampleCodeTypeSet(frozenset[SampleCodeType](key))
-                out_dict[key] = prob
+                    # normalize string keys by parsing and re-stringifying
+                    type_set = SampleCodeTypeSet(get_code_type_set_from_str(key))
+                    out_dict[str(type_set)] = prob
+                elif isinstance(key, SampleCodeTypeSet):
+                    out_dict[str(key)] = prob
+                else:
+                    # handle Iterable[SampleCodeType] (e.g., list, frozenset)
+                    type_set = SampleCodeTypeSet(frozenset[SampleCodeType](key))
+                    out_dict[str(type_set)] = prob
             return out_dict
         return val
+
+    def get_code_type_prob_map_resolved(self) -> dict[SampleCodeTypeSet, float]:
+        """Returns the code type prob map with SampleCodeTypeSet keys (resolved from strings).
+
+        This method converts string keys back to SampleCodeTypeSet objects for use at runtime,
+        while the config itself stores string keys for hydra-zen serialization compatibility.
+        """
+        resolved: dict[SampleCodeTypeSet, float] = {}
+        for key, prob in self.code_type_prob_map.items():
+            if isinstance(key, str):
+                type_set = SampleCodeTypeSet(get_code_type_set_from_str(key))
+            else:
+                type_set = key
+            resolved[type_set] = prob
+        return resolved
 
     def get_rng(self, epoch: int | None = None) -> np.random.Generator:
         """Returns a numpy random generator seeded with the internal seed and the given epoch.
@@ -387,7 +410,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             special_subset_overrides = {
                 "selection_config": SampleSelectionConfig(
                     seed=0,
-                    code_type_prob_map={code_type_set: 1.0},
+                    code_type_prob_map={str(code_type_set): 1.0},
                     fallback_to_orig=False,
                 )
             }

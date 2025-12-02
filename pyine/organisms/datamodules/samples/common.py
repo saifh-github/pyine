@@ -9,6 +9,7 @@ anything across any of these, make sure to also update other areas accordingly.
 from __future__ import annotations
 
 import collections
+import collections.abc
 import contextlib
 import dataclasses
 import enum
@@ -69,10 +70,15 @@ class SampleCodeType(enum.StrEnum):
 
 
 _FORBIDDEN_SAMPLE_CODE_TYPE_SETS: set[frozenset[SampleCodeType]] = {
-    # we can't combine 'original' samples with any other flag
-    *[frozenset({SampleCodeType.original, t}) for t in SampleCodeType],
+    # we can't combine 'original' samples with any other flag (but singleton {original} is allowed)
+    *[frozenset({SampleCodeType.original, t}) for t in SampleCodeType if t != SampleCodeType.original],
     # stubbed code is hard to combine with hinted/buggy/misleading code without maybe breaking those
-    *[frozenset({SampleCodeType.stubbed, t}) for t in SampleCodeType if t != SampleCodeType.obfuscated],
+    # (stubbed + obfuscated is allowed, and singleton {stubbed} is allowed)
+    *[
+        frozenset({SampleCodeType.stubbed, t})
+        for t in SampleCodeType
+        if t not in (SampleCodeType.obfuscated, SampleCodeType.stubbed)
+    ],
     # it makes no sense to create both misleading and hinted samples
     frozenset({SampleCodeType.misleading, SampleCodeType.hinted}),
 }
@@ -99,7 +105,7 @@ class SampleCodeTypeSet:
         """Validates that the given sample code types are valid (i.e. not forbidden)."""
         types_set = frozenset(sample_code_types)
         for forbidden_set in _FORBIDDEN_SAMPLE_CODE_TYPE_SETS:
-            if forbidden_set in types_set:
+            if forbidden_set.issubset(types_set):
                 raise ValueError(f"sample code types set is forbidden (contains {forbidden_set}): {sample_code_types}")
 
     def has(self, t: SampleCodeType) -> bool:
@@ -114,13 +120,16 @@ class SampleCodeTypeSet:
         """Returns True if any of the candidate types is present."""
         return not self.types.isdisjoint(frozenset(candidate_types))
 
-    def __eq__(self, other: SampleCodeTypeSet | SampleCodeType | typing.Iterable[SampleCodeType]) -> bool:
+    @typing.no_type_check
+    def __eq__(self, other: object) -> bool:
         """Returns True if the given object is a set of sample code types with the same types."""
         if isinstance(other, SampleCodeTypeSet):
             return self.types == other.types
-        if isinstance(other, SampleCodeType):
+        if isinstance(other, (SampleCodeType, str)):
             return self.types == frozenset({other})
-        return self.has_all(other)
+        if isinstance(other, collections.abc.Iterable) and all(isinstance(s, SampleCodeType) for s in other):
+            return self.has_all(other)
+        raise NotImplementedError(f"cannot compare sample code type sets with {type(other)}")
 
     @property
     def is_original(self) -> bool:
@@ -229,7 +238,7 @@ def get_all_supported_code_type_sets() -> list[SampleCodeTypeSet]:
     for code_type_set_size in range(1, len(SampleCodeType) + 1):
         for code_type_set_members in itertools.combinations(list(SampleCodeType), code_type_set_size):
             code_type_set = frozenset(SampleCodeType(m) for m in code_type_set_members)
-            if not any(forbidden_set in code_type_set for forbidden_set in _FORBIDDEN_SAMPLE_CODE_TYPE_SETS):
+            if not any(forbidden_set.issubset(code_type_set) for forbidden_set in _FORBIDDEN_SAMPLE_CODE_TYPE_SETS):
                 supported_type_sets.append(code_type_set)
     return [SampleCodeTypeSet(code_type_set) for code_type_set in supported_type_sets]
 

@@ -171,7 +171,7 @@ class FakePromptResultDB:
             records = self._records_by_identifier.get(id, [])
             for record in records:
                 if prompt_name is None or record.prompt_name in prompt_names:
-                    # Build key tuple based on which filters were lists
+                    # build key tuple based on which filters were lists
                     key_parts: list[str] = []
                     if isinstance(identifier, list):
                         key_parts.append(id)
@@ -368,9 +368,9 @@ def test_train_overrides_enable_random_hint_selection(
         if selected.code_type.is_original:
             assert picked_identifier == expected_trace_identifier_prefix
         elif selected.code_type.is_obfuscated:
-            picked_identifier.endswith("/a:obfuscated:000")
+            assert picked_identifier.endswith("/a:obfuscated:000")
         elif selected.code_type.is_bugged:
-            picked_identifier.endswith("/a:bugged:001")
+            assert picked_identifier.endswith("/a:bugged:001")
         assert selected.code_override is None
         sample = builder_without_records[sample_idx]
         assert sample.identifier == picked_identifier
@@ -406,7 +406,7 @@ def test_train_overrides_enable_random_hint_selection(
             else:
                 assert selected.code_override is None
         elif selected.code_type.is_obfuscated:
-            picked_identifier.endswith("/a:obfuscated:000")
+            assert picked_identifier.endswith("/a:obfuscated:000")
             if selected.code_type.types == frozenset(["obfuscated"]):
                 assert selected.code_override is None
             else:
@@ -487,4 +487,158 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         assert sample.predict_type == "program_output"
 
 
-# @@@@ TODO: update the tests to make sure we can hit (and do hit) all supported sample types
+def test_all_supported_code_type_sets_can_be_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies that all supported code type sets can be selected and processed.
+
+    Note: stubbed code types cannot be tested via direct trace data because stubbed
+    code cannot be executed/traced: it must come from the prompt result db.
+    """
+    from pyine.organisms.datamodules.samples.common import (
+        SampleCodeType,
+        get_all_supported_code_type_sets,
+    )
+
+    all_supported_sets = get_all_supported_code_type_sets()
+    assert len(all_supported_sets) > 0, "should have at least one supported code type set"
+    # verify we have all single types and some multi-augmented sets
+    single_type_sets = [s for s in all_supported_sets if len(s.types) == 1]
+    multi_type_sets = [s for s in all_supported_sets if len(s.types) > 1]
+    assert len(single_type_sets) == len(SampleCodeType), "should have all single-type sets"
+    assert len(multi_type_sets) > 0, "should have some multi-augmented sets"
+    # filter out code type sets containing 'stubbed'; these can't be traced directly
+    # (stubbed code must come from prompt db, not from executed traces)
+    traceable_sets = [s for s in all_supported_sets if not s.is_stubbed]
+    # test that each traceable code type set can be selected when available
+    for code_type_set in traceable_sets:
+        dataset_hash = f"fake-{code_type_set}"
+        solution_identifier = "TACO/test/p000001/s0000"
+        trace_identifier = f"{solution_identifier}/t0000"
+        # build augmentation suffix for the trace identifier
+        if code_type_set.is_original:
+            augmented_identifier = trace_identifier
+            tags = ["subset:test"]
+        else:
+            # create augmentation suffix from code types (sorted for consistency)
+            augment_types = "_".join(sorted(str(t) for t in code_type_set.types))
+            augmented_identifier = f"{trace_identifier}/a:{augment_types}:000"
+            tags = ["subset:test"] + [f"augment:{t}" for t in code_type_set.types]
+        trace_metadatas: list[dataset_utils.TraceMetadata] = []
+        trace_results: list[execution_utils.TraceResult] = []
+        metadata, result = build_trace_artifacts(
+            dataset_hash=dataset_hash,
+            trace_idx=0,
+            identifier=augmented_identifier,
+            tags=tags,
+            return_value=42,
+        )
+        trace_metadatas.append(metadata)
+        trace_results.append(result)
+        reader = FakeDatasetReader(dataset_hash=dataset_hash, traces=trace_results)
+        # configure selection to only pick this specific code type set
+        selection_config = sample_utils.SampleSelectionConfig(
+            seed=0,
+            code_type_prob_map={code_type_set: 1.0},
+            fallback_to_orig=False,
+            allow_db_lookups=False,
+        )
+        transform_config = sample_utils.SampleTransformConfig(
+            transform_strategy=sample_utils.SampleTransformStrategy.never,
+        )
+        builder = sample_utils.SampleBuilder(
+            source_data=reader,
+            traces=trace_metadatas,
+            selection_config=selection_config,
+            transform_config=transform_config,
+        )
+        assert len(builder) == 1, f"should select exactly one sample for {code_type_set}"
+        sample = builder[0]
+        assert sample.code_type == code_type_set.types, (
+            f"sample code type {sample.code_type} should match {code_type_set.types}"
+        )
+
+
+def test_code_type_selection_probabilities_are_respected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies that code type selection respects the configured probability distribution."""
+    from pyine.organisms.datamodules.samples.common import SampleCodeType, SampleCodeTypeSet
+
+    dataset_hash = "fake-prob-test"
+    solution_count = 500  # enough samples to verify distribution
+    trace_specifications = []
+    for solution_idx in range(solution_count):
+        solution_identifier = f"TACO/train/p000001/s{solution_idx:04d}"
+        trace_identifier = f"{solution_identifier}/t0000"
+        # create original, obfuscated, and bugged variants for each solution
+        # (using bugged instead of hinted since hinted requires prompt db lookup)
+        trace_specifications.extend(
+            [
+                (trace_identifier, ["subset:train"]),
+                (f"{trace_identifier}/a:obfuscated:000", ["subset:train", "augment:obfuscated"]),
+                (f"{trace_identifier}/a:bugged:000", ["subset:train", "augment:bugged"]),
+            ]
+        )
+    trace_metadatas: list[dataset_utils.TraceMetadata] = []
+    trace_results: list[execution_utils.TraceResult] = []
+    for idx, (identifier, tags) in enumerate(trace_specifications):
+        metadata, result = build_trace_artifacts(
+            dataset_hash=dataset_hash,
+            trace_idx=idx,
+            identifier=identifier,
+            tags=tags,
+            return_value=idx,
+        )
+        trace_metadatas.append(metadata)
+        trace_results.append(result)
+    reader = FakeDatasetReader(dataset_hash=dataset_hash, traces=trace_results)
+    # mock prompt db to return empty results (no db-based augmentations)
+    fake_prompt_db = FakePromptResultDB({})
+    monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: fake_prompt_db)
+    # configure selection with specific probabilities
+    original_set = SampleCodeTypeSet.create_default()
+    obfuscated_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated}))
+    bugged_set = SampleCodeTypeSet(frozenset({SampleCodeType.bugged}))
+    selection_config = sample_utils.SampleSelectionConfig(
+        seed=42,
+        code_type_prob_map={
+            original_set: 0.5,
+            obfuscated_set: 0.3,
+            bugged_set: 0.2,
+        },
+        fallback_to_orig=False,
+        allow_db_lookups=False,
+    )
+    transform_config = sample_utils.SampleTransformConfig(
+        transform_strategy=sample_utils.SampleTransformStrategy.never,
+    )
+    builder = sample_utils.SampleBuilder(
+        source_data=reader,
+        traces=trace_metadatas,
+        selection_config=selection_config,
+        transform_config=transform_config,
+    )
+
+    # count selections by code type
+    counts: dict[str, int] = {"original": 0, "obfuscated": 0, "bugged": 0}
+    for sample in builder:
+        if SampleCodeType.original in sample.code_type:
+            counts["original"] += 1
+        elif SampleCodeType.obfuscated in sample.code_type:
+            counts["obfuscated"] += 1
+        elif SampleCodeType.bugged in sample.code_type:
+            counts["bugged"] += 1
+    total = sum(counts.values())
+    assert total == solution_count, f"should have {solution_count} samples, got {total}"
+
+    # verify distribution is roughly correct (with some tolerance for randomness)
+    # expected: 50% original, 30% obfuscated, 20% bugged
+    original_ratio = counts["original"] / total
+    obfuscated_ratio = counts["obfuscated"] / total
+    bugged_ratio = counts["bugged"] / total
+
+    # allow 10% tolerance for random variation
+    assert 0.4 <= original_ratio <= 0.6, f"original ratio {original_ratio:.2f} should be ~0.5"
+    assert 0.2 <= obfuscated_ratio <= 0.4, f"obfuscated ratio {obfuscated_ratio:.2f} should be ~0.3"
+    assert 0.1 <= bugged_ratio <= 0.3, f"bugged ratio {bugged_ratio:.2f} should be ~0.2"

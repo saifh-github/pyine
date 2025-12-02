@@ -149,6 +149,7 @@ def select_samples_from_trace_families(
     """Selects samples to generate from traces according to the specified strategy/options."""
     # @@@@@@@@@@ TODO: add caching based on trace data hash, epoch, config, and prompt db hash
     rng = selection_config.get_rng(epoch)
+    code_type_prob_map = selection_config.get_code_type_prob_map_resolved()
     output_selections: list[SelectedSample] = []
     failed_selections: int = 0
     samples_with_full_trace_support: int = 0
@@ -159,7 +160,7 @@ def select_samples_from_trace_families(
         for _ in range(selection_config.samples_per_family):
             got_selection = False
             for _ in range(selection_config.draw_attempts):
-                target_type = draw_type(selection_config.code_type_prob_map, rng)
+                target_type = draw_type(code_type_prob_map, rng)
                 assert isinstance(target_type, SampleCodeTypeSet)
                 if (
                     target_type in trace_data.trace_family_sample_code_type_counts[parent_id]
