@@ -540,7 +540,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Whether to always try to save/load pre-tokenized datasets from the local cache or not."""
     use_tokenized_dataset_cache: bool = True
     """Whether to enable caching for tokenized datasets derived from conversation datasets."""
-    cache_lock_timeout_seconds: float = pydantic.Field(default=600.0, ge=0)
+    cache_lock_timeout_seconds: float = pydantic.Field(default=1800.0, ge=0)
     """Maximum time (in seconds) to wait when acquiring dataset cache locks."""
 
     def get_prompt_template(
