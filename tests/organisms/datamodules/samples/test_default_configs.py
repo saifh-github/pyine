@@ -374,7 +374,7 @@ def test_train_overrides_enable_random_hint_selection(
         assert selected.code_override is None
         sample = builder_without_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type.types
+        assert sample.code_type == str(selected.code_type)
         assert sample.predict_type == "program_output"
         assert sample.has_code_override is False
         assert not sample.description
@@ -413,7 +413,7 @@ def test_train_overrides_enable_random_hint_selection(
                 assert selected.code_override == "fake obfuscated + hinted code"
         sample = builder_with_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type.types
+        assert sample.code_type == str(selected.code_type)
         assert sample.predict_type == "program_output"
         if selected.code_type.is_hinted:
             assert sample.has_code_override is True
@@ -476,7 +476,7 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         assert selection.code_type.is_original or selection.code_type.is_stubbed
         expected_stubbed_code = f"def solution_{sample_idx}():\n    raise NotImplementedError('stubbed')\n"
         sample = builder[sample_idx]
-        assert sample.code_type == selection.code_type.types
+        assert sample.code_type == str(selection.code_type)
         assert sample.has_code_override == (selection.code_override is not None)
         if selection.code_type.is_original:
             assert selection.code_override is None
@@ -554,8 +554,8 @@ def test_all_supported_code_type_sets_can_be_selected(
         )
         assert len(builder) == 1, f"should select exactly one sample for {code_type_set}"
         sample = builder[0]
-        assert sample.code_type == code_type_set.types, (
-            f"sample code type {sample.code_type} should match {code_type_set.types}"
+        assert sample.code_type == str(code_type_set), (
+            f"sample code type {sample.code_type} should match {code_type_set}"
         )
 
 
