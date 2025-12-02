@@ -36,7 +36,7 @@ def test_get_score_only_config_and_template() -> None:
     for var in ["expected_output", "predicted_output"]:
         assert var in template.input_variables
     rendered = template.format(
-        predict_type="program_output",
+        execution_type="program_output",
         expected_output="Hello, Bob",
         predicted_output="Hello Bob",
     )
@@ -61,11 +61,11 @@ def test_get_with_reasoning_config_and_template() -> None:
         "as per the required format above:\n"
     )
     rendered = template.format(
-        predict_type="function_return",
+        execution_type="function_return",
         expected_output="{'a': 1, 'b': 2}",
         predicted_output="{'b': 2, 'a': 1}",
     )
-    assert "Execution type" in rendered
+    assert "Execution type: function_return" in rendered
 
 
 def test_get_chain_attaches_parser(

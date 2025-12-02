@@ -647,7 +647,7 @@ class TestSelectTraces:
         sb_obf = SampleBuilder(
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
-                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.obfuscated)): 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated})): 1.0},
             ),
         )
         assert len(sb_obf) == 0
@@ -656,7 +656,7 @@ class TestSelectTraces:
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
                 allow_db_lookups=False,
-                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.hinted)): 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset({SampleCodeType.hinted})): 1.0},
             ),
         )
         assert len(sb_no_db) == 0
@@ -708,7 +708,7 @@ class TestSelectTraces:
             source_data=[small_fake_reader],
             selection_config=SampleSelectionConfig(
                 allow_db_lookups=True,
-                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.hinted)): 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset({SampleCodeType.hinted})): 1.0},
             ),
             prompt_result_db_path=str(db_path),
         )
@@ -726,7 +726,7 @@ class TestSelectTraces:
             selection_config=SampleSelectionConfig(
                 seed=0,
                 allow_db_lookups=True,
-                code_type_prob_map={SampleCodeTypeSet(frozenset(SampleCodeType.bugged)): 1.0},
+                code_type_prob_map={SampleCodeTypeSet(frozenset({SampleCodeType.bugged})): 1.0},
             ),
             prompt_result_db_path=str(db_path),
         )

@@ -63,9 +63,9 @@ class _FakeOutcomeEvaluator:
     def add_sample(
         self,
         identifier: str,
-        expected: str,
         predicted: str,
-        execution_type: str = "unknown",
+        expected: str,
+        predict_type: str = "unknown",
         tags: list[str] | None = None,
     ) -> None:
         self.added.append((identifier, expected, predicted, tags or []))

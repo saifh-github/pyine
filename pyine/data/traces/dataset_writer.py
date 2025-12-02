@@ -479,12 +479,10 @@ def _get_traces_to_write(
     raw_results, errors = pyine.utils.concurrency.run_in_parallel(
         callables=[
             functools.partial(
-                typing.cast(
-                    "typing.Callable[..., pyine.data.traces.common.TraceExecutionOutcome]",
-                    pyine.data.traces.common.trace_code_snippet,
-                ),
+                pyine.data.traces.common.trace_code_snippet,
                 code_snippet=code_snippet,
-                config=config,
+                tracing_config=config,
+                output_compare_config=config.test_output_compare_options,
             )
             for code_snippet in to_trace
         ],

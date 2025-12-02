@@ -89,12 +89,12 @@ class TraceFilteringConfig(pydantic.BaseModel):
         """
         if self.seed is None:
             return get_rng()  # always return a non-deterministic rng, no matter the epoch
-        return get_rng(np.random.SeedSequence([self.seed, epoch or -1]))
+        return get_rng(np.random.SeedSequence([self.seed, 0 if epoch is None else epoch]))
 
 
-def get_default_code_type_prob_map() -> dict[SampleCodeTypeSet, float]:
+def get_default_code_type_prob_map() -> dict[SampleCodeTypeSet | str, float]:
     """Returns the default probability map used to decide which sample code type to select for each trace."""
-    return {SampleCodeTypeSet.create_default(): 1.0}  # samples 'original' code only, 100% of the time
+    return {"original": 1.0}  # samples 'original' code only, 100% of the time
 
 
 class SampleSelectionConfig(pydantic.BaseModel):
@@ -169,7 +169,7 @@ class SampleSelectionConfig(pydantic.BaseModel):
         """
         if self.seed is None:
             return get_rng()  # always return a non-deterministic rng, no matter the epoch
-        return get_rng(np.random.SeedSequence([self.seed, epoch or -1]))
+        return get_rng(np.random.SeedSequence([self.seed, 0 if epoch is None else epoch]))
 
 
 class SampleTransformConfig(pydantic.BaseModel):
@@ -308,7 +308,7 @@ class SampleTransformConfig(pydantic.BaseModel):
         """
         if self.seed is None:
             return get_rng()  # always return a non-deterministic rng, no matter the epoch/sample
-        return get_rng(np.random.SeedSequence([self.seed, sample, epoch or -1]))
+        return get_rng(np.random.SeedSequence([self.seed, sample, 0 if epoch is None else epoch]))
 
 
 class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):

@@ -625,7 +625,8 @@ async def test_bugged_hint_prompt_uses_buggy_code(
     assert input_vars["expected_output"] == str(trace.expected_output)
     tags = captured["tags"]
     assert "sample_code_description:1" in tags
-    assert "augment:bugged_hinted" in tags
+    assert "augment:bugged" in tags
+    assert "augment:hinted" in tags
     assert captured["prompt_name"] == "hints/docs"
 
 
@@ -715,8 +716,8 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
     assert input_vars["expected_output"] == str({"alt": "value"})
     tags = captured["tags"]
     assert "sample_code_description:1" in tags
-    assert "augment:misleading" not in tags
-    assert "augment:bugged_misleading" in tags
+    assert "augment:misleading" in tags
+    assert "augment:bugged" in tags
     assert captured["prompt_name"] == "issues/docs"
 
 

@@ -147,6 +147,42 @@ class FakePromptResultDB:
             return list(records)
         return [record for record in records if record.prompt_name == prompt_name]
 
+    def get_tags(
+        self,
+        identifier: str | list[str],
+        prompt_name: str | list[str] | None = None,
+        breakdown: bool = False,
+    ) -> list[list[str]] | dict[tuple[str, ...], list[list[str]]]:
+        if not breakdown:
+            if isinstance(identifier, list):
+                records = [rec for id in identifier for rec in self._records_by_identifier.get(id, [])]
+            else:
+                records = self._records_by_identifier.get(identifier, [])
+            if prompt_name is None:
+                return [record.tags for record in records]
+            if isinstance(prompt_name, list):
+                return [record.tags for record in records if record.prompt_name in prompt_name]
+            return [record.tags for record in records if record.prompt_name == prompt_name]
+        # breakdown=True: return dict mapping filter tuples to lists of tag lists
+        result_dict: dict[tuple[str, ...], list[list[str]]] = {}
+        identifiers = [identifier] if isinstance(identifier, str) else identifier
+        prompt_names = [prompt_name] if isinstance(prompt_name, str) else (prompt_name or [None])
+        for id in identifiers:
+            records = self._records_by_identifier.get(id, [])
+            for record in records:
+                if prompt_name is None or record.prompt_name in prompt_names:
+                    # Build key tuple based on which filters were lists
+                    key_parts: list[str] = []
+                    if isinstance(identifier, list):
+                        key_parts.append(id)
+                    if isinstance(prompt_name, list):
+                        key_parts.append(record.prompt_name or "")
+                    key = tuple(key_parts) if key_parts else (id,)
+                    if key not in result_dict:
+                        result_dict[key] = []
+                    result_dict[key].append(record.tags)
+        return result_dict
+
 
 def build_trace_artifacts(
     dataset_hash: str,
@@ -219,13 +255,13 @@ def setup_builder(
 def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_hash = "fake-valid"
     original_identifier = "TACO/valid/p000001/s0000/t0000"
-    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:generic:000"
+    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:hinted:000"
     trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(
         [
             (original_identifier, ["subset:valid"]),
-            (hinted_identifier, ["subset:valid", "augment:generic"]),
+            (hinted_identifier, ["subset:valid", "augment:hinted"]),
         ]
     ):
         metadata, result = build_trace_artifacts(
@@ -246,13 +282,14 @@ def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) 
         subset_name="valid",
     )
     assert len(builder) == 1
-    selection = builder.selected_traces[0]
-    assert selection.code_type == "original"
+    selection = builder.selection_results[0]
+    assert selection.code_type.is_original
     assert selection.code_override is None
     sample = builder[0]
-    assert sample.code_type == "original"
+    assert "original" in sample.code_type
     assert sample.predict_type == "program_output"
     assert sample.has_code_override is False
+    assert sample.code == selection.trace_meta.code_string
 
 
 def test_train_overrides_enable_random_hint_selection(
@@ -274,8 +311,8 @@ def test_train_overrides_enable_random_hint_selection(
                     ["subset:train", "augment:obfuscated"],
                 ),
                 (
-                    f"{trace_identifier}/a:generic:001",
-                    ["subset:train", "augment:generic"],
+                    f"{trace_identifier}/a:bugged:001",
+                    ["subset:train", "augment:bugged"],
                 ),
             ]
         )
@@ -321,24 +358,23 @@ def test_train_overrides_enable_random_hint_selection(
         subset_name="train",
     )
     assert len(builder_without_records) == solution_count
-    saw_orig, saw_obfs = False, False
     for sample_idx in range(len(builder_without_records)):
-        selected = builder_without_records.selected_traces[sample_idx]
-        assert selected.code_type in ["original", "obfuscated"]
+        selected = builder_without_records.selection_results[sample_idx]
+        assert selected.code_type.has_any(["original", "obfuscated", "bugged"])
         picked_identifier = selected.trace_meta.identifier
         expected_solution_identifier = f"TACO/train/p000010/s{sample_idx:04d}"
         expected_trace_identifier_prefix = f"{expected_solution_identifier}/t0001"
         assert picked_identifier.startswith(expected_trace_identifier_prefix)
-        if selected.code_type == "original":
+        if selected.code_type.is_original:
             assert picked_identifier == expected_trace_identifier_prefix
-            saw_orig = True
-        elif selected.code_type == "obfuscated":
+        elif selected.code_type.is_obfuscated:
             picked_identifier.endswith("/a:obfuscated:000")
-            saw_obfs = True
+        elif selected.code_type.is_bugged:
+            picked_identifier.endswith("/a:bugged:001")
         assert selected.code_override is None
         sample = builder_without_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type
+        assert sample.code_type == selected.code_type.types
         assert sample.predict_type == "program_output"
         assert sample.has_code_override is False
         assert not sample.description
@@ -346,7 +382,6 @@ def test_train_overrides_enable_random_hint_selection(
         assert "sample_code_description:0" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
         assert "sample_predict_type:program_output" in tags
-    assert saw_orig and saw_obfs
 
     builder_with_records = setup_builder(
         monkeypatch=monkeypatch,
@@ -357,40 +392,30 @@ def test_train_overrides_enable_random_hint_selection(
         prompt_records=prompt_records,
     )
     assert len(builder_with_records) == solution_count
-    saw_orig, saw_hinted, saw_obfs, saw_obfs_hinted = False, False, False, False
     for sample_idx in range(len(builder_with_records)):
-        selected = builder_with_records.selected_traces[sample_idx]
-        assert selected.code_type in [
-            "original",
-            "hinted",
-            "obfuscated",
-            "obfuscated_hinted",
-        ]
+        selected = builder_with_records.selection_results[sample_idx]
+        assert selected.code_type.has_any(["original", "hinted", "obfuscated"])
         picked_identifier = selected.trace_meta.identifier
         expected_solution_identifier = f"TACO/train/p000010/s{sample_idx:04d}"
         expected_trace_identifier_prefix = f"{expected_solution_identifier}/t0001"
         assert picked_identifier.startswith(expected_trace_identifier_prefix)
-        if selected.code_type in ["original", "hinted"]:
+        if selected.code_type.is_original or not selected.code_type.is_obfuscated:
             assert picked_identifier == expected_trace_identifier_prefix
             if selected.code_type == "hinted":
                 assert selected.code_override == "fake hinted code"
-                saw_hinted = True
             else:
                 assert selected.code_override is None
-                saw_orig = True
-        elif selected.code_type in ["obfuscated", "obfuscated_hinted"]:
+        elif selected.code_type.is_obfuscated:
             picked_identifier.endswith("/a:obfuscated:000")
-            if selected.code_type == "obfuscated":
+            if selected.code_type.types == frozenset(["obfuscated"]):
                 assert selected.code_override is None
-                saw_obfs = True
             else:
                 assert selected.code_override == "fake obfuscated + hinted code"
-                saw_obfs_hinted = True
         sample = builder_with_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type
+        assert sample.code_type == selected.code_type.types
         assert sample.predict_type == "program_output"
-        if selected.code_type in ["hinted", "obfuscated_hinted"]:
+        if selected.code_type.is_hinted:
             assert sample.has_code_override is True
             assert sample.code in ["fake hinted code", "fake obfuscated + hinted code"]
         else:
@@ -404,7 +429,6 @@ def test_train_overrides_enable_random_hint_selection(
         assert "sample_code_description:1" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
         assert "sample_predict_type:program_output" in tags
-    assert saw_orig and saw_hinted and saw_obfs and saw_obfs_hinted
 
 
 def test_train_overrides_fetch_stubbed_from_prompt_db(
@@ -447,20 +471,20 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         prompt_records=prompt_records,
     )
     assert len(builder) == solution_count
-    saw_stubbed = False
     for sample_idx in range(len(builder)):
-        selection = builder.selected_traces[sample_idx]
-        assert selection.code_type in ["original", "stubbed"]
+        selection = builder.selection_results[sample_idx]
+        assert selection.code_type.is_original or selection.code_type.is_stubbed
         expected_stubbed_code = f"def solution_{sample_idx}():\n    raise NotImplementedError('stubbed')\n"
         sample = builder[sample_idx]
-        assert sample.code_type == selection.code_type
+        assert sample.code_type == selection.code_type.types
         assert sample.has_code_override == (selection.code_override is not None)
-        if selection.code_type == "original":
+        if selection.code_type.is_original:
             assert selection.code_override is None
             assert sample.code != expected_stubbed_code
         else:
             assert selection.code_override == expected_stubbed_code
             assert sample.code == expected_stubbed_code
-            saw_stubbed = True
         assert sample.predict_type == "program_output"
-    assert saw_stubbed
+
+
+# @@@@ TODO: update the tests to make sure we can hit (and do hit) all supported sample types

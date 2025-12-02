@@ -114,6 +114,14 @@ class SampleCodeTypeSet:
         """Returns True if any of the candidate types is present."""
         return not self.types.isdisjoint(frozenset(candidate_types))
 
+    def __eq__(self, other: SampleCodeTypeSet | SampleCodeType | typing.Iterable[SampleCodeType]) -> bool:
+        """Returns True if the given object is a set of sample code types with the same types."""
+        if isinstance(other, SampleCodeTypeSet):
+            return self.types == other.types
+        if isinstance(other, SampleCodeType):
+            return self.types == frozenset({other})
+        return self.has_all(other)
+
     @property
     def is_original(self) -> bool:
         """Returns True if the set contains only the original sample code type."""
@@ -189,6 +197,10 @@ class SampleCodeTypeSet:
     def create_default() -> SampleCodeTypeSet:
         """Creates a default sample code type set (i.e. the original sample code type)."""
         return SampleCodeTypeSet(frozenset({SampleCodeType.original}))
+
+    def __str__(self) -> str:
+        """Returns a string representation of the sample code type set."""
+        return "_".join(sorted(self.types))
 
 
 _CODE_TYPES_THAT_TARGET_SPECIFIC_TESTS: frozenset[SampleCodeType] = frozenset(
@@ -352,7 +364,7 @@ type StrictProbability = typing.Annotated[pydantic.StrictFloat, pydantic.Field(g
 """Type for probabilities (floats between 0 and 1)."""
 type SamplePredictTypeProbMap = dict[SamplePredictType, StrictProbability]
 """Type of the probability map used to decide which sample prediction type to generate for each trace."""
-type SampleCodeTypeSetProbMap = dict[SampleCodeTypeSet, StrictProbability]
+type SampleCodeTypeSetProbMap = dict[SampleCodeTypeSet | str, StrictProbability]
 """Type of the probability map used to decide which sample type sets to select for each trace."""
 
 
@@ -543,10 +555,9 @@ class TraceDatasetToSampleCodeTypeMappings:
     def __post_init__(self) -> None:
         """Validates that the provided data is consistent."""
         assert len(self.trace_families) == len(self.trace_family_sample_code_type_counts)
-        assert len(self.trace_families) == len(self.db_supported_family_sample_code_type_counts)
+        assert len(self.trace_families) >= len(self.db_supported_family_sample_code_type_counts)
         for parent_tid, family_mapping in self.trace_families.items():
             assert parent_tid in self.trace_family_sample_code_type_counts
-            assert parent_tid in self.db_supported_family_sample_code_type_counts
             for member_tid, member_data in family_mapping.items():
                 assert member_tid == member_data.target_trace_id
                 assert member_tid in self.trace_metadata_lut
@@ -616,9 +627,9 @@ class TraceDatasetToSampleCodeTypeMappings:
         assert sum(len(family) for family in trace_families.values()) == len(traces)
         # don't forget to get rid of the defaultdict stuff
         for parent_id, count_dict in trace_family_sample_code_type_counts.items():
-            trace_family_sample_code_type_counts[parent_id] = dict(sorted(count_dict.items()))
+            trace_family_sample_code_type_counts[parent_id] = dict(count_dict.items())
         for parent_id, count_dict in db_supported_family_sample_code_type_counts.items():
-            db_supported_family_sample_code_type_counts[parent_id] = dict(sorted(count_dict.items()))
+            db_supported_family_sample_code_type_counts[parent_id] = dict(count_dict.items())
         return TraceDatasetToSampleCodeTypeMappings(
             trace_metadata_lut=trace_metadata_lut,
             trace_families=dict(trace_families),

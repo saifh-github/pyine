@@ -25,7 +25,7 @@ class _DummyGraderChain:
         self,
         predicted: typing.Any,
         expected: typing.Any,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         **invoke_kwargs: typing.Any,
     ) -> float:
         return float(self._scorer(expected, predicted))
@@ -34,14 +34,14 @@ class _DummyGraderChain:
         self,
         predicted: typing.Any,
         expected: typing.Any,
-        execution_type: str = "unknown",
+        predict_type: str = "unknown",
         **invoke_kwargs: typing.Any,
     ) -> float:
         return await asyncio.to_thread(
             self.invoke,
             predicted=predicted,
             expected=expected,
-            predict_type=execution_type,
+            predict_type=predict_type,
             **invoke_kwargs,
         )
 
@@ -135,9 +135,9 @@ def test_strip_hard_checks_behavior() -> None:
 def test_tags_include_exec_type() -> None:
     evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
     evaluator.add_sample(identifier="s1", expected="answer", predicted="answer", tags=["x"])
-    assert len(evaluator.results) == 1 and evaluator.results[0].tags == ["x", "execution_type:unknown"]
+    assert len(evaluator.results) == 1 and evaluator.results[0].tags == ["x", "sample_predict_type:unknown"]
     evaluator.add_sample(identifier="s2", expected="answer", predicted="answer", predict_type="potato", tags=["x"])
-    assert len(evaluator.results) == 2 and evaluator.results[1].tags == ["x", "execution_type:potato"]
+    assert len(evaluator.results) == 2 and evaluator.results[1].tags == ["x", "sample_predict_type:potato"]
 
 
 @pytest.mark.asyncio

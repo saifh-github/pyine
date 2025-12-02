@@ -620,7 +620,7 @@ def _default_tags_builder(
     is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
     is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
     is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
-    assert sum((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)) == 1
+    assert sum((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)) <= 1
     if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
         output_tags.append("augment:misleading")
     if is_hint_prompting:

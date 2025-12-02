@@ -59,6 +59,10 @@ class SampleSelectionResults:
         """Returns the number of samples that were selected."""
         return len(self.samples)
 
+    def __getitem__(self, idx: int) -> SelectedSample:
+        """Returns the sample associated with a specified index (where `0 <= idx < len(self)`)."""
+        return self.samples[idx]
+
     def get_selected_traces(self) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
         """Returns all traces that were selected to generate samples."""
         target_trace_ids = {sample.trace_id for sample in self.samples}
@@ -181,6 +185,7 @@ def select_samples_from_trace_families(
                     break
                 if (
                     selection_config.allow_db_lookups
+                    and parent_id in trace_data.db_supported_family_sample_code_type_counts
                     and target_type in trace_data.db_supported_family_sample_code_type_counts[parent_id]
                     and trace_data.db_supported_family_sample_code_type_counts[parent_id][target_type] > 0
                 ):
