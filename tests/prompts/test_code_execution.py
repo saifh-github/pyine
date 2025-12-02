@@ -48,7 +48,7 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
         predict_type="program_output",
         inputs="Bobby",
     )
-    assert "Execution output type: program_output" in rendered_prog
+    assert "Type of execution output that should be predicted: program_output" in rendered_prog
     assert "Greets a user by name" in rendered_prog
     assert "Enter name: " in rendered_prog and "Bobby" in rendered_prog
     assert rendered_prog.endswith("Now, provide ONLY the execution output:")
@@ -60,12 +60,12 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
         inputs="",
         first_line=1,
         last_line=3,
-        trace_step_count=3,
+        first_line_hit=1,
+        last_line_hit=2,
     )
-    assert "Execution output type: frame_variables" in rendered_vars
+    assert "Type of execution output that should be predicted: frame_variables" in rendered_vars
     assert "First line" in rendered_vars and "Last line" in rendered_vars
-    assert "Expected execution step count" in rendered_vars
-    assert rendered_vars.endswith("Now, provide ONLY the variables dump:")
+    assert rendered_vars.endswith("dump that would be obtained after the specified hit of the last line:")
 
     rendered_ret = template.format(
         code="def add(a,b): return a+b\nresult = add(1,2)",
@@ -76,7 +76,7 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
         first_line=1,
         last_line=1,
     )
-    assert "Execution output type: function_return" in rendered_ret
+    assert "Type of execution output that should be predicted: function_return" in rendered_ret
     assert "Consider only a call of the following function:" in rendered_ret
     assert "Use the following call input arguments:" in rendered_ret
     assert "a=1, b=2" in rendered_ret
