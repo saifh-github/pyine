@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import pytest_mock
 
+import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as exec_utils
 from pyine.organisms.datamodules.samples.common import (
     SampleCodeType,
@@ -302,6 +303,7 @@ class TestPrivateFunctionCallSample:
             self.inputs = ""
             self.expected_output = ""
             self.traced_steps = steps
+            self.complexity_metrics = complexity_metrics_utils.get_complexity_metrics(self.code_string)
 
         @property
         def valid_step_count(self) -> int:

@@ -312,6 +312,7 @@ def _get_function_call_sample(
             trace_step_count=call_step_count,
             comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
             has_code_override=False,
+            complexity_metrics=trace_data.complexity_metrics.as_dict(),
         )
     return None  # no more candidates to consider, failed to get a function call
 
@@ -426,6 +427,7 @@ def _get_code_segment_sample(
             trace_step_count=segment_size,
             comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
             has_code_override=False,
+            complexity_metrics=trace_data.complexity_metrics.as_dict(),
         )
     return None  # no more candidate lists to consider, failed to get a segment sample
 
@@ -459,4 +461,5 @@ def _get_full_program_sample(
         trace_step_count=trace_data.valid_step_count,  # count valid steps only
         comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
         has_code_override=code_type_selection_result.code_override is not None,
+        complexity_metrics=trace_data.complexity_metrics.as_dict(),
     )

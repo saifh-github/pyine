@@ -356,6 +356,12 @@ class SampleData(typing.NamedTuple):
     and the `expected_output` field might correspond to a different execution outcome than the
     "correct" one (see the description of the `expected_output` field above for more details).
     """
+    complexity_metrics: dict[str, float | int]
+    """Code complexity metrics dict (cyclomatic, LOC, Halstead, maintainability).
+
+    Note: these metrics are computed from the original traced code. If `has_code_override = True`,
+    the metrics may not reflect the actual code in the `code` field.
+    """
 
     def get_trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""

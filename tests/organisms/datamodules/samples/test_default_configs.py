@@ -8,6 +8,7 @@ import pyine.data.traces.dataset_utils as dataset_utils
 import pyine.organisms.datamodules.samples as sample_utils
 import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
 import pyine.prompts
+import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as execution_utils
 import pyine.utils.pydantic
 
@@ -210,6 +211,9 @@ def build_trace_artifacts(
         stderr="",
         metadata={},
         tags=tags,
+        complexity_metrics=complexity_metrics_utils.get_complexity_metrics(
+            f"def solution():\n    return {return_value}\n"
+        ),
     )
     trace_metadata = dataset_utils.TraceMetadata(
         identifier=identifier,

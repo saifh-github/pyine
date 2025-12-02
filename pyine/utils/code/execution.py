@@ -18,6 +18,7 @@ import pydantic
 
 import pyine.utils.code.args_mapper
 import pyine.utils.code.blocks
+import pyine.utils.code.complexity_metrics
 import pyine.utils.code.input_mock
 import pyine.utils.code.output_capture
 import pyine.utils.filesystem
@@ -294,6 +295,8 @@ class TraceResult(pydantic.BaseModel):
     """A dictionary containing metadata about the execution environment & settings."""
     tags: list[str]
     """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""
+    complexity_metrics: pyine.utils.code.complexity_metrics.ComplexityMetrics
+    """Code complexity metrics computed from the code_string using radon."""
 
     def __str__(self) -> str:
         """Returns a string representation of the trace result based on its identifier."""
@@ -821,6 +824,7 @@ def _unsafe_execute_and_trace_code(
         serialized_expected_output: pydantic.JsonValue | None = repr(expected_output)
     else:
         serialized_expected_output = typing.cast("pydantic.JsonValue | None", expected_output)
+    complexity_metrics = pyine.utils.code.complexity_metrics.get_complexity_metrics(code_string)
     try:
         trace_result = TraceResult(
             identifier=identifier,
@@ -849,6 +853,7 @@ def _unsafe_execute_and_trace_code(
             stderr=stderr_buffer,
             metadata=reprod_metadata,
             tags=trace_tags,
+            complexity_metrics=complexity_metrics,
         )
     except pydantic.ValidationError as e:
         print(f"Error while creating TraceResult instance (unrelated to exec): {e}")

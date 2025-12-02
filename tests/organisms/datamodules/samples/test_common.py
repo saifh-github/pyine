@@ -171,6 +171,21 @@ class TestSampleData:
             trace_step_count=3,
             comma_separated_tags="subset:test,sample_predict_type:program_output",
             has_code_override=False,
+            complexity_metrics={
+                "cyclomatic_complexity_avg": 1.0,
+                "cyclomatic_complexity_max": 1,
+                "cyclomatic_complexity_sum": 1,
+                "loc": 2,
+                "lloc": 2,
+                "sloc": 2,
+                "comments": 0,
+                "multi": 0,
+                "blank": 0,
+                "halstead_volume": 10.0,
+                "halstead_difficulty": 1.0,
+                "halstead_effort": 10.0,
+                "maintainability_index": 100.0,
+            },
         )
 
     def test_get_trace_id(self, sample_data: SampleData) -> None:
@@ -199,6 +214,21 @@ class TestSampleData:
             trace_step_count=0,
             comma_separated_tags="",
             has_code_override=False,
+            complexity_metrics={
+                "cyclomatic_complexity_avg": 0.0,
+                "cyclomatic_complexity_max": 0,
+                "cyclomatic_complexity_sum": 0,
+                "loc": 0,
+                "lloc": 0,
+                "sloc": 0,
+                "comments": 0,
+                "multi": 0,
+                "blank": 0,
+                "halstead_volume": 0.0,
+                "halstead_difficulty": 0.0,
+                "halstead_effort": 0.0,
+                "maintainability_index": 0.0,
+            },
         )
         assert sample.get_tag_list() == []
 

@@ -14,6 +14,7 @@ import pyine.organisms.datamodules.utils.annotator as annotator
 import pyine.prompts.manager as prompt_manager
 import pyine.prompts.result_db as result_db
 import pyine.prompts.types as prompt_types
+import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as exec_utils
 import pyine.utils.llm_providers as llm_providers
 import tests.env_checks
@@ -62,6 +63,7 @@ class _FakeDatasetReader:
             stderr="",
             metadata={},
             tags=list(trace_data.tags),
+            complexity_metrics=complexity_metrics_utils.get_complexity_metrics(trace_data.code_string),
         )
 
     def get_problem_data(self, idx: int) -> du.CodingProblem:
