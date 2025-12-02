@@ -451,7 +451,7 @@ def _get_full_program_sample(
         description=description,
         entrypoint=str(trace_data.entrypoint_name),
         first_line=0,
-        last_line=len(trace_data.code_string.splitlines()),
+        last_line=len(sample_code.splitlines()),
         inputs=str(trace_data.inputs),
         expected_output=str(trace_data.expected_output),
         predict_type=SamplePredictType.program_output,
