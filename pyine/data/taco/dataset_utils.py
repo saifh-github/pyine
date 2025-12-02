@@ -10,10 +10,11 @@ def get_latest_repackaged_dataset_path() -> pathlib.Path:
     If multiple repackaged datasets are available, the most recent version is returned.
     """
     rpkg_root = pyine.utils.filesystem.get_data_root_path() / "TACO" / "repackaged"
-    assert rpkg_root.exists() and rpkg_root.is_dir(), f"invalid repackaged dataset root path: {rpkg_root}"
+    if not rpkg_root.exists() or not rpkg_root.is_dir():
+        raise FileNotFoundError(f"invalid repackaged dataset root path: {rpkg_root}")
     dataset_folders = list(rpkg_root.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-v*/"))
     if not dataset_folders:
-        raise FileNotFoundError(f"No dataset folders found in {rpkg_root}")
+        raise FileNotFoundError(f"no dataset folders found in {rpkg_root}")
     latest_dataset = max(dataset_folders)
     return pathlib.Path(latest_dataset)
 
