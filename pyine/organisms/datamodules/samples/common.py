@@ -175,12 +175,15 @@ class SampleCodeTypeSet:
     def create_from_tags(tags: typing.Iterable[str]) -> SampleCodeTypeSet:
         """Creates a sample code type set from the given tags."""
         found_types: set[SampleCodeType] = set()
+        orig_set = frozenset({SampleCodeType.original})
         for tag in tags:
             if tag.startswith("augment:"):
                 augment_type = tag.split(":", maxsplit=1)[1]
-                found_types.update(get_code_type_set_from_str(augment_type))
+                code_type_set = get_code_type_set_from_str(augment_type)
+                if code_type_set != orig_set:
+                    found_types.update(code_type_set)
         if not found_types:
-            return SampleCodeTypeSet(frozenset({SampleCodeType.original}))
+            return SampleCodeTypeSet(orig_set)
         return SampleCodeTypeSet(frozenset(found_types))
 
     @staticmethod

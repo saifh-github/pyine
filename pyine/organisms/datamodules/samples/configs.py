@@ -159,6 +159,8 @@ class SampleSelectionConfig(pydantic.BaseModel):
                 if isinstance(key, str):
                     # normalize string keys by parsing and re-stringifying
                     type_set = SampleCodeTypeSet(get_code_type_set_from_str(key))
+                    if type_set.is_original and key != "original":
+                        raise ValueError(f"invalid key in code type prob map: {key}")
                     out_dict[str(type_set)] = prob
                 elif isinstance(key, SampleCodeTypeSet):
                     out_dict[str(key)] = prob
