@@ -239,6 +239,32 @@ For more details, see [`pyine/apps/README.md`](./pyine/apps/README.md#trainers).
 
 ______________________________________________________________________
 
+### Step 6a: Distributed Training with DDP (Optional)
+
+For training on multiple GPUs using Distributed Data Parallel (DDP), you have two options:
+
+**Option A: HuggingFace Accelerate**
+
+Use the Accelerate library for simplified distributed training configuration:
+
+```bash
+uv run accelerate launch pyine/apps/trainers/hf_trainer.py +experiment=<some_experiment_name>
+```
+
+**Note:** While Accelerate attempts to infer configuration automatically, it's recommended to first run `accelerate config` to generate proper settings for your specific deployment infrastructure (GPU count, mixed precision, etc.).
+
+**Option B: Custom torchrun Script**
+
+Use the provided `run_ddp.sh` script that explicitly leverages torchrun with configurable parameters:
+
+```bash
+uv run ./scripts/run_ddp.sh -- +experiment=<some_experiment_name>
+```
+
+Both approaches handle process spawning, distributed communication setup, and gradient synchronization automatically. The Accelerate option provides a simpler interface with automatic configuration, while the `run_ddp.sh` script offers more explicit control over distributed parameters (nodes, processes per node, master address/port, etc.). See the script's `--help` flag for advanced options.
+
+______________________________________________________________________
+
 ### Step 6b - W&B Agents: Run Hyperparameter Sweeps (Optional)
 
 For hyperparameter tuning, you can use WandB's native sweep functionality with distributed agents
