@@ -34,11 +34,8 @@ import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROBLEM_DIR = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
 CACHE_OVERRIDE_BASENAME = "problem_data_overrides.json"
-DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
 TARGET_SOURCES = {"leetcode", "geeksforgeeks"}
-
 MAX_LLM_ATTEMPTS = 1
 MAX_SOLUTIONS_TO_TRY = 3
 MAX_LLM_TOKENS = 10_000
@@ -332,7 +329,7 @@ def output_compare(
 def run_input_output_rewrite(
     problem_dir: pathlib.Path,
     problem_filenames: typing.Iterable[pathlib.Path | str],
-    override_log_path: pathlib.Path | None,
+    override_log_path: pathlib.Path,
 ) -> None:
     """Run the LLM-powered rewrite pass for TACO problem JSON files.
 
@@ -341,20 +338,11 @@ def run_input_output_rewrite(
         problem_filenames: Optional specific problem files to process.
         override_log_path: Optional path to the override log used to persist fixes.
     """
-    problem_dir = (pathlib.Path.cwd() / problem_dir).resolve()
-    if not problem_dir.exists():
+    if not problem_dir.is_dir():
         raise FileNotFoundError(f"Problem directory does not exist: {problem_dir}")
-
-    if override_log_path is None:
-        override_log_path = DEFAULT_OVERRIDE_PATH
-    else:
-        override_log_path = (pathlib.Path.cwd() / override_log_path).resolve()
-
-    pyine.utils.reprod.load_dotenv()
 
     override_entries = _load_override_log(override_log_path)
     logger.info(f"using override log: {override_log_path}")
-
     overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
 
     prompt_chain_config = _get_prompt_chain_builder_config()
@@ -474,11 +462,24 @@ def run_input_output_rewrite(
             logger.warning(f"failed to fix {problem_filename} after {MAX_LLM_ATTEMPTS} attempts")
 
 
+def get_default_problem_dir_path() -> pathlib.Path:
+    """Get the default problem directory path based on the framework utils or cwd."""
+    try:
+        return pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    except FileNotFoundError:
+        return pathlib.Path.cwd() / "data" / "TACO" / "repackaged"
+
+
+def get_default_override_log_path() -> pathlib.Path:
+    """Get the default override log path based on framework utils."""
+    return pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--problem-dir",
     type=click.Path(path_type=pathlib.Path),
-    default=DEFAULT_PROBLEM_DIR,
+    default=None,
     show_default=True,
     help="Directory containing problem JSON files.",
 )
@@ -492,10 +493,11 @@ def run_input_output_rewrite(
 @click.option(
     "--override-log",
     type=click.Path(path_type=pathlib.Path),
-    help=f"Optional override log path. Defaults to the framework cache at {DEFAULT_OVERRIDE_PATH}.",
+    default=None,
+    help="Optional override log path. Defaults to the framework data cache location.",
 )
 def main(
-    problem_dir: pathlib.Path,
+    problem_dir: pathlib.Path | None,
     problem_filenames: tuple[pathlib.Path, ...],
     override_log: pathlib.Path | None,
 ) -> None:
@@ -507,6 +509,10 @@ def main(
         override_log: Optional path to the override log used to persist fixes.
     """
     pyine.utils.reprod.entrypoint_setup()
+    if problem_dir is None:
+        problem_dir = get_default_problem_dir_path()
+    if override_log is None:
+        override_log = get_default_override_log_path()
     run_input_output_rewrite(problem_dir, problem_filenames, override_log)
 
 
