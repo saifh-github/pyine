@@ -362,6 +362,14 @@ class SampleData(typing.NamedTuple):
     Note: these metrics are computed from the original traced code. If `has_code_override = True`,
     the metrics may not reflect the actual code in the `code` field.
     """
+    first_line_hit: int = 0
+    """Which visit (1-indexed) to first_line this segment starts at. 0 if not applicable."""
+    last_line_hit: int = 0
+    """Which visit (1-indexed) to last_line this segment ends at. 0 if not applicable."""
+    first_step_idx: int = 0
+    """Absolute trace step index of segment start. 0 if not applicable."""
+    last_step_idx: int = 0
+    """Absolute trace step index of segment end. 0 if not applicable."""
 
     def get_trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""

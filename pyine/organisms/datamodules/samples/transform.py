@@ -313,6 +313,10 @@ def _get_function_call_sample(
             comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
             has_code_override=False,
             complexity_metrics=trace_data.complexity_metrics.as_dict(),
+            first_line_hit=0,  # not tracked for function_return
+            last_line_hit=0,
+            first_step_idx=call_event.trace_step_idx,
+            last_step_idx=return_event.trace_step_idx,
         )
     return None  # no more candidates to consider, failed to get a function call
 
@@ -407,6 +411,16 @@ def _get_code_segment_sample(
             segment_start.trace_key.line,
             segment_end.trace_key.line,
         )
+        # compute hit counts using traced_steps_map
+        first_line_key = repr(segment_start.trace_key)
+        assert first_line_key in trace_data.traced_steps_map, f"missing key: {first_line_key}"
+        first_line_hit = trace_data.traced_steps_map[first_line_key].index(segment_start.trace_step_idx) + 1
+        last_line_key = repr(segment_end.trace_key)
+        assert last_line_key in trace_data.traced_steps_map, f"missing key: {last_line_key}"
+        last_line_hit = trace_data.traced_steps_map[last_line_key].index(segment_end.trace_step_idx) + 1
+        # get absolute step indices
+        first_step_idx = segment_start.trace_step_idx
+        last_step_idx = segment_end.trace_step_idx
         sample_tags = trace_meta.tags.copy()
         description = code_summary if code_summary is not None else ""
         sample_tags.append(f"sample_code_description:{int(bool(description))}")
@@ -428,6 +442,10 @@ def _get_code_segment_sample(
             comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
             has_code_override=False,
             complexity_metrics=trace_data.complexity_metrics.as_dict(),
+            first_line_hit=first_line_hit,
+            last_line_hit=last_line_hit,
+            first_step_idx=first_step_idx,
+            last_step_idx=last_step_idx,
         )
     return None  # no more candidate lists to consider, failed to get a segment sample
 
@@ -462,4 +480,8 @@ def _get_full_program_sample(
         comma_separated_tags=convert_to_comma_separated_tags(sample_tags),
         has_code_override=code_type_selection_result.code_override is not None,
         complexity_metrics=trace_data.complexity_metrics.as_dict(),
+        first_line_hit=0,  # not applicable for full program
+        last_line_hit=0,
+        first_step_idx=0,
+        last_step_idx=0,
     )

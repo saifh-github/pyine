@@ -167,6 +167,10 @@ class TestSampleBuilderPartialSamples:
             if sample.predict_type == SamplePredictType.frame_variables:
                 got_frame_variables = True
                 assert sample.trace_step_count <= 10
+                assert sample.first_line_hit >= 1, "hit count should be 1-indexed"
+                assert sample.last_line_hit >= 1
+                assert sample.first_step_idx >= 0
+                assert sample.last_step_idx >= sample.first_step_idx
         assert got_frame_variables, "should produce at least one frame_variables sample across seeds"
 
     def test_partial_sample_function_return(self, small_fake_reader: FakeTraceDatasetReader) -> None:

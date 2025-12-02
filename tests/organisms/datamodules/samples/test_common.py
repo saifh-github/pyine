@@ -232,6 +232,12 @@ class TestSampleData:
         )
         assert sample.get_tag_list() == []
 
+    def test_hit_count_fields_default_to_zero(self, sample_data: SampleData) -> None:
+        assert sample_data.first_line_hit == 0
+        assert sample_data.last_line_hit == 0
+        assert sample_data.first_step_idx == 0
+        assert sample_data.last_step_idx == 0
+
 
 class TestConvertToCommaSeparatedTags:
     """Tests for the convert_to_comma_separated_tags function."""
