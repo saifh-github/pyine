@@ -459,47 +459,56 @@ def _safe_execute_and_trace_code(
         ),
         name=identifier,
     )
-    process.start()
-    process_timeout = timeout_seconds + timeout_external_buffer_seconds
-    start_time = time.time()
-    latest_time_delta = 0
-    child_pid: typing.Any | None = None
-    status: str | None = None
-    returned_val = None
-    # wait until we get the child pid from the queue
-    while latest_time_delta < process_timeout and returned_val is None:
-        while result_queue.empty():
-            latest_time_delta = time.time() - start_time
-            if latest_time_delta > process_timeout:
-                break
-            time.sleep(sleep_duration_seconds)
-        if not result_queue.empty():
-            if child_pid is None:
-                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
-                status, child_pid = result_tuple
-                assert status == "started"
-            else:
-                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
-                status, returned_val = result_tuple
-                assert status in ("returned", "raised")
-    if status not in ("returned", "raised") and process.is_alive():
-        logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
-        process.kill()
-    process.join(timeout_external_buffer_seconds)
-    if process.exitcode != 0:
-        # note: this might not be an issue, solutions sometimes use sys.exit for outputs
-        logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
-    if status == "returned":
-        logger.debug(f"tracing subprocess returned results (name={identifier})")
-        assert isinstance(returned_val, TraceResult)
-        return returned_val
-    if status == "raised":
-        assert isinstance(returned_val, Exception)
-        logger.debug(f"tracing subprocess raised exception: {returned_val}")
-        raise returned_val
-    error_msg = f"tracing subprocess timed out after {latest_time_delta:.3f} seconds (name={identifier})"
-    logger.debug(error_msg)
-    raise TimeoutError(error_msg)
+    try:
+        process.start()
+        process_timeout = timeout_seconds + timeout_external_buffer_seconds
+        start_time = time.time()
+        latest_time_delta = 0
+        child_pid: typing.Any | None = None
+        status: str | None = None
+        returned_val = None
+        # wait until we get the child pid from the queue
+        while latest_time_delta < process_timeout and returned_val is None:
+            while result_queue.empty():
+                latest_time_delta = time.time() - start_time
+                if latest_time_delta > process_timeout:
+                    break
+                time.sleep(sleep_duration_seconds)
+            if not result_queue.empty():
+                if child_pid is None:
+                    result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                    status, child_pid = result_tuple
+                    assert status == "started"
+                else:
+                    result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                    status, returned_val = result_tuple
+                    assert status in ("returned", "raised")
+        if status not in ("returned", "raised") and process.is_alive():
+            logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
+            process.kill()
+        process.join(timeout_external_buffer_seconds)
+        if process.exitcode != 0:
+            # note: this might not be an issue, solutions sometimes use sys.exit for outputs
+            logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
+        if status == "returned":
+            logger.debug(f"tracing subprocess returned results (name={identifier})")
+            assert isinstance(returned_val, TraceResult)
+            return returned_val
+        if status == "raised":
+            assert isinstance(returned_val, Exception)
+            logger.debug(f"tracing subprocess raised exception: {returned_val}")
+            raise returned_val
+        error_msg = f"tracing subprocess timed out after {latest_time_delta:.3f} seconds (name={identifier})"
+        logger.debug(error_msg)
+        raise TimeoutError(error_msg)
+    finally:
+        # clean up multiprocessing resources to prevent file descriptor leaks
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=1)
+        process.close()
+        result_queue.close()
+        result_queue.join_thread()
 
 
 def _unsafe_execute_and_trace_code(
