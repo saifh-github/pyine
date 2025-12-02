@@ -2,6 +2,7 @@
 
 import pytest
 
+import pyine.data.traces.dataset_utils
 from pyine.organisms.datamodules.samples.configs import TraceFilteringConfig
 from pyine.organisms.datamodules.samples.filtering import (
     filter_traces,
@@ -104,27 +105,32 @@ class TestFilterTraces:
 
     def test_filtering_by_args_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         traces = small_fake_reader.trace_metadata
-        total_traces = len(traces)
-        # verify some traces exceed the threshold (so filtering can happen)
-        traces_exceeding = sum(1 for t in traces if len(str(t.inputs)) + len(str(t.expected_output)) > 10)
-        if traces_exceeding == 0:
-            pytest.skip("no traces exceed args length threshold, cannot test filtering")
+
+        def get_args_length(t: pyine.data.traces.dataset_utils.TraceMetadata) -> int:
+            return len(str(t.inputs)) + len(str(t.expected_output))
+
+        args_length_map = {idx: get_args_length(traces[idx]) for idx in range(len(traces))}
+        unique_lengths = sorted(set(args_length_map.values()))
+        if len(unique_lengths) < 2:
+            # all traces have the same args length; set threshold below to filter all
+            if unique_lengths[0] <= 1:
+                pytest.skip("cannot set max_args_length below 1 to exercise filtering")
+            length_threshold = unique_lengths[0] - 1
+        else:
+            # set threshold to the smallest value so some traces are filtered
+            length_threshold = unique_lengths[0]
         cfg = TraceFilteringConfig(
             max_trace_steps=None,
             max_code_line_count=None,
             max_code_line_length=None,
             max_code_length=None,
-            max_args_length=10,
+            max_args_length=length_threshold,
         )
         results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
-        # verify filtering actually removed some traces
-        assert results.kept_trace_count < total_traces, "filtering should remove some traces"
-        assert results.filtered_by_var_length > 0
+        expected_count = sum(1 for al in args_length_map.values() if al <= length_threshold)
+        assert results.kept_trace_count == expected_count
         for t in results.kept_traces:
-            inputs_str = str(t.inputs)
-            expected_output_str = str(t.expected_output)
-            combined_length = len(inputs_str) + len(expected_output_str)
-            assert combined_length <= 10
+            assert get_args_length(t) <= length_threshold
 
     def test_filtering_by_code_line_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         traces = small_fake_reader.trace_metadata

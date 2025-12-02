@@ -3,6 +3,7 @@
 import pathlib
 
 import pytest
+from pytest_mock import MockerFixture
 
 import pyine.data.traces.dataset_utils
 import pyine.prompts
@@ -296,17 +297,20 @@ class TestSelectionWithPromptDb:
             prompt="hints/docs",
             result=hint_code,
             prompt_name="hints/docs",
+            tags=["augment:hinted"],
         )
         return db, trace_id_str
 
-    @pytest.mark.skip(reason="Test depends on prompt manager having hints/* templates registered")
     def test_db_lookup_finds_hinted_code(
         self,
         small_fake_reader: FakeTraceDatasetReader,
         prompt_db_with_hints: tuple[pyine.prompts.PromptResultDB, str],
+        mocker: MockerFixture,
     ) -> None:
         db, trace_id_str = prompt_db_with_hints
         traces = small_fake_reader.trace_metadata
+        # patch list_prompts to include our test prompt name
+        mocker.patch("pyine.prompts.manager.list_prompts", return_value=["hints/docs"])
         trace_data = TraceDatasetToSampleCodeTypeMappings.create_from_traces(traces, db)
         selection_config = SampleSelectionConfig(
             allow_db_lookups=True,

@@ -254,31 +254,34 @@ class TestSampleBuilderFiltering:
         assert stats["filtered/by_step_count"] > 0
 
     def test_filtering_by_args_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
-        sb_no_filter = SampleBuilder(source_data=[small_fake_reader], selection_config=default_selection_config())
-        total_traces = len(sb_no_filter)
-        # find traces that exceed the args length threshold
-        traces_exceeding_threshold = sum(
-            1 for t in small_fake_reader.trace_metadata if len(str(t.inputs)) + len(str(t.expected_output)) > 10
-        )
-        if traces_exceeding_threshold == 0:
-            pytest.skip("no traces exceed args length threshold, cannot test filtering")
-        cfg = TraceFilteringConfig(max_args_length=10)
+        traces = small_fake_reader.trace_metadata
+
+        def get_args_length(t: pyine.data.traces.dataset_utils.TraceMetadata) -> int:
+            return len(str(t.inputs)) + len(str(t.expected_output))
+
+        args_length_map = {idx: get_args_length(traces[idx]) for idx in range(len(traces))}
+        unique_lengths = sorted(set(args_length_map.values()))
+        if len(unique_lengths) < 2:
+            # all traces have the same args length; set threshold below to filter all
+            if unique_lengths[0] <= 1:
+                pytest.skip("cannot set max_args_length below 1 to exercise filtering")
+            length_threshold = unique_lengths[0] - 1
+        else:
+            # set threshold to the smallest value so some traces are filtered
+            length_threshold = unique_lengths[0]
+        cfg = TraceFilteringConfig(max_args_length=length_threshold)
         sb_filtered = SampleBuilder(
             source_data=[small_fake_reader],
             filtering_config=cfg,
             selection_config=default_selection_config(),
         )
-        # verify filtering actually removed some traces
-        assert len(sb_filtered) < total_traces, "filtering should remove some traces"
+        expected_count = sum(1 for al in args_length_map.values() if al <= length_threshold)
+        assert len(sb_filtered) == expected_count
         for st in sb_filtered.selection_results:
             tr = small_fake_reader[st.trace_meta.index]
-            inputs_str = str(tr.inputs)
-            expected_output_str = str(tr.expected_output)
-            combined_length = len(inputs_str) + len(expected_output_str)
-            assert combined_length <= 10
+            assert get_args_length(tr) <= length_threshold
         stats = sb_filtered.get_stats()
         assert "filtered/by_var_length" in stats
-        assert stats["filtered/by_var_length"] > 0
 
     def test_no_filtering_when_config_is_none(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         sb_default = SampleBuilder(source_data=[small_fake_reader], selection_config=default_selection_config())
