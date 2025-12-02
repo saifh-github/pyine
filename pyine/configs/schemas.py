@@ -329,7 +329,7 @@ class ConfigDescription(pydantic.BaseModel):
             self.config.__cfg_description__ = self.description
         zen_meta = getattr(self.config, "zen_meta", None)
         if isinstance(zen_meta, collections.abc.MutableMapping):
-            # @@@@ TODO might need to update zen exclude?
+            # TODO might need to update zen exclude?
             zen_meta["__cfg_name__"] = self.name
             zen_meta["__cfg_group__"] = self.group
             zen_meta["__cfg_package__"] = self.package

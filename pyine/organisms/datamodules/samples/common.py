@@ -327,7 +327,7 @@ class SampleData(typing.NamedTuple):
     """Entrypoint name used when executing a target function (may be empty if irrelevant/unused)."""
     first_line: int
     """First execution line in the code string (should be 0 for full execs, non-zero for partial execs)."""
-    last_line: int  # @@@@@ TODO: go back and verify that the first/last lines are defined and used correctly
+    last_line: int
     """Last potential execution line in the code string (should be total number of code lines for full execs)."""
     inputs: str
     """Provided input args (for full execution or function calls), or intermediary state (for partial execs)."""

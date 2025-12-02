@@ -456,7 +456,6 @@ def prepare_resume_artifacts(
                 continue
             target_path = runtime.output_dir_path / target_name
             shutil.copy2(source_path, target_path)
-    # @@@@ TODO: add warnings if resuming from different commit/seed?
     return resume_artifacts
 
 
