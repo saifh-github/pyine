@@ -885,7 +885,8 @@ def write_dataset(
             if not traces_to_write:
                 log(f"{problem}: no valid solution found")
             else:
-                log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {written_outputs})")
+                new_total = written_outputs + len(traces_to_write)
+                log(f"writing {len(traces_to_write)} traces to LMDB dataset... (total so far: {new_total})")
                 put_result = writer.put_batch(
                     traces_to_write,
                     show_progress=False,
