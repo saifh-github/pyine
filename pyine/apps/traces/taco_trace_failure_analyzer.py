@@ -17,7 +17,7 @@ import pathlib
 import typing
 
 import click
-import langchain_core.exceptions
+import langchain_core.exceptions  # pyright: ignore[reportUnusedImport]
 import openai
 import orjson
 

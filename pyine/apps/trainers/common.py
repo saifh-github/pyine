@@ -10,7 +10,7 @@ import typing
 import pydantic
 import transformers
 
-import pyine.configs.schemas
+import pyine.configs.schemas  # pyright: ignore[reportUnusedImport]
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
