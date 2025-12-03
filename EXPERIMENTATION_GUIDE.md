@@ -64,7 +64,8 @@ basis for training and evaluating model organisms.
 
 This step is quite time-consuming, and you might want to avoid it by just downloading a dataset
 of already-generated traces. See once again the shared drive for more information, or contact
-maintainers.
+maintainers. Full instructions for generating the TACO 10s10t-v1 dataset are also availabe
+[here](./pyine/apps/README-10s10t-v1.md).
 
 **Note:** by default, we trace all solutions for all code problems, so this step can be done prior
 to doing any train/valid/test splitting (which is the next step).
@@ -101,7 +102,7 @@ python -m pyine.apps.write.dataset_writer traces \
 
 **Output:** Creates `<PYINE_DATA_ROOT>/traces/TACO/<tag>.<date>.lmdb` containing execution traces.
 
-For more details, see [`pyine/apps/README.md`](./pyine/apps/README.md#write-execution-traces-and-deltas-datasets).
+For more detail on the tracing app itself, see [`pyine/apps/README.md`](./pyine/apps/README.md#write-execution-traces-and-deltas-datasets).
 
 ______________________________________________________________________
 

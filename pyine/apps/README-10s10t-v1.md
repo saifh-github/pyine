@@ -52,7 +52,26 @@ This should create 26 partitions in `<PYINE_DATA_ROOT>/splits/` named as follows
     ...
 ```
 
-## Step 3: Generate the PyINE traces dataset
+## Step 3: Generate or Download Metadata Overrides for TACO problems (optional)
+
+The TACO dataset possesses a number of metadata issues that can be fixed using LLMs to infer e.g.
+proper program entrypoints and arguments unpacking strategies. This is done using the
+`taco_trace_failure_analyzer.py` app (more info [here](./README.md)). You can also download the
+overrides directly if you wish to avoid launching the LLM invocation pipeline yourself; refer to
+the [experimentation guide](../../EXPERIMENTATION_GUIDE.md) for download links.
+
+The overrides should be stored as a json file in the following location:
+
+```
+    <PYINE_CACHE_ROOT>/overrides/TACO/problem_data_overrides.json
+   or
+    <PYINE_DATA_ROOT>/cache/overrides/TACO/problem_data_overrides.json
+```
+
+This step is optional, but without it, up to 20% of all code snippets in the TACO dataset may be
+impossible to use properly.
+
+## Step 4: Generate the PyINE traces dataset
 
 For each of the above partitions, we will now generate a dataset of traced solutions; for this first
 version, we will ask for 10 solutions to be traced per problem, each with 10 different tests
