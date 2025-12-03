@@ -191,6 +191,84 @@ async def test_outcome_evaluator_large_batch_base_config(
 
 
 @pytest.mark.asyncio
+async def test_compute_category_wise_metrics_no_grader() -> None:
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator.add_sample(identifier="s1", expected="42", predicted="42", tags=["easy"])
+    evaluator.add_sample(identifier="s2", expected="abc", predicted="xyz", tags=["hard"])
+    evaluator.add_sample(identifier="s3", expected="1.0", predicted="1", tags=["easy"])  # soft match only
+    evaluator.add_sample(identifier="s4", expected="ok", predicted="ok", tags=["hard"])
+    identifier_to_categories = {
+        "s1": ["code_type/original", "predict_type/program_output"],
+        "s2": ["code_type/original", "predict_type/program_output"],
+        "s3": ["code_type/obfuscated", "predict_type/program_output"],
+        "s4": ["code_type/obfuscated", "predict_type/frame_variables"],
+    }
+    category_metrics = await evaluator.compute_category_wise_metrics(identifier_to_categories)
+    # code_type/original: s1 (hard=1, soft=1), s2 (hard=0, soft=0) -> 0.5, 0.5
+    assert "code_type/original" in category_metrics
+    assert category_metrics["code_type/original"]["accuracy_hard"] == pytest.approx(0.5)
+    assert category_metrics["code_type/original"]["accuracy_soft"] == pytest.approx(0.5)
+    assert category_metrics["code_type/original"]["count"] == 2
+    # code_type/obfuscated: s3 (hard=0, soft=1), s4 (hard=1, soft=1) -> 0.5, 1.0
+    assert "code_type/obfuscated" in category_metrics
+    assert category_metrics["code_type/obfuscated"]["accuracy_hard"] == pytest.approx(0.5)
+    assert category_metrics["code_type/obfuscated"]["accuracy_soft"] == pytest.approx(1.0)
+    assert category_metrics["code_type/obfuscated"]["count"] == 2
+    # predict_type/program_output: s1, s2, s3
+    assert "predict_type/program_output" in category_metrics
+    assert category_metrics["predict_type/program_output"]["count"] == 3
+    # predict_type/frame_variables: s4 only
+    assert "predict_type/frame_variables" in category_metrics
+    assert category_metrics["predict_type/frame_variables"]["count"] == 1
+    assert category_metrics["predict_type/frame_variables"]["accuracy_hard"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_compute_category_wise_metrics_with_grader() -> None:
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator._llm_grader_chain_config = _DummyGraderChain(
+        scorer=lambda exp, pred: 1.0 if exp.strip() == pred.strip() else 0.0
+    )
+    evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+    evaluator.add_sample(identifier="s2", expected="abc", predicted="xyz")
+    identifier_to_categories = {
+        "s1": ["cat_a"],
+        "s2": ["cat_a"],
+    }
+    category_metrics = await evaluator.compute_category_wise_metrics(identifier_to_categories)
+    assert "cat_a" in category_metrics
+    assert category_metrics["cat_a"]["accuracy_hard"] == pytest.approx(0.5)
+    assert category_metrics["cat_a"]["accuracy_soft"] == pytest.approx(0.5)
+    assert category_metrics["cat_a"]["accuracy_grader"] == pytest.approx(0.5)
+    assert category_metrics["cat_a"]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_compute_category_wise_metrics_empty_categories() -> None:
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+    # empty mapping should return empty result
+    category_metrics = await evaluator.compute_category_wise_metrics({})
+    assert category_metrics == {}
+    # unknown identifiers should be skipped, resulting in empty category
+    category_metrics = await evaluator.compute_category_wise_metrics({"unknown_id": ["cat1"]})
+    assert category_metrics == {}
+
+
+@pytest.mark.asyncio
+async def test_compute_category_wise_metrics_overlapping_categories() -> None:
+    evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator()
+    evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+    # sample belongs to multiple categories
+    identifier_to_categories = {"s1": ["cat_a", "cat_b", "cat_c"]}
+    category_metrics = await evaluator.compute_category_wise_metrics(identifier_to_categories)
+    assert len(category_metrics) == 3
+    for cat in ["cat_a", "cat_b", "cat_c"]:
+        assert category_metrics[cat]["accuracy_hard"] == 1.0
+        assert category_metrics[cat]["count"] == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.openai
 @pytest.mark.skipif(

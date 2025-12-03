@@ -76,6 +76,13 @@ class _FakeOutcomeEvaluator:
             ),
         )
 
+    async def compute_category_wise_metrics(
+        self,
+        identifier_to_categories: dict[str, list[str]],
+        score_threshold: float = 0.5,
+    ) -> dict[str, dict[str, typing.Any]]:
+        return {}
+
 
 @dataclasses.dataclass
 class _FakeArtifact:
@@ -401,6 +408,9 @@ async def test_evaluate_hf_model_generates_results(
             if not self.comma_separated_tags:
                 return []
             return self.comma_separated_tags.split(",")
+
+        def _asdict(self) -> dict[str, typing.Any]:
+            return dataclasses.asdict(self)
 
     def fake_is_hf_model(_model: typing.Any) -> bool:
         return True

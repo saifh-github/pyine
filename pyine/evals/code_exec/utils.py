@@ -430,6 +430,53 @@ class OutcomeEvaluator:
             )
         return output
 
+    async def compute_category_wise_metrics(
+        self,
+        identifier_to_categories: dict[str, list[str]],
+        score_threshold: float = 0.5,
+    ) -> dict[str, pyine.evals.utils.MetricsDictType]:
+        """Computes accuracy metrics grouped by category.
+
+        Args:
+            identifier_to_categories: Mapping from sample identifier to list of category strings.
+            score_threshold: Score threshold for LLM grader binary decisions.
+
+        Returns:
+            Dictionary mapping category string to MetricsDictType with accuracy_hard, accuracy_soft,
+            count, and optionally accuracy_grader.
+        """
+        category_to_identifiers: collections.defaultdict[str, list[str]] = collections.defaultdict(list)
+        for identifier, categories in identifier_to_categories.items():
+            for category in categories:
+                category_to_identifiers[category].append(identifier)
+        if self.is_llm_grader_available():
+            await SampleEval.gather_llm_scores(self.results)
+        identifier_to_eval: dict[str, SampleEval] = {r.identifier: r for r in self.results}
+        output: dict[str, pyine.evals.utils.MetricsDictType] = {}
+        for category, identifiers in sorted(category_to_identifiers.items()):
+            hard_correct, soft_correct, grader_correct = 0, 0, 0
+            total = 0
+            for identifier in identifiers:
+                if identifier not in identifier_to_eval:
+                    continue
+                eval_result = identifier_to_eval[identifier]
+                total += 1
+                hard_correct += int(eval_result.hard_match)
+                soft_correct += int(eval_result.soft_match.equal)
+                if self.is_llm_grader_available() and eval_result.llm_score is not None:
+                    grader_correct += int(eval_result.llm_score >= score_threshold)
+            if total == 0:
+                continue
+            category_metrics: pyine.evals.utils.MetricsDictType = {
+                "accuracy_hard": _safe_ratio(hard_correct, total),
+                "accuracy_soft": _safe_ratio(soft_correct, total),
+                "count": total,
+            }
+            if self.is_llm_grader_available():
+                category_metrics["accuracy_grader"] = _safe_ratio(grader_correct, total)
+            output[category] = category_metrics
+        return output
+
     async def compute_agreement_table(
         self,
         score_threshold: float = 0.5,
