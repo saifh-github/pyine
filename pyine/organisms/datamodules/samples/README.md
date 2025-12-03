@@ -213,12 +213,13 @@ which handles:
 
 Augmented code can come from two sources:
 
-1. **Direct trace execution**: has full trace data, supports all prediction types;
-2. **Prompt result DB lookup**: only program output is available, `has_code_override=True`.
-
-When code comes from the prompt DB, only the `program_output` prediction type is possible since we
-don't have intermediate execution state (and thus cannot access the required execution step data to
-generate partial samples).
+1. **LMDB trace datasets** written using the [dataset_writer.py](../../../apps/README.md) app: these
+   contain full trace data for specific code snippets which support all sample prediction types;
+2. **[Prompt result database](../../../prompts/README.md)** results: these only support samples
+   where we try to predict full program outputs. This is because we don't have intermediate
+   execution information and thus cannot access the required execution step data to generate
+   partial samples. Supporting all prediction types for augmented code contained in this database
+   can be done by creating a new LMDB trace dataset for these samples.
 
 ### Deterministic RNG
 
