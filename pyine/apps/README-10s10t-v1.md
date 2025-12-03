@@ -1,4 +1,6 @@
-# Generating the PyINE Traces Dataset from TACO (10s10t-v1, September 2025)
+# Generating the PyINE Traces Dataset from TACO
+
+`(TACO 10s10t-v1.4, December 2025)`
 
 Internal documentation link: https://docs.google.com/document/d/13MQf50_cjLsFmMlNbiPLvTAgVsRY9c-uQyTTX7IlQQ0
 
