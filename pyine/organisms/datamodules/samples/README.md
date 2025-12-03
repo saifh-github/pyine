@@ -124,21 +124,23 @@ targeting traces that would be harder to work with.
 
 ### Stage 2: Selection (`selection.py`)
 
-**Purpose:** Choose which traces to use and what code versions to sample from each trace family.
+**Purpose:** Choose which traces to use and what code versions to sample from each trace family. If
+possible and allowed, will also consider pre-generated yet untraced code augmentations from the
+[prompt result database](../../../prompts/README.md) in order to further diversity samples.
 
 **Configuration (`SampleSelectionConfig`):**
 
 - `code_type_prob_map`: probability distribution for selecting code augmentation types;
 - `samples_per_family`: how many samples to generate per trace family;
 - `draw_attempts`: retry count before giving up on a family;
-- `allow_db_lookups`: whether to fetch augmented code from the prompt result database;
+- `allow_db_lookups`: whether to fetch augmented code from the [prompt result database](../../../prompts/README.md);
 - `fallback_to_orig`: whether to fallback to original code if augmented code is unavailable.
 
 **Algorithm:**
 
 1. For each trace family, attempt to draw the desired code type(s);
 2. If available in the trace dataset, use it directly;
-3. If not available but `allow_db_lookups=True`, query the prompt result database;
+3. If not available but `allow_db_lookups=True`, query the [prompt result database](../../../prompts/README.md);
 4. If still not found and `fallback_to_orig=True`, use the original (unaugmented) code;
 5. Track statistics on success/fallback/failure.
 
