@@ -403,6 +403,35 @@ class TestSampleBuilderStats:
             assert key in stats
 
 
+class TestSampleBuilderEpoch:
+    """Tests for SampleBuilder epoch management."""
+
+    def test_set_epoch_triggers_refresh(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sb = SampleBuilder(source_data=[small_fake_reader], selection_config=default_selection_config())
+        call_log: list[int] = []
+
+        def _fake_prepare(self: SampleBuilder) -> None:
+            call_log.append(self.current_epoch)
+
+        monkeypatch.setattr(SampleBuilder, "_prepare_sampling_data", _fake_prepare)
+        sb.set_epoch(1)
+        sb.set_epoch(1)  # redundant epoch does not trigger refresh
+        sb.set_epoch(2)
+        assert call_log == [1, 2]
+
+    def test_set_epoch_rejects_negative_values(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+    ) -> None:
+        sb = SampleBuilder(source_data=[small_fake_reader], selection_config=default_selection_config())
+        with pytest.raises(ValueError):
+            sb.set_epoch(-1)
+
+
 class TestSampleBuilderIndexAccess:
     """Tests for index access on SampleBuilder."""
 

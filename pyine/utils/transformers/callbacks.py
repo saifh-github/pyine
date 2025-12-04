@@ -6,7 +6,13 @@ import transformers
 
 import pyine.utils.transformers.checkpoints
 
-__all__ = ["StdoutMilestones"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "StdoutMilestones",
+    "EpochAwarenessCallback",
+    "create_epoch_awareness_callback",
+]
 
 
 class StdoutMilestones(transformers.TrainerCallback):
@@ -209,3 +215,124 @@ class StdoutMilestones(transformers.TrainerCallback):
                 f"best_metric={state.best_metric}, "
                 f"best_model_checkpoint={state.best_model_checkpoint}"
             )
+
+
+class EpochAwarenessCallback(transformers.TrainerCallback):
+    """Forward trainer epoch values to registered datasets/parsers.
+
+    The callback intentionally keeps no custom state. Instead, it reads the current epoch from
+    ``TrainerState`` every time a hook fires and relays that integer value to each target's
+    ``set_epoch`` method (or to explicit setter callables).
+    """
+
+    def __init__(
+        self,
+        *,
+        epoch_targets: collections.abc.Iterable[typing.Any] | None = None,
+        epoch_setters: collections.abc.Iterable[collections.abc.Callable[[int], None]] | None = None,
+    ) -> None:
+        """Normalize the provided targets/setters immediately for quick dispatch later.
+
+        Args:
+            epoch_targets: Objects exposing ``set_epoch(int)`` that should receive epoch updates.
+            epoch_setters: Callables taking a single ``int`` epoch argument, allowing indirection when
+                a public ``set_epoch`` is not available or desirable.
+        """
+        self._epoch_setters: list[collections.abc.Callable[[int], None]] = []
+        if epoch_setters is not None:
+            for setter in epoch_setters:
+                if not callable(setter):
+                    raise TypeError("epoch_setters entries must be callables")
+                self._epoch_setters.append(setter)
+        if epoch_targets is not None:
+            for target in epoch_targets:
+                setter = getattr(target, "set_epoch", None)
+                if setter is None or not callable(setter):
+                    continue
+                self._epoch_setters.append(typing.cast("collections.abc.Callable[[int], None]", setter))
+
+    @staticmethod
+    def _coerce_epoch(epoch_value: float | int | None) -> int:
+        """Return a non-negative integer epoch derived from the Trainer state."""
+        if epoch_value is None:
+            return 0
+        if isinstance(epoch_value, float):
+            if epoch_value < 0:
+                return 0
+            return int(epoch_value)
+        return max(0, int(epoch_value))
+
+    def _propagate_epoch(self, epoch_value: int, hook: str) -> None:
+        """Send the epoch value to every registered setter and log the hook context."""
+        if not self._epoch_setters:
+            return
+        logger.debug(f"epoch-aware callback setting epoch={epoch_value} via {hook}")
+        for setter in self._epoch_setters:
+            setter(epoch_value)
+
+    @typing.override
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Propagate the trainer's current epoch before the first training step."""
+        self._propagate_epoch(self._coerce_epoch(state.epoch), hook="train_begin")
+
+    @typing.override
+    def on_epoch_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Update registered targets at the start of every epoch."""
+        self._propagate_epoch(self._coerce_epoch(state.epoch), hook="epoch_begin")
+
+
+def create_epoch_awareness_callback(
+    train_dataset: typing.Any,
+    datamodule: typing.Any,
+    subset_names: collections.abc.Iterable[str] | None,
+) -> EpochAwarenessCallback | None:
+    """Build an EpochAwarenessCallback for the provided dataset/datamodule if needed.
+
+    Args:
+        train_dataset: Dataset passed to the HuggingFace Trainer; used when it exposes ``set_epoch``.
+        datamodule: DataModule capable of returning parsers via ``get_parser``.
+        subset_names: Iterable of subset names to inspect on the datamodule (typically the train
+            subsets); entries without a reachable parser are skipped.
+
+    Returns:
+        An `EpochAwarenessCallback` when at least one target supports `set_epoch`, otherwise `None`.
+    """
+    seen_target_ids: set[int] = set()
+    epoch_targets: list[typing.Any] = []
+
+    def _register_candidate(candidate: typing.Any) -> None:
+        if candidate is None:
+            return
+        setter = getattr(candidate, "set_epoch", None)
+        if setter is None or not callable(setter):
+            return
+        candidate_id = id(candidate)
+        if candidate_id in seen_target_ids:
+            return
+        seen_target_ids.add(candidate_id)
+        epoch_targets.append(candidate)
+
+    _register_candidate(train_dataset)
+    if datamodule is not None and hasattr(datamodule, "get_parser"):
+        for subset_name in subset_names or []:
+            try:
+                parser = datamodule.get_parser(subset_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"skipping epoch-aware parser hookup for subset {subset_name}: {exc}")
+                continue
+            _register_candidate(parser)
+    if not epoch_targets:
+        return None
+    return EpochAwarenessCallback(epoch_targets=epoch_targets)

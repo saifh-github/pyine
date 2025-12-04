@@ -375,6 +375,142 @@ def test_train_configures_trainer_and_saves_artifacts(
     assert collator_calls and collator_calls[0]["wandb_run"] is runtime.wandb_run
 
 
+def test_train_adds_epoch_callback_for_epoch_aware_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    train_dataset = _FakePreparedDataset(
+        [
+            {
+                "input_ids": [1, 2],
+                "attention_mask": [1, 1],
+                "labels": [1, 2],
+            }
+        ]
+    )
+    valid_dataset = _FakePreparedDataset(
+        [
+            {
+                "input_ids": [10, 11],
+                "attention_mask": [1, 1],
+                "labels": [10, 11],
+                "sample_data": {"code_type": "bugfix"},
+            }
+        ]
+    )
+
+    class _FakeDataModule:
+        def get_hf_tokenized_examples_dataset(
+            self,
+            subset_name: str,
+            tokenizer: typing.Any,
+            model_max_seq_len: int,
+            **_: typing.Any,
+        ) -> _FakePreparedDataset:
+            del tokenizer
+            del model_max_seq_len
+            if subset_name == "train":
+                return train_dataset
+            assert subset_name == "valid"
+            return valid_dataset
+
+    class _FakeTrainingArgsConfig:
+        def __init__(self) -> None:
+            self.do_train = True
+
+        def model_dump(self) -> dict[str, typing.Any]:
+            return {
+                "output_dir": "ignored",
+                "per_device_train_batch_size": 2,
+            }
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.config = types.SimpleNamespace(name_or_path="fake")
+
+    class _FakeTokenizer:
+        def __init__(self) -> None:
+            self.padding_side = "right"
+
+    config = types.SimpleNamespace(
+        training_args_config=_FakeTrainingArgsConfig(),
+        get_model=lambda: _FakeModel(),
+        get_tokenizer=lambda: _FakeTokenizer(),
+        sample_category_extraction_config=None,
+        datamodule_config=types.SimpleNamespace(
+            train_subset_names=["train"],
+            valid_subset_names=["valid"],
+            eval_subset_names=[],
+        ),
+        use_wandb_logging=False,
+    )
+    _install_collator_stub(config)
+    runtime = types.SimpleNamespace(wandb_run=None)
+    epoch_callback_calls: list[dict[str, typing.Any]] = []
+    sentinel_callback = object()
+
+    def _fake_create_epoch_cb(
+        *,
+        train_dataset: typing.Any,
+        datamodule: typing.Any,
+        subset_names: typing.Iterable[str],
+    ) -> typing.Any:
+        epoch_callback_calls.append(
+            {
+                "train_dataset": train_dataset,
+                "datamodule": datamodule,
+                "subset_names": tuple(subset_names),
+            }
+        )
+        return sentinel_callback
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "create_epoch_awareness_callback",
+        _fake_create_epoch_cb,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "infer_effective_max_seq_len",
+        lambda *_args, **_kwargs: 16,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "TrainingArguments",
+        lambda **kwargs: types.SimpleNamespace(**kwargs),
+    )
+
+    class _FakeTrainer:
+        def __init__(self, **kwargs: typing.Any) -> None:
+            self.kwargs = kwargs
+            self.model = kwargs["model"]
+            self.processing_class = kwargs["processing_class"]
+            self.callbacks = kwargs.get("callbacks", [])
+            self.trained = False
+
+        def train(self, **_: typing.Any) -> str:
+            self.trained = True
+            return "done"
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
+        lambda **kwargs: _FakeTrainer(**kwargs),
+    )
+    datamodule = _FakeDataModule()
+    trainer = pyine.apps.trainers.hf_trainer.train(
+        datamodule=datamodule,
+        config=config,
+        runtime=runtime,
+        resume_artifacts=None,
+    )
+    assert trainer.trained
+    assert epoch_callback_calls
+    assert epoch_callback_calls[0]["train_dataset"] is train_dataset
+    assert epoch_callback_calls[0]["datamodule"] is datamodule
+    assert epoch_callback_calls[0]["subset_names"] == ("train",)
+    assert trainer.callbacks[-1] is sentinel_callback
+
+
 def test_train_enables_wandb_batch_logging(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,

@@ -110,6 +110,13 @@ def train(
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
+    epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
+        train_dataset=train_ds,
+        datamodule=datamodule,
+        subset_names=getattr(config.datamodule_config, "train_subset_names", []),
+    )
+    if epoch_callback is not None:
+        callbacks.append(epoch_callback)
     trainer = transformers.Trainer(
         model=model,
         args=training_args,
