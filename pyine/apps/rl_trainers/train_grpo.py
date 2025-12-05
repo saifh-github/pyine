@@ -17,7 +17,7 @@ import pyine.data.datamodule
 import pyine.utils.reprod
 
 # Import local modules
-from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig, RewardConfig
+from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
 from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
 
 # Configure logging
@@ -216,7 +216,7 @@ def main(config: ExperimentConfig) -> None:
     # Create GRPO trainer
     logger.info("Initializing GRPO trainer...")
     trainer = GRPOTrainer(
-        model=model,
+        model=config.model.model_name_or_path,  # model,
         args=training_args,
         train_dataset=train_dataset,
         reward_funcs=reward_num_unique_letters,
@@ -265,13 +265,6 @@ if __name__ == "__main__":
             num_generations=4,
             max_completion_length=256,
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        ),
-        reward=RewardConfig(
-            use_hard_match=True,
-            use_soft_match=True,  # Use soft match as fallback
-            hard_match_reward=1.0,
-            soft_match_reward=0.5,
-            no_match_reward=0.0,
         ),
     )
 
