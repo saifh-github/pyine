@@ -1,0 +1,289 @@
+"""Main training script for GRPO with code execution rewards.
+
+This script demonstrates how to use TRL's GRPO trainer with verifiable
+rewards for code execution tasks. It can work with either the existing
+ConversationDataModule or directly with HuggingFace datasets.
+"""
+
+import logging
+import pathlib
+from typing import Any
+
+import torch
+import transformers
+from trl import GRPOConfig, GRPOTrainer
+
+import pyine.data.datamodule
+import pyine.utils.reprod
+
+# Import local modules
+from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig, RewardConfig
+from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
+from pyine.apps.rl_trainers.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def setup_model_and_tokenizer(
+    config: ModelConfig,
+) -> tuple[transformers.PreTrainedModel, transformers.PreTrainedTokenizer]:
+    """Setup model and tokenizer based on configuration.
+
+    Args:
+        config: Model configuration.
+
+    Returns:
+        Tuple of (model, tokenizer).
+    """
+    logger.info(f"Loading model: {config.model_name_or_path}")
+
+    # Load tokenizer
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        config.model_name_or_path,
+        trust_remote_code=True,
+    )
+
+    # Ensure tokenizer has pad token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        logger.info("Set pad_token to eos_token")
+
+    # Setup model loading kwargs
+    model_kwargs: dict[str, Any] = {
+        "trust_remote_code": True,
+    }
+
+    # Quantization
+    if config.load_in_8bit:
+        model_kwargs["load_in_8bit"] = True
+        logger.info("Loading model in 8-bit precision")
+    elif config.load_in_4bit:
+        model_kwargs["load_in_4bit"] = True
+        logger.info("Loading model in 4-bit precision")
+
+    # Load model
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        config.model_name_or_path,
+        **model_kwargs,
+    )
+
+    # Apply PEFT if requested
+    if config.use_peft:
+        from peft import LoraConfig, get_peft_model
+
+        logger.info("Applying LoRA adapters")
+
+        # Determine target modules if not specified
+        target_modules = config.target_modules
+        if target_modules is None:
+            # Common default for many models
+            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+            logger.info(f"Using default target modules: {target_modules}")
+
+        peft_config = LoraConfig(
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            target_modules=target_modules,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
+    return model, tokenizer
+
+
+def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDataModule[Any]:
+    """Load the ConversationDataModule from config.
+
+    Args:
+        config: Data configuration.
+
+    Returns:
+        Loaded and prepared datamodule.
+    """
+    # This is a simplified version - in practice, you'd need to:
+    # 1. Load the datamodule config from the specified path
+    # 2. Instantiate the datamodule
+    # 3. Call prepare_data() and setup()
+
+    # For now, raise a helpful error pointing to how to do this
+    raise NotImplementedError(
+        "Loading datamodule from config not yet fully implemented. "
+        "To use an existing datamodule, you need to:\n"
+        "1. Load the datamodule config from your config file\n"
+        "2. Instantiate it using config.instantiate_datamodule()\n"
+        "3. Call datamodule.prepare_data() and datamodule.setup()\n"
+        "See pyine/apps/trainers/common.py:prepare_datamodule() for reference.\n\n"
+        "Alternatively, set data.use_datamodule=False and provide a dataset_path."
+    )
+
+
+def main(config: ExperimentConfig) -> None:
+    """Main training function.
+
+    Args:
+        config: Experiment configuration.
+    """
+    # Validate config
+    config.validate()
+
+    # Set random seeds
+    pyine.utils.reprod.set_seed(config.seed)
+
+    logger.info(f"Starting experiment: {config.experiment_name}")
+
+    # Setup model and tokenizer
+    model, tokenizer = setup_model_and_tokenizer(config.model)
+
+    # Setup reward calculator and function
+    reward_calculator = CodeExecutionRewardCalculator(
+        use_hard_match=config.reward.use_hard_match,
+        use_soft_match=config.reward.use_soft_match,
+        hard_match_reward=config.reward.hard_match_reward,
+        soft_match_reward=config.reward.soft_match_reward,
+        no_match_reward=config.reward.no_match_reward,
+        strip_whitespace=config.reward.strip_whitespace,
+    )
+
+    reward_fn = create_grpo_reward_function(
+        reward_calculator=reward_calculator,
+        expected_outputs_key="expected_output",
+    )
+
+    # Load dataset
+    if config.data.use_datamodule:
+        logger.info("Loading dataset from datamodule...")
+        datamodule = load_datamodule(config.data)
+        train_dataset = prepare_grpo_dataset_from_datamodule(
+            datamodule=datamodule,
+            subset_name=config.data.train_subset_name,
+            tokenizer=tokenizer,
+        )
+    else:
+        logger.info("Loading dataset directly...")
+        train_dataset = prepare_grpo_dataset_simple(
+            dataset_path=config.data.dataset_path,
+            split=config.data.dataset_split_train,
+        )
+
+    # Apply max_samples limit if specified
+    if config.data.max_samples is not None:
+        original_size = len(train_dataset)
+        train_dataset = train_dataset.select(range(min(config.data.max_samples, original_size)))
+        logger.info(f"Limited dataset from {original_size} to {len(train_dataset)} samples")
+
+    logger.info(f"Training dataset size: {len(train_dataset)}")
+
+    # Setup GRPO training arguments
+    training_args = GRPOConfig(
+        output_dir=config.training.output_dir,
+        num_train_epochs=config.training.num_train_epochs,
+        per_device_train_batch_size=config.training.per_device_train_batch_size,
+        per_device_eval_batch_size=config.training.per_device_eval_batch_size,
+        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
+        learning_rate=config.training.learning_rate,
+        warmup_steps=config.training.warmup_steps,
+        logging_steps=config.training.logging_steps,
+        eval_steps=config.training.eval_steps,
+        save_steps=config.training.save_steps,
+        save_total_limit=config.training.save_total_limit,
+        bf16=config.training.bf16,
+        fp16=config.training.fp16,
+        report_to="wandb" if config.use_wandb else "none",
+        run_name=config.experiment_name if config.use_wandb else None,
+        # GRPO-specific args
+        num_generation_per_prompt=config.training.num_generation_per_prompt,
+        max_new_tokens=config.training.max_new_tokens,
+        temperature=config.training.temperature,
+        top_p=config.training.top_p,
+        kl_coef=config.training.kl_coef,
+    )
+
+    # Initialize W&B if requested
+    if config.use_wandb:
+        import wandb
+
+        wandb.init(
+            project=config.wandb_project,
+            name=config.experiment_name,
+            config={
+                "model": config.model.__dict__,
+                "data": config.data.__dict__,
+                "training": config.training.__dict__,
+                "reward": config.reward.__dict__,
+            },
+        )
+
+    # Create GRPO trainer
+    logger.info("Initializing GRPO trainer...")
+    trainer = GRPOTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        tokenizer=tokenizer,
+        reward_funcs=reward_fn,
+    )
+
+    # Train
+    logger.info("Starting training...")
+    trainer.train()
+
+    # Save final model
+    final_output_dir = pathlib.Path(config.training.output_dir) / "final_model"
+    logger.info(f"Saving final model to: {final_output_dir}")
+    trainer.save_model(str(final_output_dir))
+
+    logger.info("Training complete!")
+
+
+if __name__ == "__main__":
+    # Example configuration for quick testing
+    # In practice, you'd load this from a config file or use argparse
+
+    config = ExperimentConfig(
+        experiment_name="grpo_code_exec_test",
+        seed=42,
+        use_wandb=False,
+        model=ModelConfig(
+            model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
+            use_peft=True,  # Use LoRA for efficient training
+            lora_r=16,
+            lora_alpha=32,
+        ),
+        data=DataConfig(
+            use_datamodule=False,  # Set to True to use ConversationDataModule
+            dataset_path="trl-lib/ultrafeedback-prompt",  # Placeholder - replace with your dataset
+            dataset_split_train="train",
+            max_samples=100,  # Use small subset for testing
+        ),
+        training=GRPOTrainingConfig(
+            output_dir="./grpo_output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            learning_rate=1e-5,
+            logging_steps=5,
+            save_steps=50,
+            num_generation_per_prompt=4,
+            max_new_tokens=256,
+            bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        ),
+        reward=RewardConfig(
+            use_hard_match=True,
+            use_soft_match=True,  # Use soft match as fallback
+            hard_match_reward=1.0,
+            soft_match_reward=0.5,
+            no_match_reward=0.0,
+        ),
+    )
+
+    # Run training
+    main(config)
