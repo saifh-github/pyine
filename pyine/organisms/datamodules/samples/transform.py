@@ -237,32 +237,37 @@ def _get_function_call_sample(
         return_event: TraceEvent | None = None
         return_event_idx: int | None = None
         function_output_str: str | None = None
+        last_exception_at_depth: TraceEvent | None = None  # track exception events for the current function
         for step_idx in range(call_event_idx + 1, len(trace_data.traced_steps)):
             if trace_data.traced_steps[step_idx] is None:
                 continue  # invalid/external event, keep going
-            if (
-                trace_data.traced_steps[step_idx].event_type == TraceEventType.CALL
-                and trace_data.traced_steps[step_idx].trace_key.object == target_func_name
-            ):
+            curr_event = trace_data.traced_steps[step_idx]
+            if curr_event.event_type == TraceEventType.CALL and curr_event.trace_key.object == target_func_name:
                 # increase recursion depth (we need to find as many return calls)
                 target_func_return_depth += 1
-            elif (
-                trace_data.traced_steps[step_idx].event_type == TraceEventType.RETURN
-                and trace_data.traced_steps[step_idx].trace_key.object == target_func_name
-            ):
+                last_exception_at_depth = None  # reset exception tracking for nested call
+            elif curr_event.event_type == TraceEventType.EXCEPTION:
+                # track the exception event; it might be followed by a RETURN
+                if target_func_return_depth == 1:
+                    last_exception_at_depth = curr_event
+            elif curr_event.event_type == TraceEventType.RETURN and curr_event.trace_key.object == target_func_name:
                 # we assume that even when an exception is raised, we always get a 'return' event
                 target_func_return_depth -= 1
                 if target_func_return_depth == 0:
                     # we've found enough matching calls, stepping out
-                    return_event = trace_data.traced_steps[step_idx]
+                    return_event = curr_event
                     return_event_idx = step_idx
+                    # check for exception: first in RETURN event, then in preceding EXCEPTION event
                     if return_event.exception is not None:
-                        # if we are raising an exception, the expected output should be that exception
                         function_output_str = repr(return_event.exception)
+                    elif last_exception_at_depth is not None and last_exception_at_depth.exception is not None:
+                        # exception is in the preceding EXCEPTION event, not the RETURN event
+                        function_output_str = repr(last_exception_at_depth.exception)
                     else:
                         # otherwise, it's the returned value itself
                         function_output_str = repr(return_event.return_value)
                     break  # we found our matching return event, nothing else to do
+                last_exception_at_depth = None  # reset for outer depth
         if return_event is None:
             continue  # could not locate the matching return event; go find another candidate
         assert function_output_str is not None
