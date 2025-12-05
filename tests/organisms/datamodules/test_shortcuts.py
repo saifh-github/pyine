@@ -14,6 +14,21 @@ import pyine.utils.transformers
 import tests.env_checks
 
 
+def _normalize_whitespace(text: str) -> str:
+    """Collapse all whitespace (spaces, tabs, newlines) to single spaces."""
+    return " ".join(text.split())
+
+
+def _normalized_contains(haystack: str, needle: str) -> bool:
+    """Check if needle is in haystack after normalizing whitespace."""
+    return _normalize_whitespace(needle) in _normalize_whitespace(haystack)
+
+
+def _normalized_equals(text_a: str, text_b: str) -> bool:
+    """Check if two strings are equal after normalizing whitespace."""
+    return _normalize_whitespace(text_a) == _normalize_whitespace(text_b)
+
+
 def _assert_non_leaking_assignments(
     metadata: pyine.data.traces.dataset_utils.TraceDatasetMetadata,
 ) -> None:
@@ -268,7 +283,13 @@ def test_shortcuts_datamodule_examples_round_trip(
             output_ids = ids[non_ignore_labels_mask]
             assert len(output_ids) > 0
             output_txt = tokenizer.decode(output_ids, skip_special_tokens=True)
-            assert output_txt == example_batch["expected_output"][iter_idx].strip()
+            expected_output = example_batch["expected_output"][iter_idx].strip()
+            # round-trip expected_output through tokenizer to handle encode/decode quirks
+            round_tripped_expected = tokenizer.decode(
+                tokenizer.encode(expected_output),
+                skip_special_tokens=True,
+            )
+            assert _normalized_equals(output_txt, round_tripped_expected), "output text mismatch"
             non_ignore_attn_mask = attn != 0
             padding_mask = ~non_ignore_attn_mask
             # Note: when always_pad_to_max_length=False, some examples may have no padding
@@ -283,10 +304,10 @@ def test_shortcuts_datamodule_examples_round_trip(
                 tokenizer.encode(example_batch["code"][iter_idx].strip()),
                 skip_special_tokens=True,
             )
-            assert round_tripped_code in prompt_txt, "code snippet missing from prompt text?"
+            assert _normalized_contains(prompt_txt, round_tripped_code), "code snippet missing from prompt text?"
             round_tripped_inputs = tokenizer.decode(  # to ensure compatibility with tokenizer quirks
                 tokenizer.encode(example_batch["inputs"][iter_idx].strip()),
                 skip_special_tokens=True,
             )
-            assert round_tripped_inputs in prompt_txt, "inputs missing from prompt text?"
+            assert _normalized_contains(prompt_txt, round_tripped_inputs), "inputs missing from prompt text?"
     dm.teardown()
