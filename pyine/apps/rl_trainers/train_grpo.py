@@ -200,11 +200,11 @@ def main(config: ExperimentConfig) -> None:
         report_to="wandb" if config.use_wandb else "none",
         run_name=config.experiment_name if config.use_wandb else None,
         # GRPO-specific args
-        num_generation_per_prompt=config.training.num_generation_per_prompt,
-        max_new_tokens=config.training.max_new_tokens,
+        num_generations=config.training.num_generations,
+        max_completion_length=config.training.max_completion_length,
         temperature=config.training.temperature,
         top_p=config.training.top_p,
-        kl_coef=config.training.kl_coef,
+        beta=config.training.beta,
     )
 
     # Initialize W&B if requested
@@ -228,7 +228,6 @@ def main(config: ExperimentConfig) -> None:
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        tokenizer=tokenizer,
         reward_funcs=reward_fn,
     )
 
@@ -272,8 +271,8 @@ if __name__ == "__main__":
             learning_rate=1e-5,
             logging_steps=5,
             save_steps=50,
-            num_generation_per_prompt=4,
-            max_new_tokens=256,
+            num_generations=4,
+            max_completion_length=256,
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         ),
         reward=RewardConfig(

@@ -6,7 +6,6 @@ combining model, training, reward, and data settings.
 
 import pathlib
 from dataclasses import dataclass, field
-from typing import Literal
 
 
 @dataclass
@@ -140,10 +139,10 @@ class GRPOTrainingConfig:
     """Whether to use float16 precision."""
 
     # GRPO-specific settings
-    num_generation_per_prompt: int = 4
+    num_generations: int = 4
     """Number of completions to generate per prompt for GRPO."""
 
-    max_new_tokens: int = 256
+    max_completion_length: int = 256
     """Maximum number of new tokens to generate."""
 
     temperature: float = 0.7
@@ -152,7 +151,7 @@ class GRPOTrainingConfig:
     top_p: float = 0.9
     """Top-p (nucleus) sampling parameter."""
 
-    kl_coef: float = 0.05
+    beta: float = 0.05
     """KL divergence coefficient for GRPO."""
 
 
