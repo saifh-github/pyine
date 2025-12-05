@@ -248,7 +248,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert sample.predict_type == SamplePredictType.frame_variables
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_output_matches_local_variables_at_segment_end(
         self,
@@ -272,7 +272,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert sample.expected_output.startswith("{"), "output should be a dict repr"
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_first_line_hit_is_one_indexed(
         self,
@@ -296,7 +296,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert sample.first_line_hit >= 1, "first_line_hit should be >= 1 (1-indexed)"
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_last_line_hit_is_one_indexed(
         self,
@@ -320,7 +320,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert sample.last_line_hit >= 1, "last_line_hit should be >= 1 (1-indexed)"
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_step_indices_match_trace_positions(
         self,
@@ -350,7 +350,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert last_step.trace_step_idx == sample.last_step_idx
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_trace_step_count_matches_segment_size(
         self,
@@ -377,7 +377,7 @@ class TestCodeSegmentSampleAccuracy:
                 assert sample.trace_step_count <= frame_variables_only_config.max_partial_trace_steps
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_combine_vars_true_includes_globals(
         self,
@@ -395,7 +395,7 @@ class TestCodeSegmentSampleAccuracy:
         )
         trace = trace_from_code(CODE_GLOBAL_AND_LOCAL, inputs=5, entrypoint="compute")
         trace_meta = make_trace_metadata(trace)
-        for seed in range(50):
+        for seed in range(100):
             rng = np.random.default_rng(seed)
             sample = _get_code_segment_sample(
                 trace_data=trace,
@@ -405,13 +405,12 @@ class TestCodeSegmentSampleAccuracy:
                 transform_config=config,
                 rng=rng,
             )
-            if sample is not None:
-                # check if MULTIPLIER (global) is in the inputs or output
-                # note: this may or may not include globals depending on where the segment falls
-                assert sample.predict_type == SamplePredictType.frame_variables
-                break
-        else:
-            pytest.skip("could not generate a segment sample")
+            if sample is None:
+                continue
+            assert sample.predict_type == SamplePredictType.frame_variables
+            if "MULTIPLIER" in sample.inputs or "MULTIPLIER" in sample.expected_output:
+                return
+        pytest.fail("failed to generate segment sample that surfaces global variables")
 
 
 @pytest.mark.slow

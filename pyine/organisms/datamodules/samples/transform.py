@@ -85,7 +85,9 @@ def generate_sample(
         rng=rng,
     )
     should_fallback_to_segments = False
+    attempted_partial_sample = False
     if pred_type_selection_result.predict_type == SamplePredictType.function_return:
+        attempted_partial_sample = True
         # first, if requested, try to generate a sample for a function call
         sample = _get_function_call_sample(
             trace_data=trace_data,
@@ -101,6 +103,7 @@ def generate_sample(
         if transform_config.functions_fallback_to_segments:
             should_fallback_to_segments = True
     if pred_type_selection_result.predict_type == SamplePredictType.frame_variables or should_fallback_to_segments:
+        attempted_partial_sample = True
         # if requested (or as a fallback from the function call sample), try to generate a segment sample
         sample = _get_code_segment_sample(
             trace_data=trace_data,
@@ -115,6 +118,8 @@ def generate_sample(
             return sample
     if pred_type_selection_result.predict_type == SamplePredictType.next_step_key:
         raise NotImplementedError  # @@@@ TODO
+    if attempted_partial_sample and not transform_config.fallback_to_orig:
+        return None
     # ultimate fallback: return a sample for the full program output
     return _get_full_program_sample(
         trace_data=trace_data,

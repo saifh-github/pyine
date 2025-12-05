@@ -261,7 +261,7 @@ class TestCodeSegmentEdgeCases:
                 hit_counts.add(sample.first_line_hit)
                 hit_counts.add(sample.last_line_hit)
         # with multiple loop iterations, we should see different hit counts
-        assert len(hit_counts) >= 1, "should have at least one hit count"
+        assert len(hit_counts) >= 2, "should capture multiple distinct hit counts across loop iterations"
 
     def test_segment_combine_vars_false_excludes_globals(
         self,
@@ -279,7 +279,7 @@ class TestCodeSegmentEdgeCases:
         )
         trace = trace_from_code(CODE_GLOBAL_AND_LOCAL, inputs=5, entrypoint="compute")
         trace_meta = make_trace_metadata(trace)
-        for seed in range(50):
+        for seed in range(100):
             rng = np.random.default_rng(seed)
             sample = _get_code_segment_sample(
                 trace_data=trace,
@@ -289,13 +289,13 @@ class TestCodeSegmentEdgeCases:
                 transform_config=config,
                 rng=rng,
             )
-            if sample is not None:
-                # MULTIPLIER is a global, should not be in inputs/output when combining is disabled
-                # (unless there are no locals, in which case it might be empty)
-                assert sample.predict_type == SamplePredictType.frame_variables
-                break
-        else:
-            pytest.skip("could not generate a segment sample")
+            if sample is None:
+                continue
+            assert sample.predict_type == SamplePredictType.frame_variables
+            assert "MULTIPLIER" not in sample.inputs
+            assert "MULTIPLIER" not in sample.expected_output
+            return
+        pytest.fail("failed to generate segment sample to validate global exclusion")
 
     def test_segment_step_count_respects_max_cap(
         self,
@@ -326,7 +326,7 @@ class TestCodeSegmentEdgeCases:
                 assert sample.trace_step_count <= 3, "step count should respect max cap"
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_segment_step_count_respects_min_threshold(
         self,
@@ -357,7 +357,7 @@ class TestCodeSegmentEdgeCases:
                 assert sample.trace_step_count >= 3, "step count should meet min threshold"
                 break
         else:
-            pytest.skip("could not generate a segment sample")
+            pytest.fail("could not generate a segment sample")
 
     def test_trace_ending_without_return_logs_warning(
         self,
@@ -399,8 +399,8 @@ class TestTransformStrategyBehavior:
         config = SampleTransformConfig(
             transform_strategy=SampleTransformStrategy.random,
             predict_type_prob_map={
-                SamplePredictType.function_return: 0.5,
-                SamplePredictType.frame_variables: 0.5,
+                SamplePredictType.function_return: 0.4,
+                SamplePredictType.frame_variables: 0.4,
             },
             max_partial_trace_steps=100,
             min_partial_trace_steps=1,
@@ -409,9 +409,9 @@ class TestTransformStrategyBehavior:
         )
         trace = trace_from_code(CODE_LOOP_MULTIPLE_ITERATIONS, inputs=4, entrypoint="sum_range")
         selection = make_selected_sample(trace)
-        # with 100% partial sample probability, should get at least one partial
         got_partial = False
-        for seed in range(50):
+        got_program_output = False
+        for seed in range(200):
             rng = np.random.default_rng(seed)
             sample = generate_sample(
                 code_type_selection_result=selection,
@@ -420,10 +420,15 @@ class TestTransformStrategyBehavior:
                 transform_config=config,
                 rng=rng,
             )
-            if sample is not None and sample.predict_type != SamplePredictType.program_output:
+            assert sample is not None
+            if sample.predict_type == SamplePredictType.program_output:
+                got_program_output = True
+            else:
                 got_partial = True
+            if got_partial and got_program_output:
                 break
-        assert got_partial, "random strategy should produce partial samples"
+        assert got_partial, "random strategy should eventually yield partial samples"
+        assert got_program_output, "random strategy should sometimes fall back to program output when mass < 1.0"
 
     def test_if_too_long_strategy_triggers_for_long_traces(
         self,

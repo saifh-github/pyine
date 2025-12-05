@@ -241,6 +241,26 @@ class TestGenerateSample:
         assert sample is not None
         assert sample.predict_type == SamplePredictType.program_output
 
+    def test_partial_failure_respects_disabled_fallback(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        selection = make_selected_sample(small_fake_reader, 0)
+        trace_data = small_fake_reader[0]
+        cfg = SampleTransformConfig(
+            transform_strategy=SampleTransformStrategy.always,
+            max_inputs_str_length=0,
+            max_output_str_length=0,
+            predict_type_prob_map={SamplePredictType.frame_variables: 1.0},
+            fallback_to_orig=False,
+        )
+        rng = np.random.default_rng(0)
+        sample = generate_sample(
+            code_type_selection_result=selection,
+            trace_data=trace_data,
+            code_summary="",
+            transform_config=cfg,
+            rng=rng,
+        )
+        assert sample is None
+
     def test_sample_tags_include_metadata(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         selection = make_selected_sample(small_fake_reader, 0)
         trace_data = small_fake_reader[0]
