@@ -1,19 +1,17 @@
 ## List of High-Level TODOs, FIXMEs, and Improvement Ideas
 
-Last review date: 2025-11-10
+Last review date: 2025-12-04
 
 **High priority, bugs, and issues:**
 
-- none
+- Eval metrics definitions (for wandb) skip the category metrics; we might be able to predetermine
+  those, create a sort of registry for all metrics, and query that registry for wandb definitions?
 
 **Medium priority:**
 
 - Refactor shortcuts datamodule to have a base interface for anything samples-related, and make the shortcuts dm itself
   only related to the learning of a "shortcuts" bias by models (based on data preparation settings); this will help
   simplify the creation of other dm classes that are also sample-based but that have different biases later.
-- Let `SampleBuilder` deterministically pull one sample per cousin cluster; extend the clustering metadata in
-  `pyine/organisms/datamodules/utils/samples.py` and add a selector that enforces one representative per cluster
-  while keeping existing sampling modes intact.
 - Harden trace execution edge-case handling (stdin/stdout mismatches, long runtimes) by tightening safeguards in
   `pyine/utils/code/execution.py` and the dataset writer; focus on clearer timeout reporting, better tagging,
   and limited retries for recoverable failures.
