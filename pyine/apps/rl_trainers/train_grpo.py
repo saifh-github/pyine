@@ -19,7 +19,6 @@ import pyine.utils.reprod
 # Import local modules
 from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig, RewardConfig
 from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
-from pyine.apps.rl_trainers.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
 
 # Configure logging
 logging.basicConfig(
@@ -126,6 +125,13 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
     )
 
 
+# Dummy reward function for demonstration purposes
+def reward_num_unique_letters(completions: list[list[dict[str, str]]], **_kwargs: dict[str, Any]) -> list[float]:
+    """Reward function that rewards completions with more unique letters."""
+    completion_contents = [completion[0]["content"] for completion in completions]
+    return [float(len(set(content))) for content in completion_contents]
+
+
 def main(config: ExperimentConfig) -> None:
     """Main training function.
 
@@ -142,21 +148,6 @@ def main(config: ExperimentConfig) -> None:
 
     # Setup model and tokenizer
     model, tokenizer = setup_model_and_tokenizer(config.model)
-
-    # Setup reward calculator and function
-    reward_calculator = CodeExecutionRewardCalculator(
-        use_hard_match=config.reward.use_hard_match,
-        use_soft_match=config.reward.use_soft_match,
-        hard_match_reward=config.reward.hard_match_reward,
-        soft_match_reward=config.reward.soft_match_reward,
-        no_match_reward=config.reward.no_match_reward,
-        strip_whitespace=config.reward.strip_whitespace,
-    )
-
-    reward_fn = create_grpo_reward_function(
-        reward_calculator=reward_calculator,
-        expected_outputs_key="expected_output",
-    )
 
     # Load dataset
     if config.data.use_datamodule:
@@ -228,7 +219,7 @@ def main(config: ExperimentConfig) -> None:
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        reward_funcs=reward_fn,
+        reward_funcs=reward_num_unique_letters,
     )
 
     # Train
