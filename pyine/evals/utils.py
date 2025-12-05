@@ -5,6 +5,7 @@ import enum
 import typing
 
 import langchain_core.runnables
+import numpy as np
 import pydantic
 import torch
 import transformers
@@ -12,6 +13,7 @@ import transformers.trainer_callback
 import wandb
 
 import pyine.configs.schemas
+import pyine.evals.constants
 import pyine.utils.transformers
 
 type MetricsDictType = dict[str, float | int | str]
@@ -236,6 +238,36 @@ def parse_token_usage_from_response(
     if not any_known:
         raise ValueError("could not deduce token usage information from the provided response")
     return result
+
+
+def compute_aggregated_token_usage_metrics(
+    token_usage_data: typing.Iterable[TokenUsageInfo],
+) -> dict[str, float]:
+    """Computes aggregated token usage statistics across all samples.
+
+    All token usage metrics are aggregated using mean, median, std, min, and max operators
+    across all samples. If the sample list is empty, an empty dict is returned.
+
+    Args:
+        token_usage_data: List of token usage data samples containing counts to aggregate.
+
+    Returns:
+        Dict mapping metric names (with an aggregation suffix) to value of aggregated metric.
+    """
+    token_usage_counts: list[dict[str, TokenCount]] = [d.asdict() for d in token_usage_data]
+    if not token_usage_counts:
+        return {}
+    output: dict[str, float] = {}
+    for metric_name in TokenUsageInfo.get_metric_names():
+        counts = [count[metric_name] for count in token_usage_counts]
+        if any(count == "unknown" for count in counts):
+            for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+                output[f"{metric_name}_{aggr_name}"] = np.nan
+        else:
+            arr = np.array(counts)
+            for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
+                output[f"{metric_name}_{aggr_name}"] = float(aggr_func(arr))
+    return output
 
 
 def print_metrics(

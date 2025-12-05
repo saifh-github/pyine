@@ -316,13 +316,13 @@ def test_train_configures_trainer_and_saves_artifacts(
     config = types.SimpleNamespace(
         training_args_config=_FakeTrainingArgsConfig(),
         datamodule_config=_FakeDatamoduleConfig(cache_dir=cache_root),
+        evals_config=types.SimpleNamespace(category_extraction_config=None),
         gradient_checkpointing=True,
         use_wandb_logging=True,
         collator_batch_logging=False,
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
-        sample_category_extraction_config=None,
     )
     collator_calls = _install_collator_stub(config)
 
@@ -435,12 +435,12 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
         training_args_config=_FakeTrainingArgsConfig(),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
-        sample_category_extraction_config=None,
         datamodule_config=types.SimpleNamespace(
             train_subset_names=["train"],
             valid_subset_names=["valid"],
             eval_subset_names=[],
         ),
+        evals_config=types.SimpleNamespace(category_extraction_config=None),
         use_wandb_logging=False,
     )
     _install_collator_stub(config)
@@ -605,13 +605,13 @@ def test_train_enables_wandb_batch_logging(
     config = types.SimpleNamespace(
         training_args_config=_FakeTrainingArgsConfig(),
         datamodule_config=types.SimpleNamespace(),
+        evals_config=types.SimpleNamespace(category_extraction_config=None),
         gradient_checkpointing=False,
         use_wandb_logging=True,
         collator_batch_logging=True,
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
-        sample_category_extraction_config=None,
     )
 
     captured_handlers: list[typing.Callable[[pyine.utils.transformers.CollatorBatchLogRecord], None]] = []
@@ -1100,12 +1100,12 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
         config = types.SimpleNamespace(
             training_args_config=_TinyTrainingArgsConfig(output_dir=output_dir, max_steps=max_steps),
             datamodule_config=_TinyDatamoduleConfig(cache_dir=output_dir / "tokenized_cache"),
+            evals_config=types.SimpleNamespace(category_extraction_config=None),
             gradient_checkpointing=False,
             use_wandb_logging=False,
             output_dir=str(output_dir),
             get_model=_build_tiny_model,
             get_tokenizer=_SimpleTokenizer,
-            sample_category_extraction_config=None,
         )
         _install_collator_stub(config, collator_factory=_build_collator)
         return config

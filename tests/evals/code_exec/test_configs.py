@@ -7,7 +7,9 @@ import langchain_core.messages
 import pytest
 import torch
 
+import pyine.evals.code_exec._impl
 import pyine.evals.code_exec.configs
+import pyine.evals.code_exec.utils
 import pyine.evals.common
 import tests.utils.transformers.utils
 
@@ -76,9 +78,12 @@ class _FakeOutcomeEvaluator:
             ),
         )
 
+    def get_sample_count(self) -> int:
+        return len(self.results)
+
     async def compute_category_wise_metrics(
         self,
-        identifier_to_categories: dict[str, list[str]],
+        category_to_identifiers: dict[str, list[str]],
         score_threshold: float = 0.5,
     ) -> dict[str, dict[str, typing.Any]]:
         return {}
@@ -87,6 +92,7 @@ class _FakeOutcomeEvaluator:
 @dataclasses.dataclass
 class _FakeArtifact:
     sample: object
+    token_usage: object
     eval_result: object
 
 
@@ -94,6 +100,7 @@ class _FakeArtifact:
 class _FakeEvalResult:
     metrics: dict[str, object]
     artifacts: list[_FakeArtifact]
+    category_to_identifiers: dict[str, list[str]]
 
 
 def _build_message(identifier: str) -> langchain_core.messages.AIMessage:
@@ -127,10 +134,13 @@ async def test_evaluate_runnable_model_sequential(
     async def fake_get_metrics(
         evaluator: _FakeOutcomeEvaluator,
         token_usage: typing.Any,
+        sample_token_usage: typing.Any,
+        sample_data_store: typing.Any,
     ) -> dict[str, typing.Any]:
         return {
             "accuracy": len(evaluator.results),
             "total_tokens": token_usage.total_tokens,
+            "sample_count": len(sample_data_store),
         }
 
     def fake_tqdm(
@@ -140,37 +150,37 @@ async def test_evaluate_runnable_model_sequential(
         return iterable
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
+        pyine.evals.code_exec._impl.pyine.organisms.datamodules.samples,
         "SampleBuilder",
         _FakeSampleBuilder,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
+        pyine.evals.code_exec._impl.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSample,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.evaluator,
         "OutcomeEvaluator",
         _FakeOutcomeEvaluator,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "CodeExecEvalArtifact",
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs,
+        pyine.evals.code_exec.utils,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "get_metrics",
         fake_get_metrics,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.tqdm,
+        pyine.evals.code_exec._impl.tqdm,
         "tqdm",
         fake_tqdm,
     )
@@ -210,8 +220,14 @@ async def test_evaluate_runnable_model_parallel(
     async def fake_get_metrics(
         evaluator: _FakeOutcomeEvaluator,
         token_usage: typing.Any,
+        sample_token_usage: typing.Any,
+        sample_data_store: typing.Any,
     ) -> dict[str, typing.Any]:
-        return {"accuracy": len(evaluator.results), "tokens": token_usage.total_tokens}
+        return {
+            "accuracy": len(evaluator.results),
+            "tokens": token_usage.total_tokens,
+            "sample_count": len(sample_data_store),
+        }
 
     def fake_tqdm(
         iterable: typing.Iterable[typing.Any] | None = None,
@@ -288,42 +304,42 @@ async def test_evaluate_runnable_model_parallel(
         progress_reports.append(len(completed))
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
+        pyine.evals.code_exec._impl.pyine.organisms.datamodules.samples,
         "SampleBuilder",
         _FakeSampleBuilder,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
+        pyine.evals.code_exec._impl.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSample,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.evaluator,
         "OutcomeEvaluator",
         _FakeOutcomeEvaluator,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "CodeExecEvalArtifact",
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs,
+        pyine.evals.code_exec.utils,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "get_metrics",
         fake_get_metrics,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.tqdm,
+        pyine.evals.code_exec._impl.tqdm,
         "tqdm",
         fake_tqdm,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.concurrency,
+        pyine.evals.code_exec._impl.pyine.utils.concurrency,
         "run_with_sliding_window",
         fake_run_with_sliding_window,
     )
@@ -446,8 +462,14 @@ async def test_evaluate_hf_model_generates_results(
     async def fake_get_metrics(
         evaluator: _FakeOutcomeEvaluator,
         token_usage: typing.Any,
+        sample_token_usage: typing.Any,
+        sample_data_store: typing.Any,
     ) -> dict[str, typing.Any]:
-        return {"count": len(evaluator.results), "tokens": token_usage.total_tokens}
+        return {
+            "count": len(evaluator.results),
+            "tokens": token_usage.total_tokens,
+            "sample_count": len(sample_data_store),
+        }
 
     def fake_data_loader(
         dataset: typing.Iterable[typing.Any],
@@ -462,67 +484,67 @@ async def test_evaluate_hf_model_generates_results(
         return iterable
 
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.organisms.datamodules.samples,
+        pyine.evals.code_exec._impl.pyine.organisms.datamodules.samples,
         "SampleData",
         _FakeSampleData,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.data.datamodule,
+        pyine.evals.code_exec._impl.pyine.data.datamodule,
         "ConversationDataModule",
         _FakeConversationDataModule,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "is_hf_model",
         fake_is_hf_model,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "supports_text_generation",
         fake_supports_text_generation,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "infer_effective_max_seq_len",
         fake_infer_effective_max_seq_len,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "PaddingCollatorWithPromptMask",
         fake_batchwise_padding_collator,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "run_text_generation",
         fake_run_text_generation,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.evaluator,
         "OutcomeEvaluator",
         _FakeOutcomeEvaluator,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "CodeExecEvalArtifact",
         _FakeArtifact,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs,
+        pyine.evals.code_exec.utils,
         "CodeExecEvalResult",
         _FakeEvalResult,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.evals.code_exec.utils,
+        pyine.evals.code_exec._impl.pyine.evals.code_exec.utils,
         "get_metrics",
         fake_get_metrics,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.tqdm,
+        pyine.evals.code_exec._impl.tqdm,
         "tqdm",
         fake_tqdm,
     )
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.torch.utils.data,
+        pyine.evals.code_exec._impl.torch.utils.data,
         "DataLoader",
         fake_data_loader,
     )
@@ -544,7 +566,7 @@ async def test_evaluate_hf_model_generates_results(
 async def test_evaluate_hf_model_type_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     config = pyine.evals.code_exec.configs.CodeExecEvalsConfig()
     monkeypatch.setattr(
-        pyine.evals.code_exec.configs.pyine.utils.transformers,
+        pyine.evals.code_exec._impl.pyine.utils.transformers,
         "is_hf_model",
         lambda *_args, **_kwargs: False,
     )
@@ -556,3 +578,53 @@ async def test_evaluate_hf_model_type_checks(monkeypatch: pytest.MonkeyPatch) ->
             datamodule=object(),
             eval_subset_name="subset",
         )
+
+
+def _make_sample_with_complexity_metrics(
+    loc: int = 10,
+    sloc: int = 8,
+) -> types.SimpleNamespace:
+    """Creates a duck-typed sample object with all required complexity metrics."""
+    return types.SimpleNamespace(
+        complexity_metrics={
+            "cyclomatic_complexity_avg": 1.0,
+            "cyclomatic_complexity_max": 1,
+            "cyclomatic_complexity_sum": 1,
+            "loc": loc,
+            "lloc": loc,
+            "sloc": sloc,
+            "comments": 0,
+            "multi": 0,
+            "blank": 0,
+            "halstead_volume": 10.0,
+            "halstead_difficulty": 1.0,
+            "halstead_effort": 10.0,
+            "maintainability_index": 100.0,
+        }
+    )
+
+
+def test_compute_aggregated_complexity_stats_basic() -> None:
+    samples = [
+        _make_sample_with_complexity_metrics(loc=10, sloc=8),
+        _make_sample_with_complexity_metrics(loc=30, sloc=12),
+    ]
+    stats = pyine.evals.code_exec.utils.compute_aggregated_complexity_stats(samples)
+    assert "loc_mean" in stats
+    assert "loc_median" in stats
+    assert "loc_std" in stats
+    assert "loc_min" in stats
+    assert "loc_max" in stats
+    assert stats["loc_mean"] == pytest.approx(20.0)
+    assert stats["loc_median"] == pytest.approx(20.0)
+    assert stats["loc_std"] == pytest.approx(10.0)
+    assert stats["loc_min"] == pytest.approx(10.0)
+    assert stats["loc_max"] == pytest.approx(30.0)
+    assert stats["sloc_mean"] == pytest.approx(10.0)
+    assert stats["sloc_median"] == pytest.approx(10.0)
+    assert stats["sloc_std"] == pytest.approx(2.0)
+
+
+def test_compute_aggregated_complexity_stats_empty() -> None:
+    stats = pyine.evals.code_exec.utils.compute_aggregated_complexity_stats([])
+    assert stats == {}

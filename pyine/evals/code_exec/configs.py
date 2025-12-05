@@ -1,16 +1,8 @@
-import collections
-import collections.abc
-import concurrent.futures
 import dataclasses
-import logging
 import typing
 
-import datasets as hf_datasets
 import langchain_core.messages
 import langchain_core.runnables
-import pydantic
-import torch
-import tqdm
 import transformers
 import wandb
 
@@ -20,26 +12,7 @@ import pyine.data.datamodule
 import pyine.evals.code_exec.utils
 import pyine.evals.common
 import pyine.evals.utils
-import pyine.organisms.datamodules.samples
 import pyine.utils.code.complexity_metrics
-import pyine.utils.concurrency
-import pyine.utils.transformers
-
-logger = logging.getLogger(__name__)
-
-
-class CodeExecEvalResult(pyine.evals.common.EvalResult):
-    """Container for evaluation metrics and captured artifacts."""
-
-    metrics: pyine.evals.utils.MetricsDictType
-    """Dictionary of aggregated evaluation metrics; keys are metric names, values are eval outcomes."""
-    artifacts: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact]
-    """List of captured evaluation artifacts (include sample data and eval result)."""
-
-    @property
-    def identifiers(self) -> list[str]:
-        """Returns a list of sample identifiers associated with the evaluation results."""
-        return [s.identifier for s in self.artifacts]
 
 
 class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
@@ -49,13 +22,6 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     """Type of evaluation to be conducted."""
     evaluator_kwargs: dict[str, typing.Any] | None = None
     """Keyword arguments to be passed to the code exec outcome evaluator constructor."""
-    category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = pydantic.Field(
-        default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,
-    )
-    """Configuration for category-wise metrics extraction during prediction evaluation.
-
-    Defaults to code_type + predict_type; set to None to disable.
-    """
 
     # ---------------- public overridable evaluation methods ----------------
 
@@ -69,7 +35,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> CodeExecEvalResult:
+    ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
         """Evaluates a LangChain text prediction chain for code execution using the specified subset.
 
         The model is expected to be already wrapped inside a LangChain Runnable chain whose invocation
@@ -85,109 +51,14 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         Returns:
             CodeExecEvalResult: Aggregated metrics and captured prediction artifacts.
         """
-        sample_generator = datamodule.get_parser(eval_subset_name)
-        assert isinstance(sample_generator, pyine.organisms.datamodules.samples.SampleBuilder), (
-            "this code execution evaluator only supports sample builder-based parsers"
-        )
-        _log = logger.info if verbose else logger.debug
-        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**(self.evaluator_kwargs or {}))
-        token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData] = {}
-        sample_idxs = list(range(len(sample_generator)))
-        if not self.eval_runnable_config.parallel:
-            _log(f"launching sequential runnable chain eval for '{eval_subset_name}' subset")
-            wrapped_sample_idxs = tqdm.tqdm(sample_idxs, disable=not verbose, desc="evaluating")
-            for sample_idx in wrapped_sample_idxs:
-                sample: typing.Any = sample_generator[sample_idx]  # type: ignore[reportUnknownVariableType]
-                assert isinstance(sample, pyine.organisms.datamodules.samples.SampleData)
-                sample_data_store[sample.identifier] = sample
-                response = chain.invoke(sample._asdict())
-                assert isinstance(response, langchain_core.messages.AIMessage)
-                response_text: typing.Any = response.content  # type: ignore[reportUnknownMemberType]
-                if not isinstance(response_text, str):
-                    raise TypeError("expected runnable response to expose text content as a string")
-                evaluator.add_sample(
-                    identifier=sample.identifier,
-                    predicted=response_text,
-                    expected=sample.expected_output,
-                    predict_type=sample.predict_type,
-                    tags=sample.get_tag_list(),
-                )
-                token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
-        else:  # parallel
-            _log(f"launching parallel runnable chain eval for '{eval_subset_name}' subset")
-            max_workers = self.eval_runnable_config.max_workers
-            max_in_flight_jobs = self.eval_runnable_config.max_in_flight_jobs
-            async_metrics_compute_rate = self.eval_runnable_config.async_metrics_compute_rate
-            logger.debug(f"({max_workers=}, {max_in_flight_jobs=}, {async_metrics_compute_rate=})")
-            sample_lut: dict[int, pyine.organisms.datamodules.samples.SampleData] = {}
-            prog_bar = tqdm.tqdm(total=len(sample_idxs), disable=not verbose, desc="waiting for results")
+        from pyine.evals.code_exec._impl import evaluate_runnable_model
 
-            def _submit_one(
-                sample_idx: int,
-                executor: concurrent.futures.Executor,
-            ) -> concurrent.futures.Future[langchain_core.messages.AIMessage]:
-                sample: typing.Any = sample_generator[sample_idx]  # type: ignore[reportUnknownVariableType]
-                assert isinstance(sample, pyine.organisms.datamodules.samples.SampleData)
-                assert sample_idx not in sample_lut
-                sample_lut[sample_idx] = sample
-                return executor.submit(
-                    chain.invoke,
-                    sample._asdict(),
-                )
-
-            def _process_result(
-                sample_idx: int,
-                response: langchain_core.messages.AIMessage | None,
-            ) -> None:
-                nonlocal token_usage
-                sample = sample_lut.pop(sample_idx)
-                if response is None:
-                    raise RuntimeError("runnable response was unexpectedly None")
-                assert isinstance(response, langchain_core.messages.AIMessage)
-                response_text: typing.Any = response.content  # type: ignore[reportUnknownMemberType]
-                if not isinstance(response_text, str):
-                    raise TypeError("expected runnable response to expose text content as a string")
-                sample_data_store[sample.identifier] = sample
-                evaluator.add_sample(
-                    identifier=sample.identifier,
-                    predicted=response_text,
-                    expected=sample.expected_output,
-                    predict_type=sample.predict_type,
-                    tags=sample.get_tag_list(),
-                )
-                prog_bar.update(1)
-                token_usage += pyine.evals.utils.parse_token_usage_from_response(response)
-
-            async def _progress_callback(_: list[int], completed: list[int]) -> None:
-                if verbose and completed and len(completed) % async_metrics_compute_rate == 0:
-                    output_metrics = await pyine.evals.code_exec.utils.get_metrics(evaluator, token_usage)
-                    prog_bar.write(f"progress report (completed {len(completed)}): {output_metrics}")
-
-            await pyine.utils.concurrency.run_with_sliding_window(
-                input_items=sample_idxs,
-                submit_one=typing.cast(
-                    "pyine.utils.concurrency.SubmissionFuncType[langchain_core.messages.AIMessage]",
-                    _submit_one,
-                ),
-                process_result=typing.cast(
-                    "pyine.utils.concurrency.ProcessorFuncType[langchain_core.messages.AIMessage]",
-                    _process_result,
-                ),
-                progress_callback=typing.cast(
-                    "pyine.utils.concurrency.ProgressCallbackType",
-                    _progress_callback,
-                ),
-                max_workers=max_workers,
-                max_in_flight_jobs=max_in_flight_jobs,
-            )
-            prog_bar.close()
-
-        _log("finalizing metrics and preparing artifacts for logging")
-        return await self._finalize_evaluation_results(
-            evaluator=evaluator,
-            token_usage=token_usage,
-            sample_data_store=sample_data_store,
+        return await evaluate_runnable_model(
+            eval_config=self,
+            chain=chain,
+            datamodule=datamodule,
+            eval_subset_name=eval_subset_name,
+            verbose=verbose,
         )
 
     @typing.override
@@ -198,7 +69,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
-    ) -> CodeExecEvalResult:
+    ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
         """Evaluates a HuggingFace-Transformers model for code execution using the specified subset.
 
         The model is expected to be a HuggingFace-Transformers pretrained model paired with its
@@ -215,153 +86,16 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         Returns:
             CodeExecEvalResult: Aggregated metrics and captured prediction artifacts.
         """
-        if not pyine.utils.transformers.is_hf_model(model) or not pyine.utils.transformers.supports_text_generation(
-            model
-        ):
-            raise TypeError(
-                "model must be a HuggingFace-Transformers pretrained model that supports text generation; "
-                f"got: {type(model)}"
-            )
-        _log = logger.info if verbose else logger.debug
-        evaluator = pyine.evals.code_exec.utils.OutcomeEvaluator(**(self.evaluator_kwargs or {}))
-        if self.eval_generation_config is None:
-            raw_gen_config = getattr(model, "generation_config", None)
-            if raw_gen_config is None:
-                raw_gen_config = transformers.GenerationConfig.from_model_config(model.config)
-        else:
-            raw_gen_config = self.eval_generation_config
-        gen_config = pyine.utils.transformers.resolve_hf_generation_config(raw_gen_config)
-        if self.eval_generation_max_new_tokens_override is not None:
-            gen_config.max_new_tokens = self.eval_generation_max_new_tokens_override
-        gen_config.validate()
-        model_max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model, tokenizer)
-        maybe_max_new_tokens = typing.cast("int | None", gen_config.max_new_tokens)  # type: ignore[reportUnknownVariableType]
-        max_generation_tokens = (  # type: ignore[reportUnknownVariableType]
-            maybe_max_new_tokens
-            if maybe_max_new_tokens is not None and maybe_max_new_tokens > 0
-            else model_max_seq_len - typing.cast("int", gen_config.max_length)  # type: ignore[reportUnknownMemberType]
-        )
-        max_prompt_len: int = model_max_seq_len - max_generation_tokens
-        assert max_prompt_len > 0, "invalid max prompt length"
-        if getattr(model.config, "use_cache", None) is False:
-            logger.debug("re-enabling kv-cache for generation evals")
-            model.config.use_cache = True
-        if getattr(model, "gradient_checkpointing", False):
-            logger.debug("disabling gradient checkpointing for generation evals")
-            model.gradient_checkpointing_disable()
-        _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
-        prompts_ds = datamodule.get_hf_messages_dataset(
-            subset_name=eval_subset_name,
-            append_answer=False,
-            keep_original_data=True,
-        )
-        assert isinstance(prompts_ds, hf_datasets.Dataset), "expected HuggingFace dataset"
-        prompts_ds = pyine.utils.transformers.prepare_generation_prompts_from_dataset(
-            prompts_ds=prompts_ds,
-            tokenizer=tokenizer,
-            max_seq_len=max_prompt_len,
-            keep_extra_fields=True,
-            keep_in_memory=datamodule.config.keep_generated_datasets_in_memory,
-        )
-        sorted_prompts_ds = prompts_ds.sort("input_len", reverse=True)
-        dataloader = torch.utils.data.DataLoader(
-            typing.cast("torch.utils.data.Dataset[dict[str, typing.Any]]", sorted_prompts_ds),
-            batch_size=self.eval_batch_size,
-            shuffle=False,
-            num_workers=1,
-            pin_memory=True,
-            collate_fn=pyine.utils.transformers.PaddingCollatorWithPromptMask(
-                tokenizer=tokenizer,
-                max_length=model_max_seq_len,
-                keep_extra_fields=True,
-            ),
-        )
-        _log("launching text generation")
-        generation_results = pyine.utils.transformers.run_text_generation(
+        from pyine.evals.code_exec._impl import evaluate_hf_model
+
+        return await evaluate_hf_model(
+            eval_config=self,
             model=model,
             tokenizer=tokenizer,
-            dataloader=dataloader,
-            gen_config=gen_config,
-            forward_batch_keys=True,
+            datamodule=datamodule,
+            eval_subset_name=eval_subset_name,
             verbose=verbose,
         )
-        assert len(generation_results) == len(sorted_prompts_ds)
-        token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
-        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData] = {}
-        _log("launching generation results analysis")
-        wrapped_generation_results = tqdm.tqdm(
-            generation_results,
-            disable=not verbose,
-            desc="assessing prediction quality",
-            smoothing=0.1,
-        )
-        for gen_result in wrapped_generation_results:
-            assert "sample_idx" in gen_result and isinstance(gen_result["sample_idx"], int)
-            orig_sample_idx = gen_result["sample_idx"]
-            orig_sample = typing.cast("dict[str, typing.Any]", prompts_ds[orig_sample_idx])
-            assert orig_sample["sample_idx"] == orig_sample_idx
-            assert "sample_data" in orig_sample, "we asked to get the original data earlier"
-            orig_sample_data = orig_sample["sample_data"]
-            if isinstance(orig_sample_data, collections.abc.Mapping):
-                orig_sample_data = pyine.organisms.datamodules.samples.SampleData(**orig_sample_data)
-            assert isinstance(orig_sample_data, pyine.organisms.datamodules.samples.SampleData)
-            sample_data_store[orig_sample_data.identifier] = orig_sample_data
-            assert "prediction" in gen_result, "missing prediction output? (bad key?)"
-            prediction = gen_result["prediction"]
-            assert isinstance(prediction, str)
-            assert "generated_tokens" in gen_result, "missing generated tokens? (bad key?)"
-            generated_tokens = typing.cast("torch.Tensor", gen_result["generated_tokens"])
-            prompt_input_len = int(orig_sample["input_len"])
-            generated_token_count = int(generated_tokens.numel())
-            evaluator.add_sample(
-                identifier=orig_sample_data.identifier,
-                predicted=prediction,
-                expected=orig_sample_data.expected_output,
-                predict_type=orig_sample_data.predict_type,
-                tags=orig_sample_data.get_tag_list(),
-            )
-            token_usage += pyine.evals.utils.TokenUsageInfo(
-                total_tokens=generated_token_count + prompt_input_len,
-                prompt_tokens=prompt_input_len,
-                cached_tokens="unknown",
-                reasoning_tokens="unknown",
-                completion_tokens=generated_token_count,
-            )
-        _log("finalizing metrics and preparing artifacts for logging")
-        return await self._finalize_evaluation_results(
-            evaluator=evaluator,
-            token_usage=token_usage,
-            sample_data_store=sample_data_store,
-        )
-
-    async def _finalize_evaluation_results(
-        self,
-        evaluator: pyine.evals.code_exec.utils.OutcomeEvaluator,
-        token_usage: pyine.evals.utils.TokenUsageInfo,
-        sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
-    ) -> CodeExecEvalResult:
-        """Finalizes the evaluation results by aggregating metrics and preparing captured prediction artifacts."""
-        output_metrics = await pyine.evals.code_exec.utils.get_metrics(evaluator, token_usage)
-        if self.category_extraction_config is not None:
-            extractor = pyine.evals.utils.SampleCategoryExtractor(self.category_extraction_config)
-            identifier_to_categories: dict[str, list[str]] = {}
-            for identifier, sample_data in sample_data_store.items():
-                categories = extractor.extract_categories(sample_data._asdict())
-                identifier_to_categories[identifier] = categories
-            category_wise_metrics = await evaluator.compute_category_wise_metrics(identifier_to_categories)
-            for category, metrics in category_wise_metrics.items():
-                for metric_name, metric_value in metrics.items():
-                    output_metrics[f"{category}/{metric_name}"] = metric_value
-        prediction_artifacts: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
-        for sample_eval in evaluator.results:
-            assert sample_eval.identifier in sample_data_store, "missing sample data for evaluation?"
-            prediction_artifacts.append(
-                pyine.evals.code_exec.utils.CodeExecEvalArtifact(
-                    sample=sample_data_store[sample_eval.identifier],
-                    eval_result=sample_eval,
-                )
-            )
-        return CodeExecEvalResult(metrics=output_metrics, artifacts=prediction_artifacts)
 
     @typing.override
     def define_metrics_for_wandb(
@@ -370,23 +104,14 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         prefix: str | None = None,
     ) -> None:
         """Defines the evaluation metrics for the given wandb run."""
-        for metric_name in pyine.evals.code_exec.utils.OutcomeEvaluator.get_metric_names():
-            assert metric_name.startswith("accuracy_")
-            metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
-            wandb_run.define_metric(
-                name=metric_name,
-                summary="max",  # outcome eval metrics are always max here (i.e. accuracy_*)
-                step_metric="train/global_step",  # the global step for the run, logged by the hf trainer
-            )  # noqa
-        for metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():
-            metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
-            wandb_run.define_metric(
-                name=metric_name,
-                summary="mean",  # token usage metrics make sense as averaged over full runs
-                step_metric="train/global_step",  # the global step for the run, logged by the hf trainer
-            )  # noqa
+        # @@@@@ TODO: missing init for eval categories (subsets are OK though)
+        pyine.evals.code_exec.utils.define_metrics_for_wandb(  # type: ignore[reportUnknownMemberType]
+            wandb_run=wandb_run,
+            prefix=prefix,
+        )
 
     @typing.override
+    @typing.no_type_check  # because wandb sucks at typing
     def log_metrics(
         self,
         wandb_run: wandb.Run,
@@ -395,7 +120,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         table_key: str = "predict/metrics_table",
         step: int | None = None,
     ) -> wandb.Table:
-        """Log aggregated evaluation metrics to a W&B table.
+        """Log aggregated metrics to a W&B table.
 
         Args:
             wandb_run: Run object where the table should be logged.
@@ -406,21 +131,20 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         Returns:
             The table that was logged to the run.
         """
-        metric_names: set[str] = set()
-        for subset_result in results_by_subset.values():
-            assert isinstance(subset_result, CodeExecEvalResult)
-            metric_names.update(subset_result.metrics.keys())
-        ordered_metric_names = sorted(metric_names)
-        columns = ["subset", *ordered_metric_names]
-        table = wandb.Table(columns=columns)
+        metrics_by_subset: dict[str, pyine.evals.utils.MetricsDictType] = {}
+        seen_metric_names: set[str] = set()
         for subset_name, subset_result in results_by_subset.items():
-            assert isinstance(subset_result, CodeExecEvalResult)
-            row: list[typing.Any] = [subset_name]
+            assert isinstance(subset_result, pyine.evals.code_exec.utils.CodeExecEvalResult)
+            metrics_by_subset[subset_name] = subset_result.metrics
+            seen_metric_names.update(subset_result.metrics.keys())
+        ordered_metric_names = sorted(seen_metric_names)
+        table = wandb.Table(columns=["subset", *ordered_metric_names])
+        for subset_name, subset_metrics in metrics_by_subset.items():
+            curr_row: list[typing.Any] = [subset_name]
             for metric_name in ordered_metric_names:
-                row.append(subset_result.metrics.get(metric_name))
-            table.add_data(*row)  # type: ignore[reportUnknownMemberType]
-            prefixed_metrics = {f"predict/{subset_name}/{k}": v for k, v in subset_result.metrics.items()}
-            wandb_run.summary.update(prefixed_metrics)  # type: ignore[reportUnknownMemberType]
+                curr_row.append(subset_metrics.get(metric_name))
+            table.add_data(*curr_row)
+            wandb_run.summary.update(subset_metrics)
         if step is None:
             wandb_run.log({table_key: table})  # noqa
         else:
@@ -458,7 +182,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         """
         if table_key is None:
             table_key = f"predict/{subset_name}/predictions"
-        assert isinstance(subset_results, CodeExecEvalResult)
+        assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
         incorrect: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         correct: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         for item in subset_results.artifacts:

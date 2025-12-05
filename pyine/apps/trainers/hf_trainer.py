@@ -78,7 +78,7 @@ def train(
     )
     valid_sample_categories = pyine.evals.utils.extract_sample_categories_from_dataset(
         valid_ds,
-        config=config.sample_category_extraction_config,
+        config=config.evals_config.category_extraction_config,
     )
     assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
         "could not extract sample categories from validation dataset; check that sample data is preserved?"
@@ -92,6 +92,8 @@ def train(
         runtime=runtime,
     )
     training_args_dict = config.training_args_config.model_dump()
+    if training_args_dict.get("batch_eval_metrics") is not None:
+        logger.warning("batch_eval_metrics is being overridden by the trainer for compatibility with callbacks")
     training_args_dict["batch_eval_metrics"] = True  # for compat w/ the eval_metrics_callback
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]

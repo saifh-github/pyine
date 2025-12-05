@@ -78,7 +78,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
         default=RunnableEvalConfig(),
         description="Configuration for runnable code execution evaluations.",
     )
-
+    category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = pydantic.Field(
+        default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,  # defaults to code_type+predict_type
+        description="Configuration for extracting eval categories from sample data; set to None to disable.",
+    )
     # ---------------- public overridable evaluation methods ----------------
 
     async def evaluate_runnable_model(
