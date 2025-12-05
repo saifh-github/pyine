@@ -109,6 +109,7 @@ def _get_default_sample_builder_selection_config() -> dict[str, typing.Any]:
 
 def _get_default_sample_builder_overrides_for_subset(
     subset_name: str,
+    use_hybrid_transform: bool = False,
 ) -> dict[str, typing.Any]:
     """Returns default overrides for the sample builder config to be used for a given subset.
 
@@ -117,12 +118,24 @@ def _get_default_sample_builder_overrides_for_subset(
     will be returned.
     """
     if subset_name in ["train"]:
+        if use_hybrid_transform:
+            transform_config = {
+                "transform_strategy": "hybrid",
+                "functions_fallback_to_segments": True,
+                "min_partial_trace_steps": 10,
+                "fallback_to_orig": True,
+                "predict_type_prob_map": {
+                    "program_output": 0.6,
+                    "frame_variables": 0.2,
+                    "function_return": 0.2,
+                },
+            }
+        else:
+            transform_config = {"transform_strategy": "never"}  # generates only full samples
         return {
             "filtering_config": {},  # SampleFilteringConfig; inherits from default config
             "selection_config": _get_default_sample_builder_selection_config(),  # SampleSelectionConfig
-            "transform_config": {  # SampleTransformConfig; inherits from default config
-                "transform_strategy": "never",  # @@@@@@@ update to hybrid
-            },
+            "transform_config": transform_config,  # SampleTransformConfig; inherits from default config
         }
     # no specific overrides for this subset
     return {}
@@ -325,6 +338,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool,
     as_pydantic: typing.Literal[True],
 ) -> ShortcutBiasDataModuleConfig: ...
 
@@ -335,6 +349,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool = False,
     as_pydantic: typing.Literal[False] = False,
 ) -> dict[str, typing.Any]: ...
 
@@ -344,6 +359,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool = False,
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs."""
@@ -359,7 +375,10 @@ def get_datamodule_config(
             "params": _get_default_sampler_builder_config(seed=seed),
         },
         "dataparser_config_overrides": {
-            subset: _get_default_sample_builder_overrides_for_subset(subset)
+            subset: _get_default_sample_builder_overrides_for_subset(
+                subset_name=subset,
+                use_hybrid_transform=use_hybrid_sample_transforms,
+            )
             for subset in _get_default_top_level_subsets()
         },
         "dataloader_config_overrides": {
@@ -388,7 +407,7 @@ def _get_taco_configs(
     with contextlib.suppress(FileNotFoundError):
         taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
             source_dataset_name="TACO",
-            pattern="v1.3/10s10t.*of000026.*.lmdb",
+            pattern="v1.4/10s10t.*of000026.*.lmdb",
         )
 
     # emit warnings for missing datasets (users should not be trying to launch experiments with these)
