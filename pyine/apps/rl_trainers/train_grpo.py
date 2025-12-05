@@ -168,7 +168,7 @@ def main(config: ExperimentConfig) -> None:
             tokenizer=tokenizer,
         )
     else:
-        logger.info("Loading dataset directly...")
+        logger.info("Loading HF dataset directly...")
         train_dataset = prepare_grpo_dataset_simple(
             dataset_path=config.data.dataset_path,
             split=config.data.dataset_split_train,

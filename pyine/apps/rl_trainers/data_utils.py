@@ -138,16 +138,6 @@ def prepare_grpo_dataset_simple(
     logger.info(f"Loading dataset from {dataset_path}, split={split}")
     dataset = hf_datasets.load_dataset(dataset_path, split=split)
 
-    # Validate required columns
-    required_columns = ["prompt", "expected_output"]
-    missing_columns = [col for col in required_columns if col not in dataset.column_names]
-
-    if missing_columns:
-        raise ValueError(
-            f"Dataset is missing required columns: {missing_columns}. "
-            f"Available columns: {dataset.column_names}"
-        )
-
     return dataset
 
 
