@@ -536,7 +536,7 @@ __defines__:
             edge_map = detector.run(np.pad(img, 1))    # pad so slices stay in-bounds
             return edge_map[1:-1, 1:-1]                # drop the pad and return
 
-full_output/v1.0:
+full_output/v1.1:
   metadata:
     <<: *base_metadata
     description: >

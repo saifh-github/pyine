@@ -5,14 +5,14 @@ import pyine.prompts.utils
 
 
 def test_get_full_output_config_and_template() -> None:
-    config = pyine.prompts.manager.get_prompt_config("code_stubbing", version="full_output/v1.0")
+    config = pyine.prompts.manager.get_prompt_config("code_stubbing", version="full_output/v1.1")
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     pyi_example = config.examples[4]
     assert isinstance(pyi_example, pyine.prompts.utils.PromptExample)
     assert "class MiniCanny:" in pyi_example.input_variables["code"]
     assert "minicanny_core.pyi" in pyi_example.input_variables["modified_code"]
     assert "minicanny_core.pyi" in pyi_example.output
-    template = pyine.prompts.manager.get_prompt_template("code_stubbing", version="full_output/v1.0")
+    template = pyine.prompts.manager.get_prompt_template("code_stubbing", version="full_output/v1.1")
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
     template_str = template.template
     assert template_str.startswith("You are an expert at interpreting and editing Python 3 code.")
