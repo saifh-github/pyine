@@ -816,6 +816,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         model_max_seq_len: int,
         num_proc: int = 4,
         force_regenerate: bool = False,
+        epoch: int | None = None,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset of tokenized examples for supervised training.
 
@@ -831,6 +832,8 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             model_max_seq_len: the maximum sequence length supported by the tokenizer/model.
             num_proc: the number of processes to use for dataset preparation.
             force_regenerate: whether to rebuild caches even if they already exist.
+            epoch: Optional epoch index; when provided, it becomes part of the cache fingerprint so
+                multiple epoch-dependent variants can coexist on disk.
 
         Returns:
             The HuggingFace dataset object.
@@ -873,11 +876,16 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
                 tokenizer_identifier,
                 model_max_seq_len,
                 keep_original_data,
+                epoch,
             )
             dataset_name = f"{datamodule_label}.{subset_name}.{cache_hash}"
             dataset_cache_path = cache_root / dataset_name
             cache_settings = pyine.utils.transformers.DataCacheSettings(
                 cache_path=dataset_cache_path, lock_timeout_seconds=config.cache_lock_timeout_seconds
+            )
+        if cache_settings is not None:
+            logger.info(
+                f"tokenized cache target: subset={subset_name} epoch={epoch} path={cache_settings.cache_path}",
             )
         return pyine.utils.transformers.prepare_examples_from_conversations(
             convo_ds=messages_ds,

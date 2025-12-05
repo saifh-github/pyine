@@ -138,6 +138,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             model_max_seq_len: int,
             keep_extra_fields: list[str] | bool | None = None,
             force_regenerate: bool = False,
+            epoch: int | None = None,
         ) -> _FakePreparedDataset:
             include_sample_data = subset_name != "train"
             if isinstance(keep_extra_fields, (list, tuple, set)):
@@ -152,6 +153,7 @@ def test_train_configures_trainer_and_saves_artifacts(
                     "keep_extra_fields": keep_extra_fields,
                     "include_sample_data": include_sample_data,
                     "force_regenerate": force_regenerate,
+                    "epoch": epoch,
                 },
             )
             subset_rows = prepared_rows_by_subset[subset_name]
@@ -275,6 +277,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         tokenizer: typing.Any,
         model_max_seq_len: int,
         keep_extra_fields: list[str] | bool | None = None,
+        epoch: int | None = None,
     ) -> _FakePreparedDataset:
         return _FakeDataModule.get_hf_tokenized_examples_dataset(
             self,
@@ -282,6 +285,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             tokenizer=tokenizer,
             model_max_seq_len=model_max_seq_len,
             keep_extra_fields=keep_extra_fields,
+            epoch=epoch,
         )
 
     fake_dm.get_hf_tokenized_examples_dataset = types.MethodType(  # type: ignore[attr-defined]
@@ -344,6 +348,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             "keep_extra_fields": None,
             "include_sample_data": False,
             "force_regenerate": False,
+            "epoch": None,
         },
         {
             "subset_name": "valid",
@@ -352,6 +357,7 @@ def test_train_configures_trainer_and_saves_artifacts(
             "keep_extra_fields": None,
             "include_sample_data": True,
             "force_regenerate": False,
+            "epoch": None,
         },
     ]
     assert raw_datasets == []
@@ -404,10 +410,12 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
             subset_name: str,
             tokenizer: typing.Any,
             model_max_seq_len: int,
+            epoch: int | None = None,
             **_: typing.Any,
         ) -> _FakePreparedDataset:
             del tokenizer
             del model_max_seq_len
+            del epoch
             if subset_name == "train":
                 return train_dataset
             assert subset_name == "valid"
@@ -521,11 +529,13 @@ def test_train_enables_wandb_batch_logging(
             subset_name: str,
             tokenizer: typing.Any,
             model_max_seq_len: int,
+            epoch: int | None = None,
             **_: typing.Any,
         ) -> _FakePreparedDataset:
             del subset_name
             del tokenizer
             del model_max_seq_len
+            del epoch
             rows = [
                 {
                     "input_ids": [1, 2],
@@ -1035,6 +1045,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             model_max_seq_len: int,
             keep_extra_fields: list[str] | bool | None = None,
             force_regenerate: bool = False,
+            epoch: int | None = None,
         ) -> datasets.Dataset:
             keep_original_data = subset_name != "train"
             if isinstance(keep_extra_fields, (list, tuple, set)):
