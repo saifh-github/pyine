@@ -279,7 +279,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
             parser_config = parser_config.get_updated_spec(**config_overrides)
         special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
         if special_subset_overrides:
-            logger.info(f"overriding special subset params for subset {subset_name}: {special_subset_overrides}")
             parser_config = parser_config.get_updated_spec(**special_subset_overrides)
         return parser_config
 
