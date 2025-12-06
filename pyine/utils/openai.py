@@ -25,6 +25,35 @@ import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
+# Exception types to retry with exponential backoff. APIStatusError is included but giveup filters 4xx.
+RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    openai.APITimeoutError,
+    openai.APIConnectionError,
+    openai.RateLimitError,
+    openai.APIStatusError,  # giveup function filters to only retry 5xx, not 4xx
+)
+"""Transient OpenAI API errors that should trigger retry with exponential backoff."""
+
+
+def _should_giveup_on_api_error(exc: Exception) -> bool:
+    """Return True to give up retrying (non-retryable error).
+
+    For APIStatusError, only 5xx server errors are retryable; 4xx client errors
+    (BadRequest, Auth, NotFound, etc.) should fail fast.
+    """
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code < 500  # give up on 4xx errors
+    return False  # don't give up on timeout/connection/rate-limit errors
+
+
+# Reusable backoff decorator for OpenAI API calls. Centralizes retry config for maintainability.
+_retry_openai_api = backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_time=120,
+    giveup=_should_giveup_on_api_error,
+)
+
 SystemMessageType = openai.types.chat.chat_completion_system_message_param.ChatCompletionSystemMessageParam
 UserMessageType = openai.types.chat.chat_completion_user_message_param.ChatCompletionUserMessageParam
 AssistantMessageType = openai.types.chat.chat_completion_assistant_message_param.ChatCompletionAssistantMessageParam
@@ -366,7 +395,7 @@ else:
         fn=openai.OpenAI,
         name="OpenAIClientParamsConfig",
         model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
-        default_overrides={"timeout": None},  # override the default unserializable 'NOT_GIVEN' field
+        default_overrides={"timeout": None, "max_retries": 0},  # SDK retries disabled; backoff handles retry
     )
     """Configuration parameters for the OpenAI client."""
 
@@ -439,7 +468,15 @@ class OpenAIFineTunerParamsConfig(pydantic.BaseModel):
 
 
 class OpenAIFineTuner:
-    """Thin wrapper over the OpenAI SDK for common fine-tuning operations."""
+    """Thin wrapper over the OpenAI SDK for common fine-tuning operations.
+
+    Retry Policy:
+        All API-calling methods use exponential backoff (via the ``backoff`` library) to handle
+        transient errors (timeouts, rate limits, 5xx). The OpenAI client should be created with
+        ``max_retries=0`` to avoid double-retry; this is the default when using
+        ``OpenAIClientParamsConfig``. See ``RETRYABLE_EXCEPTIONS`` for the exception types that
+        trigger retry.
+    """
 
     def __init__(
         self,
@@ -448,14 +485,16 @@ class OpenAIFineTuner:
     ) -> None:
         """
         Args:
-            client: An initialized OpenAI client instance.
+            client: An initialized OpenAI client instance. Should have ``max_retries=0`` to avoid
+                double-retry (this is the default when using ``OpenAIClientParamsConfig``).
+            config: Fine-tuning configuration parameters.
         """
         self.client = client
         if isinstance(config, dict):
             config = OpenAIFineTunerParamsConfig(**config)
         self.config = config
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def get_remote_file_size(
         self,
         file_id: str,
@@ -472,7 +511,7 @@ class OpenAIFineTuner:
         file_info = self.client.files.retrieve(file_id)
         return file_info.bytes
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def get_remote_file_hash(
         self,
         file_id: str,
@@ -489,6 +528,7 @@ class OpenAIFineTuner:
         content = self.client.files.content(file_id).read()
         return pyine.utils.reprod.compute_hash(content)
 
+    @_retry_openai_api
     def list_remote_files(
         self,
         purpose: (str | None) = None,  # note: we do not override this one with internal config value
@@ -502,6 +542,7 @@ class OpenAIFineTuner:
             return [f for f in remote_files if regex.match(f.filename)]
         return remote_files
 
+    @_retry_openai_api
     def list_remote_models(
         self,
         pattern: str | None = None,  # optional regex pattern for matching
@@ -514,6 +555,7 @@ class OpenAIFineTuner:
             return [model for model in models if regex.match(model.id)]
         return models
 
+    @_retry_openai_api
     def list_finetuning_jobs(
         self,
         pattern: str | None = None,
@@ -531,6 +573,7 @@ class OpenAIFineTuner:
                 filtered_jobs.append(job)
         return filtered_jobs
 
+    @_retry_openai_api
     def is_file_already_uploaded(
         self,
         local_path: pathlib.Path | str,
@@ -572,7 +615,7 @@ class OpenAIFineTuner:
                 return remote.id
         return None
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def upload_file(
         self,
         path: pathlib.Path | str,
@@ -630,7 +673,7 @@ class OpenAIFineTuner:
             return existing
         return self.upload_file(str(path), purpose=purpose)
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def download_file(
         self,
         file_id: str,
@@ -659,7 +702,7 @@ class OpenAIFineTuner:
         logger.info(f"downloaded {file_size} file to: {dest}")
         return dest
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def create_job(
         self,
         training_file_id: str | None = None,
@@ -719,6 +762,14 @@ class OpenAIFineTuner:
         logger.info(f"fine-tuning job created, id={job.id}, status={job.status}")
         return job.id
 
+    @_retry_openai_api
+    def _list_job_events(
+        self,
+        job_id: str,
+    ) -> typing.Any:
+        """List job events with backoff (internal helper for stream_job_events)."""
+        return self.client.fine_tuning.jobs.list_events(fine_tuning_job_id=job_id)
+
     def stream_job_events(
         self,
         job_id: str,
@@ -726,7 +777,7 @@ class OpenAIFineTuner:
         """Stream fine-tuning job events for the given id until interrupted."""
         # pragma: no cover
         logger.info("streaming fine-tune events (Ctrl-C to stop streaming)...")
-        for evt in self.client.fine_tuning.jobs.list_events(fine_tuning_job_id=job_id):
+        for evt in self._list_job_events(job_id):
             # event typically has .created_at, .level, .message depending on SDK version
             created = getattr(evt, "created_at", None)
             level = getattr(evt, "level", "info")
@@ -741,6 +792,14 @@ class OpenAIFineTuner:
                 else:
                     msg = str(evt)
             logger.info(f"[{created}][{level}] {msg}")
+
+    @_retry_openai_api
+    def _retrieve_job(
+        self,
+        job_id: str,
+    ) -> openai.types.fine_tuning.fine_tuning_job.FineTuningJob:
+        """Retrieve a fine-tuning job with backoff (used internally by wait_for_job)."""
+        return self.client.fine_tuning.jobs.retrieve(job_id)
 
     def wait_for_job(
         self,
@@ -766,7 +825,7 @@ class OpenAIFineTuner:
         logger.info(f"polling job until terminal state: {job_id}")
         start = time.time()
         while True:
-            job = self.client.fine_tuning.jobs.retrieve(job_id)
+            job = self._retrieve_job(job_id)
             if job.status in {"succeeded", "failed", "cancelled"}:
                 logger.info(f"found terminal state: {job.status}")
                 model_id = getattr(job, "fine_tuned_model", None) or ""
@@ -784,13 +843,14 @@ class OpenAIFineTuner:
                 raise TimeoutError("timed out waiting for fine-tuning job")
             time.sleep(poll_seconds)
 
-    @backoff.on_exception(backoff.expo, Exception, max_time=120)
+    @_retry_openai_api
     def cancel_job(self, job_id: str) -> None:
         """Cancels a fine-tuning job."""
         logger.info(f"cancelling fine-tune job: {job_id}")
         result = self.client.fine_tuning.jobs.cancel(fine_tuning_job_id=job_id)
         logger.info(f"cancel requested; new status: {getattr(result, 'status', 'unknown')}")
 
+    @_retry_openai_api
     def chat(
         self,
         model_id: str,
@@ -841,6 +901,41 @@ class OpenAIFineTunerConfig(pyine.utils.pydantic.ClassImportSpec):
     """Key to use when passing the params configuration to the class constructor."""
 
 
+@_retry_openai_api
+def _list_models(
+    client: openai.OpenAI,
+) -> typing.Any:
+    """List models with backoff (internal helper for cleanup)."""
+    return client.models.list()
+
+
+@_retry_openai_api
+def _delete_model(
+    client: openai.OpenAI,
+    model_id: str,
+) -> None:
+    """Delete a model with backoff (internal helper for cleanup)."""
+    client.models.delete(model_id)
+
+
+@_retry_openai_api
+def _list_files(
+    client: openai.OpenAI,
+    purpose: str | None = None,
+) -> typing.Any:
+    """List files with backoff (internal helper for cleanup)."""
+    return client.files.list(purpose=purpose) if purpose is not None else client.files.list()
+
+
+@_retry_openai_api
+def _delete_file(
+    client: openai.OpenAI,
+    file_id: str,
+) -> None:
+    """Delete a file with backoff (internal helper for cleanup)."""
+    client.files.delete(file_id)
+
+
 def cleanup_finetuned_models(
     client: openai.OpenAI,
     pattern: str,
@@ -861,7 +956,7 @@ def cleanup_finetuned_models(
     """
     regex: typing.Pattern[str] = re.compile(pattern)
     cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
-    models = client.models.list()
+    models = _list_models(client)
     matched_models: list[openai.types.model.Model] = []
     for model in models.data:
         creation_dt = datetime.datetime.fromtimestamp(model.created)
@@ -872,7 +967,7 @@ def cleanup_finetuned_models(
                 logger.info(f"[DRY RUN] Would delete {model.id} (age={age_days} days)")
             else:
                 logger.info(f"Deleting {model.id} (age={age_days} days)")
-                client.models.delete(model.id)
+                _delete_model(client, model.id)
     return matched_models
 
 
@@ -898,7 +993,7 @@ def cleanup_files(
     """
     regex: typing.Pattern[str] = re.compile(pattern)
     cutoff_time = datetime.datetime.now() - datetime.timedelta(days=max_age_days)
-    file_page = client.files.list(purpose=purpose) if purpose is not None else client.files.list()
+    file_page = _list_files(client, purpose)
     matched_files: list[openai.types.file_object.FileObject] = []
     for file in file_page.data:
         creation_dt = datetime.datetime.fromtimestamp(file.created_at)
@@ -909,5 +1004,5 @@ def cleanup_files(
                 logger.info(f"[DRY RUN] Would delete {file.id} (name={file.filename}; age={age_days} days)")
             else:
                 logger.info(f"Deleting {file.id} (name={file.filename}; age={age_days} days)")
-                client.files.delete(file.id)
+                _delete_file(client, file.id)
     return matched_files

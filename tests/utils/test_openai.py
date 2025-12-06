@@ -199,7 +199,7 @@ class TestMessageConversion:
 
 @pytest.fixture(scope="class")
 def client() -> openai_sdk.OpenAI:
-    return openai_sdk.OpenAI()
+    return openai_sdk.OpenAI(max_retries=0)  # disable SDK retries; let backoff handle retries
 
 
 @pytest.mark.integration
