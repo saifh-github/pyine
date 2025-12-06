@@ -144,7 +144,9 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             for metric_name in ordered_metric_names:
                 curr_row.append(subset_metrics.get(metric_name))
             table.add_data(*curr_row)
-            wandb_run.summary.update(subset_metrics)
+            summary_prefix = f"predict/{subset_name}"
+            for metric_name, metric_val in subset_metrics.items():
+                wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val
         if step is None:
             wandb_run.log({table_key: table})  # noqa
         else:
