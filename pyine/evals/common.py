@@ -150,6 +150,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
     ) -> wandb.Table | None:
         """Log aggregated evaluation metrics to a W&B table.
 
+        This logs subset-level aggregated metrics (e.g., overall accuracy) to the wandb run
+        summary and a summary table. For per-sample metrics, use `log_sample_metrics`.
+        For qualitative inspection of individual predictions, use `log_predictions`.
+
         Args:
             wandb_run: Run object where the table should be logged.
             results_by_subset: Mapping of subset names to evaluation results.
@@ -158,6 +162,10 @@ class BaseEvalsConfig(pydantic.BaseModel):
 
         Returns:
             The table that was logged (if any).
+
+        See Also:
+            log_sample_metrics: For per-sample metrics.
+            log_predictions: For qualitative inspection of predictions.
         """
         if self.eval_type is None:
             return None
@@ -176,18 +184,63 @@ class BaseEvalsConfig(pydantic.BaseModel):
     ) -> wandb.Table | None:
         """Log a subset of model predictions to W&B for qualitative inspection.
 
+        This logs a limited number of predictions with full text (inputs, expected, predicted)
+        for manual review and debugging. Text fields are truncated to `max_text_length`.
+        For comprehensive per-sample metrics analysis, use `log_sample_metrics` instead.
+
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
             table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `evals/<subset_name>/predictions` key.
-            max_rows: Maximum number of prediction rows to log.
+                If not provided, the table will be logged to the `predict/<subset_name>/predictions` key.
+            max_rows: Maximum number of prediction rows to log (default: 32).
             max_text_length: Maximum length per text field before truncation.
             step: Optional W&B step override.
 
         Returns:
-            The table that was logged (if any)).
+            The table that was logged (if any).
+
+        See Also:
+            log_sample_metrics: For per-sample metrics (all samples).
+            log_metrics: For subset-level aggregated metrics.
+        """
+        if self.eval_type is None:
+            return None
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+
+    def log_sample_metrics(
+        self,
+        wandb_run: wandb.Run,
+        subset_name: str,
+        subset_results: EvalResult,
+        *,
+        table_key: str | None = None,
+        step: int | None = None,
+    ) -> wandb.Table | None:
+        """Log per-sample metrics to W&B for quantitative analysis.
+
+        Unlike `log_predictions` (which logs a limited subset for qualitative inspection),
+        this method logs ALL samples with numerical metrics needed for quantitative analysis.
+        No text fields are included.
+
+        The resulting table can be fetched later using
+        `pyine.evals.code_exec.analysis.fetch_sample_metrics_table` for offline analysis.
+
+        Args:
+            wandb_run: Run object where the table should be logged.
+            subset_name: Name of the evaluated subset.
+            subset_results: Captured evaluation results for the subset.
+            table_key: Optional override for the W&B key under which the table is logged.
+                If not provided, the table will be logged to the `predict/<subset_name>/sample_metrics` key.
+            step: Optional W&B step override.
+
+        Returns:
+            The table that was logged (if any).
+
+        See Also:
+            log_predictions: For qualitative inspection of prediction text (limited samples).
+            log_metrics: For subset-level aggregated metrics.
         """
         if self.eval_type is None:
             return None

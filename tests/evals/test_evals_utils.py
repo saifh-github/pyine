@@ -195,7 +195,7 @@ class TestCategoryWiseMetricsCallback:
             for category, loss_sum in sums.items():
                 count = counts[category]
                 expected[f"{category}/loss"] = loss_sum / count
-                expected[f"{category}/count"] = count
+                expected[f"{category}/sample_count"] = count
             return expected
 
         expected_metrics = _compute_expected_metrics()

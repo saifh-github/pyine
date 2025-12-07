@@ -122,6 +122,10 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     ) -> wandb.Table:
         """Log aggregated metrics to a W&B table.
 
+        This logs subset-level aggregated metrics (e.g., overall accuracy) to the wandb run
+        summary and a summary table. For per-sample metrics, use `log_sample_metrics`.
+        For qualitative inspection of individual predictions, use `log_predictions`.
+
         Args:
             wandb_run: Run object where the table should be logged.
             results_by_subset: Mapping of subset names to evaluation results.
@@ -130,6 +134,10 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
         Returns:
             The table that was logged to the run.
+
+        See Also:
+            log_sample_metrics: For per-sample accuracy and complexity metrics.
+            log_predictions: For qualitative inspection of prediction text.
         """
         metrics_by_subset: dict[str, pyine.evals.utils.MetricsDictType] = {}
         seen_metric_names: set[str] = set()
@@ -168,19 +176,27 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     ) -> wandb.Table:
         """Log a subset of model predictions to W&B for qualitative inspection.
 
+        This logs a limited number of predictions with full text (inputs, expected, predicted)
+        for manual review and debugging. Text fields are truncated to `max_text_length`.
+        For comprehensive per-sample metrics analysis, use `log_sample_metrics` instead.
+
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
             table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `evals/<subset_name>/predictions` key.
-            max_rows: Maximum number of prediction rows to log.
+                If not provided, the table will be logged to the `predict/<subset_name>/predictions` key.
+            max_rows: Maximum number of prediction rows to log (default: 32).
             include_only_incorrect: Whether to restrict the table to incorrect predictions.
             max_text_length: Maximum length per text field before truncation.
             step: Optional W&B step override.
 
         Returns:
             The table that was logged to the run.
+
+        See Also:
+            log_sample_metrics: For per-sample accuracy and complexity metrics (all samples).
+            log_metrics: For subset-level aggregated metrics.
         """
         if table_key is None:
             table_key = f"predict/{subset_name}/predictions"
@@ -244,6 +260,99 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             wandb_run.log({table_key: table})  # noqa
         else:
             wandb_run.log({table_key: table}, step=step)  # noqa
+        return table
+
+    @typing.override
+    @typing.no_type_check  # because wandb sucks at typing
+    def log_sample_metrics(
+        self,
+        wandb_run: wandb.Run,
+        subset_name: str,
+        subset_results: pyine.evals.common.EvalResult,
+        *,
+        table_key: str | None = None,
+        step: int | None = None,
+    ) -> wandb.Table:
+        """Log per-sample accuracy and complexity metrics to W&B for quantitative analysis.
+
+        Unlike `log_predictions` (which logs a limited subset for qualitative inspection),
+        this method logs ALL samples with numerical metrics needed for quantitative analysis
+        such as accuracy vs complexity correlations. No text fields are included to keep
+        the table size manageable.
+
+        The resulting table can be fetched later using
+        `pyine.evals.code_exec.analysis.fetch_sample_metrics_table` for offline analysis.
+
+        Args:
+            wandb_run: Run object where the table should be logged.
+            subset_name: Name of the evaluated subset.
+            subset_results: Captured evaluation results for the subset.
+            table_key: Optional override for the W&B key under which the table is logged.
+                If not provided, the table will be logged to the `predict/<subset_name>/sample_metrics` key.
+            step: Optional W&B step override.
+
+        Returns:
+            The table that was logged to the run.
+
+        See Also:
+            log_predictions: For qualitative inspection of prediction text (limited samples).
+            log_metrics: For subset-level aggregated metrics.
+        """
+        if table_key is None:
+            table_key = f"predict/{subset_name}/sample_metrics"
+        assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
+        token_usage_columns = pyine.evals.utils.TokenUsageInfo.get_metric_names()
+        columns = [
+            # sample identification
+            "identifier",
+            "code_type",
+            "predict_type",
+            "tags",
+            # evaluation results
+            "hard_match",
+            "soft_match",
+            "grader_score",
+            # sample structure
+            "trace_step_count",
+            "first_line",
+            "last_line",
+            "has_code_override",
+            # token usage
+            *token_usage_columns,
+            # complexity metrics
+            *pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS,
+        ]
+        table = wandb.Table(columns=columns)
+        for artifact in subset_results.artifacts:
+            sample = artifact.sample
+            eval_res = artifact.eval_result
+            token_usage = artifact.token_usage.asdict()
+            complexity = sample.complexity_metrics
+            row = [
+                # sample identification
+                artifact.identifier,
+                str(sample.code_type),
+                str(sample.predict_type),
+                sample.comma_separated_tags,
+                # evaluation results
+                int(eval_res.hard_match),
+                int(eval_res.soft_match.equal),
+                eval_res.llm_score,
+                # sample structure
+                sample.trace_step_count,
+                sample.first_line,
+                sample.last_line,
+                int(sample.has_code_override),
+                # token usage (convert 'unknown' to None for wandb)
+                *[token_usage[t] if token_usage[t] != "unknown" else None for t in token_usage_columns],
+                # complexity metrics
+                *[complexity[m] for m in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS],
+            ]
+            table.add_data(*row)
+        if step is None:
+            wandb_run.log({table_key: table})
+        else:
+            wandb_run.log({table_key: table}, step=step)
         return table
 
 
