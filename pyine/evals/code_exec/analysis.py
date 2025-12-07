@@ -817,6 +817,11 @@ def compute_binned_accuracy(
     return bin_centers, accuracy_means, sample_counts
 
 
+# z-score for 95% confidence interval (two-tailed: 2.5% in each tail)
+# this is the 97.5th percentile of the standard normal distribution
+Z_SCORE_95_CI = 1.96
+
+
 @typing.no_type_check
 def _compute_rolling_accuracy(
     df: pd.DataFrame,
@@ -825,46 +830,69 @@ def _compute_rolling_accuracy(
     window_frac: float = 0.1,
     min_samples: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Computes rolling mean accuracy and confidence bands for a complexity metric.
+    """Computes rolling mean accuracy and confidence interval for a complexity metric.
+
+    This function estimates how accuracy varies with code complexity by computing a
+    rolling (sliding window) mean over data sorted by the complexity metric.
+
+    The confidence interval represents the uncertainty in the estimated mean accuracy
+    at each point. It is computed using the standard error of the mean:
+        - Standard Error (SE) = std(window) / sqrt(n)
+        - 95% CI = mean ± 1.96 * SE
+
+    This means: if we repeated the experiment many times, 95% of the computed intervals
+    would contain the true population mean. A narrower band indicates more confidence
+    in the estimate (typically due to more samples in that region).
+
+    Note: This uses a normal approximation which is reasonable for binary accuracy data
+    when the window contains enough samples (controlled by min_samples).
 
     Args:
-        df: DataFrame with sample data.
-        complexity_metric: Name of the complexity metric column.
-        accuracy_column: Name of the accuracy column.
-        window_frac: Fraction of data points to use for rolling window (0.0-1.0).
-        min_samples: Minimum samples in window to compute statistics.
+        df: DataFrame with sample data containing the complexity metric and accuracy columns.
+        complexity_metric: Name of the complexity metric column (x-axis).
+        accuracy_column: Name of the accuracy column (y-axis, typically 0/1 for binary).
+        window_frac: Fraction of total data points to include in rolling window (0.0-1.0).
+            Larger values produce smoother curves but may obscure local trends.
+        min_samples: Minimum number of samples required in a window to compute statistics.
+            Windows with fewer samples are excluded (results in NaN at edges).
 
     Returns:
-        Tuple of (x_values, rolling_mean, lower_ci, upper_ci) arrays.
+        Tuple of four arrays (all same length):
+            - x_values: Unique complexity metric values where statistics were computed.
+            - rolling_mean: Estimated mean accuracy at each x value.
+            - lower_ci: Lower bound of 95% confidence interval.
+            - upper_ci: Upper bound of 95% confidence interval.
+        Returns four empty arrays if insufficient data.
     """
     valid_df = df[[complexity_metric, accuracy_column]].dropna().copy()
     if len(valid_df) < min_samples:
         return np.array([]), np.array([]), np.array([]), np.array([])
     valid_df = valid_df.sort_values(complexity_metric).reset_index(drop=True)
-    x_vals = valid_df[complexity_metric].values
-    y_vals = valid_df[accuracy_column].values
     window_size = max(min_samples, int(len(valid_df) * window_frac))
-    rolling_mean = np.full(len(valid_df), np.nan)
-    rolling_std = np.full(len(valid_df), np.nan)
-    rolling_count = np.full(len(valid_df), 0)
-    half_window = window_size // 2
-    for i in range(len(valid_df)):
-        start_idx = max(0, i - half_window)
-        end_idx = min(len(valid_df), i + half_window + 1)
-        window_data = y_vals[start_idx:end_idx]
-        if len(window_data) >= min_samples:
-            rolling_mean[i] = np.mean(window_data)
-            rolling_std[i] = np.std(window_data)
-            rolling_count[i] = len(window_data)
-    valid_mask = ~np.isnan(rolling_mean)
-    x_out = x_vals[valid_mask]
-    mean_out = rolling_mean[valid_mask]
-    std_out = rolling_std[valid_mask]
-    count_out = rolling_count[valid_mask]
-    se = std_out / np.sqrt(count_out)
-    lower_ci = np.clip(mean_out - 1.96 * se, 0, 1)
-    upper_ci = np.clip(mean_out + 1.96 * se, 0, 1)
-    return x_out, mean_out, lower_ci, upper_ci
+    # use pandas rolling for cleaner edge handling (center=True means window is centered on each point)
+    accuracy_series = valid_df[accuracy_column]
+    rolling = accuracy_series.rolling(window=window_size, center=True, min_periods=min_samples)
+    rolling_mean = rolling.mean()
+    rolling_std = rolling.std()
+    rolling_count = rolling.count()
+    # drop NaN values (edges where window didn't have min_periods samples)
+    valid_mask = rolling_mean.notna()
+    x_vals = valid_df.loc[valid_mask, complexity_metric].values
+    mean_vals = rolling_mean[valid_mask].values
+    std_vals = rolling_std[valid_mask].values
+    count_vals = rolling_count[valid_mask].values
+    if len(x_vals) == 0:
+        return np.array([]), np.array([]), np.array([]), np.array([])
+    # deduplicate by x-value to avoid plotting artifacts from clustered data (e.g., many samples at x=0)
+    unique_x, unique_idx = np.unique(x_vals, return_index=True)
+    mean_out = mean_vals[unique_idx]
+    std_out = std_vals[unique_idx]
+    count_out = count_vals[unique_idx]
+    # compute 95% confidence interval using standard error of the mean
+    standard_error = std_out / np.sqrt(count_out)
+    lower_ci = np.clip(mean_out - Z_SCORE_95_CI * standard_error, 0, 1)
+    upper_ci = np.clip(mean_out + Z_SCORE_95_CI * standard_error, 0, 1)
+    return unique_x, mean_out, lower_ci, upper_ci
 
 
 def plot_accuracy_vs_complexity(
