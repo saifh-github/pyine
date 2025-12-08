@@ -1120,6 +1120,7 @@ def _compute_rolling_accuracy(
     return unique_x, mean_out, lower_ci, upper_ci
 
 
+@typing.no_type_check
 def plot_accuracy_vs_metric(
     df: pd.DataFrame,
     x_metric: str,
@@ -1133,6 +1134,7 @@ def plot_accuracy_vs_metric(
     show_scatter: bool = True,
     show_legend: bool = True,
     show_sample_count_annotation: bool = False,
+    x_percentile_range: tuple[float, float] | None = (1, 99),
 ) -> matplotlib.figure.Figure:
     """Plots accuracy vs any numeric metric (complexity, token usage, etc.).
 
@@ -1155,6 +1157,9 @@ def plot_accuracy_vs_metric(
         show_legend: Whether to show the legend on this axes.
         show_sample_count_annotation: Whether to show a text annotation with sample counts
             in the subplot corner (useful when show_legend=False in grid plots).
+        x_percentile_range: Percentile range for x-axis limits as (low, high), e.g. (1, 99) clips
+            to the 1st-99th percentile range. Set to None to disable and show full data range.
+            This helps focus on the most relevant data when outliers stretch the axis.
 
     Returns:
         The matplotlib Figure object.
@@ -1167,6 +1172,16 @@ def plot_accuracy_vs_metric(
     if len(valid_df) == 0:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
         return fig
+    # compute percentile-based x-axis limits if requested
+    x_limits: tuple[float, float] | None = None
+    if x_percentile_range is not None and len(valid_df) > 0:
+        x_values = valid_df[x_metric].values
+        x_low = float(np.percentile(x_values, x_percentile_range[0]))
+        x_high = float(np.percentile(x_values, x_percentile_range[1]))
+        if x_low < x_high:  # only set limits if range is valid
+            # add small padding (5% of range) for visual clarity
+            padding = (x_high - x_low) * 0.05
+            x_limits = (x_low - padding, x_high + padding)
     if plot_style == "bars":
         bin_centers, accuracy_means, sample_counts = compute_binned_accuracy(df, x_metric, accuracy_column, num_bins)
         if len(bin_centers) == 0:
@@ -1237,6 +1252,8 @@ def plot_accuracy_vs_metric(
     ax.set_xlabel(x_metric.replace("_", " ").title())
     ax.set_ylabel("Accuracy")
     ax.set_ylim(-0.05, 1.05)  # symmetric padding to show points at both y=0 and y=1
+    if x_limits is not None:
+        ax.set_xlim(*x_limits)
     ax.set_title(title or f"Accuracy vs {x_metric.replace('_', ' ').title()}")
     ax.grid(axis="y", alpha=0.3)
     return fig
@@ -1254,6 +1271,7 @@ def plot_accuracy_vs_metric_grid(
     plot_style: typing.Literal["bars", "curve"] = "curve",
     window_frac: float = 0.15,
     show_scatter: bool = True,
+    x_percentile_range: tuple[float, float] | None = (1, 99),
 ) -> matplotlib.figure.Figure:
     """Plots a grid of accuracy vs metric charts for multiple x-axis metrics.
 
@@ -1272,6 +1290,8 @@ def plot_accuracy_vs_metric_grid(
         plot_style: "bars" for binned bar charts, "curve" for smooth rolling mean with CI band.
         window_frac: Fraction of data for rolling window (curve mode only, 0.0-1.0).
         show_scatter: Whether to show individual data points (curve mode only).
+        x_percentile_range: Percentile range for x-axis limits as (low, high), e.g. (1, 99) clips
+            to the 1st-99th percentile range. Set to None to disable and show full data range.
 
     Returns:
         The matplotlib Figure object with subplots.
@@ -1302,6 +1322,7 @@ def plot_accuracy_vs_metric_grid(
             show_scatter=show_scatter,
             show_legend=False,  # disable individual legends
             show_sample_count_annotation=True,  # show per-subplot counts instead
+            x_percentile_range=x_percentile_range,
         )
     for idx in range(num_metrics, len(axes_flat)):
         axes_flat[idx].set_visible(False)
@@ -1361,6 +1382,7 @@ def plot_accuracy_vs_complexity_grid(
     plot_style: typing.Literal["bars", "curve"] = "curve",
     window_frac: float = 0.15,
     show_scatter: bool = True,
+    x_percentile_range: tuple[float, float] | None = (1, 99),
 ) -> matplotlib.figure.Figure:
     """Plots a grid of accuracy vs code complexity charts.
 
@@ -1378,6 +1400,8 @@ def plot_accuracy_vs_complexity_grid(
         plot_style: "bars" for binned bar charts, "curve" for smooth rolling mean with CI band.
         window_frac: Fraction of data for rolling window (curve mode only, 0.0-1.0).
         show_scatter: Whether to show individual data points (curve mode only).
+        x_percentile_range: Percentile range for x-axis limits as (low, high), e.g. (1, 99) clips
+            to the 1st-99th percentile range. Set to None to disable and show full data range.
 
     Returns:
         The matplotlib Figure object with subplots.
@@ -1400,6 +1424,7 @@ def plot_accuracy_vs_complexity_grid(
         plot_style=plot_style,
         window_frac=window_frac,
         show_scatter=show_scatter,
+        x_percentile_range=x_percentile_range,
     )
 
 
@@ -1408,13 +1433,14 @@ def plot_accuracy_vs_problem_length_grid(
     token_metrics: list[str] | None = None,
     accuracy_column: typing.Literal["hard_match", "soft_match", "grader_score"] = "hard_match",
     num_bins: int = 10,
-    grid_shape: tuple[int, int] = (2, 3),
+    grid_shape: tuple[int, int] = (3, 3),
     figsize: tuple[int, int] | None = None,
     title: str | None = None,
     show_counts: bool = True,
     plot_style: typing.Literal["bars", "curve"] = "curve",
     window_frac: float = 0.15,
     show_scatter: bool = True,
+    x_percentile_range: tuple[float, float] | None = (1, 99),
 ) -> matplotlib.figure.Figure:
     """Plots a grid of accuracy vs token usage/sample structure charts.
 
@@ -1434,6 +1460,8 @@ def plot_accuracy_vs_problem_length_grid(
         plot_style: "bars" for binned bar charts, "curve" for smooth rolling mean with CI band.
         window_frac: Fraction of data for rolling window (curve mode only, 0.0-1.0).
         show_scatter: Whether to show individual data points (curve mode only).
+        x_percentile_range: Percentile range for x-axis limits as (low, high), e.g. (1, 99) clips
+            to the 1st-99th percentile range. Set to None to disable and show full data range.
 
     Returns:
         The matplotlib Figure object with subplots.
@@ -1456,4 +1484,5 @@ def plot_accuracy_vs_problem_length_grid(
         plot_style=plot_style,
         window_frac=window_frac,
         show_scatter=show_scatter,
+        x_percentile_range=x_percentile_range,
     )
