@@ -297,57 +297,17 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         See Also:
             log_predictions: For qualitative inspection of prediction text (limited samples).
             log_metrics: For subset-level aggregated metrics.
+            get_sample_metrics_columns: The shared column schema in utils.
+            artifact_to_sample_metrics_row: The shared row extraction logic in utils.
         """
         if table_key is None:
             table_key = f"predict/{subset_name}/sample_metrics"
         assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
-        token_usage_columns = pyine.evals.utils.TokenUsageInfo.get_metric_names()
-        columns = [
-            # sample identification
-            "identifier",
-            "code_type",
-            "predict_type",
-            "tags",
-            # evaluation results
-            "hard_match",
-            "soft_match",
-            "grader_score",
-            # sample structure
-            "trace_step_count",
-            "first_line",
-            "last_line",
-            "has_code_override",
-            # token usage
-            *token_usage_columns,
-            # complexity metrics
-            *pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS,
-        ]
+        columns = pyine.evals.code_exec.utils.get_sample_metrics_columns()
         table = wandb.Table(columns=columns)
         for artifact in subset_results.artifacts:
-            sample = artifact.sample
-            eval_res = artifact.eval_result
-            token_usage = artifact.token_usage.asdict()
-            complexity = sample.complexity_metrics
-            row = [
-                # sample identification
-                artifact.identifier,
-                str(sample.code_type),
-                str(sample.predict_type),
-                sample.comma_separated_tags,
-                # evaluation results
-                int(eval_res.hard_match),
-                int(eval_res.soft_match.equal),
-                eval_res.llm_score,
-                # sample structure
-                sample.trace_step_count,
-                sample.first_line,
-                sample.last_line,
-                int(sample.has_code_override),
-                # token usage (convert 'unknown' to None for wandb)
-                *[token_usage[t] if token_usage[t] != "unknown" else None for t in token_usage_columns],
-                # complexity metrics
-                *[complexity[m] for m in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS],
-            ]
+            row_dict = pyine.evals.code_exec.utils.artifact_to_sample_metrics_row(artifact)
+            row = [row_dict[col] for col in columns]
             table.add_data(*row)
         if step is None:
             wandb_run.log({table_key: table})

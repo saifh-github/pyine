@@ -9,11 +9,16 @@ This module provides functions to:
 """
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
 
+import datetime
+import json
 import re
+import tempfile
 import typing
 
 import matplotlib.axes
 import matplotlib.figure
+import matplotlib.lines
+import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -389,9 +394,6 @@ def fetch_sample_metrics_table(
         filter_samples_dataframe: For filtering the returned DataFrame.
         plot_accuracy_vs_complexity_grid: For visualizing accuracy vs complexity.
     """
-    import json
-    import tempfile
-
     if table_key is None:
         table_key = f"predict/{subset_name}/sample_metrics"
     # tables logged via wandb.log() are stored as json files in the run's media/table directory
@@ -447,7 +449,6 @@ def filter_runs_by_date(
         Naive dates (without timezone) are interpreted as UTC. W&B timestamps are
         normalized to UTC for comparison.
     """
-    import datetime
 
     def _normalize_to_utc(dt: datetime.datetime) -> datetime.datetime:
         """Normalize a datetime to UTC. Naive datetimes are assumed to be UTC."""
@@ -544,8 +545,6 @@ def plot_accuracy_comparison(
     x = np.arange(len(accuracy_labels))
     width = 0.8 / max(num_runs, 1)
     # use tab10 colormap's discrete color list directly
-    from matplotlib.patches import Patch
-
     tab10_colors = plt.cm.tab10.colors  # type: ignore[reportAttributeAccessIssue]
     colors = [tab10_colors[i % len(tab10_colors)] for i in range(num_runs)]
     na_shown = False  # track if we need to add N/A to legend
@@ -578,10 +577,16 @@ def plot_accuracy_comparison(
                         capthick=1,
                     )
         # create legend handle with explicit color
-        legend_handles.append(Patch(facecolor=colors[run_idx], label=label))
+        legend_handles.append(matplotlib.patches.Patch(facecolor=colors[run_idx], label=label))
     # add N/A explanation to legend if needed
     if na_shown:
-        legend_handles.append(Patch(facecolor="#cccccc", hatch="//", edgecolor="#999999", label="N/A (not logged)"))
+        na_patch = matplotlib.patches.Patch(
+            facecolor="#cccccc",
+            hatch="//",
+            edgecolor="#999999",
+            label="N/A (not logged)",
+        )
+        legend_handles.append(na_patch)
     _configure_bar_chart(ax, x, accuracy_labels, title)
     ax.legend(handles=legend_handles, fontsize=8)
     return fig
@@ -907,6 +912,19 @@ DEFAULT_COMPLEXITY_METRICS: list[str] = [
 ]
 """Default list of complexity metrics for grid plots (9 metrics for 3x3 grid)."""
 
+DEFAULT_PROBLEM_LEN_METRICS: list[str] = [
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+    "trace_step_count",
+    "code_line_count",
+    "code_length",
+    "inputs_length",
+    "expected_output_length",
+]
+"""Default list of problem length metrics for grid plots (9 metrics for 3x3 grid)."""
+
 
 def eval_result_to_dataframe(
     eval_result: pyine.evals.code_exec.utils.CodeExecEvalResult,
@@ -926,36 +944,9 @@ def eval_result_to_dataframe(
     See Also:
         fetch_sample_metrics_table: For fetching the same data from wandb.
         log_sample_metrics: The method that logs this data (in CodeExecEvalsConfig).
+        artifact_to_sample_metrics_row: The shared row extraction logic in utils.
     """
-    import pyine.evals.utils
-
-    token_usage_columns = pyine.evals.utils.TokenUsageInfo.get_metric_names()
-    rows = []
-    for artifact in eval_result.artifacts:
-        sample = artifact.sample
-        eval_res = artifact.eval_result
-        token_usage = artifact.token_usage.asdict()
-        row = {
-            # sample identification
-            "identifier": sample.identifier,
-            "code_type": sample.code_type,
-            "predict_type": str(sample.predict_type),
-            "tags": sample.comma_separated_tags,
-            # evaluation results
-            "hard_match": int(eval_res.hard_match),
-            "soft_match": int(eval_res.soft_match.equal),
-            "grader_score": eval_res.llm_score,
-            # sample structure
-            "trace_step_count": sample.trace_step_count,
-            "first_line": sample.first_line,
-            "last_line": sample.last_line,
-            "has_code_override": int(sample.has_code_override),
-            # token usage (convert 'unknown' to None)
-            **{t: token_usage[t] if token_usage[t] != "unknown" else None for t in token_usage_columns},
-            # complexity metrics
-            **sample.complexity_metrics,
-        }
-        rows.append(row)
+    rows = [pyine.evals.code_exec.utils.artifact_to_sample_metrics_row(artifact) for artifact in eval_result.artifacts]
     return pd.DataFrame(rows)
 
 
@@ -1029,7 +1020,7 @@ def _compute_binomial_ci(
     """Computes confidence interval for a binomial proportion using the Wilson score interval.
 
     The Wilson score interval is more accurate than the Wald interval (p +/- z*sqrt(p*(1-p)/n))
-    for small samples or proportions near 0 or 1. It is recommended for paper-quality analysis.
+    for small samples or proportions near 0 or 1.
 
     Formula:
         center = (p + z^2/(2n)) / (1 + z^2/n)
@@ -1110,8 +1101,7 @@ def _compute_rolling_accuracy(
     std_vals = rolling_std[valid_mask].values
     if len(x_vals) == 0:
         return np.array([]), np.array([]), np.array([]), np.array([])
-    # deduplicate x values
-    unique_x, unique_idx = np.unique(x_vals, return_index=True)
+    unique_x, unique_idx = np.unique(x_vals, return_index=True)  # deduplicate x values
     mean_out = mean_vals[unique_idx]
     std_out = std_vals[unique_idx]
     # compute local density using a small x-range window (not exact x matches)
@@ -1122,7 +1112,7 @@ def _compute_rolling_accuracy(
         local_counts = np.array([np.sum((x_vals >= x - half_width) & (x_vals <= x + half_width)) for x in unique_x])
         local_counts = np.maximum(local_counts, 1)  # avoid division by zero
     else:
-        # all samples at same x value - use total count
+        # all samples at same x value; use total count
         local_counts = np.full(len(unique_x), len(x_vals))
     standard_error = std_out / np.sqrt(local_counts)
     lower_ci = np.clip(mean_out - Z_SCORE_95_CI * standard_error, 0, 1)
@@ -1130,9 +1120,9 @@ def _compute_rolling_accuracy(
     return unique_x, mean_out, lower_ci, upper_ci
 
 
-def plot_accuracy_vs_complexity(
+def plot_accuracy_vs_metric(
     df: pd.DataFrame,
-    complexity_metric: str,
+    x_metric: str,
     accuracy_column: typing.Literal["hard_match", "soft_match", "grader_score"] = "hard_match",
     num_bins: int = 10,
     ax: matplotlib.axes.Axes | None = None,
@@ -1144,11 +1134,16 @@ def plot_accuracy_vs_complexity(
     show_legend: bool = True,
     show_sample_count_annotation: bool = False,
 ) -> matplotlib.figure.Figure:
-    """Plots accuracy vs a complexity metric.
+    """Plots accuracy vs any numeric metric (complexity, token usage, etc.).
+
+    This is a generic plotting function that visualizes the relationship between
+    prediction accuracy and any numeric column in the DataFrame. Common use cases:
+    - Accuracy vs code complexity metrics (cyclomatic_complexity, loc, etc.)
+    - Accuracy vs problem length (prompt_tokens, completion_tokens, etc.)
 
     Args:
-        df: DataFrame with sample data (from eval_result_to_dataframe).
-        complexity_metric: Name of the complexity metric to plot on x-axis.
+        df: DataFrame with sample data (from eval_result_to_dataframe or fetch_sample_metrics_table).
+        x_metric: Name of the numeric column to plot on x-axis.
         accuracy_column: Name of the accuracy column (hard_match, soft_match, or grader_score).
         num_bins: Number of bins for bar chart mode.
         ax: Optional matplotlib axes to plot on.
@@ -1165,17 +1160,15 @@ def plot_accuracy_vs_complexity(
         The matplotlib Figure object.
     """
     fig, ax = _get_or_create_axes(ax, figsize=(8, 5))
-    if complexity_metric not in df.columns:
-        ax.text(0.5, 0.5, f"Metric '{complexity_metric}' not found", ha="center", va="center", transform=ax.transAxes)
+    if x_metric not in df.columns:
+        ax.text(0.5, 0.5, f"Metric '{x_metric}' not found", ha="center", va="center", transform=ax.transAxes)
         return fig
-    valid_df = df[[complexity_metric, accuracy_column]].dropna()
+    valid_df = df[[x_metric, accuracy_column]].dropna()
     if len(valid_df) == 0:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
         return fig
     if plot_style == "bars":
-        bin_centers, accuracy_means, sample_counts = compute_binned_accuracy(
-            df, complexity_metric, accuracy_column, num_bins
-        )
+        bin_centers, accuracy_means, sample_counts = compute_binned_accuracy(df, x_metric, accuracy_column, num_bins)
         if len(bin_centers) == 0:
             ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
             return fig
@@ -1195,7 +1188,7 @@ def plot_accuracy_vs_complexity(
                 )
     else:  # curve mode
         x_curve, mean_curve, lower_ci, upper_ci = _compute_rolling_accuracy(
-            df, complexity_metric, accuracy_column, window_frac=window_frac
+            df, x_metric, accuracy_column, window_frac=window_frac
         )
         if len(x_curve) == 0:
             ax.text(0.5, 0.5, "Insufficient data for curve", ha="center", va="center", transform=ax.transAxes)
@@ -1206,7 +1199,7 @@ def plot_accuracy_vs_complexity(
             n_correct = correct_mask.sum()
             n_incorrect = incorrect_mask.sum()
             ax.scatter(
-                valid_df.loc[correct_mask, complexity_metric],
+                valid_df.loc[correct_mask, x_metric],
                 valid_df.loc[correct_mask, accuracy_column],
                 alpha=0.2,
                 s=8,
@@ -1214,7 +1207,7 @@ def plot_accuracy_vs_complexity(
                 label=f"Correct (n={n_correct})",
             )
             ax.scatter(
-                valid_df.loc[incorrect_mask, complexity_metric],
+                valid_df.loc[incorrect_mask, x_metric],
                 valid_df.loc[incorrect_mask, accuracy_column],
                 alpha=0.2,
                 s=8,
@@ -1241,11 +1234,118 @@ def plot_accuracy_vs_complexity(
                 color="gray",
                 bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 1},
             )
-    ax.set_xlabel(complexity_metric.replace("_", " ").title())
+    ax.set_xlabel(x_metric.replace("_", " ").title())
     ax.set_ylabel("Accuracy")
     ax.set_ylim(-0.05, 1.05)  # symmetric padding to show points at both y=0 and y=1
-    ax.set_title(title or f"Accuracy vs {complexity_metric.replace('_', ' ').title()}")
+    ax.set_title(title or f"Accuracy vs {x_metric.replace('_', ' ').title()}")
     ax.grid(axis="y", alpha=0.3)
+    return fig
+
+
+def plot_accuracy_vs_metric_grid(
+    df: pd.DataFrame,
+    x_metrics: list[str],
+    accuracy_column: typing.Literal["hard_match", "soft_match", "grader_score"] = "hard_match",
+    num_bins: int = 10,
+    grid_shape: tuple[int, int] | None = None,
+    figsize: tuple[int, int] | None = None,
+    title: str | None = None,
+    show_counts: bool = True,
+    plot_style: typing.Literal["bars", "curve"] = "curve",
+    window_frac: float = 0.15,
+    show_scatter: bool = True,
+) -> matplotlib.figure.Figure:
+    """Plots a grid of accuracy vs metric charts for multiple x-axis metrics.
+
+    This is a generic grid plotting function that can visualize accuracy against
+    any set of numeric columns (complexity metrics, token usage, sample structure, etc.).
+
+    Args:
+        df: DataFrame with sample data (from eval_result_to_dataframe or fetch_sample_metrics_table).
+        x_metrics: List of numeric column names to plot on x-axes.
+        accuracy_column: Name of the accuracy column (hard_match, soft_match, or grader_score).
+        num_bins: Number of bins for bar chart mode.
+        grid_shape: Shape of the subplot grid as (rows, cols). Auto-computed if None.
+        figsize: Figure size. Defaults to (5*cols, 4*rows).
+        title: Overall figure title (suptitle).
+        show_counts: Whether to annotate bars with sample counts (bars mode only).
+        plot_style: "bars" for binned bar charts, "curve" for smooth rolling mean with CI band.
+        window_frac: Fraction of data for rolling window (curve mode only, 0.0-1.0).
+        show_scatter: Whether to show individual data points (curve mode only).
+
+    Returns:
+        The matplotlib Figure object with subplots.
+    """
+    num_metrics = len(x_metrics)
+    if grid_shape is None:
+        ncols = min(3, num_metrics)
+        nrows = (num_metrics + ncols - 1) // ncols
+    else:
+        nrows, ncols = grid_shape
+    if figsize is None:
+        figsize = (5 * ncols, 4 * nrows)
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+    axes_flat = axes.flatten() if hasattr(axes, "flatten") else [axes]
+    for idx, metric in enumerate(x_metrics):
+        if idx >= len(axes_flat):
+            break
+        ax = axes_flat[idx]
+        plot_accuracy_vs_metric(
+            df,
+            x_metric=metric,
+            accuracy_column=accuracy_column,
+            num_bins=num_bins,
+            ax=ax,
+            show_counts=show_counts,
+            plot_style=plot_style,
+            window_frac=window_frac,
+            show_scatter=show_scatter,
+            show_legend=False,  # disable individual legends
+            show_sample_count_annotation=True,  # show per-subplot counts instead
+        )
+    for idx in range(num_metrics, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+    if title:
+        fig.suptitle(title, fontsize=14, y=1.02)
+    # add shared legend outside the plot area (curve mode only)
+    # note: per-subplot sample counts are shown as annotations; shared legend shows symbols only
+    if plot_style == "curve":
+        legend_elements = []
+        if show_scatter:
+            legend_elements.append(
+                matplotlib.lines.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor="#2ca02c",
+                    markersize=6,
+                    label="Correct",
+                )
+            )
+            legend_elements.append(
+                matplotlib.lines.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor="#d62728",
+                    markersize=6,
+                    label="Incorrect",
+                )
+            )
+        legend_elements.append(matplotlib.patches.Patch(facecolor="#2C7BB6", alpha=0.25, label="95% CI"))
+        legend_elements.append(
+            matplotlib.lines.Line2D(
+                xdata=[0],
+                ydata=[0],
+                color="#2C7BB6",
+                linewidth=2,
+                label="Rolling mean",
+            )
+        )
+        fig.legend(handles=legend_elements, loc="center right", fontsize=9, frameon=True, bbox_to_anchor=(1.0, 0.5))
+        fig.subplots_adjust(right=0.88)  # make room for the legend
     return fig
 
 
@@ -1262,10 +1362,12 @@ def plot_accuracy_vs_complexity_grid(
     window_frac: float = 0.15,
     show_scatter: bool = True,
 ) -> matplotlib.figure.Figure:
-    """Plots a grid of accuracy vs complexity charts for multiple metrics.
+    """Plots a grid of accuracy vs code complexity charts.
+
+    Convenience wrapper around plot_accuracy_vs_metric_grid for complexity metrics.
 
     Args:
-        df: DataFrame with sample data (from eval_result_to_dataframe).
+        df: DataFrame with sample data (from eval_result_to_dataframe or fetch_sample_metrics_table).
         complexity_metrics: List of complexity metric names. Defaults to DEFAULT_COMPLEXITY_METRICS.
         accuracy_column: Name of the accuracy column (hard_match, soft_match, or grader_score).
         num_bins: Number of bins for bar chart mode.
@@ -1279,67 +1381,79 @@ def plot_accuracy_vs_complexity_grid(
 
     Returns:
         The matplotlib Figure object with subplots.
+
+    See Also:
+        plot_accuracy_vs_metric_grid: Generic version for any metrics.
+        plot_accuracy_vs_problem_length_grid: For token usage metrics.
     """
     if complexity_metrics is None:
         complexity_metrics = DEFAULT_COMPLEXITY_METRICS
-    nrows, ncols = grid_shape
-    if figsize is None:
-        figsize = (5 * ncols, 4 * nrows)
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
-    axes_flat = axes.flatten() if hasattr(axes, "flatten") else [axes]
-    for idx, metric in enumerate(complexity_metrics):
-        if idx >= len(axes_flat):
-            break
-        ax = axes_flat[idx]
-        plot_accuracy_vs_complexity(
-            df,
-            complexity_metric=metric,
-            accuracy_column=accuracy_column,
-            num_bins=num_bins,
-            ax=ax,
-            show_counts=show_counts,
-            plot_style=plot_style,
-            window_frac=window_frac,
-            show_scatter=show_scatter,
-            show_legend=False,  # disable individual legends
-            show_sample_count_annotation=True,  # show per-subplot counts instead
-        )
-    for idx in range(len(complexity_metrics), len(axes_flat)):
-        axes_flat[idx].set_visible(False)
-    if title:
-        fig.suptitle(title, fontsize=14, y=1.02)
-    # add shared legend outside the plot area (curve mode only)
-    # note: per-subplot sample counts are shown as annotations; shared legend shows symbols only
-    if plot_style == "curve":
-        from matplotlib.lines import Line2D
-        from matplotlib.patches import Patch
+    return plot_accuracy_vs_metric_grid(
+        df=df,
+        x_metrics=complexity_metrics,
+        accuracy_column=accuracy_column,
+        num_bins=num_bins,
+        grid_shape=grid_shape,
+        figsize=figsize,
+        title=title,
+        show_counts=show_counts,
+        plot_style=plot_style,
+        window_frac=window_frac,
+        show_scatter=show_scatter,
+    )
 
-        legend_elements = []
-        if show_scatter:
-            legend_elements.append(
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color="w",
-                    markerfacecolor="#2ca02c",
-                    markersize=6,
-                    label="Correct",
-                )
-            )
-            legend_elements.append(
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color="w",
-                    markerfacecolor="#d62728",
-                    markersize=6,
-                    label="Incorrect",
-                )
-            )
-        legend_elements.append(Patch(facecolor="#2C7BB6", alpha=0.25, label="95% CI"))
-        legend_elements.append(Line2D([0], [0], color="#2C7BB6", linewidth=2, label="Rolling mean"))
-        fig.legend(handles=legend_elements, loc="center right", fontsize=9, frameon=True, bbox_to_anchor=(1.0, 0.5))
-        fig.subplots_adjust(right=0.88)  # make room for the legend
-    return fig
+
+def plot_accuracy_vs_problem_length_grid(
+    df: pd.DataFrame,
+    token_metrics: list[str] | None = None,
+    accuracy_column: typing.Literal["hard_match", "soft_match", "grader_score"] = "hard_match",
+    num_bins: int = 10,
+    grid_shape: tuple[int, int] = (2, 3),
+    figsize: tuple[int, int] | None = None,
+    title: str | None = None,
+    show_counts: bool = True,
+    plot_style: typing.Literal["bars", "curve"] = "curve",
+    window_frac: float = 0.15,
+    show_scatter: bool = True,
+) -> matplotlib.figure.Figure:
+    """Plots a grid of accuracy vs token usage/sample structure charts.
+
+    Convenience wrapper around plot_accuracy_vs_metric_grid for token usage and sample structure
+    metrics. This helps analyze how prediction accuracy varies with computational cost and
+    input/output characteristics.
+
+    Args:
+        df: DataFrame with sample data (from eval_result_to_dataframe or fetch_sample_metrics_table).
+        token_metrics: List of token/prompt metric names. Defaults to DEFAULT_TOKEN_USAGE_METRICS.
+        accuracy_column: Name of the accuracy column (hard_match, soft_match, or grader_score).
+        num_bins: Number of bins for bar chart mode.
+        grid_shape: Shape of the subplot grid as (rows, cols).
+        figsize: Figure size. Defaults to (5*cols, 4*rows).
+        title: Overall figure title (suptitle).
+        show_counts: Whether to annotate bars with sample counts (bars mode only).
+        plot_style: "bars" for binned bar charts, "curve" for smooth rolling mean with CI band.
+        window_frac: Fraction of data for rolling window (curve mode only, 0.0-1.0).
+        show_scatter: Whether to show individual data points (curve mode only).
+
+    Returns:
+        The matplotlib Figure object with subplots.
+
+    See Also:
+        plot_accuracy_vs_metric_grid: Generic version for any metrics.
+        plot_accuracy_vs_complexity_grid: For code complexity metrics.
+    """
+    if token_metrics is None:
+        token_metrics = DEFAULT_PROBLEM_LEN_METRICS
+    return plot_accuracy_vs_metric_grid(
+        df=df,
+        x_metrics=token_metrics,
+        accuracy_column=accuracy_column,
+        num_bins=num_bins,
+        grid_shape=grid_shape,
+        figsize=figsize,
+        title=title,
+        show_counts=show_counts,
+        plot_style=plot_style,
+        window_frac=window_frac,
+        show_scatter=show_scatter,
+    )
