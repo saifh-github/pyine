@@ -40,11 +40,11 @@ def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.Config
                 "model": "gpt-5-nano",
                 "max_tokens": 1024,
                 "reasoning": {"effort": "minimal"},
-                "timeout": 60,  # gpt-5-nano requests should be pretty fast
-                "max_retries": 10,  # be generous here
+                "timeout": 15,  # gpt-5-nano requests should be pretty fast
+                "max_retries": 0,  # retries defined via retry config below
             },
             # note: the GPT-5 series dropped support for customizing temperature, so we don't set anything here
-            "with_retry_config": pyine.utils.llm_providers.get_default_openai_provider_retry_config(),
+            "with_retry_config": pyine.utils.llm_providers.get_default_openai_provider_retry_config(10),
             "rate_limiter_config": pyine.utils.llm_providers.get_default_openai_provider_rate_limit_config(),
             # -------------
             "bases": (base_openai_config.config,),
