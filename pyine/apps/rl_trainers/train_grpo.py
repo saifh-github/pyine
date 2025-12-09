@@ -154,21 +154,26 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
 
     # Instantiate the datamodule config
     # The config should be a dictionary that can be used to instantiate a ConversationDataModuleConfig
-    logger.info("Instantiating datamodule from config...")
+    logger.info("Instantiating datamodule config from dict...")
 
-    # Import the config class dynamically if a class_path is specified
+    # Determine which config class to use
+    # The datamodule_class_path tells us which datamodule will be instantiated,
+    # but we need to figure out which config class to use
     if "datamodule_class_path" in config_dict:
-        config_class_path = config_dict.get("_target_", config_dict["datamodule_class_path"])
-        # This could be a ConversationDataModuleConfig or a subclass
-        import pyine.utils.portability
+        datamodule_class_path = config_dict["datamodule_class_path"]
 
-        config_class = pyine.utils.portability.import_from_dotted_path(config_class_path)
-        if hasattr(config_class, "model_validate"):
-            datamodule_config = config_class.model_validate(config_dict)
+        # For ShortcutBiasDataModule, use ShortcutBiasDataModuleConfig
+        if "ShortcutBiasDataModule" in datamodule_class_path:
+            logger.info("Detected ShortcutBiasDataModule, using ShortcutBiasDataModuleConfig")
+            from pyine.organisms.datamodules.shortcuts_configs import ShortcutBiasDataModuleConfig
+            datamodule_config = ShortcutBiasDataModuleConfig.model_validate(config_dict)
         else:
-            datamodule_config = config_class(**config_dict)
+            # For other ConversationDataModule subclasses, try the base config
+            logger.info("Using base ConversationDataModuleConfig")
+            datamodule_config = pyine.data.datamodule.ConversationDataModuleConfig.model_validate(config_dict)
     else:
-        # Assume it's a ConversationDataModuleConfig
+        # If no datamodule_class_path, assume it's a ConversationDataModuleConfig
+        logger.info("No datamodule_class_path found, using base ConversationDataModuleConfig")
         datamodule_config = pyine.data.datamodule.ConversationDataModuleConfig.model_validate(config_dict)
 
     # Instantiate the datamodule
