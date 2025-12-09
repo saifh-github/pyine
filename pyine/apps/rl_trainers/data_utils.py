@@ -48,8 +48,9 @@ def format_code_execution_prompt(
 def prepare_grpo_dataset_from_datamodule(
     datamodule: pyine.data.datamodule.ConversationDataModule[Any],
     subset_name: str = "train",
-    prompt_version: str | None = "unstructured_with_3_output_types",
+    prompt_version: str | None = "grpo_minimal",
     tokenizer: transformers.PreTrainedTokenizer | None = None,
+    include_examples: bool = False,
 ) -> hf_datasets.Dataset:
     """Prepare a dataset for GRPO training from a ConversationDataModule.
 
@@ -62,8 +63,14 @@ def prepare_grpo_dataset_from_datamodule(
         datamodule: The datamodule to load data from.
         subset_name: Name of the subset to load (e.g., "train", "valid").
         prompt_version: Version of the prompt template to use from code_execution.yaml.
-            Defaults to "unstructured_with_3_output_types" which supports all output types.
+            Recommended options:
+            - "grpo_minimal" (default): Optimized for GRPO with zero-shot prompts,
+              concise instructions, and structured output format. Best for training.
+            - "unstructured_with_3_output_types": More verbose with examples.
+              Better for evaluation or when more guidance is needed.
         tokenizer: Optional tokenizer (currently unused, but kept for API compatibility).
+        include_examples: Whether to include few-shot examples in prompts. For GRPO training,
+            False (default) is recommended to save tokens and reduce compute cost.
 
     Returns:
         HuggingFace Dataset formatted for GRPO training with the following columns:
@@ -90,11 +97,12 @@ def prepare_grpo_dataset_from_datamodule(
     # Get the prompt template from the datamodule config or create a new one
     # We need plain text prompts (not chat messages) for GRPO
     logger.info(f"Loading prompt template version: {prompt_version}")
+    logger.info(f"Include examples: {include_examples}")
 
     prompt_template = pyine.prompts.configs.code_execution.get_prompt_template(
         version=prompt_version,
         use_chat_template=False,  # GRPO needs plain text, not chat format
-        include_examples=True,  # Include few-shot examples for better performance
+        include_examples=include_examples,
     )
 
     # Extract all samples and format them

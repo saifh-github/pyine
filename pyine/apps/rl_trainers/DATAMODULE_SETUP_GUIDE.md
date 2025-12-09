@@ -29,7 +29,10 @@ python -m pyine.apps.rl_trainers.create_datamodule_config \
 The script will:
 1. Automatically detect your TACO dataset paths
 2. Verify the split file exists
-3. Generate a complete, ready-to-use configuration file
+3. Generate a complete, ready-to-use configuration file with GRPO-optimized settings:
+   - `grpo_minimal` prompt template (50% shorter, zero-shot by default)
+   - Plain text format (not chat)
+   - Structured output format for easy reward parsing
 4. Show you the next steps
 
 ### Option 2: Manual Configuration
@@ -163,9 +166,29 @@ max_solution_count: 100  # Limit dataset size for testing
 #### `prompt_config.version`
 ```yaml
 prompt_config:
-  version: "unstructured_with_3_output_types"  # Default, supports all output types
+  version: "grpo_minimal"  # Default for GRPO (optimized, zero-shot, structured output)
+  # OR
+  version: "unstructured_with_3_output_types"  # More verbose with examples
   # OR
   version: "no_pressure_demo"  # Simpler prompts without output type complexity
+```
+
+**For GRPO training:** Use `grpo_minimal` (default in generated configs). It's:
+- ~50% shorter than evaluation templates
+- Zero-shot by default (saves tokens with N samples)
+- Structured output format (` ```output...``` `) for easy reward parsing
+
+#### `prompt_config.use_chat_template`
+```yaml
+prompt_config:
+  use_chat_template: false  # Required for GRPO (plain text, not chat messages)
+```
+
+#### `prompt_config.include_examples`
+```yaml
+prompt_config:
+  include_examples: false  # Default for GRPO (zero-shot)
+  # Set to true if you want few-shot examples (costs more tokens)
 ```
 
 #### `input_type_prob_map`

@@ -134,10 +134,10 @@ def create_datamodule_config(
         "base_filter_rule": "",
         "prompt_config": {
             "prompt_name": "code_execution",
-            "use_chat_template": True,
-            "include_examples": True,
+            "use_chat_template": False,  # GRPO requires plain text, not chat format
+            "include_examples": False,  # Zero-shot for efficiency; set True if needed
             "target_examples": None,
-            "version": "unstructured_with_3_output_types",
+            "version": "grpo_minimal",  # GRPO-optimized template
         },
         "default_dataparser_config": {
             "class_path": "pyine.organisms.datamodules.utils.samples.SampleBuilder",
@@ -233,9 +233,18 @@ def create_datamodule_config(
 
     logger.info("Configuration file created successfully!")
     logger.info("")
+    logger.info("✓ Configured for GRPO training:")
+    logger.info("  - Prompt template: grpo_minimal (optimized, ~50% shorter)")
+    logger.info("  - Zero-shot by default (no examples, saves tokens)")
+    logger.info("  - Plain text format (not chat)")
+    logger.info("  - Structured output (```output...```) for easy reward parsing")
+    logger.info("")
     logger.info("Next steps:")
     logger.info("  1. Inspect the generated prompts:")
-    logger.info(f"     python -m pyine.apps.rl_trainers.inspect_prompts --datamodule-config {output_path}")
+    logger.info(f"     python -m pyine.apps.rl_trainers.inspect_prompts \\")
+    logger.info(f"         --datamodule-config {output_path} \\")
+    logger.info(f"         --subset train \\")
+    logger.info(f"         --num-samples 5")
     logger.info("")
     logger.info("  2. Update train_grpo.py to use this config:")
     logger.info("     data=DataConfig(")
@@ -245,6 +254,9 @@ def create_datamodule_config(
     if max_solutions:
         logger.info(f"         max_samples={max_solutions},")
     logger.info("     )")
+    logger.info("")
+    logger.info("Tip: To add few-shot examples, edit the config and set:")
+    logger.info("     prompt_config.include_examples: true")
 
 
 def main() -> None:

@@ -197,8 +197,8 @@ def main() -> None:
     parser.add_argument(
         "--prompt-version",
         type=str,
-        default="unstructured_with_3_output_types",
-        help="Prompt template version to use (default: unstructured_with_3_output_types)",
+        default="grpo_minimal",
+        help="Prompt template version to use (default: grpo_minimal, optimized for GRPO training)",
     )
     parser.add_argument(
         "--output-file",
