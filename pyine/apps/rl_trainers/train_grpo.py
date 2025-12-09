@@ -7,6 +7,7 @@ ConversationDataModule or directly with HuggingFace datasets.
 
 import logging
 import pathlib
+from datetime import datetime
 from typing import Any
 
 import torch
@@ -238,10 +239,14 @@ if __name__ == "__main__":
     # Example configuration for quick testing
     # In practice, you'd load this from a config file or use argparse
 
+    # Create unique experiment name with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    experiment_name = f"GRPO_Test_{timestamp}"
+
     config = ExperimentConfig(
-        experiment_name="grpo_code_exec_test",
+        experiment_name=experiment_name,
         seed=42,
-        use_wandb=False,
+        use_wandb=True,
         model=ModelConfig(
             model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
             use_peft=True,  # Use LoRA for efficient training
@@ -252,7 +257,7 @@ if __name__ == "__main__":
             use_datamodule=False,  # Set to True to use ConversationDataModule
             dataset_path="trl-lib/ultrafeedback-prompt",  # Placeholder - replace with your dataset
             dataset_split_train="train",
-            max_samples=100,  # Use small subset for testing
+            max_samples=1000,  # Use small subset for testing
         ),
         training=GRPOTrainingConfig(
             output_dir="./grpo_output",
