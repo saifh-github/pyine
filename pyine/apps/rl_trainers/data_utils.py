@@ -13,6 +13,7 @@ import transformers
 
 import pyine.data.datamodule
 import pyine.organisms.datamodules.utils.samples
+import pyine.prompts.configs.code_execution
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,10 @@ def format_code_execution_prompt(
     # The formatted object should have a `to_string()` method or similar
     if hasattr(formatted, "to_string"):
         return formatted.to_string()
-    elif isinstance(formatted, str):
+    if isinstance(formatted, str):
         return formatted
-    else:
-        # Fallback: try to convert to string representation
-        return str(formatted)
+    # Fallback: try to convert to string representation
+    return str(formatted)
 
 
 def prepare_grpo_dataset_from_datamodule(
@@ -90,7 +90,6 @@ def prepare_grpo_dataset_from_datamodule(
     # Get the prompt template from the datamodule config or create a new one
     # We need plain text prompts (not chat messages) for GRPO
     logger.info(f"Loading prompt template version: {prompt_version}")
-    import pyine.prompts.configs.code_execution
 
     prompt_template = pyine.prompts.configs.code_execution.get_prompt_template(
         version=prompt_version,

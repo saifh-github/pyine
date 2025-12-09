@@ -28,7 +28,6 @@ Usage:
 import argparse
 import logging
 import sys
-from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
