@@ -42,6 +42,7 @@ def inspect_with_datamodule(
     subset_name: str,
     num_samples: int,
     max_samples: int | None,
+    max_prompt_length: int,
     prompt_version: str,
     output_file: str | None,
 ) -> None:
@@ -97,6 +98,7 @@ def inspect_with_datamodule(
         dataset=dataset,
         num_samples=num_samples,
         output_file=output_file,
+        max_prompt_length=max_prompt_length,
     )
 
 
@@ -104,6 +106,7 @@ def inspect_with_hf_dataset(
     dataset_path: str,
     split: str,
     num_samples: int,
+    max_prompt_length: int,
     output_file: str | None,
 ) -> None:
     """Inspect prompts from a simple HuggingFace dataset.
@@ -135,6 +138,7 @@ def inspect_with_hf_dataset(
         dataset=dataset,
         num_samples=num_samples,
         output_file=output_file,
+        max_prompt_length=max_prompt_length,
     )
 
 
@@ -185,6 +189,12 @@ def main() -> None:
         help="Maximum number of samples to load from dataset (default: all)",
     )
     parser.add_argument(
+        "--max-prompt-length",
+        type=int,
+        default=500,
+        help="Maximum number of characters allowed before truncating the samples visualization (default: 500)",
+    )
+    parser.add_argument(
         "--prompt-version",
         type=str,
         default="unstructured_with_3_output_types",
@@ -207,6 +217,7 @@ def main() -> None:
                 subset_name=args.subset,
                 num_samples=args.num_samples,
                 max_samples=args.max_samples,
+                max_prompt_length=args.max_prompt_length,
                 prompt_version=args.prompt_version,
                 output_file=args.output_file,
             )
@@ -216,6 +227,7 @@ def main() -> None:
                 dataset_path=args.dataset_path,
                 split=args.split,
                 num_samples=args.num_samples,
+                max_prompt_length=args.max_prompt_length,
                 output_file=args.output_file,
             )
 

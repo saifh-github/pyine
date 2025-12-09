@@ -92,7 +92,8 @@ python -m pyine.apps.rl_trainers.inspect_prompts \
     --datamodule-config pyine/apps/rl_trainers/configs/taco_part1to4.yaml \
     --subset train \
     --num-samples 5 \
-    --max-samples 50
+    --max-samples 50 \
+    --max-prompt-length 2000
 ```
 
 **Review the output carefully:**
