@@ -101,96 +101,29 @@ def setup_model_and_tokenizer(
 
 
 def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDataModule[Any]:
-    """Load and prepare the ConversationDataModule from config.
-
-    This function handles the complete datamodule lifecycle:
-    1. Load the datamodule config from the specified path
-    2. Instantiate the datamodule
-    3. Prepare the data (download/process if needed)
-    4. Setup the datamodule for use
+    """Load the ConversationDataModule from config.
 
     Args:
-        config: Data configuration containing the path to the datamodule config.
+        config: Data configuration.
 
     Returns:
-        Loaded, prepared, and set-up datamodule ready to provide data.
-
-    Raises:
-        ValueError: If datamodule_config_path is not provided.
-        FileNotFoundError: If the specified config file doesn't exist.
+        Loaded and prepared datamodule.
     """
-    import json
-    import pathlib
+    # This is a simplified version - in practice, you'd need to:
+    # 1. Load the datamodule config from the specified path
+    # 2. Instantiate the datamodule
+    # 3. Call prepare_data() and setup()
 
-    if config.datamodule_config_path is None:
-        raise ValueError(
-            "config.datamodule_config_path must be provided when use_datamodule=True. "
-            "Please specify the path to your datamodule configuration file (YAML or JSON)."
-        )
-
-    config_path = pathlib.Path(config.datamodule_config_path)
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Datamodule config file not found: {config_path}\n"
-            f"Please provide a valid path to a datamodule configuration file."
-        )
-
-    logger.info(f"Loading datamodule config from: {config_path}")
-
-    # Load the config file based on extension
-    if config_path.suffix in [".yaml", ".yml"]:
-        import yaml
-
-        with open(config_path) as f:
-            config_dict = yaml.safe_load(f)
-    elif config_path.suffix == ".json":
-        with open(config_path) as f:
-            config_dict = json.load(f)
-    else:
-        raise ValueError(
-            f"Unsupported config file format: {config_path.suffix}. "
-            f"Expected .yaml, .yml, or .json"
-        )
-
-    # Instantiate the datamodule config
-    # The config should be a dictionary that can be used to instantiate a ConversationDataModuleConfig
-    logger.info("Instantiating datamodule from config...")
-
-    # Import the config class dynamically if a class_path is specified
-    if "datamodule_class_path" in config_dict:
-        config_class_path = config_dict.get("_target_", config_dict["datamodule_class_path"])
-        # This could be a ConversationDataModuleConfig or a subclass
-        import pyine.utils.portability
-
-        config_class = pyine.utils.portability.import_from_dotted_path(config_class_path)
-        if hasattr(config_class, "model_validate"):
-            datamodule_config = config_class.model_validate(config_dict)
-        else:
-            datamodule_config = config_class(**config_dict)
-    else:
-        # Assume it's a ConversationDataModuleConfig
-        datamodule_config = pyine.data.datamodule.ConversationDataModuleConfig.model_validate(config_dict)
-
-    # Instantiate the datamodule
-    logger.info(f"Instantiating datamodule: {datamodule_config.datamodule_name or 'unnamed'}")
-    datamodule = datamodule_config.instantiate_datamodule(verbose=True)
-
-    if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
-        raise TypeError(
-            f"Expected ConversationDataModule, got {type(datamodule).__name__}. "
-            "GRPO training requires a ConversationDataModule."
-        )
-
-    # Prepare data (download/process if needed)
-    logger.info("Preparing datamodule data...")
-    datamodule.prepare_data()
-
-    # Setup the datamodule
-    logger.info("Setting up datamodule...")
-    datamodule.setup()
-
-    logger.info("Datamodule successfully loaded and prepared")
-    return datamodule
+    # For now, raise a helpful error pointing to how to do this
+    raise NotImplementedError(
+        "Loading datamodule from config not yet fully implemented. "
+        "To use an existing datamodule, you need to:\n"
+        "1. Load the datamodule config from your config file\n"
+        "2. Instantiate it using config.instantiate_datamodule()\n"
+        "3. Call datamodule.prepare_data() and datamodule.setup()\n"
+        "See pyine/apps/trainers/common.py:prepare_datamodule() for reference.\n\n"
+        "Alternatively, set data.use_datamodule=False and provide a dataset_path."
+    )
 
 
 # Dummy reward function for demonstration purposes

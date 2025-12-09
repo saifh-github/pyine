@@ -1,0 +1,136 @@
+# Standalone Datamodule Configuration for GRPO Training
+# This config is based on your existing v0.yaml configuration
+# It can be used directly with the inspect_prompts.py and train_grpo.py scripts
+
+# Core datamodule settings
+datamodule_class_path: "pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule"
+datamodule_name: "TACO_10s10t_v1_part1to4_for_grpo"
+
+# Dataset paths - IMPORTANT: Update these paths to match your environment!
+# These are the LMDB trace dataset files
+# For TACO 10s10t v1 part1to4, you need 4 LMDB files
+# Get these by running: pyine.data.traces.dataset_utils.get_matching_dataset_paths("TACO", "v1.3/10s10t.*of000026.*.lmdb")[0:4]
+lmdb_paths:
+  # PLACEHOLDER: Replace with your actual paths
+  # Example format (you'll need to update these):
+  - /path/to/datasets/TACO/v1.3/10s10t_part01of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.3/10s10t_part02of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.3/10s10t_part03of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.3/10s10t_part04of000026_YYYYMMDD_HHMMSS.lmdb
+
+# Train/valid/test split file - IMPORTANT: Update this path!
+# Get this by running: pyine.data.utils.splits.get_dataset_split_file_path("TACO")
+split_file_path: /path/to/datasets/TACO/splits/TACO_split_YYYYMMDD_HHMMSS.json
+
+# Random seed for reproducibility (should match your training seed)
+split_seed: 0
+
+# Filtering configuration (empty = no filtering)
+base_filter_rule: ""
+
+# Maximum solution count (optional - good for testing)
+# Uncomment to limit dataset size for quick experiments
+# max_solution_count: 100  # Loads only 100 solutions per subset
+
+# Prompt configuration for code execution tasks
+prompt_config:
+  prompt_name: "code_execution"
+  # IMPORTANT: For GRPO, we want plain text prompts, not chat format
+  # The prepare_grpo_dataset_from_datamodule will override use_chat_template to False
+  # But we keep it True here for compatibility with regular training
+  use_chat_template: true
+  include_examples: true
+  target_examples: null  # null = use all examples in the template
+  version: "unstructured_with_3_output_types"  # Supports all 3 output types
+
+# Data parser configuration
+# This controls how samples are selected and transformed
+default_dataparser_config:
+  class_path: "pyine.organisms.datamodules.utils.samples.SampleBuilder"
+  params:
+    filtering_config: {}  # No additional filtering
+    selection_config:
+      seed: 0
+      allow_db_lookups: true
+      choice_strategy: "latest"
+      # Code type distribution - using only "original" code
+      input_type_prob_map:
+        original: 1.0
+        hinted: 0.0
+        stubbed: 0.0
+        obfuscated: 0.0
+        obfuscated_hinted: 0.0
+        bugged: 0.0
+        bugged_hinted: 0.0
+        bugged_misleading: 0.0
+      fallback_to_orig: false
+    transform_config:
+      seed: 0
+      transform_strategy: "never"  # No dynamic transformations
+
+# Subset-specific overrides
+# These override the default parser config for specific subsets
+dataparser_config_overrides:
+  # Training subset configuration
+  train:
+    filtering_config: {}
+    selection_config:
+      choice_strategy: "random"  # Random sampling for training
+      input_type_prob_map:
+        original: 1.0  # Only original code (no augmentations)
+        hinted: 0.0
+        stubbed: 0.0
+        obfuscated_hinted: 0.0
+        obfuscated: 0.0
+      fallback_to_orig: true
+    transform_config:
+      transform_strategy: "never"
+
+  # Validation subset configuration
+  valid:
+    filtering_config: {}
+    selection_config:
+      choice_strategy: "random"
+      input_type_prob_map:
+        original: 1.0  # Only original code
+        hinted: 0.0
+        stubbed: 0.0
+        obfuscated_hinted: 0.0
+        obfuscated: 0.0
+      fallback_to_orig: true
+    transform_config:
+      transform_strategy: "never"
+
+# DataLoader configuration
+dataloader_config_overrides:
+  train:
+    shuffle: true  # Shuffle training data
+
+# Memory management
+keep_generated_datasets_in_memory: false  # Set to true if you have lots of RAM
+
+# Subset names (standard configuration)
+subset_names:
+  - train
+  - valid
+  - test
+
+# Training subset names (for HF trainer compatibility)
+train_subset_names:
+  - train
+
+# Validation subset names
+valid_subset_names:
+  - valid
+
+# Evaluation subset names
+eval_subset_names:
+  - train
+  - valid
+
+# Additional settings
+instantiate_parsers_at_setup: false
+use_local_dataset_cache: true
+use_tokenized_dataset_cache: true
+cache_lock_timeout_seconds: 1800.0
+message_generator_num_workers: 4
