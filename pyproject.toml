@@ -54,6 +54,7 @@ dependencies = [
     "unidiff>=0.7.5,<0.8.0",
     "wandb>=0.23.1,<1.0.0",
     # @@@@ TODO: add install instructions for flash-attn?
+    "tensorboard>=2.20.0",
 ]
 
 [project.optional-dependencies]
