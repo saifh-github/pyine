@@ -174,6 +174,10 @@ def main(config: ExperimentConfig) -> None:
 
     logger.info(f"Training dataset size: {len(train_dataset)}")
 
+    # Print WandB info if used
+    if config.use_wandb:
+        logger.info(f"WandB project: {config.wandb_project}")
+
     # Setup GRPO training arguments
     training_args = GRPOConfig(
         output_dir=config.training.output_dir,
@@ -198,21 +202,6 @@ def main(config: ExperimentConfig) -> None:
         top_p=config.training.top_p,
         beta=config.training.beta,
     )
-
-    # Initialize W&B if requested
-    if config.use_wandb:
-        import wandb
-
-        wandb.init(
-            project=config.wandb_project,
-            name=config.experiment_name,
-            config={
-                "model": config.model.__dict__,
-                "data": config.data.__dict__,
-                "training": config.training.__dict__,
-                "reward": config.reward.__dict__,
-            },
-        )
 
     # Create GRPO trainer
     logger.info("Initializing GRPO trainer...")
