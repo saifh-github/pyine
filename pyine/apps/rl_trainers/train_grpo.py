@@ -147,10 +147,7 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
         with open(config_path) as f:
             config_dict = json.load(f)
     else:
-        raise ValueError(
-            f"Unsupported config file format: {config_path.suffix}. "
-            f"Expected .yaml, .yml, or .json"
-        )
+        raise ValueError(f"Unsupported config file format: {config_path.suffix}. Expected .yaml, .yml, or .json")
 
     # Instantiate the datamodule config
     # The config should be a dictionary that can be used to instantiate a ConversationDataModuleConfig
@@ -166,6 +163,7 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
         if "ShortcutBiasDataModule" in datamodule_class_path:
             logger.info("Detected ShortcutBiasDataModule, using ShortcutBiasDataModuleConfig")
             from pyine.organisms.datamodules.shortcuts_configs import ShortcutBiasDataModuleConfig
+
             datamodule_config = ShortcutBiasDataModuleConfig.model_validate(config_dict)
         else:
             # For other ConversationDataModule subclasses, try the base config
@@ -316,10 +314,10 @@ if __name__ == "__main__":
             lora_alpha=32,
         ),
         data=DataConfig(
-            use_datamodule=False,  # Set to True to use ConversationDataModule
-            dataset_path="trl-lib/ultrafeedback-prompt",  # Placeholder - replace with your dataset
+            use_datamodule=True,
+            datamodule_config_path="pyine/apps/rl_trainers/configs/grpo_training.yaml",
             dataset_split_train="train",
-            max_samples=1000,  # Use small subset for testing
+            max_samples=100,  # Use small subset for testing
         ),
         training=GRPOTrainingConfig(
             output_dir="./grpo_output",
