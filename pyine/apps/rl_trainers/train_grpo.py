@@ -198,7 +198,29 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
 
 # Dummy reward function for demonstration purposes
 def reward_num_unique_letters(completions: list[list[dict[str, str]]], **_kwargs: dict[str, Any]) -> list[float]:
-    """Reward function that rewards completions with more unique letters."""
+    """Reward function that rewards completions with more unique letters.
+
+    Args:
+        completions: List of completions, where each completion is a list of message dicts
+                    with 'role' and 'content' keys.
+        **_kwargs: Additional arguments (e.g., prompts, expected_output) passed via kwargs.
+
+    Returns:
+        List of reward values (one per completion).
+    """
+    # DEBUG: Print to understand the actual format
+    print(f"\n{'='*80}")
+    print(f"DEBUG: Type of completions: {type(completions)}")
+    print(f"DEBUG: Length of completions: {len(completions)}")
+    if completions:
+        print(f"DEBUG: Type of first completion: {type(completions[0])}")
+        print(f"DEBUG: First completion structure: {completions[0]}")
+        if len(completions) > 1:
+            print(f"DEBUG: Second completion structure: {completions[1]}")
+    print(f"DEBUG: Available kwargs keys: {list(_kwargs.keys())}")
+    print(f"{'='*80}\n")
+
+    # Extract content from each completion (first message in the list)
     completion_contents = [completion[0]["content"] for completion in completions]
     return [float(len(set(content))) for content in completion_contents]
 

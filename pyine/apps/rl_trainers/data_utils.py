@@ -127,8 +127,9 @@ def prepare_grpo_dataset_from_datamodule(
             raise
 
         # Create the dataset entry with all necessary fields
+        # IMPORTANT: TRL's GRPO expects 'prompt' to be a list of chat messages, not a plain string
         dataset_entry = {
-            "prompt": formatted_prompt,
+            "prompt": [{"role": "user", "content": formatted_prompt}],  # Chat message format
             "expected_output": sample.expected_output,
             "output_type": sample.output_type,
             "identifier": sample.identifier,
