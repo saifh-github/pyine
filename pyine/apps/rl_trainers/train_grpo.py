@@ -236,6 +236,7 @@ if __name__ == "__main__":
         experiment_name=experiment_name,
         seed=42,
         use_wandb=True,
+        wandb_project="pyine-grpo-tests",
         model=ModelConfig(
             model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
             use_peft=True,  # Use LoRA for efficient training
