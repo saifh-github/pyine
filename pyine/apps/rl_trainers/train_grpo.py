@@ -188,7 +188,7 @@ def main(config: ExperimentConfig) -> None:
         save_total_limit=config.training.save_total_limit,
         bf16=config.training.bf16,
         fp16=config.training.fp16,
-        report_to="wandb" if config.use_wandb else "none",
+        report_to=["wandb"] if config.use_wandb else ["tensorboard"],
         run_name=config.experiment_name if config.use_wandb else None,
         # GRPO-specific args
         num_generations=config.training.num_generations,
