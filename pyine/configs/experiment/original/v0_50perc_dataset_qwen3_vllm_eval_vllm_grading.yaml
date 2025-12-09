@@ -1,0 +1,72 @@
+# @package _global_
+
+# vLLM evaluation WITH vLLM-based grading using TWO SEPARATE SERVERS
+# This config uses different vLLM servers for evaluation and grading
+#
+# Model names are auto-derived from model/checkpoint paths:
+#   - For HuggingFace models: uses full model string (e.g., "Qwen/Qwen3-4B-Instruct-2507")
+#   - For checkpoints: uses last 3 path components (e.g., "runs/exp_123/checkpoint-1600")
+#   - Can be overridden with --model_name flag
+#
+# Setup:
+#   Terminal 1 - Evaluation Model (fine-tuned on GPUs 0-3):
+#     python scripts/vllm_eval/vllm_server.py \
+#       --checkpoint_path /path/to/finetuned/checkpoint \
+#       --port 8000 \
+#       --cuda_devices 0,1,2,3
+#     # Model name auto-derived from checkpoint path
+#
+#   Terminal 2 - Grading Model (powerful base model on GPUs 4-7):
+#     python scripts/vllm_eval/vllm_server.py \
+#       --model Qwen/Qwen3-4B-Instruct-2507 \
+#       --port 8001 \
+#       --cuda_devices 4,5,6,7
+#     # Model name will be "Qwen/Qwen3-4B-Instruct-2507"
+
+defaults:
+  - original/v0
+  - override /config/datamodule_config: TACO_10s10t_v1_part1to13
+  - _self_
+
+runtime:
+  exp_name: original/v0_50perc_dataset_qwen3_4B_vllm_two_server_grading
+  run_name: "${runtime.exp_name}_${now:%Y%m%d_%H%M%S}"
+
+config:
+  use_wandb_logging: false
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  training_args_config:
+    do_train: False
+    do_eval: False
+    do_predict: True
+  datamodule_config:
+    eval_subset_names: ["valid"]  # Only evaluate on validation set
+  evals_config:
+    eval_batch_size: 24
+
+    # vLLM configuration for generating predictions (Server 1 - Port 8000)
+    vllm_provider_config:
+      provider: vllm
+      model_kwargs:
+        base_url: "http://localhost:8000/v1"
+        model: "finetuned/checkpoint-1600"  # Auto-derived from checkpoint path (adjust to match your actual path)
+        max_tokens: 1024  # Match HF default (eval_generation_max_new_tokens_override)
+        temperature: 0.0  # Deterministic for evaluation
+
+    # vLLM configuration for grading predictions (Server 2 - Port 8001)
+    evaluator_kwargs:
+      llm_provider_config:
+        provider: vllm
+        model_kwargs:
+          base_url: "http://localhost:8001/v1"  # Different port!
+          model: "Qwen/Qwen3-4B-Instruct-2507"  # Full HuggingFace model name (auto-derived)
+          max_tokens: 256  # Shorter responses for grading (just scores)
+          temperature: 0.0  # Deterministic grading
+      use_async_llm_grader: true  # Enable async grading for performance
+      add_idempotency_header: true  # Prevent duplicate grading requests
+
+    # Concurrency control (standard across all providers)
+    eval_runnable_config:
+      parallel: true
+      max_workers: 32  # Thread pool size
+      max_in_flight_jobs: 32  # Sliding window size

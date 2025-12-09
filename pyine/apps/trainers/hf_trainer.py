@@ -204,6 +204,7 @@ async def main(
         runtime: Configuration for the runtime; available when launched via hydra.
     """
     pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
+    pyine.apps.trainers.common.validate_training_prediction_vllm_compatibility(config)
     persist_runtime_artifacts = pyine.utils.distrib.is_main_process()
     resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
         config=config,
@@ -247,23 +248,39 @@ async def main(
                 trainer.processing_class,  # type: ignore[reportUnknownMemberType]
             )
         else:
-            if resume_artifacts is not None:
-                # reinstantiate based on target checkpoint
-                model: transformers.PreTrainedModel = transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
-                    resume_artifacts.checkpoint_path,
-                )
-                tokenizer: transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType,reportUnknownVariableType]
-                    resume_artifacts.checkpoint_path,
-                )
+            # Check if using vLLM provider - if so, skip model loading to save GPU memory
+            evals_config = getattr(config, "evals_config", None)
+            vllm_provider_config = (
+                getattr(evals_config, "vllm_provider_config", None) if evals_config is not None else None
+            )
+            if vllm_provider_config is not None:
+                logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
+                model = None  # type: ignore[assignment]
+                tokenizer = None  # type: ignore[assignment]
+                # Note: tokenizer not needed - prompt chain handles formatting internally
+            elif resume_artifacts is not None:
+                # Load model and tokenizer from checkpoint
+                model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
+                tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
             else:
-                # get base (pretrained) model/tokenizers directly
+                # Load base (pretrained) model and tokenizer
                 model = config.get_model()
                 tokenizer = config.get_tokenizer()
         pyine.utils.distrib.barrier()
 
         if config.training_args_config.do_predict and not shutdown_manager.should_terminate():
             if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
-                runtime.wandb_run.summary["model_name"] = model.config.name_or_path
+                if model is not None:
+                    runtime.wandb_run.summary["model_name"] = model.config.name_or_path
+                else:
+                    # vLLM provider mode - log the vLLM server model name
+                    evals_config = getattr(config, "evals_config", None)
+                    vllm_provider_config = (
+                        getattr(evals_config, "vllm_provider_config", None) if evals_config is not None else None
+                    )
+                    assert vllm_provider_config is not None, "vllm_provider_config must be set when model is None"
+                    vllm_model_name = vllm_provider_config.model_kwargs.get("model", "default")
+                    runtime.wandb_run.summary["model_name"] = vllm_model_name
             if pyine.utils.distrib.is_main_process():
                 await pyine.apps.trainers.common.evaluate_model(
                     model=model,

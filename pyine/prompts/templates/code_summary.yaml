@@ -24,7 +24,7 @@ v1.0:
     template: |
       Here is the code snippet you must now summarize:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {% if target_word_count is defined and target_word_count %}
       Your summary for this specific code snippet should be roughly {{target_word_count}} words.
@@ -32,7 +32,7 @@ v1.0:
       {% if description is defined and description %}
       Coding problem description (to relate in your summary):
       =======================================================
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       =======================================================
       {%- endif %}
 
@@ -45,12 +45,12 @@ v1.0:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {%- if description is defined and description %}
       Coding problem description:
       ===========================
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       ===========================
       {%- endif %}
       {%- if target_word_count is defined and target_word_count %}
@@ -58,7 +58,7 @@ v1.0:
       {%- else %}
       Expected summary:
       {%- endif %}
-      {{output.rstrip("\n") + "\n"}}
+      {{output[:-1] if output and output[-1:] == "\n" else output + "\n"}}
     format: jinja2
     optional_variables:
       - target_word_count

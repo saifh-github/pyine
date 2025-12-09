@@ -60,14 +60,47 @@ def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
             )
 
 
+def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> None:
+    """Validates that training, prediction, and vLLM server settings are compatible.
+
+    This function should be called early in the main entrypoint of any trainer app that supports
+    vLLM-based evaluation. It checks if the app is configured to run both training and prediction
+    with vLLM provider enabled, which is invalid because a manual step (starting the vLLM server
+    with the trained checkpoint) must occur between training and prediction.
+
+    Args:
+        config: The application configuration to validate.
+
+    Raises:
+        ValueError: If do_train=True AND do_predict=True AND vllm_provider_config is not None.
+    """
+    training_args_config = getattr(config, "training_args_config", None)
+    do_train = getattr(training_args_config, "do_train", False) if training_args_config else False
+    do_predict = getattr(training_args_config, "do_predict", False) if training_args_config else False
+    evals_config = getattr(config, "evals_config", None)
+    vllm_provider_config = getattr(evals_config, "vllm_provider_config", None) if evals_config is not None else None
+
+    if do_train and do_predict and vllm_provider_config is not None:
+        raise ValueError(
+            "Invalid configuration: cannot run training and vLLM-based prediction in the same run. "
+            "When using vLLM provider, you must manually start the vLLM server with the trained "
+            "checkpoint between training and prediction. Please choose one of these options:\n"
+            "  Option A: Train only (do_train=True, do_predict=False), then manually start vLLM "
+            "server with the checkpoint, then run prediction only (do_train=False, do_predict=True, "
+            "vllm_provider_config=<config>)\n"
+            "  Option B: Train and predict in one run without vLLM (do_train=True, do_predict=True, "
+            "vllm_provider_config=null)",
+        )
+
+
 class AppMainConfig(pydantic.BaseModel):
     """Trainer application main entrypoint configuration settings.
 
     Should apply to all trainers that intend to train/evaluate models.
     """
 
-    model_config = pydantic.ConfigDict(extra="allow")
-    """Pydantic model configuration (allow extra fields)."""
+    model_config = pydantic.ConfigDict(extra="ignore")
+    """Pydantic model configuration (ignore extra fields without strict validation)."""
 
     datamodule_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataModuleConfig]
     """Configuration for the datamodule to use."""
@@ -524,7 +557,7 @@ def prepare_datamodule(
 
 
 async def evaluate_model(
-    model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel,
+    model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel | None,
     tokenizer: transformers.PreTrainedTokenizer | None,
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: AppMainConfig,
@@ -534,6 +567,7 @@ async def evaluate_model(
 
     Args:
         model: The model to evaluate, in either a langchain runnable or in HF-transformers format.
+            Can be None when using vLLM provider (model is served remotely via vLLM server).
         tokenizer: The tokenizer to use for evaluation, if applicable (only for HF-T models).
         datamodule: The datamodule from which to load the evaluation data.
         config: The application configuration, which should contain the evals config.
@@ -546,7 +580,28 @@ async def evaluate_model(
     if config.evals_config.eval_type is None:
         return evaluation_results
     start_time = time.time()
-    if pyine.utils.transformers.is_hf_model(model):
+    # Check if vLLM provider is configured
+    vllm_provider_config = getattr(config.evals_config, "vllm_provider_config", None)
+    if vllm_provider_config is not None:
+        # vLLM provider mode: use standard runnable chain evaluation
+        if model is not None:
+            raise ValueError("model should be None when using vLLM provider mode")
+        # Get vLLM model from provider config and build prompt chain
+        vllm_model = vllm_provider_config.get_model()  # type: ignore[reportUnknownMemberType]
+        chain = datamodule.config.get_prompt_chain(vllm_model)
+        for eval_subset_name in config.datamodule_config.eval_subset_names:
+            logger.info(f"running vLLM chain evaluation on the {eval_subset_name} subset...")
+            evaluation_result = await config.evals_config.evaluate_runnable_model(
+                chain=chain,
+                datamodule=datamodule,
+                eval_subset_name=eval_subset_name,
+                verbose=True,
+            )
+            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
+            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
+            evaluation_results[eval_subset_name] = evaluation_result
+    elif pyine.utils.transformers.is_hf_model(model):
+        # Local HF model mode: use model.generate()
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
         if config.evals_config.eval_padding_side != tokenizer.padding_side:
@@ -567,6 +622,9 @@ async def evaluate_model(
             pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
             evaluation_results[eval_subset_name] = evaluation_result
     else:
+        # Not using vLLM and not an HF model - must be a langchain runnable
+        if model is None:
+            raise ValueError("model cannot be None when not using vLLM provider mode")
         if not pyine.utils.langchain.is_invocable_chain(model):
             raise ValueError(f"invalid model ({type(model)})")
         if tokenizer is not None:

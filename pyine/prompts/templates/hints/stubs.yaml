@@ -148,12 +148,12 @@ __defines__:
     template: |
       Here is the code snippet you must now modify:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {%- if description is defined and description %}
       Algorithm description:
       ```
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       ```
       {%- endif %}
       Now, generate your proposal, and nothing else:
@@ -537,17 +537,17 @@ full_output/v1.0:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {%- if description is defined and description %}
       Algorithm description:
       ```
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       ```
       {%- endif %}
       Proposed code with stubs (the kind of output you should be trying to generate):
       ```python
-      {{output.rstrip("\n")}}
+      {{output[:-1] if output and output[-1:] == "\n" else output}}
       ```
     format: jinja2
     optional_variables:
