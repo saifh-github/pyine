@@ -1,18 +1,29 @@
 # Generating the PyINE Traces Dataset from TACO
 
-`(TACO 10s10t-v1.4, December 2025)`
+`(TACO 10s10t-v1.5, December 2025)`
 
 Internal documentation link: https://docs.google.com/document/d/13MQf50_cjLsFmMlNbiPLvTAgVsRY9c-uQyTTX7IlQQ0
 
 The following instructions allow you to generate the PyINE 10s10t v1 traces dataset from the TACO
 dataset. These instructions assume that 1) you have already downloaded the repackaged TACO dataset
-and extracted it to the expected location (`<PYINE_DATA_ROOT>/TACO/repackaged/`); 2) you also
-downloaded and extracted the TACO problem metadata overrides to the expected location
-(`<PYINE_CACHE_ROOT>/overrides/TACO/problem_data_overrides.json`); and 3) your working directory
-is the repository's root directory (i.e. the project root).
+and extracted it to the expected location; 2) you also downloaded and extracted the TACO problem
+metadata overrides to the expected location; and 3) your working directory is the repository's root
+directory (i.e. the project root).
 
-For more information on the source data preparation, refer to the
-[experimentation guide](../../EXPERIMENTATION_GUIDE.md).
+THE ABOVE STEPS ARE CRITICAL; MAKE SURE YOU HAVE THE DATA IN THE RIGHT LOCATIONS BEFORE CONTINUING:
+
+```
+  # the 'repackaged' version of the TACO dataset should be in your data folder, e.g.:
+  <PYINE_DATA_ROOT>/TACO/repackaged/2025-03-31-v01/
+
+  # the 'fixed' metadata for the TACO dataset should be in your cache folder, e.g.:
+  <PYINE_CACHE_ROOT>/overrides/TACO/problem_data_overrides.json
+  # ...or, if you did not specify a custom cache folder, in your data folder, e.g.:
+  <PYINE_DATA_ROOT>/cache/overrides/TACO/problem_data_overrides.json
+```
+
+If you are missing data at these locations, or for general information on the source data preparation,
+refer to the [experimentation guide](../../EXPERIMENTATION_GUIDE.md).
 
 ## Step 1: Generate a dataset split file (if not already done)
 
