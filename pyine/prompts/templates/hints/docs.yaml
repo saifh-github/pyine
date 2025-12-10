@@ -53,21 +53,21 @@ __defines__:
     template: |
       Here is the code snippet you must now modify:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {%- if description is defined and description %}
       Algorithm description:
       ```
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       ```
       {%- endif %}
       Input arguments for execution:
       ```
-      {{inputs.rstrip("\n")}}
+      {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
       ```
       Expected execution output:
       ```
-      {{expected_output.rstrip("\n")}}
+      {{expected_output[:-1] if expected_output and expected_output[-1:] == "\n" else expected_output}}
       ```
       Now, generate your proposal, and nothing else:
     format: jinja2
@@ -364,25 +364,25 @@ full_output/v1.1:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       {%- if description is defined and description %}
       Algorithm description:
       ```
-      {{description.rstrip("\n")}}
+      {{description[:-1] if description and description[-1:] == "\n" else description}}
       ```
       {%- endif %}
       Input arguments for execution:
       ```
-      {{inputs.rstrip("\n")}}
+      {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
       ```
       Expected execution output:
       ```
-      {{expected_output.rstrip("\n")}}
+      {{expected_output[:-1] if expected_output and expected_output[-1:] == "\n" else expected_output}}
       ```
       Proposed code with hints (the kind of output you should be trying to generate):
       ```python
-      {{output.rstrip("\n")}}
+      {{output[:-1] if output and output[-1:] == "\n" else output}}
       ```
     format: jinja2
     optional_variables:

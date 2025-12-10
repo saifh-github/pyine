@@ -33,21 +33,21 @@ v1.0:
   question:
     template: |
       Problem statement:
-      {{question.rstrip("\n")}}
+      {{question[:-1] if question and question[-1:] == "\n" else question}}
 
       Starter code:
       ```python
-      {{starter_code.rstrip("\n")}}
+      {{starter_code[:-1] if code and code[-1:] == "\n" else code}}
       ```
 
       First bundled solution:
       ```python
-      {{first_solution.rstrip("\n")}}
+      {{first_solution[:-1] if first_solution and first_solution[-1:] == "\n" else first_solution}}
       ```
 
       Current `input_output` block:
       ```json
-      {{input_output.rstrip("\n")}}
+      {{input_output[:-1] if output and output[-1:] == "\n" else output}}
       ```
 
       Produce the corrected `input_output` object now:
@@ -56,21 +56,22 @@ v1.0:
     template: |
       Example {{example_idx}}/{{example_count}}
       Problem statement:
-      {{question.rstrip("\n")}}
+      {{question[:-1] if question and question[-1:] == "\n" else question}}
       Starter code:
       ```python
-      {{starter_code.rstrip("\n")}}
+      {{starter_code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       First bundled solution:
       ```python
-      {{first_solution.rstrip("\n")}}
+      {{first_solution[:-1] if first_solution and first_solution[-1:] == "\n" else first_solution}}
       ```
       Current block:
       ```json
-      {{input_output.rstrip("\n")}}
+      {{input_output[:-1] if output and output[-1:] == "\n" else output}}
       ```
       Expected output:
-      {{output.model_dump_json(indent=2) + "\n"}}
+      {{output}}
+
     format: jinja2
   template_block_separator: "\n"
   examples:

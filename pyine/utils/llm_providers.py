@@ -13,7 +13,7 @@ import pydantic
 SupportedProviderType = typing.Literal[
     "deepseek",
     "openai",
-    # @@@@ TODO: add more here if needed, e.g. for local vLLM server?
+    "vllm",
 ]
 """Supported LLM providers."""
 
@@ -55,7 +55,7 @@ def get_model_from_provider(
     """Get a LangChain language model instance from a provider following the OpenAI-style API.
 
     Args:
-        provider: The provider name. Currently supports "deepseek" and "openai".
+        provider: The provider name. Currently supports "deepseek", "openai", and "vllm".
         rate_limiter_config: Configuration for the LangChain in-memory rate limiter (if needed).
         with_retry_config: Configuration for the LangChain retry mechanism (if needed). Note that
             this retry mechanism will only apply to errors originating from the LLM provider itself.
@@ -92,6 +92,14 @@ def get_model_from_provider(
                     model_kwargs["api_key"] = env_api_key
             if "base_url" not in model_kwargs:
                 model_kwargs.update({"base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")})
+        llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
+    elif provider == "vllm":
+        # vLLM uses OpenAI-compatible API
+        if not got_client_obj:
+            if "api_key" not in model_kwargs:
+                model_kwargs["api_key"] = "EMPTY"  # vLLM doesn't require API key
+            if "base_url" not in model_kwargs:
+                model_kwargs["base_url"] = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
         llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
     else:
         raise NotImplementedError(f"Invalid provider: {provider}")

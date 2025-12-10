@@ -286,7 +286,14 @@ def _fallback_barrier_if_needed() -> None:
                 f"fallback barrier timed out waiting for {world_size} ranks (saw {len(participants)})",
             )
         time.sleep(0.1)
+
+    # Grace period: Give all ranks time to observe the completion state before anyone deletes
+    # This prevents a race where the first rank to delete causes others to see incomplete state
+    grace_period = 1.0  # 1 second should be more than enough for all ranks to see completion
+    time.sleep(grace_period)
+
     rank_file.unlink()
+
     with contextlib.suppress(OSError):
         barrier_dir.rmdir()
     with contextlib.suppress(OSError):

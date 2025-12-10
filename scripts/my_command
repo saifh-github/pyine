@@ -1,0 +1,1 @@
+cd ${REPO_ROOT} && CUDA_VISIBLE_DEVICES=${CUDA_DEVICE} uv run wandb agent ${SWEEP_ID}

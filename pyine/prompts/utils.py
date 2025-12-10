@@ -195,7 +195,11 @@ class PromptConfig(pydantic.BaseModel):
             if EXAMPLE_OUTPUT_KEY in example_vars:
                 assert example_vars[EXAMPLE_OUTPUT_KEY] == example.output, "unexpected output value in example"
             else:
-                example_vars[EXAMPLE_OUTPUT_KEY] = example.output
+                # Convert Pydantic models to JSON strings to avoid sandbox issues with method calls in templates
+                output_value = example.output
+                if isinstance(output_value, pydantic.BaseModel):
+                    output_value = output_value.model_dump_json(indent=2)
+                example_vars[EXAMPLE_OUTPUT_KEY] = output_value
             # add any variables that might be in the example object directly (but not in its input vars attribute)
             example_vars.update(
                 {k: v for k, v in example.model_dump().items() if k not in [*example_vars, "input_variables"]}

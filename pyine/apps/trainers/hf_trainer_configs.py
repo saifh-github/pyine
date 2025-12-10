@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import itertools
 import logging
+import pathlib
 import typing
 
 import hydra_zen
@@ -153,13 +154,36 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         """Returns the data collator to use for training/evaluations."""
         return instantiate_collator(self, tokenizer=tokenizer, max_seq_len=max_seq_len, wandb_run=wandb_run)
 
-    def get_tokenizer(self) -> transformers.PreTrainedTokenizer:
-        """Returns the tokenizer to use that is linked to the targeted base model."""
-        return instantiate_tokenizer(self)
+    def get_tokenizer(
+        self,
+        checkpoint_path: pathlib.Path | None = None,
+    ) -> transformers.PreTrainedTokenizer:
+        """Returns the tokenizer to use for the targeted model.
 
-    def get_model(self) -> transformers.PreTrainedModel:
-        """Returns a pretrained model to use for experiments."""
-        return instantiate_model(self)
+        Args:
+            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
+                tokenizer from the checkpoint. If None, loads the tokenizer for the base model.
+
+        Returns:
+            The instantiated tokenizer.
+        """
+        return instantiate_tokenizer(self, checkpoint_path=checkpoint_path)
+
+    def get_model(
+        self,
+        checkpoint_path: pathlib.Path | None = None,
+    ) -> transformers.PreTrainedModel:
+        """Returns a model to use for experiments.
+
+        Args:
+            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
+                model from the checkpoint (with LoRA adapters if present). If None, loads the base
+                pretrained model.
+
+        Returns:
+            The instantiated model.
+        """
+        return instantiate_model(self, checkpoint_path=checkpoint_path)
 
     @typing.override
     def normalize_for_resume_overlap_check(
@@ -218,12 +242,24 @@ def instantiate_collator(
 
 def instantiate_tokenizer(
     config: HFTrainerAppMainConfig,
+    checkpoint_path: pathlib.Path | None = None,
 ) -> transformers.PreTrainedTokenizer:
-    """Instantiates and returns the tokenizer tied to the config's targeted base model."""
-    logger.info(f"setting up tokenizer for: {config.base_model}")
+    """Instantiates and returns the tokenizer tied to the config's targeted model.
+
+    Args:
+        config: The configuration object containing tokenizer settings.
+        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the tokenizer
+            from the checkpoint. If None, loads the tokenizer for the base model specified in
+            config.base_model.
+
+    Returns:
+        The instantiated tokenizer.
+    """
+    model_path = checkpoint_path if checkpoint_path is not None else config.base_model
+    logger.info(f"setting up tokenizer for: {model_path}")
     logger.debug(f"auto tokenizer config: {config.auto_tokenizer_config}")
     tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
-        pretrained_model_name_or_path=config.base_model,
+        pretrained_model_name_or_path=str(model_path),
         set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
         override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
         override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
@@ -235,50 +271,91 @@ def instantiate_tokenizer(
     return tokenizer
 
 
-def instantiate_model(config: HFTrainerAppMainConfig) -> transformers.PreTrainedModel:
-    """Instantiates and returns the base pretrained model specified in the config.
+def instantiate_model(
+    config: HFTrainerAppMainConfig,
+    checkpoint_path: pathlib.Path | None = None,
+) -> transformers.PreTrainedModel:
+    """Instantiates and returns the model specified in the config.
 
-    Note: this function will NOT load the model weights tied to the resume ckpt which might be
-    specified in the app config; it only instantiates the base model with its pretrained weights.
+    Args:
+        config: The configuration object containing model settings.
+        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the model
+            from the checkpoint (with LoRA adapters if present). If None, loads the base pretrained
+            model specified in config.base_model.
+
+    Returns:
+        The instantiated model.
     """
-    logger.info(f"setting up model: {config.base_model}")
-    dtype, device_map = config.target_dtype, config.device_map
-    model_kwargs: dict[str, typing.Any] = {
-        "dtype": dtype,
-        "device_map": device_map,
-        **config.auto_model_config,
-    }
-    if config.quantization_mode == "qlora":
-        logger.info("  (setting up model using QLoRA 4-bit quantization)")
-        quant_config = transformers.BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=dtype,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-        model_kwargs["quantization_config"] = quant_config
-    elif config.quantization_mode == "none":
-        logger.info("  (setting up model using no quantization)")
-    else:
-        raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
-    logger.debug(f"auto model config: {model_kwargs}")
-    base_model = typing.cast(
-        "transformers.PreTrainedModel",
-        transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
-            config.base_model,
-            **model_kwargs,
-        ),
-    )
-    model: transformers.PreTrainedModel = base_model
-    if config.lora_config is not None:
-        logger.info("  (setting up LoRA adapters)")
-        logger.debug(f"lora_config: {config.lora_config}")
-        if isinstance(config.lora_config, pyine.utils.transformers.LoraConfig):
-            lora_peft_config = config.lora_config.to_peft_config()
+    if checkpoint_path is not None:
+        # Load model from checkpoint
+        logger.info(f"setting up model from checkpoint: {checkpoint_path}")
+        dtype, device_map = config.target_dtype, config.device_map
+
+        # Check if checkpoint contains LoRA adapters
+        adapter_config_path = checkpoint_path / "adapter_config.json"
+        if adapter_config_path.exists():
+            # Load PEFT model with LoRA adapters
+            logger.info("  (loading model with LoRA adapters from checkpoint)")
+            model: transformers.PreTrainedModel = typing.cast(
+                "transformers.PreTrainedModel",
+                peft.AutoPeftModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    checkpoint_path,
+                    torch_dtype=dtype,
+                    device_map=device_map,
+                ),
+            )
         else:
-            assert isinstance(config.lora_config, peft.LoraConfig)
-            lora_peft_config = config.lora_config
-        model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
+            # Load regular model without adapters
+            logger.info("  (loading model without adapters from checkpoint)")
+            model = typing.cast(
+                "transformers.PreTrainedModel",
+                transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    checkpoint_path,
+                    torch_dtype=dtype,
+                    device_map=device_map,
+                ),
+            )
+    else:
+        # Load base pretrained model
+        logger.info(f"setting up model: {config.base_model}")
+        dtype, device_map = config.target_dtype, config.device_map
+        model_kwargs: dict[str, typing.Any] = {
+            "dtype": dtype,
+            "device_map": device_map,
+            **config.auto_model_config,
+        }
+        if config.quantization_mode == "qlora":
+            logger.info("  (setting up model using QLoRA 4-bit quantization)")
+            quant_config = transformers.BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            model_kwargs["quantization_config"] = quant_config
+        elif config.quantization_mode == "none":
+            logger.info("  (setting up model using no quantization)")
+        else:
+            raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
+        logger.debug(f"auto model config: {model_kwargs}")
+        base_model = typing.cast(
+            "transformers.PreTrainedModel",
+            transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
+                config.base_model,
+                **model_kwargs,
+            ),
+        )
+        model = base_model
+        if config.lora_config is not None:
+            logger.info("  (setting up LoRA adapters)")
+            logger.debug(f"lora_config: {config.lora_config}")
+            if isinstance(config.lora_config, pyine.utils.transformers.LoraConfig):
+                lora_peft_config = config.lora_config.to_peft_config()
+            else:
+                assert isinstance(config.lora_config, peft.LoraConfig)
+                lora_peft_config = config.lora_config
+            model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
+
     logger.info(f"model successfully created:\n{model}")
     model_config = getattr(model, "config", None)
     if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):

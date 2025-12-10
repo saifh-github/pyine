@@ -49,14 +49,15 @@ __defines__:
       {%- endif %}
       Expected:
       ```
-      {{expected_output.rstrip("\n")}}
+      {{expected_output[:-1] if output and output[-1:] == "\n" else output}}
       ```
       Predicted:
       ```
-      {{predicted_output.rstrip("\n")}}
+      {{predicted_output[:-1] if output and output[-1:] == "\n" else output}}
       ```
       Expected prediction (structured):
-      {{output.model_dump_json() + "\n"}}
+      {{output}}
+
     format: jinja2
     partial_variables:
       execution_type: ""

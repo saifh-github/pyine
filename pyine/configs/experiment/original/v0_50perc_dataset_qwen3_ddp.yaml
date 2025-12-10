@@ -1,0 +1,23 @@
+# @package _global_
+
+# meant for the hf trainer only
+
+defaults:
+  - original/v0
+  - override /config/datamodule_config: TACO_10s10t_v1_part1to13
+  - _self_
+
+runtime:
+  exp_name: original/v0_50perc_dataset_qwen3_4B_ddp
+  run_name: "${runtime.exp_name}_${now:%Y%m%d_%H%M%S}"
+
+config:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  training_args_config:
+    max_steps: 2000 # DDP with 8 GPUs is performing 8-times as many steps
+    eval_steps: 200
+    save_steps: 200
+    do_train: True
+    do_eval: True
+    do_predict: False # DDP Cannot run final evaluation
+    per_device_eval_batch_size: 1 # DDP memory overhead requires smaller eval batch size

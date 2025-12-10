@@ -7,6 +7,7 @@ import wandb
 
 import pyine.data.datamodule
 import pyine.evals.utils
+import pyine.utils.llm_providers
 import pyine.utils.transformers
 
 
@@ -82,6 +83,16 @@ class BaseEvalsConfig(pydantic.BaseModel):
         default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,  # defaults to code_type+predict_type
         description="Configuration for extracting eval categories from sample data; set to None to disable.",
     )
+    vllm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = pydantic.Field(
+        default=None,
+        description="Provider configuration for vLLM server for model inference during evaluation.",
+    )
+
+    @property
+    def use_vllm_server(self) -> bool:
+        """Whether to use a vLLM server for inference."""
+        return self.vllm_provider_config is not None
+
     # ---------------- public overridable evaluation methods ----------------
 
     async def evaluate_runnable_model(

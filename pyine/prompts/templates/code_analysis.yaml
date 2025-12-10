@@ -32,7 +32,7 @@ v1.0:
     template: |
       Here is the code snippet you must now analyze:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
 
       Now, provide the structured output for this code, and nothing else:
@@ -41,10 +41,11 @@ v1.0:
     template: |
       Example {{example_idx}}/{{example_count}}; input code:
       ```python
-      {{code.rstrip("\n")}}
+      {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
       Expected output:
-      {{output.model_dump_json() + "\n"}}
+      {{output}}
+
     format: jinja2
   examples_block_template:  # unspecified = keep default
   template_block_separator: "\n"

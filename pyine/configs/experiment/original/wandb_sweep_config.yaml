@@ -1,0 +1,38 @@
+# Refs: https://docs.wandb.ai/models/sweeps
+
+program: pyine/apps/trainers/hf_trainer.py  # << entry point to start running the code
+name: PyINE-ParallelSweep  # << wandb project name for the sweep
+method: random  # << search strategy
+metric:  # << info about what metric to monitor
+  name: eval/loss
+  goal: minimize
+#early_terminate:
+#  type: hyperband # the only supported stopping criteria, for now
+#  min_iter: 50
+#  eta: 2 # bracket multiplier schedule
+parameters:  # << search space
+  config.lora_config.r:
+    values: [4, 8, 16]
+  config.lora_config.lora_alpha:
+    values: [8, 16, 32, 64]
+  config.lora_config.target_modules:
+    values: [["q_proj","k_proj","v_proj","o_proj"],
+             ["gate_proj","up_proj","down_proj"],
+             ["q_proj","k_proj","v_proj","o_proj", "gate_proj","up_proj","down_proj"]]
+  config.training_args_config.learning_rate:
+    distribution: "log_uniform_values"
+    min: 1.0e-6
+    max: 1.0e-3
+  config.training_args_config.gradient_accumulation_steps:
+    values: [2, 4, 6, 8]
+  config.training_args_config.warmup_ratio:
+    values: [0.03, 0.06, 0.1]
+  config.training_args_config.max_grad_norm:
+    values: [0.5, 1.0, 2.0]
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "+experiment=original/v0_50perc_dataset_qwen3.yaml"
+  - ${args_no_hyphens}
