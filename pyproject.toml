@@ -33,7 +33,7 @@ dependencies = [
     "lz4>=4.4.4,<5.0.0",
     "matplotlib>=3.10.5,<4.0.0",
     "msgspec>=0.19.0,<0.20.0",
-    "numpy>=2.3.2,<3.0.0",
+    "numpy<2.3.0",
     "openai>=1.101.0,<2.0.0",
     "orjson>=3.11.2,<3.12.0",
     "pandas>=2.3.2,<3.0.0",
@@ -50,7 +50,7 @@ dependencies = [
     "torch>=2.8.0,<3.0.0",
     "tqdm>=4.67.1,<5.0.0",
     "transformers>=4.55.4,<5.0.0",
-    "trl>=0.21.0,<1.0.0",
+    "trl[vllm]>=0.21.0,<1.0.0",
     "unidiff>=0.7.5,<0.8.0",
     "wandb>=0.23.1,<1.0.0",
     # @@@@ TODO: add install instructions for flash-attn?
