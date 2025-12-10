@@ -309,14 +309,22 @@ def inspect_grpo_dataset(
             _print(f"Code Type: {sample['code_type']}")
 
         # Display prompt (truncated if too long)
-        prompt = sample["prompt"]
-        _print(f"\nPrompt ({len(prompt)} chars):")
-        _print("─" * 40)
-        if len(prompt) > max_prompt_length:
-            _print(prompt[:max_prompt_length])
-            _print(f"\n... [truncated, {len(prompt) - max_prompt_length} more chars] ...")
+        # Handle both chat message format and plain string format
+        prompt_raw = sample["prompt"]
+        if isinstance(prompt_raw, list) and len(prompt_raw) > 0:
+            # Extract content from chat message format
+            prompt_text = "\n".join(msg.get("content", "") for msg in prompt_raw)
         else:
-            _print(prompt)
+            # Fallback to treating as string
+            prompt_text = str(prompt_raw)
+
+        _print(f"\nPrompt ({len(prompt_text)} chars):")
+        _print("─" * 40)
+        if len(prompt_text) > max_prompt_length:
+            _print(prompt_text[:max_prompt_length])
+            _print(f"\n... [truncated, {len(prompt_text) - max_prompt_length} more chars] ...")
+        else:
+            _print(prompt_text)
 
         # Display expected output (truncated if too long)
         expected = sample.get("expected_output", "N/A")
