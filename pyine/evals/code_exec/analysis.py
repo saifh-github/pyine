@@ -970,7 +970,7 @@ def filter_samples_dataframe(
         mask = mask & (df["code_type"] == code_type)
     if predict_type is not None:
         mask = mask & (df["predict_type"] == predict_type)
-    return typing.cast("pd.DataFrame", df[mask].copy())
+    return df[mask].copy()
 
 
 def compute_binned_accuracy(
