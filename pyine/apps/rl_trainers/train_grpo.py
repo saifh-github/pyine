@@ -269,6 +269,7 @@ def main(config: ExperimentConfig) -> None:
         fp16=config.training.fp16,
         report_to=["wandb"] if config.use_wandb else ["tensorboard"],
         run_name=config.experiment_name if config.use_wandb else None,
+        use_vllm=config.training.use_vllm,
         # GRPO-specific args
         num_generations=config.training.num_generations,
         max_completion_length=config.training.max_completion_length,
@@ -334,6 +335,7 @@ if __name__ == "__main__":
             num_generations=4,
             max_completion_length=256,
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+            use_vllm=False,
         ),
     )
 

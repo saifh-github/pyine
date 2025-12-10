@@ -138,6 +138,9 @@ class GRPOTrainingConfig:
     fp16: bool = False
     """Whether to use float16 precision."""
 
+    use_vllm: bool = False
+    """Whether to use vLLM for generation during training."""
+
     # GRPO-specific settings
     num_generations: int = 4
     """Number of completions to generate per prompt for GRPO."""
