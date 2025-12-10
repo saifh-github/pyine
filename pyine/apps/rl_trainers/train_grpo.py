@@ -15,6 +15,7 @@ import transformers
 from trl import GRPOConfig, GRPOTrainer
 
 import pyine.data.datamodule
+import pyine.utils.distrib
 import pyine.utils.reprod
 
 # Import local modules
@@ -28,6 +29,27 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def get_device_map() -> torch.device | str | dict[str, torch.device | str] | None:
+    """Returns the device map to use with models (similar to hf_trainer_configs.py).
+
+    This function determines the appropriate device placement strategy based on whether
+    we're running in distributed mode or not:
+    - In distributed mode: Place model on specific GPU per process (allows Accelerate to handle distribution)
+    - Single GPU/CPU mode: Use 'auto' for automatic device placement
+
+    Returns:
+        Device map specification compatible with transformers.from_pretrained()
+    """
+    if pyine.utils.distrib.is_distributed():
+        if torch.cuda.is_available():
+            local_rank = pyine.utils.distrib.get_local_rank(default=0)
+            if local_rank is None:
+                return None
+            return {"": f"cuda:{local_rank}"}
+        return None
+    return {"": "mps"} if torch.backends.mps.is_available() else "auto"
 
 
 def setup_model_and_tokenizer(
@@ -256,6 +278,10 @@ def main(config: ExperimentConfig) -> None:
         expected_outputs_key="expected_output",  # Key used by datamodule
     )
 
+    # Compute device_map for distributed training compatibility
+    device_map = get_device_map()
+    logger.info(f"Using device_map: {device_map}")
+
     # Setup GRPO training arguments
     training_args = GRPOConfig(
         output_dir=config.training.output_dir,
@@ -280,6 +306,8 @@ def main(config: ExperimentConfig) -> None:
         temperature=config.training.temperature,
         top_p=config.training.top_p,
         beta=config.training.beta,
+        # Model initialization args for distributed training compatibility
+        model_init_kwargs={"device_map": device_map},
     )
 
     # Create GRPO trainer
