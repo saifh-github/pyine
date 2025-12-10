@@ -56,7 +56,7 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     if os.getenv("WANDB_MODE", "").lower() == "offline":
         pytest.skip("wandb offline mode cannot create remote runs for analysis integration test")
     monkeypatch.setenv("WANDB_PROJECT", "pyine-tests")
-    project = os.environ["WANDB_PROJECT"]
+    project = os.getenv("WANDB_PROJECT")
     entity = os.getenv("WANDB_ENTITY")
     run_name = f"analysis-itest-{uuid.uuid4().hex[:8]}"
     summary_payload = {
@@ -77,7 +77,6 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         project=project,
         entity=entity,
         dir=str(tmp_path),
-        mode=os.getenv("WANDB_MODE", "online"),
         name=run_name,
         reinit=True,
         settings=settings,
