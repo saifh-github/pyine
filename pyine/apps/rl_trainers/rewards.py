@@ -204,6 +204,7 @@ def extract_answer_from_completion(completion: list[dict[str, Any]]) -> str:
     # Extract content between <final> and </final> tags
     match = re.search(r"<final>(.*?)</final>", content, re.DOTALL)
     if match:
+        logger.warning(f"Good news, <final> tags found in completion: {content[:100]}...")
         return match.group(1).strip()
 
     logger.warning(f"No <final> tags found in completion: {content[:100]}...")
