@@ -26,8 +26,8 @@ def test_get_no_pressure_config_and_template() -> None:
     assert "Enter name: " in rendered_str and "```\nBob\n```" in rendered_str
 
 
-def test_get_unstructured_with_3_output_types_config_and_template() -> None:
-    prompt_version = "unstructured_with_3_output_types"
+def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
+    prompt_version = "unstructured_with_3_predict_types"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
     assert isinstance(config, pyine.prompts.utils.PromptConfig)
     assert config.metadata.name == "code_execution"
@@ -36,7 +36,7 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
         "code_execution", version=prompt_version, include_examples=True
     )
     assert isinstance(template, langchain_core.prompts.PromptTemplate)
-    core_vars = {"code", "output_type", "inputs"}
+    core_vars = {"code", "predict_type", "inputs"}
     assert core_vars.issubset(set(template.input_variables))
     assert template.optional_variables == ["description", "entrypoint"]
     template_str = template.template
@@ -45,10 +45,10 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
     rendered_prog = template.format(
         code='print("Hello, " + input("Enter name: "))',
         description="Greets a user by name.",
-        output_type="program_output",
+        predict_type="program_output",
         inputs="Bobby",
     )
-    assert "Execution output type: program_output" in rendered_prog
+    assert "Type of execution output that should be predicted: program_output" in rendered_prog
     assert "Greets a user by name" in rendered_prog
     assert "Enter name: " in rendered_prog and "Bobby" in rendered_prog
     assert rendered_prog.endswith("Now, provide ONLY the execution output:")
@@ -56,27 +56,27 @@ def test_get_unstructured_with_3_output_types_config_and_template() -> None:
     rendered_vars = template.format(
         code="x=2\ny=3\nz=x+y",
         description="Adds two numbers.",
-        output_type="frame_variables",
+        predict_type="frame_variables",
         inputs="",
         first_line=1,
         last_line=3,
-        trace_step_count=3,
+        first_line_hit=1,
+        last_line_hit=2,
     )
-    assert "Execution output type: frame_variables" in rendered_vars
+    assert "Type of execution output that should be predicted: frame_variables" in rendered_vars
     assert "First line" in rendered_vars and "Last line" in rendered_vars
-    assert "Expected execution step count" in rendered_vars
-    assert rendered_vars.endswith("Now, provide ONLY the variables dump:")
+    assert rendered_vars.endswith("dump that would be obtained after the specified hit of the last line:")
 
     rendered_ret = template.format(
         code="def add(a,b): return a+b\nresult = add(1,2)",
         description="Simple add function.",
         entrypoint="add",
-        output_type="function_return",
+        predict_type="function_return",
         inputs="a=1, b=2",
         first_line=1,
         last_line=1,
     )
-    assert "Execution output type: function_return" in rendered_ret
+    assert "Type of execution output that should be predicted: function_return" in rendered_ret
     assert "Consider only a call of the following function:" in rendered_ret
     assert "Use the following call input arguments:" in rendered_ret
     assert "a=1, b=2" in rendered_ret

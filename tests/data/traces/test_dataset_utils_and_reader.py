@@ -381,3 +381,322 @@ def test_subset_collision_requires_explicit_identifier() -> None:
     assert iterator._matches_target_problem(problem_idx=1, subset="train")
     with pytest.raises(ValueError):
         iterator._matches_target_problem(problem_idx=1, subset="valid")
+
+
+def test_iterator_nonexistent_directory_raises(tmp_path: pathlib.Path) -> None:
+    """Test iterator raises on non-existent dataset directory."""
+    nonexistent_dir = tmp_path / "nonexistent"
+    with pytest.raises(FileNotFoundError):
+        dataset_utils.CodingProblemIterator(
+            dataset_name="TACO",
+            root_data_path=nonexistent_dir,
+            allow_banned_samples=True,
+        )
+
+
+def test_iterator_can_iterate_multiple_times(tmp_path: pathlib.Path) -> None:
+    """Test that iterator can be iterated multiple times."""
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    _write_target_problem(root_dir, 2, "train")
+    iterator = dataset_utils.CodingProblemIterator(
+        dataset_name="TACO",
+        root_data_path=root_dir,
+        allow_banned_samples=True,
+    )
+    first_pass = list(iterator)
+    second_pass = list(iterator)
+    assert len(first_pass) == 2
+    assert len(second_pass) == 2
+    # same problems should be returned
+    assert first_pass[0][0].problem_id == second_pass[0][0].problem_id
+    assert first_pass[1][0].problem_id == second_pass[1][0].problem_id
+
+
+def test_iterator_with_explicit_override_path(tmp_path: pathlib.Path) -> None:
+    """Test iterator with explicit override path."""
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    override_file = tmp_path / "my_overrides.json"
+    override_payload = {
+        "TACO/train/p000001": {
+            "inputs": [["[999]"]],
+            "outputs": [[999]],
+        }
+    }
+    override_file.write_text(json.dumps(override_payload), encoding="utf-8")
+    iterator = dataset_utils.CodingProblemIterator(
+        dataset_name="TACO",
+        root_data_path=root_dir,
+        problem_data_overrides_setting=override_file,
+        allow_banned_samples=True,
+    )
+    assert iterator._problem_data_overrides == override_payload
+    assert iterator._problem_data_override_source == override_file
+
+
+def test_iterator_with_invalid_override_path_raises(tmp_path: pathlib.Path) -> None:
+    """Test iterator raises on invalid override path."""
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    invalid_path = tmp_path / "nonexistent_overrides.json"
+    with pytest.raises(ValueError, match="not found"):
+        dataset_utils.CodingProblemIterator(
+            dataset_name="TACO",
+            root_data_path=root_dir,
+            problem_data_overrides_setting=invalid_path,
+            allow_banned_samples=True,
+        )
+
+
+def test_iterator_problems_metadata_is_consistent(tmp_path: pathlib.Path) -> None:
+    """Test that problems_metadata matches iteration results."""
+    root_dir = tmp_path / "taco"
+    root_dir.mkdir()
+    _write_target_problem(root_dir, 1, "train")
+    _write_target_problem(root_dir, 2, "train")
+    _write_target_problem(root_dir, 3, "valid")
+    iterator = dataset_utils.CodingProblemIterator(
+        dataset_name="TACO",
+        root_data_path=root_dir,
+        allow_banned_samples=True,
+    )
+    problems = list(iterator)
+    # problems_metadata is a list of paths
+    assert len(iterator.problems_metadata) == len(problems)
+    # verify each path exists and matches expected problem indices
+    for path in iterator.problems_metadata:
+        assert path.exists()
+        assert path.suffix == ".json"
+
+
+def test_fake_dataset_reader_length(tmp_path: pathlib.Path) -> None:
+    """Test that FakeTraceDatasetReader has correct length."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=2,
+            solutions_per_problem=3,
+            tests_per_problem=4,
+        )
+    )
+    # length should be num_problems * solutions_per_problem * tests_per_problem
+    expected_length = 2 * 3 * 4
+    assert len(reader) == expected_length
+
+
+def test_fake_dataset_reader_indexing(tmp_path: pathlib.Path) -> None:
+    """Test that FakeTraceDatasetReader supports indexing by int and key."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    trace_by_idx = reader[0]  # index by int
+    assert trace_by_idx.identifier in reader.trace_keys
+    assert trace_by_idx.code_string  # verify trace has actual content
+    assert trace_by_idx.valid_step_count >= 0
+    key = reader.trace_keys[0]  # index by key
+    trace_by_key = reader[key]
+    assert trace_by_key.identifier == key
+    # same trace should be returned by index and key
+    assert trace_by_idx.identifier == trace_by_key.identifier
+
+
+def test_fake_dataset_reader_invalid_index_raises(tmp_path: pathlib.Path) -> None:
+    """Test that FakeTraceDatasetReader raises on invalid index."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    with pytest.raises(IndexError):
+        _ = reader[999]
+
+
+def test_dataset_collection_empty_raises() -> None:
+    """Test that DatasetCollection with empty list raises."""
+    with pytest.raises(ValueError):
+        dataset_reader.DatasetCollection([])
+
+
+def test_dataset_collection_iteration() -> None:
+    """Test that DatasetCollection supports iteration."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=2,
+        )
+    )
+    collection = dataset_reader.DatasetCollection([reader])
+    traces = list(collection)
+    assert len(traces) == 2
+    for trace in traces:
+        assert trace.identifier in collection.trace_keys
+
+
+def test_dataset_collection_get_problem_data() -> None:
+    """Test DatasetCollection get_problem_data method."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=2,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    collection = dataset_reader.DatasetCollection([reader])
+    for idx in range(len(collection)):
+        problem = collection.get_problem_data(idx)
+        # verify problem has expected structure
+        assert problem.problem_id.dataset == "FAKE"
+        assert problem.problem_id.subset == "train"
+        assert problem.problem_statement  # verify has actual content
+        assert len(problem.test_inout_pairs) > 0
+
+
+def test_dataset_collection_get_tags() -> None:
+    """Test DatasetCollection get_tags method returns tags matching metadata."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    collection = dataset_reader.DatasetCollection([reader])
+    tags = collection.get_tags(0)
+    metadata = collection.get_trace_metadata(0)
+    # tags from collection should match tags from metadata
+    assert set(tags) == set(metadata.tags)
+
+
+def test_trace_metadata_from_fake_reader() -> None:
+    """Test TraceMetadata from FakeTraceDatasetReader."""
+    reader = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE",
+            subset_name="train",
+            num_problems=1,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    meta = reader.get_trace_metadata(0)
+    assert isinstance(meta, dataset_utils.TraceMetadata)
+    assert meta.identifier == reader.trace_keys[0]
+    assert meta.index == 0
+    assert meta.parent_dataset_hash == reader.hash
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.timeout(120)
+@pytest.mark.skipif(
+    tests.env_checks.TACO_DATASET_MISSING,
+    reason="TACO dataset is missing, cannot run integration test",
+)
+def test_taco_reader_supports_key_indexing(tmp_path: pathlib.Path) -> None:
+    """Test that dataset reader supports both integer and key-based indexing."""
+    output_dataset_path = tmp_path / "mini_taco_key_indexing"
+    dataset_writer.write_dataset_from_taco(
+        output_dataset_path=output_dataset_path,
+        max_output_traces=5,
+        max_solutions_per_problem=1,
+        max_tests_per_solution=1,
+        verbose=False,
+    )
+    reader = dataset_reader.DatasetReader(output_dataset_path)
+    trace_by_idx = reader[0]  # test integer indexing
+    assert trace_by_idx is not None
+    key = reader.trace_keys[0]  # test key indexing
+    trace_by_key = reader[key]
+    assert trace_by_key.identifier == key
+    assert trace_by_idx.identifier == trace_by_key.identifier
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.timeout(120)
+@pytest.mark.skipif(
+    tests.env_checks.TACO_DATASET_MISSING,
+    reason="TACO dataset is missing, cannot run integration test",
+)
+def test_taco_reader_metadata_structure(tmp_path: pathlib.Path) -> None:
+    """Test that dataset reader metadata has expected structure."""
+    output_dataset_path = tmp_path / "mini_taco_metadata"
+    dataset_writer.write_dataset_from_taco(
+        output_dataset_path=output_dataset_path,
+        max_output_traces=3,
+        max_solutions_per_problem=1,
+        max_tests_per_solution=1,
+        verbose=False,
+    )
+    reader = dataset_reader.DatasetReader(output_dataset_path)
+    # check metadata structure
+    assert "parent_dataset" in reader.metadata
+    parent_metadata = reader.metadata["parent_dataset"]
+    assert parent_metadata["dataset_name"] == "TACO"
+    assert "problem_count" in parent_metadata
+    assert "dataset_hash" in parent_metadata
+    # check reader properties
+    assert reader.parent_dataset_name == "TACO"
+    assert reader.hash is not None
+    assert len(reader.hash) > 0
+
+
+def test_dataset_collection_from_multiple_fake_readers() -> None:
+    """Test that DatasetCollection works with multiple reader parts."""
+    # create two separate fake readers with different configurations to ensure unique traces
+    reader_1 = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE_A",
+            subset_name="train",
+            num_problems=2,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+    reader_2 = fake_dataset_readers.FakeTraceDatasetReader(
+        config=fake_dataset_readers.FakeTraceDataConfig(
+            dataset_name="FAKE_B",
+            subset_name="train",
+            num_problems=2,
+            solutions_per_problem=1,
+            tests_per_problem=1,
+        )
+    )
+
+    collection = dataset_reader.DatasetCollection([reader_1, reader_2])
+    # collection should have combined length
+    assert len(collection) == len(reader_1) + len(reader_2)
+    # all trace keys should be unique (verified by DatasetCollection init)
+    assert len(set(collection.trace_keys)) == len(collection.trace_keys)
+    # collection should be iterable
+    traces = list(collection)
+    assert len(traces) == len(collection)
+    # verify traces from both readers are accessible
+    reader_1_keys = set(reader_1.trace_keys)
+    reader_2_keys = set(reader_2.trace_keys)
+    for key in collection.trace_keys:
+        assert key in reader_1_keys or key in reader_2_keys

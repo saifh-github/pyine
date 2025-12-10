@@ -129,7 +129,7 @@ def test_timeit_decorator_with_name_and_logger() -> None:
 
 def test_timeit_invalid_func_argument_typeerror() -> None:
     with pytest.raises(TypeError):
-        timers.timeit(123)  # type: ignore[arg-type]
+        timers.timeit(123)
 
 
 def test_get_human_readable_time_units() -> None:

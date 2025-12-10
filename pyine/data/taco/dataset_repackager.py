@@ -46,6 +46,7 @@ async def reprocess_code_samples(
         model="deepseek-chat",
         temperature=0.0,  # recommended setting for coding/math
         max_tokens=1024,
+        with_retry_config=pyine.utils.llm_providers.get_default_openai_provider_retry_config(max_retries=5),
     )
     code_analysis_prompt = pyine.prompts.manager.get_prompt_template("code_analysis")
     example_prompt_text = code_analysis_prompt.format(
@@ -131,37 +132,32 @@ async def reprocess_code_samples(
             print(f"Processing chunk {i // chunk_size + 1}/{(len(all_solutions) + chunk_size - 1) // chunk_size}")
             tasks: list[typing.Coroutine[typing.Any, typing.Any, typing.Any]] = []
 
-            async def process_with_retry(
+            async def invoke_with_retry(
                 input_payload: dict[str, typing.Any],
-                max_retries: int = 5,
-                backoff: float = 2,
+                max_retries: int = 3,  # reduced from 5 since LLM already has retry config
             ) -> typing.Any:
-                retries = 0
-                while retries < max_retries:
+                """Invoke chain with retry for chain-level errors (LLM already has API retry)."""
+                for retry_idx in range(max_retries):
                     try:
                         return await code_analysis_chain.ainvoke(
                             input_payload,
                             config={"max_concurrency": 512},
                         )
                     except Exception as exc:
-                        full_stop_exceptions = [
-                            "insufficient balance",
-                            "stopping processing at ",
-                        ]
+                        full_stop_exceptions = ["insufficient balance", "stopping processing at "]
                         error_text = str(exc)
                         if any(stop in error_text.lower() for stop in full_stop_exceptions):
-                            raise exc
-                        retries += 1
-                        if retries >= max_retries:
+                            raise  # re-raise critical errors that should halt processing
+                        if retry_idx >= max_retries - 1:
                             print(f"Failed after {max_retries} retries: {error_text}")
                             return {"error": error_text}
-                        wait_time = backoff**retries
-                        print(f"Retry {retries} after {wait_time}s due to: {error_text}")
+                        wait_time = 2 ** (retry_idx + 1)  # exponential backoff: 2, 4, 8, ...
+                        print(f"Retry {retry_idx + 1} after {wait_time}s due to: {error_text}")
                         await asyncio.sleep(wait_time)
                 return {"error": "retry attempts exhausted without result"}
 
             for input_data in chunk_inputs:
-                tasks.append(process_with_retry(input_data))
+                tasks.append(invoke_with_retry(input_data))
             # Wait for all tasks in this chunk to complete
             chunk_results = await asyncio.gather(*tasks)
             analysis_outputs.extend(chunk_results)

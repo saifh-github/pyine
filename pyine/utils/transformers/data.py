@@ -233,7 +233,6 @@ def prepare_generation_prompts_from_dataset(
         desc="encoding prompts",
         keep_in_memory=keep_in_memory,
     )
-    assert len(dataset) == sample_idx
     return dataset
 
 

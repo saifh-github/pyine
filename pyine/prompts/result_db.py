@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
 import json
 import logging
 import pathlib
@@ -22,7 +23,6 @@ import pyine.utils.reprod
 from pyine.prompts.types import PromptChainBuildConfig, PromptNameType, PromptVersionType  # noqa
 
 logger = logging.getLogger(__name__)
-T = typing.TypeVar("T")
 
 
 def _reload_metadata(raw: str | None) -> dict[str, pydantic.JsonValue]:
@@ -141,6 +141,32 @@ class PromptResultRecord(pydantic.BaseModel):
         default_factory=lambda: typing.cast("list[str]", []),
     )
     """Tags associated with this record."""
+
+    @property
+    def record_uid(self) -> str:
+        """Human-readable unique identifier for this record, useful for debugging and analysis.
+
+        Combines semantic fields (identifier, prompt_name, prompt_version) with a timestamp
+        and a short content hash to produce a string that is highly likely to be unique
+        across the database while remaining readable.
+
+        Format: {identifier}[_{prompt_name}][_{prompt_version}]_{timestamp}_{hash}
+        Example: "sample_123_code_summary_v1_20241126-143022_a3f2bc"
+
+        Note: This is not a guaranteed unique key (the database row ID serves that purpose),
+        but collisions are extremely unlikely due to the 6-character hash suffix (~16 million
+        combinations) derived from the prompt and result content.
+        """
+        parts = [self.identifier]
+        if self.prompt_name:
+            parts.append(str(self.prompt_name))
+        if self.prompt_version:
+            parts.append(str(self.prompt_version))
+        ts = self.creation_meta.created_at.strftime("%Y%m%d-%H%M%S")
+        parts.append(ts)
+        content_hash = hashlib.sha256((self.prompt + self.result).encode()).hexdigest()[:6]
+        parts.append(content_hash)
+        return "_".join(parts)
 
 
 class PromptResultDB:
@@ -419,12 +445,209 @@ class PromptResultDB:
         finally:
             conn.close()
 
-    def count_records(self) -> int:
-        """Return the total number of records stored in the database."""
+    def _build_filter_clauses(
+        self,
+        identifier: str | list[str] | None,
+        group: str | list[str] | None,
+        prompt_name: PromptNameType | list[PromptNameType] | None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None,
+    ) -> tuple[list[str], list[typing.Any], list[str]]:
+        """Build WHERE clause components for filtering queries.
+
+        Args:
+            identifier: Filter by identifier(s).
+            group: Filter by group(s).
+            prompt_name: Filter by prompt name(s).
+            prompt_version: Filter by prompt version(s).
+
+        Returns:
+            Tuple of (where_clauses, params, list_filter_columns) where:
+            - where_clauses: List of "AND column = ?" or "AND column IN (...)" strings
+            - params: List of parameter values for the placeholders
+            - list_filter_columns: List of column names that had list filters (for GROUP BY)
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+
+        list_filter_columns: list[str] = []
+
+        def _add_filter(
+            column: str,
+            value: str | list[str] | None,
+            clauses: list[str],
+            params: list[typing.Any],
+        ) -> None:
+            if value is None:
+                return
+            if isinstance(value, list):
+                if not value:  # empty list = no filter
+                    return
+                placeholders = ",".join("?" * len(value))
+                clauses.append(f"AND {column} IN ({placeholders})")
+                params.extend(value)
+                list_filter_columns.append(column)
+            else:
+                clauses.append(f"AND {column} = ?")
+                params.append(value)
+
+        where_clauses: list[str] = []
+        params: list[typing.Any] = []
+        _add_filter("identifier", identifier, where_clauses, params)
+        _add_filter('"group"', group, where_clauses, params)
+        _add_filter("prompt_name", prompt_name, where_clauses, params)
+        _add_filter("prompt_version", prompt_version, where_clauses, params)
+
+        return where_clauses, params, list_filter_columns
+
+    @typing.overload
+    def count_entries(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[False] = ...,
+    ) -> int: ...
+
+    @typing.overload
+    def count_entries(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[True],
+    ) -> dict[tuple[str, ...], int]: ...
+
+    def count_entries(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: bool = False,
+    ) -> int | dict[tuple[str, ...], int]:
+        """Count records matching the provided filters.
+
+        This is a fast lookup that uses indexed columns and returns only the count,
+        avoiding the overhead of fetching and parsing full records.
+
+        Args:
+            identifier: If provided, count only records matching this identifier or any in the list.
+            group: If provided, count only records matching this group or any in the list.
+            prompt_name: If provided, filter by prompt name(s).
+            prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
+            breakdown: If True, return a dict mapping filter value tuples to counts instead of
+                a total count. Tuple order is (identifier, group, prompt_name, prompt_version),
+                including only columns that were filtered with non-empty lists.
+
+        Returns:
+            Total count when breakdown=False, or dict mapping filter tuples to counts when breakdown=True.
+        """
+        where_clauses, params, list_filter_columns = self._build_filter_clauses(
+            identifier, group, prompt_name, prompt_version
+        )
+
+        if breakdown and list_filter_columns:
+            select_cols = ", ".join(list_filter_columns)
+            sql = f"SELECT {select_cols}, COUNT(*) FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += f" GROUP BY {select_cols}"
+        else:
+            sql = "SELECT COUNT(*) FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+
         conn = self._connect()
         try:
-            row = conn.execute("SELECT COUNT(*) FROM items").fetchone()
-            return int(row[0]) if row is not None else 0
+            rows = conn.execute(sql, params).fetchall()
+            if breakdown and list_filter_columns:
+                return {tuple(row[:-1]): int(row[-1]) for row in rows}
+            return int(rows[0][0]) if rows else 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _parse_tags(raw_tags: str | None) -> list[str]:
+        """Parse raw JSON tags string into a list of strings."""
+        if raw_tags:
+            loaded = typing.cast("list[str]", orjson.loads(raw_tags))
+            assert isinstance(loaded, list) and all(isinstance(s, str) for s in loaded)
+            return loaded
+        return []
+
+    @typing.overload
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[False] = ...,
+    ) -> list[list[str]]: ...
+
+    @typing.overload
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: typing.Literal[True],
+    ) -> dict[tuple[str, ...], list[list[str]]]: ...
+
+    def get_tags(
+        self,
+        *,
+        identifier: str | list[str] | None = None,
+        group: str | list[str] | None = None,
+        prompt_name: PromptNameType | list[PromptNameType] | None = None,
+        prompt_version: PromptVersionType | list[PromptVersionType] | None = None,
+        breakdown: bool = False,
+    ) -> list[list[str]] | dict[tuple[str, ...], list[list[str]]]:
+        """Retrieve tags for all records matching the provided filters.
+
+        Args:
+            identifier: If provided, match only records with this identifier or any in the list.
+            group: If provided, match only records in this group or any in the list.
+            prompt_name: If provided, filter by prompt name(s).
+            prompt_version: If provided, filter by prompt version(s) (requires prompt_name).
+            breakdown: If True, return a dict mapping filter value tuples to lists of tag lists
+                instead of a flat list. Tuple order is (identifier, group, prompt_name, prompt_version),
+                including only columns that were filtered with non-empty lists.
+
+        Returns:
+            List of tag lists when breakdown=False, or dict mapping filter tuples to lists of
+            tag lists when breakdown=True. Each inner list contains the tags for one record
+            (empty list if the record has no tags).
+        """
+        where_clauses, params, list_filter_columns = self._build_filter_clauses(
+            identifier, group, prompt_name, prompt_version
+        )
+
+        if breakdown and list_filter_columns:
+            select_cols = ", ".join(list_filter_columns)
+            sql = f"SELECT {select_cols}, tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += " ORDER BY created_at ASC, id ASC"
+        else:
+            sql = "SELECT tags FROM items WHERE 1=1 " + " ".join(where_clauses)  # noqa: S608
+            sql += " ORDER BY created_at ASC, id ASC"
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+            if breakdown and list_filter_columns:
+                result_dict: dict[tuple[str, ...], list[list[str]]] = {}
+                for row in rows:
+                    key = tuple(row[:-1])
+                    tags = self._parse_tags(row[-1])
+                    if key not in result_dict:
+                        result_dict[key] = []
+                    result_dict[key].append(tags)
+                return result_dict
+            return [self._parse_tags(row[0]) for row in rows]
         finally:
             conn.close()
 

@@ -9,9 +9,9 @@ import typing
 import msgspec
 import numpy as np
 
+import pyine.data.traces.common
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
-import pyine.data.traces.dataset_writer
 import pyine.utils.filesystem
 import pyine.utils.reprod
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
-class CachedTestData(pyine.data.traces.dataset_writer.TestTuple):
+class CachedTestData(pyine.data.traces.common.TestTuple):
     """Container for cached coding problem test case data.
 
     Inherits `test_idx`, `inputs`, and `outputs` from the parent class.

@@ -314,7 +314,7 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
                 curr_trace_tags.extend(problem_data.problem_tags)
                 curr_trace_tags.extend(trace_data.tags)
                 if trace_id.is_augmented:
-                    curr_trace_tags.append(f"augment:{trace_id.augment_category}")
+                    curr_trace_tags.extend({f"augment:{cat}" for cat in trace_id.split_augment_categories})
                 self.trace_metadata.append(
                     pyine.data.traces.dataset_utils.TraceMetadata(
                         identifier=trace_data.identifier,

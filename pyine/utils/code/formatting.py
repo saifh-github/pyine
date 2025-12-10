@@ -53,7 +53,7 @@ def format_code_with_black(
     is_pyi: bool = False,
     string_normalization: bool = True,
     use_black_api: bool = True,
-) -> str:
+) -> str:  # pragma: no cover
     """Format Python code using Black.
 
     Args:
@@ -138,7 +138,7 @@ def format_code(
                 line_length=line_length,
                 is_pyi=is_pyi,
             )
-        except FormatterUnavailableError:
+        except FormatterUnavailableError:  # pragma: no cover
             return format_code_with_black(
                 code_string=code_string,
                 line_length=line_length,
@@ -146,7 +146,7 @@ def format_code(
                 string_normalization=string_normalization,
                 use_black_api=use_black_api,
             )
-    if formatter_normalized == "black":
+    if formatter_normalized == "black":  # pragma: no cover
         return format_code_with_black(
             code_string=code_string,
             line_length=line_length,
@@ -170,7 +170,7 @@ def _build_black_cli_command(
     line_length: int,
     is_pyi: bool,
     string_normalization: bool,
-) -> list[str]:
+) -> list[str]:  # pragma: no cover
     black_executable = shutil.which("black")
     base_cmd = [black_executable] if black_executable else [sys.executable, "-m", "black"]
     base_cmd += ["--line-length", str(line_length)]

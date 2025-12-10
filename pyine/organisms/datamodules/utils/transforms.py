@@ -8,10 +8,10 @@ import langchain_core.messages
 import langchain_core.prompts
 import langchain_core.prompts.chat
 
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.prompts.manager
 
-SampleTransformInputType = pyine.organisms.datamodules.utils.samples.SampleData | dict[str, typing.Any]
+SampleTransformInputType = pyine.organisms.datamodules.samples.SampleData | dict[str, typing.Any]
 SampleTransformOutputType = str | list[langchain_core.messages.BaseMessage] | dict[str, typing.Any]
 SampleTransformType = typing.Callable[[SampleTransformInputType], SampleTransformOutputType]
 
@@ -43,12 +43,12 @@ def _apply_prompt_template_to_sample(
 
     Kept static/top-level-friendly for to keep pickling happy.
     """
-    sample_data: pyine.organisms.datamodules.utils.samples.SampleData
+    sample_data: pyine.organisms.datamodules.samples.SampleData
     sample_args: dict[str, typing.Any]
     if isinstance(sample, collections.abc.Mapping):
         sample_dict = dict(sample)
         sample_args = sample_dict
-        sample_data = pyine.organisms.datamodules.utils.samples.SampleData(**sample_dict)
+        sample_data = pyine.organisms.datamodules.samples.SampleData(**sample_dict)
     else:
         sample_data = sample
         sample_args = sample_data._asdict()

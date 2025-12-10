@@ -18,6 +18,7 @@ import pydantic
 
 import pyine.utils.code.args_mapper
 import pyine.utils.code.blocks
+import pyine.utils.code.complexity_metrics
 import pyine.utils.code.input_mock
 import pyine.utils.code.output_capture
 import pyine.utils.filesystem
@@ -294,6 +295,8 @@ class TraceResult(pydantic.BaseModel):
     """A dictionary containing metadata about the execution environment & settings."""
     tags: list[str]
     """List of tags (labels) associated with this trace, assigned based on tracing outcomes."""
+    complexity_metrics: pyine.utils.code.complexity_metrics.ComplexityMetrics
+    """Code complexity metrics computed from the code_string using radon."""
 
     def __str__(self) -> str:
         """Returns a string representation of the trace result based on its identifier."""
@@ -459,47 +462,56 @@ def _safe_execute_and_trace_code(
         ),
         name=identifier,
     )
-    process.start()
-    process_timeout = timeout_seconds + timeout_external_buffer_seconds
-    start_time = time.time()
-    latest_time_delta = 0
-    child_pid: typing.Any | None = None
-    status: str | None = None
-    returned_val = None
-    # wait until we get the child pid from the queue
-    while latest_time_delta < process_timeout and returned_val is None:
-        while result_queue.empty():
-            latest_time_delta = time.time() - start_time
-            if latest_time_delta > process_timeout:
-                break
-            time.sleep(sleep_duration_seconds)
-        if not result_queue.empty():
-            if child_pid is None:
-                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
-                status, child_pid = result_tuple
-                assert status == "started"
-            else:
-                result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
-                status, returned_val = result_tuple
-                assert status in ("returned", "raised")
-    if status not in ("returned", "raised") and process.is_alive():
-        logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
-        process.kill()
-    process.join(timeout_external_buffer_seconds)
-    if process.exitcode != 0:
-        # note: this might not be an issue, solutions sometimes use sys.exit for outputs
-        logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
-    if status == "returned":
-        logger.debug(f"tracing subprocess returned results (name={identifier})")
-        assert isinstance(returned_val, TraceResult)
-        return returned_val
-    if status == "raised":
-        assert isinstance(returned_val, Exception)
-        logger.debug(f"tracing subprocess raised exception: {returned_val}")
-        raise returned_val
-    error_msg = f"tracing subprocess timed out after {latest_time_delta:.3f} seconds (name={identifier})"
-    logger.debug(error_msg)
-    raise TimeoutError(error_msg)
+    try:
+        process.start()
+        process_timeout = timeout_seconds + timeout_external_buffer_seconds
+        start_time = time.time()
+        latest_time_delta = 0
+        child_pid: typing.Any | None = None
+        status: str | None = None
+        returned_val = None
+        # wait until we get the child pid from the queue
+        while latest_time_delta < process_timeout and returned_val is None:
+            while result_queue.empty():
+                latest_time_delta = time.time() - start_time
+                if latest_time_delta > process_timeout:
+                    break
+                time.sleep(sleep_duration_seconds)
+            if not result_queue.empty():
+                if child_pid is None:
+                    result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                    status, child_pid = result_tuple
+                    assert status == "started"
+                else:
+                    result_tuple = typing.cast("tuple[str, typing.Any]", result_queue.get_nowait())
+                    status, returned_val = result_tuple
+                    assert status in ("returned", "raised")
+        if status not in ("returned", "raised") and process.is_alive():
+            logger.debug(f"killing hanging subprocess for tracing (name={identifier})")
+            process.kill()
+        process.join(timeout_external_buffer_seconds)
+        if process.exitcode != 0:
+            # note: this might not be an issue, solutions sometimes use sys.exit for outputs
+            logger.debug(f"subprocess exited with non-zero exit code (name={identifier}, code={process.exitcode})")
+        if status == "returned":
+            logger.debug(f"tracing subprocess returned results (name={identifier})")
+            assert isinstance(returned_val, TraceResult)
+            return returned_val
+        if status == "raised":
+            assert isinstance(returned_val, Exception)
+            logger.debug(f"tracing subprocess raised exception: {returned_val}")
+            raise returned_val
+        error_msg = f"tracing subprocess timed out after {latest_time_delta:.3f} seconds (name={identifier})"
+        logger.debug(error_msg)
+        raise TimeoutError(error_msg)
+    finally:
+        # clean up multiprocessing resources to prevent file descriptor leaks
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=1)
+        process.close()
+        result_queue.close()
+        result_queue.join_thread()
 
 
 def _unsafe_execute_and_trace_code(
@@ -516,6 +528,7 @@ def _unsafe_execute_and_trace_code(
     max_var_repr_length: int | None = None,
     timeout_seconds: float = 60,
     seed: int | None = 42,
+    request_metadata: str | None = None,
 ) -> TraceResult:
     """Execute Python code and trace the state of the execution at each line.
 
@@ -543,6 +556,7 @@ def _unsafe_execute_and_trace_code(
             variable. Above this cap, a `TracingCapError` will be raised.
         timeout_seconds: The maximum number of seconds to allow for code execution.
         seed: The seed to use for random number generation. Defaults to 42.
+        request_metadata: Additional metadata to include in the trace result (if any).
 
     Returns:
         A `TraceResult` instance containing the execution results.
@@ -792,6 +806,7 @@ def _unsafe_execute_and_trace_code(
     reprod_metadata["max_var_repr_length"] = str(max_var_repr_length)
     reprod_metadata["timeout_seconds"] = str(timeout_seconds)
     reprod_metadata["seed"] = str(seed)
+    reprod_metadata["request_metadata"] = str(request_metadata)
     if return_value is not None:
         trace_tags.append(TraceTagType.HAS_RETURN_VALUE.value)
     if caught_exception is not None:
@@ -809,6 +824,7 @@ def _unsafe_execute_and_trace_code(
         serialized_expected_output: pydantic.JsonValue | None = repr(expected_output)
     else:
         serialized_expected_output = typing.cast("pydantic.JsonValue | None", expected_output)
+    complexity_metrics = pyine.utils.code.complexity_metrics.get_complexity_metrics(code_string)
     try:
         trace_result = TraceResult(
             identifier=identifier,
@@ -837,6 +853,7 @@ def _unsafe_execute_and_trace_code(
             stderr=stderr_buffer,
             metadata=reprod_metadata,
             tags=trace_tags,
+            complexity_metrics=complexity_metrics,
         )
     except pydantic.ValidationError as e:
         print(f"Error while creating TraceResult instance (unrelated to exec): {e}")

@@ -14,6 +14,7 @@ import hydra_zen
 import pydantic
 import transformers
 
+import pyine.apps.data.utils
 import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_trainer_configs
 import pyine.configs.base
@@ -45,6 +46,14 @@ class PrecacherConfig(pydantic.BaseModel):
         ),
         ge=1,
     )
+    epochs_override: int | None = pydantic.Field(
+        default=None,
+        description=(
+            "Optional override for the number of training epochs to precache. "
+            "If omitted, the epoch budget is inferred from training args and dataset size."
+        ),
+        ge=1,
+    )
 
 
 async def main(
@@ -73,6 +82,11 @@ async def main(
             f"precacher requires a ConversationDataModule; received {type(datamodule).__name__}",
         )
     try:
+        train_epoch_budget = pyine.apps.data.utils.infer_precache_epoch_count(
+            config=config,
+            datamodule=datamodule,
+            epochs_override=precache_config.epochs_override,
+        )
         if precache_config.include_eval_subsets:
             subsets_to_precache = ("train", "valid", "eval")
         else:
@@ -94,13 +108,29 @@ async def main(
             max_seq_len = pyine.utils.transformers.infer_effective_max_seq_len(model_config, tokenizer)
             logger.info(f"effective max_seq_len={max_seq_len}")
         for subset in subsets_to_precache:
-            logger.info(f"caching {subset} dataset...")
-            _ = datamodule.get_hf_tokenized_examples_dataset(
-                subset_name=subset,
-                tokenizer=tokenizer,
-                model_max_seq_len=max_seq_len,
-                force_regenerate=precache_config.force_regenerate,
-            )
+            if subset == "train":
+                for epoch_idx in range(train_epoch_budget):
+                    logger.info(f"caching {subset} dataset for epoch {epoch_idx + 1}/{train_epoch_budget}")
+                    pyine.apps.data.utils.prepare_subset_epoch(
+                        datamodule=datamodule,
+                        subset_names=getattr(config.datamodule_config, "train_subset_names", [subset]),
+                        epoch=epoch_idx,
+                    )
+                    _ = datamodule.get_hf_tokenized_examples_dataset(
+                        subset_name=subset,
+                        tokenizer=tokenizer,
+                        model_max_seq_len=max_seq_len,
+                        force_regenerate=precache_config.force_regenerate,
+                        epoch=epoch_idx,
+                    )
+            else:
+                logger.info(f"caching {subset} dataset...")
+                _ = datamodule.get_hf_tokenized_examples_dataset(
+                    subset_name=subset,
+                    tokenizer=tokenizer,
+                    model_max_seq_len=max_seq_len,
+                    force_regenerate=precache_config.force_regenerate,
+                )
         logger.info("tokenized dataset caches built successfully")
     finally:
         datamodule.teardown()

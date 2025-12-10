@@ -1,15 +1,19 @@
 import collections
 import collections.abc
 import dataclasses
+import enum
 import typing
 
 import langchain_core.runnables
+import numpy as np
+import pydantic
 import torch
 import transformers
 import transformers.trainer_callback
 import wandb
 
 import pyine.configs.schemas
+import pyine.evals.constants
 import pyine.utils.transformers
 
 type MetricsDictType = dict[str, float | int | str]
@@ -236,6 +240,36 @@ def parse_token_usage_from_response(
     return result
 
 
+def compute_aggregated_token_usage_metrics(
+    token_usage_data: typing.Iterable[TokenUsageInfo],
+) -> dict[str, float]:
+    """Computes aggregated token usage statistics across all samples.
+
+    All token usage metrics are aggregated using mean, median, std, min, and max operators
+    across all samples. If the sample list is empty, an empty dict is returned.
+
+    Args:
+        token_usage_data: List of token usage data samples containing counts to aggregate.
+
+    Returns:
+        Dict mapping metric names (with an aggregation suffix) to value of aggregated metric.
+    """
+    token_usage_counts: list[dict[str, TokenCount]] = [d.asdict() for d in token_usage_data]
+    if not token_usage_counts:
+        return {}
+    output: dict[str, float] = {}
+    for metric_name in TokenUsageInfo.get_metric_names():
+        counts = [count[metric_name] for count in token_usage_counts]
+        if any(count == "unknown" for count in counts):
+            for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+                output[f"{metric_name}_{aggr_name}"] = np.nan
+        else:
+            arr = np.array(counts)
+            for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
+                output[f"{metric_name}_{aggr_name}"] = float(aggr_func(arr))
+    return output
+
+
 def print_metrics(
     metrics: MetricsDictType,
     subset: str | None = None,
@@ -243,13 +277,14 @@ def print_metrics(
 ) -> None:
     """Helper that prints the given metrics using the provided callable logger (or stdout)."""
     eval_output_strs: list[str] = []
+    prefix = f"predict/{subset}" if subset is not None else "predict"
     for key, val in metrics.items():
         if isinstance(val, float):
-            eval_output_strs.append(f"\t{key}: {val:.3f}")
+            eval_output_strs.append(f"\t{prefix}/{key}: {val:.3f}")
         elif isinstance(val, int):
-            eval_output_strs.append(f"\t{key}: {val:,}")
+            eval_output_strs.append(f"\t{prefix}/{key}: {val:,}")
         else:
-            eval_output_strs.append(f"\t{key}: {val}")
+            eval_output_strs.append(f"\t{prefix}/{key}: {val}")
     eval_output_str = "\n".join(eval_output_strs)
     output_str = f"metrics:\n{eval_output_str}" if subset is None else f"{subset} metrics:\n{eval_output_str}"
     if logger is None:
@@ -359,7 +394,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
                 continue
             loss_sum = self._category_loss_sums[category]
             metrics[f"{category}/loss"] = loss_sum / count
-            metrics[f"{category}/count"] = count
+            metrics[f"{category}/sample_count"] = count
         return metrics
 
     def define_metrics(
@@ -374,7 +409,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
                 summary="min",
             )
             wandb_run.define_metric(  # type: ignore[reportUnknownMemberType]
-                f"eval/{category}/count",  # is actually static, that's why we hide it
+                f"eval/{category}/sample_count",  # is actually static, that's why we hide it
                 hidden=True,
                 summary="none",
             )
@@ -457,3 +492,225 @@ def build_category_wise_compute_metrics_fn(
     if runtime is not None and runtime.wandb_run is not None:
         callback.define_metrics(runtime.wandb_run)
     return callback
+
+
+class SampleCategoryField(enum.StrEnum):
+    """Fields from SampleData that can be used as category sources for metrics."""
+
+    code_type = enum.auto()
+    """Extract categories from the code_type field (frozenset of SampleCodeType)."""
+    tags = enum.auto()
+    """Extract categories from comma_separated_tags field, split by prefix."""
+    predict_type = enum.auto()
+    """Extract categories from the predict_type field (SamplePredictType enum)."""
+    has_code_override = enum.auto()
+    """Extract categories from the has_code_override boolean field."""
+
+
+class SampleCategoryExtractionConfig(pydantic.BaseModel):
+    """Configuration for extracting sample categories from dataset fields.
+
+    This configuration controls which SampleData fields are used to generate category labels
+    for category-wise metrics during evaluation.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    enabled_fields: frozenset[SampleCategoryField] = pydantic.Field(
+        default=frozenset({SampleCategoryField.code_type, SampleCategoryField.predict_type}),
+        description="Set of fields to extract categories from.",
+    )
+    tag_prefixes: frozenset[str] | None = pydantic.Field(
+        default=None,
+        description=(
+            "When extracting from tags field, only include tags with these prefixes. "
+            "If None, all tag prefixes are included. Example: {'augment', 'subset'}."
+        ),
+    )
+
+
+class SampleCategoryExtractor:
+    """Extracts category labels from SampleData fields for metrics tracking.
+
+    This class handles the conversion of various SampleData field types into string category
+    labels suitable for CategoryWiseMetricsCallback.
+    """
+
+    def __init__(
+        self,
+        config: SampleCategoryExtractionConfig,
+    ) -> None:
+        """Initialize the extractor with the given configuration.
+
+        Args:
+            config: Configuration specifying which fields to extract and how.
+        """
+        self._config = config
+
+    def extract_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract category labels from a single sample's data.
+
+        Args:
+            sample_data: Dictionary containing sample fields (from SampleData).
+
+        Returns:
+            List of category strings for this sample.
+        """
+        categories: list[str] = []
+        for field in self._config.enabled_fields:
+            field_categories = self._extract_field_categories(sample_data, field)
+            categories.extend(field_categories)
+        return categories
+
+    def _extract_field_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+        field: SampleCategoryField,
+    ) -> list[str]:
+        """Extract categories from a specific field."""
+        if field == SampleCategoryField.code_type:
+            return self._extract_code_type_categories(sample_data)
+        if field == SampleCategoryField.tags:
+            return self._extract_tag_categories(sample_data)
+        if field == SampleCategoryField.predict_type:
+            return self._extract_predict_type_categories(sample_data)
+        if field == SampleCategoryField.has_code_override:
+            return self._extract_has_code_override_categories(sample_data)
+        return []
+
+    def _extract_code_type_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories from code_type field."""
+        code_type = sample_data.get("code_type")
+        if code_type is None:
+            return []
+        if isinstance(code_type, str):
+            return [f"{SampleCategoryField.code_type.value}/{code_type}"]
+        if isinstance(code_type, (frozenset, set, list, tuple)):
+            code_type_iterable = typing.cast("typing.Iterable[typing.Any]", code_type)
+            type_values = sorted(str(t) for t in code_type_iterable)
+            combined = "_".join(type_values) if type_values else None
+            if combined:
+                return [f"{SampleCategoryField.code_type.value}/{combined}"]
+        return []
+
+    def _extract_tag_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories from comma_separated_tags field.
+
+        Tags are parsed by prefix (e.g., "augment:type" -> "tags/augment/type").
+        """
+        tags_str = sample_data.get("comma_separated_tags")
+        if not tags_str or not isinstance(tags_str, str):
+            return []
+        categories: list[str] = []
+        for tag in tags_str.split(","):
+            tag = tag.strip()
+            if not tag:
+                continue
+            if ":" in tag:
+                prefix, value = tag.split(":", maxsplit=1)
+                if self._config.tag_prefixes is not None and prefix not in self._config.tag_prefixes:
+                    continue
+                category_value = f"{prefix}/{value}"
+            else:
+                if self._config.tag_prefixes is not None:
+                    continue  # skip non-prefixed tags when filtering
+                category_value = tag
+            categories.append(f"{SampleCategoryField.tags.value}/{category_value}")
+        return categories
+
+    def _extract_predict_type_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories from predict_type field."""
+        predict_type = sample_data.get("predict_type")
+        if predict_type is None:
+            return []
+        if isinstance(predict_type, str):
+            return [f"{SampleCategoryField.predict_type.value}/{predict_type}"]
+        type_value = getattr(predict_type, "value", str(predict_type))
+        return [f"{SampleCategoryField.predict_type.value}/{type_value}"]
+
+    def _extract_has_code_override_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories from has_code_override boolean field."""
+        has_override = sample_data.get("has_code_override")
+        if has_override is None:
+            return []
+        value = "true" if has_override else "false"
+        return [f"{SampleCategoryField.has_code_override.value}/{value}"]
+
+
+def extract_sample_categories_from_dataset(
+    dataset: typing.Any,
+    config: SampleCategoryExtractionConfig | None = None,
+) -> list[list[str]]:
+    """Return the list of evaluation categories for each example in a dataset.
+
+    The returned list has the same length as the dataset, where each element is a list of
+    category strings associated with the corresponding example.
+
+    Args:
+        dataset: HuggingFace dataset with a 'sample_data' column.
+        config: Configuration for category extraction. If None, uses default configuration
+            (backward compatible: code_type only, no field prefix).
+
+    Returns:
+        List of category lists, one per dataset example.
+    """
+    if dataset is None or not hasattr(dataset, "__len__"):
+        return []
+    if not hasattr(dataset, "column_names") or "sample_data" not in dataset.column_names:
+        return []
+    if config is None:
+        config = SampleCategoryExtractionConfig()
+    extractor = SampleCategoryExtractor(config)
+    sample_column = dataset["sample_data"]
+    if isinstance(sample_column, dict):
+        sample_column_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_column)
+        return _extract_categories_from_dict_column(sample_column_mapping, extractor, len(dataset))
+    return _extract_categories_from_sequence_column(sample_column, extractor)
+
+
+def _extract_categories_from_dict_column(
+    sample_column: typing.Mapping[str, typing.Any],
+    extractor: SampleCategoryExtractor,
+    dataset_len: int,
+) -> list[list[str]]:
+    """Extract categories when sample_data is accessed as a dict of arrays."""
+    results: list[list[str]] = []
+    for idx in range(dataset_len):
+        sample_data: dict[str, typing.Any] = {}
+        for key, values in sample_column.items():
+            if hasattr(values, "__getitem__") and len(values) > idx:
+                sample_data[key] = values[idx]
+        categories = extractor.extract_categories(sample_data)
+        results.append(categories)
+    return results
+
+
+def _extract_categories_from_sequence_column(
+    sample_column: typing.Iterable[typing.Any],
+    extractor: SampleCategoryExtractor,
+) -> list[list[str]]:
+    """Extract categories when sample_data is accessed as a sequence of dicts."""
+    results: list[list[str]] = []
+    for sample_data in sample_column:
+        if isinstance(sample_data, dict):
+            sample_data_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_data)
+            categories = extractor.extract_categories(sample_data_mapping)
+        else:
+            categories = []
+        results.append(categories)
+    return results

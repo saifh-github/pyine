@@ -100,7 +100,7 @@ class TestGenerateCandidateInputOutput:
         assert result == expected
         result_fetcher.fetch_or_generate.assert_called_once()
         kwargs = result_fetcher.fetch_or_generate.call_args.kwargs
-        assert kwargs["force_generation"] is False
+        assert kwargs["force_generation"] is True
         assert kwargs["log_new_results"] is True
 
     def test_returns_none_on_validation_failure(
@@ -128,5 +128,5 @@ class TestGenerateCandidateInputOutput:
 
         assert result is None
         kwargs = result_fetcher.fetch_or_generate.call_args.kwargs
-        assert kwargs["force_generation"] is False
+        assert kwargs["force_generation"] is True
         assert kwargs["log_new_results"] is True

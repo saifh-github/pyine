@@ -14,6 +14,7 @@ import pyine.organisms.datamodules.utils.annotator as annotator
 import pyine.prompts.manager as prompt_manager
 import pyine.prompts.result_db as result_db
 import pyine.prompts.types as prompt_types
+import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as exec_utils
 import pyine.utils.llm_providers as llm_providers
 import tests.env_checks
@@ -62,6 +63,7 @@ class _FakeDatasetReader:
             stderr="",
             metadata={},
             tags=list(trace_data.tags),
+            complexity_metrics=complexity_metrics_utils.get_complexity_metrics(trace_data.code_string),
         )
 
     def get_problem_data(self, idx: int) -> du.CodingProblem:
@@ -214,7 +216,7 @@ async def _run_prompt_case(
         object.__setattr__(options, "_test_data_cache", test_cache)
 
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
         dry_run=False,
@@ -305,7 +307,7 @@ async def test_annotate_generates_and_counts(monkeypatch: pytest.MonkeyPatch) ->
         force_generation=True,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )
@@ -384,7 +386,7 @@ async def test_annotate_skips_when_existing(monkeypatch: pytest.MonkeyPatch) -> 
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )
@@ -458,7 +460,7 @@ async def test_bad_id_handling_increments_skips(
         min_results_per_item=1,
     )
     report = await annotator.annotate_trace_dataset(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         config=options,
         show_progress=False,
     )
@@ -482,7 +484,7 @@ async def test_bad_id_handling_increments_skips(
         ("code_summary", "solution", "problem", False, False, False, None),
         ("hints/docs", "trace", "solution", True, True, True, "augment:hinted"),
         ("hints/tests", "trace", "solution", True, True, True, "augment:hinted"),
-        ("hints/stubs", "solution", "problem", True, False, False, "augment:stubbed"),
+        ("code_stubbing", "solution", "problem", True, False, False, "augment:stubbed"),
         (
             "issues/iterators",
             "solution",
@@ -566,9 +568,9 @@ async def test_supported_prompts_prepare_input_variables(
     if prompt_name == "code_summary":
         assert "target_summary_word_count:20" in tags
     else:
-        assert "augment:has_code_description" in tags
+        assert "sample_code_description:1" in tags
     if expected_augment_tag is None:
-        assert not any(tag.startswith("augment:") for tag in tags if tag != "augment:has_code_description")
+        assert not any(tag.startswith("augment:") for tag in tags)
     else:
         assert expected_augment_tag in tags
 
@@ -624,8 +626,9 @@ async def test_bugged_hint_prompt_uses_buggy_code(
     assert input_vars["inputs"] == str(trace.inputs)
     assert input_vars["expected_output"] == str(trace.expected_output)
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
-    assert "augment:bugged_hinted" in tags
+    assert "sample_code_description:1" in tags
+    assert "augment:bugged" in tags
+    assert "augment:hinted" in tags
     assert captured["prompt_name"] == "hints/docs"
 
 
@@ -714,9 +717,9 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
     assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
     assert input_vars["expected_output"] == str({"alt": "value"})
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
-    assert "augment:misleading" not in tags
-    assert "augment:bugged_misleading" in tags
+    assert "sample_code_description:1" in tags
+    assert "augment:misleading" in tags
+    assert "augment:bugged" in tags
     assert captured["prompt_name"] == "issues/docs"
 
 
@@ -789,7 +792,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
     assert input_vars["code"] == trace.code_string
 
     tags = captured["tags"]
-    assert "augment:has_code_description" in tags
+    assert "sample_code_description:1" in tags
     assert "augment:misleading" in tags
     assert "augment:bugged" not in tags
     assert "llm_provider:openai" in tags
@@ -869,7 +872,7 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
             "model": "gpt-4o-mini",
         },
         prompt_config=prompt_types.PromptBuildConfig(
-            prompt_name="hints/stubs",
+            prompt_name="code_stubbing",
         ),
         target_indices=target_indices,
         min_results_per_item=1,
@@ -884,4 +887,4 @@ async def test_annotator_integration_with_real_traces_dataset(tmp_path: str) -> 
     assert report.total_samples == len(target_indices)
     assert report.skipped_samples >= 0
     assert report.total_tokens_exchanged > 0
-    assert temp_db.list_prompt_names() == ["code_summary", "hints/stubs"]
+    assert temp_db.list_prompt_names() == ["code_stubbing", "code_summary"]

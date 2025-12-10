@@ -44,7 +44,7 @@ Quick overview:
 - Train or evaluate model organisms with Hydra-driven apps (`pyine/apps/trainers`).
 - Train or evaluate monitors or reporters with Hydra-driven apps (TODO @@@@@@).
 - Explore datasets and results with notebooks (visual, interactive):
-  - For datasets, start exploring `notebooks/code_tracing_demo.ipynb` (execution tracing),
+  - For datasets, start exploring `notebooks/code_execution_demo.ipynb` (execution tracing),
     `notebooks/code_deltas_demo.ipynb` (deltas), and `notebooks/trace_datasets_eda.ipynb` (EDA).
   - For prompt-based analysis and result logging, see `notebooks/code_edits_demo.ipynb` (for prompt
     use), `notebooks/prompt_result_db_demo.ipynb` (for results logging), and

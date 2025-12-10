@@ -5,9 +5,10 @@ import pytest
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
+import pyine.organisms.datamodules.samples as sample_utils
 import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
-import pyine.organisms.datamodules.utils.samples as sample_utils
 import pyine.prompts
+import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as execution_utils
 import pyine.utils.pydantic
 
@@ -147,6 +148,42 @@ class FakePromptResultDB:
             return list(records)
         return [record for record in records if record.prompt_name == prompt_name]
 
+    def get_tags(
+        self,
+        identifier: str | list[str],
+        prompt_name: str | list[str] | None = None,
+        breakdown: bool = False,
+    ) -> list[list[str]] | dict[tuple[str, ...], list[list[str]]]:
+        if not breakdown:
+            if isinstance(identifier, list):
+                records = [rec for id in identifier for rec in self._records_by_identifier.get(id, [])]
+            else:
+                records = self._records_by_identifier.get(identifier, [])
+            if prompt_name is None:
+                return [record.tags for record in records]
+            if isinstance(prompt_name, list):
+                return [record.tags for record in records if record.prompt_name in prompt_name]
+            return [record.tags for record in records if record.prompt_name == prompt_name]
+        # breakdown=True: return dict mapping filter tuples to lists of tag lists
+        result_dict: dict[tuple[str, ...], list[list[str]]] = {}
+        identifiers = [identifier] if isinstance(identifier, str) else identifier
+        prompt_names = [prompt_name] if isinstance(prompt_name, str) else (prompt_name or [None])
+        for id in identifiers:
+            records = self._records_by_identifier.get(id, [])
+            for record in records:
+                if prompt_name is None or record.prompt_name in prompt_names:
+                    # build key tuple based on which filters were lists
+                    key_parts: list[str] = []
+                    if isinstance(identifier, list):
+                        key_parts.append(id)
+                    if isinstance(prompt_name, list):
+                        key_parts.append(record.prompt_name or "")
+                    key = tuple(key_parts) if key_parts else (id,)
+                    if key not in result_dict:
+                        result_dict[key] = []
+                    result_dict[key].append(record.tags)
+        return result_dict
+
 
 def build_trace_artifacts(
     dataset_hash: str,
@@ -174,6 +211,9 @@ def build_trace_artifacts(
         stderr="",
         metadata={},
         tags=tags,
+        complexity_metrics=complexity_metrics_utils.get_complexity_metrics(
+            f"def solution():\n    return {return_value}\n"
+        ),
     )
     trace_metadata = dataset_utils.TraceMetadata(
         identifier=identifier,
@@ -219,13 +259,13 @@ def setup_builder(
 def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_hash = "fake-valid"
     original_identifier = "TACO/valid/p000001/s0000/t0000"
-    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:issues_generic:000"
+    hinted_identifier = "TACO/valid/p000001/s0000/t0000/a:hinted:000"
     trace_metadatas: list[dataset_utils.TraceMetadata] = []
     trace_results: list[execution_utils.TraceResult] = []
     for idx, (identifier, tags) in enumerate(
         [
             (original_identifier, ["subset:valid"]),
-            (hinted_identifier, ["subset:valid", "augment:issues_generic"]),
+            (hinted_identifier, ["subset:valid", "augment:hinted"]),
         ]
     ):
         metadata, result = build_trace_artifacts(
@@ -246,13 +286,14 @@ def test_default_valid_config_prefers_original(monkeypatch: pytest.MonkeyPatch) 
         subset_name="valid",
     )
     assert len(builder) == 1
-    selection = builder.selected_traces[0]
-    assert selection.code_type == "original"
+    selection = builder.selection_results[0]
+    assert selection.code_type.is_original
     assert selection.code_override is None
     sample = builder[0]
-    assert sample.code_type == "original"
-    assert sample.output_type == "program_output"
+    assert "original" in sample.code_type
+    assert sample.predict_type == "program_output"
     assert sample.has_code_override is False
+    assert sample.code == selection.trace_meta.code_string
 
 
 def test_train_overrides_enable_random_hint_selection(
@@ -274,8 +315,8 @@ def test_train_overrides_enable_random_hint_selection(
                     ["subset:train", "augment:obfuscated"],
                 ),
                 (
-                    f"{trace_identifier}/a:issues_generic:001",
-                    ["subset:train", "augment:issues_generic"],
+                    f"{trace_identifier}/a:bugged:001",
+                    ["subset:train", "augment:bugged"],
                 ),
             ]
         )
@@ -321,32 +362,30 @@ def test_train_overrides_enable_random_hint_selection(
         subset_name="train",
     )
     assert len(builder_without_records) == solution_count
-    saw_orig, saw_obfs = False, False
     for sample_idx in range(len(builder_without_records)):
-        selected = builder_without_records.selected_traces[sample_idx]
-        assert selected.code_type in ["original", "obfuscated"]
+        selected = builder_without_records.selection_results[sample_idx]
+        assert selected.code_type.has_any(["original", "obfuscated", "bugged"])
         picked_identifier = selected.trace_meta.identifier
         expected_solution_identifier = f"TACO/train/p000010/s{sample_idx:04d}"
         expected_trace_identifier_prefix = f"{expected_solution_identifier}/t0001"
         assert picked_identifier.startswith(expected_trace_identifier_prefix)
-        if selected.code_type == "original":
+        if selected.code_type.is_original:
             assert picked_identifier == expected_trace_identifier_prefix
-            saw_orig = True
-        elif selected.code_type == "obfuscated":
-            picked_identifier.endswith("/a:obfuscated:000")
-            saw_obfs = True
+        elif selected.code_type.is_obfuscated:
+            assert picked_identifier.endswith("/a:obfuscated:000")
+        elif selected.code_type.is_bugged:
+            assert picked_identifier.endswith("/a:bugged:001")
         assert selected.code_override is None
         sample = builder_without_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type
-        assert sample.output_type == "program_output"
+        assert sample.code_type == str(selected.code_type)
+        assert sample.predict_type == "program_output"
         assert sample.has_code_override is False
         assert not sample.description
         tags = sample.comma_separated_tags.split(",")
-        assert "augment:has_code_description" not in tags
+        assert "sample_code_description:0" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
-        assert "sample_output_type:program_output" in tags
-    assert saw_orig and saw_obfs
+        assert "sample_predict_type:program_output" in tags
 
     builder_with_records = setup_builder(
         monkeypatch=monkeypatch,
@@ -357,40 +396,30 @@ def test_train_overrides_enable_random_hint_selection(
         prompt_records=prompt_records,
     )
     assert len(builder_with_records) == solution_count
-    saw_orig, saw_hinted, saw_obfs, saw_obfs_hinted = False, False, False, False
     for sample_idx in range(len(builder_with_records)):
-        selected = builder_with_records.selected_traces[sample_idx]
-        assert selected.code_type in [
-            "original",
-            "hinted",
-            "obfuscated",
-            "obfuscated_hinted",
-        ]
+        selected = builder_with_records.selection_results[sample_idx]
+        assert selected.code_type.has_any(["original", "hinted", "obfuscated"])
         picked_identifier = selected.trace_meta.identifier
         expected_solution_identifier = f"TACO/train/p000010/s{sample_idx:04d}"
         expected_trace_identifier_prefix = f"{expected_solution_identifier}/t0001"
         assert picked_identifier.startswith(expected_trace_identifier_prefix)
-        if selected.code_type in ["original", "hinted"]:
+        if selected.code_type.is_original or not selected.code_type.is_obfuscated:
             assert picked_identifier == expected_trace_identifier_prefix
             if selected.code_type == "hinted":
                 assert selected.code_override == "fake hinted code"
-                saw_hinted = True
             else:
                 assert selected.code_override is None
-                saw_orig = True
-        elif selected.code_type in ["obfuscated", "obfuscated_hinted"]:
-            picked_identifier.endswith("/a:obfuscated:000")
-            if selected.code_type == "obfuscated":
+        elif selected.code_type.is_obfuscated:
+            assert picked_identifier.endswith("/a:obfuscated:000")
+            if selected.code_type.types == frozenset(["obfuscated"]):
                 assert selected.code_override is None
-                saw_obfs = True
             else:
                 assert selected.code_override == "fake obfuscated + hinted code"
-                saw_obfs_hinted = True
         sample = builder_with_records[sample_idx]
         assert sample.identifier == picked_identifier
-        assert sample.code_type == selected.code_type
-        assert sample.output_type == "program_output"
-        if selected.code_type in ["hinted", "obfuscated_hinted"]:
+        assert sample.code_type == str(selected.code_type)
+        assert sample.predict_type == "program_output"
+        if selected.code_type.is_hinted:
             assert sample.has_code_override is True
             assert sample.code in ["fake hinted code", "fake obfuscated + hinted code"]
         else:
@@ -401,10 +430,9 @@ def test_train_overrides_enable_random_hint_selection(
             ]
         assert sample.description == "some description of the code"
         tags = sample.comma_separated_tags.split(",")
-        assert "augment:has_code_description" in tags
+        assert "sample_code_description:1" in tags
         assert f"sample_code_type:{selected.code_type}" in tags
-        assert "sample_output_type:program_output" in tags
-    assert saw_orig and saw_hinted and saw_obfs and saw_obfs_hinted
+        assert "sample_predict_type:program_output" in tags
 
 
 def test_train_overrides_fetch_stubbed_from_prompt_db(
@@ -421,7 +449,7 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         prompt_records[solution_identifier] = [
             FakePromptResult(
                 identifier=solution_identifier,
-                prompt_name="hints/stubs",
+                prompt_name="code_stubbing",
                 result=f"def solution_{solution_idx}():\n    raise NotImplementedError('stubbed')\n",
             )
         ]
@@ -447,20 +475,174 @@ def test_train_overrides_fetch_stubbed_from_prompt_db(
         prompt_records=prompt_records,
     )
     assert len(builder) == solution_count
-    saw_stubbed = False
     for sample_idx in range(len(builder)):
-        selection = builder.selected_traces[sample_idx]
-        assert selection.code_type in ["original", "stubbed"]
+        selection = builder.selection_results[sample_idx]
+        assert selection.code_type.is_original or selection.code_type.is_stubbed
         expected_stubbed_code = f"def solution_{sample_idx}():\n    raise NotImplementedError('stubbed')\n"
         sample = builder[sample_idx]
-        assert sample.code_type == selection.code_type
+        assert sample.code_type == str(selection.code_type)
         assert sample.has_code_override == (selection.code_override is not None)
-        if selection.code_type == "original":
+        if selection.code_type.is_original:
             assert selection.code_override is None
             assert sample.code != expected_stubbed_code
         else:
             assert selection.code_override == expected_stubbed_code
             assert sample.code == expected_stubbed_code
-            saw_stubbed = True
-        assert sample.output_type == "program_output"
-    assert saw_stubbed
+        assert sample.predict_type == "program_output"
+
+
+def test_all_supported_code_type_sets_can_be_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies that all supported code type sets can be selected and processed.
+
+    Note: stubbed code types cannot be tested via direct trace data because stubbed
+    code cannot be executed/traced: it must come from the prompt result db.
+    """
+    from pyine.organisms.datamodules.samples.common import (
+        SampleCodeType,
+        get_all_supported_code_type_sets,
+    )
+
+    all_supported_sets = get_all_supported_code_type_sets()
+    assert len(all_supported_sets) > 0, "should have at least one supported code type set"
+    # verify we have all single types and some multi-augmented sets
+    single_type_sets = [s for s in all_supported_sets if len(s.types) == 1]
+    multi_type_sets = [s for s in all_supported_sets if len(s.types) > 1]
+    assert len(single_type_sets) == len(SampleCodeType), "should have all single-type sets"
+    assert len(multi_type_sets) > 0, "should have some multi-augmented sets"
+    # filter out code type sets containing 'stubbed'; these can't be traced directly
+    # (stubbed code must come from prompt db, not from executed traces)
+    traceable_sets = [s for s in all_supported_sets if not s.is_stubbed]
+    # test that each traceable code type set can be selected when available
+    for code_type_set in traceable_sets:
+        dataset_hash = f"fake-{code_type_set}"
+        solution_identifier = "TACO/test/p000001/s0000"
+        trace_identifier = f"{solution_identifier}/t0000"
+        # build augmentation suffix for the trace identifier
+        if code_type_set.is_original:
+            augmented_identifier = trace_identifier
+            tags = ["subset:test"]
+        else:
+            # create augmentation suffix from code types (sorted for consistency)
+            augment_types = "_".join(sorted(str(t) for t in code_type_set.types))
+            augmented_identifier = f"{trace_identifier}/a:{augment_types}:000"
+            tags = ["subset:test"] + [f"augment:{t}" for t in code_type_set.types]
+        trace_metadatas: list[dataset_utils.TraceMetadata] = []
+        trace_results: list[execution_utils.TraceResult] = []
+        metadata, result = build_trace_artifacts(
+            dataset_hash=dataset_hash,
+            trace_idx=0,
+            identifier=augmented_identifier,
+            tags=tags,
+            return_value=42,
+        )
+        trace_metadatas.append(metadata)
+        trace_results.append(result)
+        reader = FakeDatasetReader(dataset_hash=dataset_hash, traces=trace_results)
+        # configure selection to only pick this specific code type set
+        selection_config = sample_utils.SampleSelectionConfig(
+            seed=0,
+            code_type_prob_map={code_type_set: 1.0},
+            fallback_to_orig=False,
+            allow_db_lookups=False,
+        )
+        transform_config = sample_utils.SampleTransformConfig(
+            transform_strategy=sample_utils.SampleTransformStrategy.never,
+        )
+        builder = sample_utils.SampleBuilder(
+            source_data=reader,
+            traces=trace_metadatas,
+            selection_config=selection_config,
+            transform_config=transform_config,
+        )
+        assert len(builder) == 1, f"should select exactly one sample for {code_type_set}"
+        sample = builder[0]
+        assert sample.code_type == str(code_type_set), (
+            f"sample code type {sample.code_type} should match {code_type_set}"
+        )
+
+
+def test_code_type_selection_probabilities_are_respected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies that code type selection respects the configured probability distribution."""
+    from pyine.organisms.datamodules.samples.common import SampleCodeType, SampleCodeTypeSet
+
+    dataset_hash = "fake-prob-test"
+    solution_count = 500  # enough samples to verify distribution
+    trace_specifications = []
+    for solution_idx in range(solution_count):
+        solution_identifier = f"TACO/train/p000001/s{solution_idx:04d}"
+        trace_identifier = f"{solution_identifier}/t0000"
+        # create original, obfuscated, and bugged variants for each solution
+        # (using bugged instead of hinted since hinted requires prompt db lookup)
+        trace_specifications.extend(
+            [
+                (trace_identifier, ["subset:train"]),
+                (f"{trace_identifier}/a:obfuscated:000", ["subset:train", "augment:obfuscated"]),
+                (f"{trace_identifier}/a:bugged:000", ["subset:train", "augment:bugged"]),
+            ]
+        )
+    trace_metadatas: list[dataset_utils.TraceMetadata] = []
+    trace_results: list[execution_utils.TraceResult] = []
+    for idx, (identifier, tags) in enumerate(trace_specifications):
+        metadata, result = build_trace_artifacts(
+            dataset_hash=dataset_hash,
+            trace_idx=idx,
+            identifier=identifier,
+            tags=tags,
+            return_value=idx,
+        )
+        trace_metadatas.append(metadata)
+        trace_results.append(result)
+    reader = FakeDatasetReader(dataset_hash=dataset_hash, traces=trace_results)
+    # mock prompt db to return empty results (no db-based augmentations)
+    fake_prompt_db = FakePromptResultDB({})
+    monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: fake_prompt_db)
+    # configure selection with specific probabilities
+    original_set = SampleCodeTypeSet.create_default()
+    obfuscated_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated}))
+    bugged_set = SampleCodeTypeSet(frozenset({SampleCodeType.bugged}))
+    selection_config = sample_utils.SampleSelectionConfig(
+        seed=42,
+        code_type_prob_map={
+            original_set: 0.5,
+            obfuscated_set: 0.3,
+            bugged_set: 0.2,
+        },
+        fallback_to_orig=False,
+        allow_db_lookups=False,
+    )
+    transform_config = sample_utils.SampleTransformConfig(
+        transform_strategy=sample_utils.SampleTransformStrategy.never,
+    )
+    builder = sample_utils.SampleBuilder(
+        source_data=reader,
+        traces=trace_metadatas,
+        selection_config=selection_config,
+        transform_config=transform_config,
+    )
+
+    # count selections by code type
+    counts: dict[str, int] = {"original": 0, "obfuscated": 0, "bugged": 0}
+    for sample in builder:
+        if SampleCodeType.original in sample.code_type:
+            counts["original"] += 1
+        elif SampleCodeType.obfuscated in sample.code_type:
+            counts["obfuscated"] += 1
+        elif SampleCodeType.bugged in sample.code_type:
+            counts["bugged"] += 1
+    total = sum(counts.values())
+    assert total == solution_count, f"should have {solution_count} samples, got {total}"
+
+    # verify distribution is roughly correct (with some tolerance for randomness)
+    # expected: 50% original, 30% obfuscated, 20% bugged
+    original_ratio = counts["original"] / total
+    obfuscated_ratio = counts["obfuscated"] / total
+    bugged_ratio = counts["bugged"] / total
+
+    # allow 10% tolerance for random variation
+    assert 0.4 <= original_ratio <= 0.6, f"original ratio {original_ratio:.2f} should be ~0.5"
+    assert 0.2 <= obfuscated_ratio <= 0.4, f"obfuscated ratio {obfuscated_ratio:.2f} should be ~0.3"
+    assert 0.1 <= bugged_ratio <= 0.3, f"bugged ratio {bugged_ratio:.2f} should be ~0.2"

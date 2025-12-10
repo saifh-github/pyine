@@ -123,7 +123,7 @@ class FakeTraceDatasetReader(_FakeBase, traces_dr.DatasetReader):
         )
         self._dataset_name = self._cfg.dataset_name
         self._subset_name = self._cfg.subset_name
-        self._rng = random.Random(self._cfg.seed)  # noqa: S311 - deterministic pseudo-rng for tests
+        self._rng = random.Random(self._cfg.seed)
         # public attributes mirroring real reader
         self.problem_keys: list[str] = []
         self.trace_keys: list[str] = []
@@ -239,7 +239,7 @@ class FakeTraceDatasetReader(_FakeBase, traces_dr.DatasetReader):
         curr_trace_tags.extend(problem_data.problem_tags)
         curr_trace_tags.extend(trace.tags)
         if trace_id.is_augmented:
-            curr_trace_tags.append(f"augment:{trace_id.augment_category}")
+            curr_trace_tags.extend({f"augment:{cat}" for cat in trace_id.split_augment_categories})
         self.trace_metadata.append(
             traces_utils.TraceMetadata(
                 identifier=trace.identifier,

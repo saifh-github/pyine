@@ -230,6 +230,7 @@ class TestBuildFromDatasetReader:
                 }
 
         # monkeypatch tmp dir/hash so that any potential storage operations resolve to tmp_path
+        monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
         monkeypatch.setattr("pyine.utils.filesystem.get_logs_root_path", lambda: tmp_path)
         monkeypatch.setattr("pyine.utils.reprod.get_params_hash", lambda *_a, **_k: "BUILD")
         monkeypatch.setattr("pyine.utils.reprod.compute_hash", lambda *_a, **_k: "FAKE")

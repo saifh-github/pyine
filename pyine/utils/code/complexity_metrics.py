@@ -1,15 +1,16 @@
 import collections.abc
-import dataclasses
 import typing
 
+import pydantic
 import radon.complexity
 import radon.metrics
 import radon.raw
 
 
-@dataclasses.dataclass(frozen=True)
-class ComplexityMetrics(collections.abc.Mapping[str, float | int]):
+class ComplexityMetrics(pydantic.BaseModel, collections.abc.Mapping[str, float | int]):
     """Container for radon-derived code complexity metrics."""
+
+    model_config = pydantic.ConfigDict(frozen=True)
 
     cyclomatic_complexity_avg: float
     """Average cyclomatic complexity across analyzed blocks."""
@@ -43,25 +44,25 @@ class ComplexityMetrics(collections.abc.Mapping[str, float | int]):
         metric_name: str,
     ) -> float | int:
         """Returns the value of the specified metric (by name)."""
-        if not hasattr(self, metric_name):
+        if metric_name not in type(self).model_fields:
             raise KeyError(metric_name) from None
         return typing.cast("float | int", getattr(self, metric_name))
 
-    def __iter__(self) -> collections.abc.Iterator[str]:
-        """Returns an iterator over the metric names."""
+    def __iter__(self) -> collections.abc.Iterator[str]:  # type: ignore[override]
+        """Returns an iterator over the metric names (overrides BaseModel's tuple iterator)."""
         return iter(COMPLEXITY_METRICS)
 
     def __len__(self) -> int:
-        """Returns the number of metrics contained in this dataclass."""
+        """Returns the number of metrics contained in this model."""
         return len(COMPLEXITY_METRICS)
 
     def as_dict(self) -> dict[str, float | int]:
         """Returns a plain dictionary representation of the metrics."""
-        return {metric_name: getattr(self, metric_name) for metric_name in COMPLEXITY_METRICS}
+        return typing.cast("dict[str, float | int]", self.model_dump())
 
 
-COMPLEXITY_METRICS = [field.name for field in dataclasses.fields(ComplexityMetrics)]
-"""Ordered list of metric names matching the dataclass fields."""
+COMPLEXITY_METRICS = list(ComplexityMetrics.model_fields.keys())
+"""Ordered list of metric names matching the model fields."""
 
 
 @typing.no_type_check

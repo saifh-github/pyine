@@ -4,6 +4,7 @@ import typing
 import pytest
 
 import pyine.utils.code.blocks
+import pyine.utils.code.complexity_metrics
 import pyine.utils.code.execution
 from pyine.utils.code.execution import (
     EXEC_MODULE_OBJ_NAME,
@@ -451,6 +452,7 @@ def _build_dummy_trace_result() -> tuple[TraceResult, TraceEvent, TraceKey]:
         stderr="",
         metadata={"seed": "42"},
         tags=["tag"],
+        complexity_metrics=pyine.utils.code.complexity_metrics.get_complexity_metrics("print('hi')\n"),
     )
     return trace_result, event, trace_key
 
@@ -545,7 +547,17 @@ def test_safe_execute_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
         def join(self, timeout: float | None) -> None:
             return None
 
-    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+        def close(self) -> None:
+            pass
+
+    class DummyQueueWithCleanup(DummyQueue):
+        def close(self) -> None:
+            pass
+
+        def join_thread(self) -> None:
+            pass
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueueWithCleanup())
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
 
     result = _safe_execute_and_trace_code(identifier="dummy", timeout_seconds=1, code_string="", inputs=None)
@@ -595,7 +607,17 @@ def test_safe_execute_raises_original_exception(monkeypatch: pytest.MonkeyPatch)
         def join(self, timeout: float | None) -> None:
             return None
 
-    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+        def close(self) -> None:
+            pass
+
+    class DummyQueueWithCleanup(DummyQueue):
+        def close(self) -> None:
+            pass
+
+        def join_thread(self) -> None:
+            pass
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueueWithCleanup())
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -647,7 +669,17 @@ def test_safe_execute_times_out_and_kills_process(
         def join(self, timeout: float | None) -> None:
             return None
 
-    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueue())
+        def close(self) -> None:
+            pass
+
+    class DummyQueueWithCleanup(DummyQueue):
+        def close(self) -> None:
+            pass
+
+        def join_thread(self) -> None:
+            pass
+
+    monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Queue", lambda: DummyQueueWithCleanup())
     monkeypatch.setattr("pyine.utils.code.execution.multiprocessing.Process", DummyProcess)
 
     time_counter = {"value": 0.0}
@@ -727,6 +759,7 @@ def test_trace_result_properties(monkeypatch: pytest.MonkeyPatch) -> None:
         stderr="",
         metadata={},
         tags=[],
+        complexity_metrics=pyine.utils.code.complexity_metrics.get_complexity_metrics("print('hi')"),
     )
     assert "numbered:" in trace_result.code_string_with_line_numbers
     assert trace_result.total_step_count == 3

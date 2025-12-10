@@ -32,45 +32,6 @@ if typing.TYPE_CHECKING:
     import pyine.apps.trainers.hf_trainer_configs
 
 
-def _extract_sample_categories_from_dataset(
-    dataset: typing.Any,
-) -> list[list[str]]:
-    """Return the list of evaluation categories associated with each example of a dataset.
-
-    The returned list will have the same length as the dataset, and each element will be a list
-    of categories associated with the corresponding example.
-    """
-    # @@@@@ TODO: update this to work with target tags instead of just code_type?
-    # (@@@ move to datamodule? will need to concat in train func across multiple subsets)
-    if dataset is None or not hasattr(dataset, "__len__"):
-        return []
-    if not hasattr(dataset, "column_names") or "sample_data" not in dataset.column_names:
-        return []
-    sample_column = dataset["sample_data"]
-    if isinstance(sample_column, dict):
-        sample_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_column)
-        column = sample_mapping.get("code_type")
-        if column is None:
-            return [[]] * len(dataset)
-        column_iterable = typing.cast("typing.Iterable[typing.Any]", column)
-        code_types = list(column_iterable)
-        if any(not isinstance(code_type, str) and code_type is not None for code_type in code_types):
-            raise ValueError("code_type column must contain only strings or None values")
-        return [[c] if c is not None else [] for c in code_types]
-    code_types: list[str | None] = []
-    sample_iterable = typing.cast("typing.Iterable[typing.Any]", sample_column)
-    for sample_data in sample_iterable:
-        if isinstance(sample_data, dict):
-            sample_mapping = typing.cast("typing.Mapping[str, typing.Any]", sample_data)
-            code_type = sample_mapping.get("code_type")
-            if code_type is not None and not isinstance(code_type, str):
-                raise ValueError("code_type column must contain only strings or None values")
-            code_types.append(code_type)
-        else:
-            code_types.append(None)
-    return [[c] if c is not None else [] for c in code_types]
-
-
 def train(
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     config: "pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig",
@@ -115,7 +76,10 @@ def train(
         tokenizer=tokenizer,
         model_max_seq_len=model_max_seq_len,
     )
-    valid_sample_categories = _extract_sample_categories_from_dataset(valid_ds)
+    valid_sample_categories = pyine.evals.utils.extract_sample_categories_from_dataset(
+        valid_ds,
+        config=config.evals_config.category_extraction_config,
+    )
     assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
         "could not extract sample categories from validation dataset; check that sample data is preserved?"
     )
@@ -128,6 +92,8 @@ def train(
         runtime=runtime,
     )
     training_args_dict = config.training_args_config.model_dump()
+    if training_args_dict.get("batch_eval_metrics") is not None:
+        logger.warning("batch_eval_metrics is being overridden by the trainer for compatibility with callbacks")
     training_args_dict["batch_eval_metrics"] = True  # for compat w/ the eval_metrics_callback
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
@@ -146,6 +112,13 @@ def train(
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
+    epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
+        train_dataset=train_ds,
+        datamodule=datamodule,
+        subset_names=getattr(config.datamodule_config, "train_subset_names", []),
+    )
+    if epoch_callback is not None:
+        callbacks.append(epoch_callback)
     trainer = transformers.Trainer(
         model=model,
         args=training_args,

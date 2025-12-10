@@ -10,25 +10,32 @@ import pathlib
 import random
 import traceback
 import typing
-import warnings
 
 import numpy as np
 import pydantic
 import tqdm
 
+import pyine.data.traces.common
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.caching
+import pyine.prompts
 import pyine.prompts.result_db
 import pyine.prompts.types
 import pyine.utils.code.execution
+import pyine.utils.code.output_compare
 import pyine.utils.concurrency
 import pyine.utils.langchain
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
+
+# aliases for brevity
+_AugPat = pyine.data.traces.dataset_utils.AugmentPatterns
+_PromptNames = pyine.prompts.PromptNames
 
 
 class IdentifierResolverType(typing.Protocol):
@@ -145,11 +152,7 @@ type AugmProbMapType = dict[PromptNameOrNameAndVerTuple, ProbabilityType]
 
 
 class AugmentedAnnotationOptions(pydantic.BaseModel):
-    """Options controlling augmented annotations (i.e. annotations that rely on previous annotations).
-
-    The types of 'augmentations' we support through these options are described in the docstring of
-    the `SampleInputType` type defined in the `pyine.organisms.datamodules.utils.samples` module.
-    """
+    """Options controlling augmented annotations (i.e. annotations that rely on previous annotations)."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
@@ -391,23 +394,33 @@ def _default_identifier_resolver(
     samples have already been annotated (or will be, in some in-flight job) and should be skipped.
     """
     prompts_where_solution_gives_identifier = [
-        "code_summary",
-        "hints/stubs",
-        "issues/iterators",
-        "issues/todos",
+        _PromptNames.CODE_STUBBING,
+        _PromptNames.CODE_SUMMARY,
+        _PromptNames.ISSUES_ITERATORS,
+        _PromptNames.ISSUES_TODOS,
     ]
     if config.prompt_config.prompt_name in prompts_where_solution_gives_identifier:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
-        solution_id_str = str(trace_id.get_parent_identifier())
-        if config.register_identifier(solution_id_str):
-            return solution_id_str
+        if trace_id.is_augmented:
+            # we can't keep/store the solution id along with the augment id, so we'll just store under trace id
+            # -> this will cause more entries to be generated than necessary, but it's the easiest fix
+            # -> it's better to be over-specific and fail some db lookups than add entries with silent augments
+            trace_id_str = str(trace.identifier)
+            if config.register_identifier(trace_id_str):
+                return trace_id_str
+        else:
+            solution_id_str = str(trace_id.get_parent_identifier())
+            if config.register_identifier(solution_id_str):
+                return solution_id_str
         return None
     prompts_where_trace_gives_identifier = [
-        "hints/docs",
-        "hints/tests",
+        _PromptNames.HINTS_DOCS,
+        _PromptNames.HINTS_TESTS,
+        _PromptNames.ISSUES_DOCS,
     ]
     if config.prompt_config.prompt_name in prompts_where_trace_gives_identifier:
+        assert trace.identifier is not None, "cannot derive identifier without a trace id"
         trace_id_str = str(trace.identifier)
         if config.register_identifier(trace_id_str):
             return trace_id_str
@@ -427,16 +440,17 @@ def _default_group_resolver(
     an exception.
     """
     prompts_where_problem_gives_group = [
-        "code_summary",
-        "hints/stubs",
-        "issues/iterators",
-        "issues/todos",
+        _PromptNames.CODE_STUBBING,
+        _PromptNames.CODE_SUMMARY,
+        _PromptNames.ISSUES_ITERATORS,
+        _PromptNames.ISSUES_TODOS,
     ]
     if config.prompt_config.prompt_name in prompts_where_problem_gives_group:
         return str(problem.problem_id)
     prompts_where_solution_gives_group = [
-        "hints/docs",
-        "hints/tests",
+        _PromptNames.HINTS_DOCS,
+        _PromptNames.HINTS_TESTS,
+        _PromptNames.ISSUES_DOCS,
     ]
     if config.prompt_config.prompt_name in prompts_where_solution_gives_group:
         assert trace.identifier is not None, "cannot derive identifier without a trace id"
@@ -469,14 +483,16 @@ def _default_input_variables_builder(
     # initialize the vars dict with stuff that is generic/useful for all prompts
     output = {"code": trace.code_string}
     output.update(base_kwargs)  # update w/ whatever the caller may have provided
-    if config.prompt_config.prompt_name == "code_summary":
+    if config.prompt_config.prompt_name == _PromptNames.CODE_SUMMARY:
         # this is the simplest case: nothing more to do here
         return output
-    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
-    if not (is_hint_prompting or is_issue_prompting):
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
+    if not any((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)):
         raise NotImplementedError(f"unsupported prompt '{config.prompt_config.prompt_name}' for default builder")
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
@@ -484,16 +500,14 @@ def _default_input_variables_builder(
 
     # -------- early returns for invalid / unnecessary augments --------
 
-    if is_hint_prompting and not is_stub_prompting and (trace_id.is_hinted or trace_id.is_misleading):
+    if is_hint_prompting and (trace_id.is_hinted or trace_id.is_misleading):
         return None  # skip; it makes little sense to generate hints on top of hints?
     if is_mislead_prompting and (trace_id.is_misleading or trace_id.is_hinted):
-        return None  # skip; it might get confusing when both valid and misleading hints are involved
-    if is_stub_prompting and trace_id.is_bugged:
-        return None  # we probably should not try to generate stubs on buggy code (cannot verify anything)
-    if is_issue_prompting and not is_mislead_prompting and trace_id.is_bugged:
+        return None  # skip; it would get confusing when both valid and misleading hints are involved
+    if is_stub_prompting and (trace_id.is_bugged or trace_id.is_misleading or trace_id.is_hinted):
+        return None  # we probably should not try to generate stubs on modified code (cannot verify anything)
+    if is_bug_prompting and trace_id.is_bugged:
         return None  # adding more bugs on top of bugs just make the bugs less subtle (so less useful?)
-    if trace_id.is_obfuscated and ((is_issue_prompting and not is_mislead_prompting) or is_stub_prompting):
-        raise NotImplementedError("obfuscation + buggy/stubbed code is not yet supported")
 
     # -------- generic prompt data preparation: inputs/outputs/description --------
 
@@ -502,14 +516,14 @@ def _default_input_variables_builder(
         # try to go and fetch the description for the parent solution (code summary) from db
         code_summary_records = config.get_prompt_result_db().get_by_identifier(
             identifier=str(trace_id.get_parent_identifier()),
-            prompt_name="code_summary",
+            prompt_name=_PromptNames.CODE_SUMMARY,
         )
         if code_summary_records:
             # always keep the latest description (this should not matter too much)
             output[CODE_SUMMARY_TOKEN] = code_summary_records[-1].result
 
     # only provide inputs/outputs for prompts that are test-specific
-    if (is_hint_prompting and not is_stub_prompting) or is_mislead_prompting:
+    if is_hint_prompting or is_mislead_prompting:
         output["inputs"] = str(trace.inputs)
         output["expected_output"] = str(trace.expected_output)  # default expected output (prior to potential modifs)
 
@@ -517,7 +531,6 @@ def _default_input_variables_builder(
 
     should_apply_misleading = is_mislead_prompting or (
         is_hint_prompting
-        and not is_stub_prompting
         and config.augment_config.is_misleading_enabled
         and np.random.random() < config.augment_config.misleading_augment_prob
     )
@@ -542,9 +555,10 @@ def _default_input_variables_builder(
 
     # -------- special case: generating hints on buggy code, where code is not already buggy --------
 
-    if ((is_hint_prompting and not is_stub_prompting) or is_mislead_prompting) and (
+    if (is_hint_prompting or is_mislead_prompting) and (
         config.augment_config.is_bugged_hinting_enabled and not trace_id.is_bugged
     ):
+        assert not pyine.organisms.datamodules.samples.common.check_trace_code_is_test_case_specific(trace_id)
         # try to fetch a buggy version of the code string for the hint generation prompt
         for (
             bug_prompt_spec,
@@ -560,13 +574,17 @@ def _default_input_variables_builder(
                 }
             else:
                 bug_prompt_info = {"prompt_name": bug_prompt_spec}
+            if trace_id.is_augmented:
+                db_identifier = str(trace_id)
+            else:
+                db_identifier = str(trace_id.get_parent_identifier())
             buggy_code_records = config.get_prompt_result_db().get_by_identifier(
-                identifier=str(trace_id.get_parent_identifier()),
+                identifier=db_identifier,
                 **bug_prompt_info,
             )
             if buggy_code_records:
                 # always pick a random choice (default documented strategy)
-                output["code"] = random.choice(buggy_code_records).result  # noqa: S311 - non-cryptographic randomness
+                output["code"] = random.choice(buggy_code_records).result
                 output[_INTERNAL_BUGGED_HINTED_TOKEN] = trace.code_string
                 break
 
@@ -600,76 +618,37 @@ def _default_tags_builder(
     assert trace.identifier is not None, "cannot derive identifier without a trace id"
     trace_id = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier))
     if trace_id.is_augmented:
-        assert trace_id.augment_category is not None, "missing augment category"
-        output_tags.append(f"augment:{trace_id.augment_category}")  # prior trace augment tag
+        augm_categories = trace_id.split_augment_categories
+        assert augm_categories, "missing augment categories"
+        output_tags.extend({f"augment:{cat}" for cat in augm_categories})  # prior trace augment tags
 
     # add new augment-related tags below
-    is_stub_prompting = config.prompt_config.prompt_name == "hints/stubs"
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/") and not is_stub_prompting
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    is_bug_prompting = config.prompt_config.prompt_name.startswith("issues/") and not is_mislead_prompting
-    if is_stub_prompting or is_hint_prompting or is_mislead_prompting or is_bug_prompting:
-        if trace_id.is_obfuscated:
-            if trace_id.augment_category != "obfuscated":
-                raise NotImplementedError("missing handling for pre-obfuscated mixed tagging")
-            if is_stub_prompting or is_bug_prompting:
-                raise NotImplementedError("missing handling for pre-obfuscated stubs/bugs tagging")
-            if _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-                raise NotImplementedError("missing handling for pre-obfuscated bugged+hinted tagging")
-            if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
-                output_tags.append("augment:obfuscated_misleading")
-            elif is_hint_prompting:
-                output_tags.append("augment:obfuscated_hinted")
-        elif trace_id.is_bugged:
-            if is_stub_prompting or is_bug_prompting:
-                raise NotImplementedError("missing handling for pre-bugged stubs/bugs tagging")
-            assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
-            if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
-                output_tags.append("augment:bugged_misleading")
-            elif is_hint_prompting:
-                output_tags.append("augment:bugged_hinted")
-        elif trace_id.is_hinted or trace_id.is_misleading:
-            raise NotImplementedError("missing handling for pre-hinted mixed tagging")
-        elif is_mislead_prompting:
-            assert not trace_id.is_augmented, "this case should have been handled above"
-            assert _INTERNAL_MISLEADING_TOKEN in input_vars
-            if _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-                output_tags.append("augment:bugged_misleading")
-            else:
-                output_tags.append("augment:misleading")
-        elif is_hint_prompting:
-            assert not trace_id.is_augmented, "this case should have been handled above"
-            is_misleading = _INTERNAL_MISLEADING_TOKEN in input_vars
-            is_bugged = _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
-            if is_misleading and is_bugged:
-                output_tags.append("augment:bugged_misleading")
-            elif is_misleading:
-                output_tags.append("augment:misleading")
-            elif is_bugged:
-                output_tags.append("augment:bugged_hinted")
-            else:
-                output_tags.append("augment:hinted")
-        elif is_bug_prompting:
-            assert not trace_id.is_augmented, "this case should have been handled above"
-            assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
-            assert _INTERNAL_MISLEADING_TOKEN not in input_vars
-            output_tags.append("augment:bugged")
-        elif is_stub_prompting:
-            assert not trace_id.is_augmented, "this case should have been handled above"
-            output_tags.append("augment:stubbed")
-        else:
-            raise NotImplementedError(f"missing tag handling case for prompt '{config.prompt_config.prompt_name}'")
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
+    assert sum((is_stub_prompting, is_mislead_prompting, is_hint_prompting, is_bug_prompting)) <= 1
+    if is_mislead_prompting or _INTERNAL_MISLEADING_TOKEN in input_vars:
+        output_tags.append(_AugPat.TAG_MISLEADING)
+    if is_hint_prompting:
+        output_tags.append(_AugPat.TAG_HINTED)
+    if is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
+        output_tags.append(_AugPat.TAG_BUGGED)
+    if is_stub_prompting:
+        output_tags.append(_AugPat.TAG_STUBBED)
 
     # add prompt-specific tags below
-    if config.prompt_config.prompt_name == "code_summary":
+    if config.prompt_config.prompt_name == _PromptNames.CODE_SUMMARY:
         template_partial_vars = config.prompt_config.partial_vars or {}
         if "target_word_count" not in template_partial_vars:
             raise ValueError("missing 'target_word_count' in prompt template partial variables")
         target_word_count = template_partial_vars["target_word_count"]
         output_tags.append(f"target_summary_word_count:{target_word_count}")
-    elif CODE_SUMMARY_TOKEN in input_vars:
-        assert config.augment_config.fetch_code_descriptions
-        output_tags.append("augment:has_code_description")
+    else:
+        has_code_description = CODE_SUMMARY_TOKEN in input_vars
+        output_tags.append(f"sample_code_description:{int(has_code_description)}")
 
     return list(set(output_tags))
 
@@ -748,59 +727,48 @@ def _default_output_validator(
     Implements known rules for some prompts, but if an unsupported prompt is used, the result will
     always be accepted as-is (i.e., no validation is performed).
     """
-    if config.prompt_config.prompt_name == "hints/stubs":
-        # special handling for this one: it's not supposed to 'still work', so forget tracing it
+    is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
+    if is_stub_prompting:
+        # special handling for this one: it's impossible to really execute it, so forget tracing it
         assert "augment:stubbed" in tags, "missing augment tag for stubbed code"
         return True
-    is_hint_prompting = config.prompt_config.prompt_name.startswith("hints/")
-    is_issue_prompting = config.prompt_config.prompt_name.startswith("issues/")
-    is_mislead_prompting = config.prompt_config.prompt_name == "issues/docs"
-    if is_hint_prompting or is_issue_prompting:
-        # for both issues and hints, we will be tracing the newly generated code to see the results:
-        # => for all issue types, we expect the execution output to NOT be the expected one;
-        # => in contrast, hints should not influence the outcome of executing the code.
+    is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
+    is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
+    is_bug_prompting = (
+        config.prompt_config.prompt_name.startswith(_PromptNames.ISSUES_PREFIX) and not is_mislead_prompting
+    )
+    if is_mislead_prompting or is_hint_prompting or is_bug_prompting:
+        # for all of these, we will be tracing the newly generated code to see the results:
+        # => for all bug types, we expect the execution output to NOT be the expected one;
+        # => in contrast, hints (good or misleading) should NOT influence the execution outcome.
         if result_str == trace.code_string:
             return False  # if code has not changed, this is not a good sample, no matter what
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # no need to capture warnings related to traced code
-            try:
-                new_trace_result = pyine.utils.code.execution.execute_and_trace_code(
-                    code_string=result_str,
-                    inputs=trace.inputs,
-                    expected_output=trace.expected_output,
-                    identifier=trace.identifier,
-                    entrypoint_name=trace.entrypoint_name,
-                    trace_only_inside_code_string=True,
-                    max_valid_events=trace.max_valid_events,
-                    max_events_per_line=trace.max_events_per_line,
-                    max_var_repr_length=trace.max_var_repr_length,
-                    timeout_seconds=config.validation_timeout_seconds,
-                    use_safe_execution=True,  # parent runs in a thread, so isolate the child
-                )
-            except pyine.utils.code.execution.CodeAnalysisError:
-                # there's a problem with the code string itself, reject the proposal
-                return False
-        output_is_different = (
-            (trace.return_value is not None and new_trace_result.return_value != trace.return_value)
-            or (new_trace_result.exception != trace.exception)
-            or (trace.return_value is None and new_trace_result.stdout != trace.stdout)
+        trace_request = pyine.data.traces.common.TraceRequest(
+            code_string=result_str,
+            # the trace id we use won't really matter, we won't be writing these results anywhere
+            trace_id=pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier)),
+            entrypoint_name=trace.entrypoint_name,
+            test_inputs=trace.inputs,
+            test_outputs=trace.expected_output,
+            metadata="will not be kept, only for outcome eval purposes",
         )
-        if is_issue_prompting and not is_mislead_prompting:
-            assert "augment:bugged" in tags, "missing augment tag for bugged code"
-            return output_is_different  # we want a different output for bugged code
-        assert is_hint_prompting or is_mislead_prompting, "branching logic mistake somewhere"
-        if any(
-            bug_tag in tags
-            for bug_tag in [
-                "augment:bugged_hinted",
-                "augment:bugged_misleading",
-            ]
-        ):
-            assert _INTERNAL_BUGGED_HINTED_TOKEN in input_vars
-            # we are actually hinting a BUGGED code snippet, so expect a different output
-            return output_is_different
-        assert _INTERNAL_BUGGED_HINTED_TOKEN not in input_vars
-        return not output_is_different  # we want the original output for hinted code
+        trace_seed = trace.metadata["seed"]
+        assert trace_seed is None or isinstance(trace_seed, int), "invalid trace seed found in metadata"
+        tracing_config = pyine.data.traces.common.TracingConfig(
+            max_trace_valid_events=trace.max_valid_events,
+            max_trace_var_repr_length=trace.max_var_repr_length,
+            max_trace_events_per_line=trace.max_events_per_line,
+            execution_timeout_seconds=config.validation_timeout_seconds,
+            execution_seed=trace_seed,
+        )
+        _, compare_result = pyine.data.traces.common.trace_code_snippet(
+            code_snippet=trace_request,
+            tracing_config=tracing_config,
+            output_compare_config=pyine.utils.code.output_compare.get_default_comparison_config(),
+        )
+        if is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
+            return not bool(compare_result)  # we want any different output for bugged code
+        return bool(compare_result)  # we want the original output for hinted code
     # ultimate fallback: accept everything (we don't know how to validate it)
     return True
 
@@ -856,14 +824,14 @@ class AnnotationReport:
 
 
 supported_prompts_for_trace_dataset_annotation = [
-    "code_summary",
-    "hints/docs",
-    "hints/stubs",
-    "hints/tests",
+    _PromptNames.CODE_STUBBING,
+    _PromptNames.CODE_SUMMARY,
+    _PromptNames.HINTS_DOCS,
+    _PromptNames.HINTS_TESTS,
     # ... add more hints prompt names here if we build new ones
-    "issues/docs",
-    "issues/iterators",
-    "issues/todos",
+    _PromptNames.ISSUES_DOCS,
+    _PromptNames.ISSUES_ITERATORS,
+    _PromptNames.ISSUES_TODOS,
     # ... add more issues prompt names here if we build new ones
 ]
 """List of supported prompts for trace dataset annotation.
@@ -886,7 +854,7 @@ async def annotate_trace_dataset(
     max_in_flight_jobs: int | None = 32,
     verbose: bool = False,
 ) -> AnnotationReport:
-    """Annotates a trace dataset by invoking LLM prompts per element and logging results.
+    """Annotates a trace dataset by invoking LLM prompts for each dataset item.
 
     This function iterates over a trace dataset reader and, for each element, builds prompt
     inputs and calls into the framework prompt manager through the prompt result DB utility,
@@ -912,7 +880,7 @@ async def annotate_trace_dataset(
         config.prompt_config.prompt_name,
         config.prompt_config.version,
     )
-    is_mislead_prompt = prompt_name == "issues/docs"
+    is_mislead_prompt = prompt_name == _PromptNames.ISSUES_DOCS
     if prompt_name not in pyine.prompts.manager.list_prompts():
         raise ValueError(f"unknown prompt '{prompt_name}'")
     if prompt_name not in supported_prompts_for_trace_dataset_annotation:
@@ -944,7 +912,7 @@ async def annotate_trace_dataset(
     creation_meta_getter = config.creation_meta_builder or _default_creation_meta_builder
     data_indices = list(config.target_indices or range(len(dataset)))
     if shuffle_indices:
-        random.shuffle(data_indices)  # noqa: S311 - non-cryptographic randomness
+        random.shuffle(data_indices)
     wrapped_data_indices = tqdm.tqdm(
         data_indices,
         disable=not show_progress,

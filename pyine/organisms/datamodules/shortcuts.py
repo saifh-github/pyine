@@ -16,7 +16,7 @@ import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.utils.distrib
 import pyine.utils.filesystem
 import pyine.utils.reprod
@@ -54,7 +54,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     _readers: list[pyine.data.traces.dataset_reader.DatasetProtocol]
     _subset_parsers: dict[
         pyine.data.datamodule.SubsetNameType,
-        pyine.organisms.datamodules.utils.samples.SampleBuilder | None,
+        pyine.organisms.datamodules.samples.SampleBuilder | None,
     ]
 
     def __init__(
@@ -108,7 +108,6 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
             subset_traces=subset_traces_meta,
             leftover_traces=unassigned_traces_meta,
             problem_assignments=split_data.subset_assignments,
-            augment_types=pyine.organisms.datamodules.utils.samples.get_supported_augment_types(),
             split_hash=split_hash,
         )
         self._save_prepared_metadata(metadata)
@@ -237,7 +236,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def _instantiate_parser_if_needed(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleBuilder:
+    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
         """Instantiates a parser for a given subset name if it has not been instantiated yet."""
         if self._subset_parsers[subset_name] is None:
             logger.debug(f"instantiating shortcuts datamodule {subset_name} parser...")
@@ -248,7 +247,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
                 traces=subset_traces,
             )
             self._subset_parsers[subset_name] = typing.cast(
-                "pyine.organisms.datamodules.utils.samples.SampleBuilder",
+                "pyine.organisms.datamodules.samples.SampleBuilder",
                 parser,
             )
         parser = self._subset_parsers[subset_name]
@@ -268,7 +267,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
         if subset_name not in known_subsets:
             for prefix, suffix in itertools.product(
                 known_subsets,
-                typing.get_args(pyine.organisms.datamodules.utils.samples.SampleInputType),
+                pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes(),
             ):
                 if f"{prefix}_{suffix}" == subset_name:
                     return self._metadata.subset_traces[prefix]
@@ -298,7 +297,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def get_parser(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleBuilder:
+    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
         """Returns a data parser object for a given subset name.
 
         This function exists for users that might not want to use dataloaders directly, and would prefer
@@ -363,7 +362,7 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     def make_dataloader(
         self,
         loader_name: pyine.data.datamodule.LoaderNameType,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
+    ) -> pyine.organisms.datamodules.samples.SampleDataLoader:
         """Creates and returns a dataloader for the given name."""
         assert loader_name is not None, "loader name must be specified"
         parser = self.get_parser(loader_name)
@@ -375,21 +374,21 @@ class ShortcutBiasDataModule(pyine.data.datamodule.ConversationDataModule[Shortc
     @typing.override
     def train_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
+    ) -> pyine.organisms.datamodules.samples.SampleDataLoader:
         """Return the training data loader."""
         return self.make_dataloader("train")
 
     @typing.override
     def val_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
+    ) -> pyine.organisms.datamodules.samples.SampleDataLoader:
         """Return the validation data loader."""
         return self.make_dataloader("valid")
 
     @typing.override
     def test_dataloader(
         self,
-    ) -> pyine.organisms.datamodules.utils.samples.SampleDataLoader:
+    ) -> pyine.organisms.datamodules.samples.SampleDataLoader:
         """Return the test data loader."""
         return self.make_dataloader("test")
 

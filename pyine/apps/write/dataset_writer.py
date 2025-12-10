@@ -123,6 +123,13 @@ def main() -> None:
     help="Maximum number of tests per solution (hard cap, may discard picked candidates, None = no max).",
 )
 @click.option(
+    "--pick-random-tests-per-solution/--no-pick-random-tests-per-solution",
+    "pick_random_tests_per_solution",
+    default=True,
+    show_default=True,
+    help=("Whether to pick tests randomly per solution (True) instead of uniformly and and ordered (False)."),
+)
+@click.option(
     "--max-tests-args-length",
     "max_tests_args_length",
     type=int,
@@ -227,11 +234,11 @@ def main() -> None:
     help="Specifies whether to generate an obfuscated (yet still documented) version of each solution.",
 )
 @click.option(
-    "--fetch-augmented-solutions",
-    "fetch_augmented_solutions",
+    "--fetch-augmentations",
+    "fetch_augmentations",
     type=str,
     multiple=True,
-    help="Specifies the (max) number of augmented solutions to fetch from the db for a specific prompt name.",
+    help="Specifies the (max) number of augmentations to also fetch from the prompt result db, for each trace.",
 )
 @click.option(
     "--prompt-result-db-path",
@@ -269,6 +276,7 @@ def traces(
     max_output_traces: int | None,
     max_solutions_per_problem: int | None,
     max_tests_per_solution: int | None,
+    pick_random_tests_per_solution: bool,
     max_tests_args_length: int | None,
     max_trace_events_per_line: int | None,
     max_trace_var_repr_length: int | None,
@@ -282,7 +290,7 @@ def traces(
     problem_data_overrides: str | None,
     reformat_code_strings: bool,
     generate_obfuscated_solutions: bool,
-    fetch_augmented_solutions: typing.Sequence[str],
+    fetch_augmentations: typing.Sequence[str],
     prompt_result_db_path: pathlib.Path | None,
     verbose: bool,
     force: bool,
@@ -290,10 +298,10 @@ def traces(
 ) -> None:
     """Write a traces dataset from a specified source dataset according to the given configuration."""
     pyine.utils.reprod.entrypoint_setup()
-    fetch_augmented_solutions_dict: dict[str, int] = {}
-    for tupl_str in fetch_augmented_solutions:
+    fetch_augmentations_dict: dict[str, int] = {}
+    for tupl_str in fetch_augmentations:
         if "=" not in tupl_str or tupl_str.count("=") != 1:
-            raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}")
+            raise click.BadParameter(f"invalid augmentation fetch tuple: {tupl_str}")
         prompt_name, fetch_count = tupl_str.split("=")
         if prompt_name not in pyine.prompts.get_framework_prompt_manager().list_prompts():
             raise click.BadParameter(f"invalid prompt name: {prompt_name}")
@@ -301,7 +309,7 @@ def traces(
             _ = int(fetch_count)
         except ValueError as exc:
             raise click.BadParameter(f"invalid augmented solution fetch tuple: {tupl_str}") from exc
-        fetch_augmented_solutions_dict[prompt_name] = int(fetch_count)
+        fetch_augmentations_dict[prompt_name] = int(fetch_count)
     default_serialization_config = pyine.data.utils.lmdb_io.SerializationConfig(
         method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
         compression_kwargs={"level": 3},
@@ -321,6 +329,7 @@ def traces(
         max_output_traces=max_output_traces,
         max_solutions_per_problem=max_solutions_per_problem,
         max_tests_per_solution=max_tests_per_solution,
+        pick_random_tests_per_solution=pick_random_tests_per_solution,
         max_tests_args_length=max_tests_args_length,
         max_trace_events_per_line=max_trace_events_per_line,
         max_trace_var_repr_length=max_trace_var_repr_length,
@@ -336,7 +345,7 @@ def traces(
         allow_banned_samples=False,
         allow_imperfect_solutions=True,
         generate_obfuscated_solutions=generate_obfuscated_solutions,
-        fetch_augmented_solutions=fetch_augmented_solutions_dict,
+        fetch_augmentations=fetch_augmentations_dict,
         prompt_result_db_path=str(prompt_result_db_path) if prompt_result_db_path is not None else None,
         test_output_compare_options=pyine.utils.code.output_compare.get_default_comparison_config(),
         writer_serialization_config=default_serialization_config,

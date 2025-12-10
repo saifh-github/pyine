@@ -10,8 +10,8 @@ notebooks expect datasets under `data/` and optional environment variables confi
 
 **Highlighted notebooks:**
 
-- `code_tracing_demo.ipynb`: end-to-end look at instrumenting and tracing Python solutions, and
-  inspecting the resulting events/structures.
+- `code_execution_demo.ipynb`: end-to-end look at instrumenting and tracing Python code, and
+  asking models to predict the outcome of executing the same code.
 - `code_deltas_demo.ipynb`: derive "deltas" (state changes) from execution traces and examine their
   distribution and use-cases.
 - `code_edits_demo.ipynb`: demonstrate extraction/normalization of code edit steps and how they

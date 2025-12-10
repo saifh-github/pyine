@@ -11,36 +11,35 @@ these paths and filters before reusing the tool on other corpora.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import pathlib
 import typing
 
 import click
-import langchain_core.exceptions
+import langchain_core.exceptions  # pyright: ignore[reportUnusedImport]
 import openai
 import orjson
 
 import pyine.data.taco.dataset_utils
+import pyine.data.traces.common
 import pyine.data.traces.dataset_utils
-import pyine.data.traces.dataset_writer
 import pyine.prompts
 import pyine.prompts.configs.input_output_rewrite
 import pyine.prompts.result_db
+import pyine.utils.code.output_compare
 import pyine.utils.filesystem
 import pyine.utils.llm_providers
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROBLEM_DIR = pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
 CACHE_OVERRIDE_BASENAME = "problem_data_overrides.json"
-DEFAULT_OVERRIDE_PATH = pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
 TARGET_SOURCES = {"leetcode", "geeksforgeeks"}
-
 MAX_LLM_ATTEMPTS = 1
 MAX_SOLUTIONS_TO_TRY = 3
-MAX_LLM_TOKENS = 10_000
+DEFAULT_PARALLEL_WORKERS = 4
 
 
 def _resolve_llm_provider_config() -> pyine.utils.llm_providers.LLMProviderConfig:
@@ -195,7 +194,7 @@ def _generate_candidate_input_output(
             identifier=identifier,
             input_variables=prompt_inputs,
             prompt_chain_config=prompt_chain_config,
-            force_generation=False,
+            force_generation=True,
             log_new_results=True,
         )
     except langchain_core.exceptions.OutputParserException:
@@ -272,14 +271,12 @@ def _collect_problem_paths(
 def output_compare(
     problem: pyine.data.traces.dataset_utils.CodingProblem,
     solutions: list[pyine.data.traces.dataset_utils.Solution],
-    trace_writer_config: pyine.data.traces.dataset_writer.TraceDatasetWriterConfig,
 ) -> bool:
     """Check whether a problem's tests validate against its reference solutions.
 
     Args:
         problem: Coding problem with proposed tests.
         solutions: Reference solutions to validate against.
-        trace_writer_config: Configuration used for trace execution.
 
     Returns:
         bool: True if all tests pass for at least one reference solution.
@@ -292,16 +289,21 @@ def output_compare(
 
     total_tests = len(problem.test_inout_pairs)
 
+    # rely on default configurations for tracing + output comparisons
+    tracing_config = pyine.data.traces.common.TracingConfig()
+    output_compare_config = pyine.utils.code.output_compare.get_default_comparison_config()
+
     for solution in solutions[:MAX_SOLUTIONS_TO_TRY]:
         correct = 0
         for test_idx, (inputs, outputs) in enumerate(problem.test_inout_pairs):
             trace_id = pyine.data.traces.dataset_utils.TraceIdentifier(
-                **vars(solution.solution_id),
+                dataset=solution.solution_id.dataset,
+                subset=solution.solution_id.subset,
+                problem_idx=solution.solution_id.problem_idx,
+                solution_idx=solution.solution_id.solution_idx,
                 test_idx=test_idx,
-                augment_category="bug",
-                augment_idx=0,
             )
-            code_to_trace = pyine.data.traces.dataset_writer.TraceRequest(
+            code_to_trace = pyine.data.traces.common.TraceRequest(
                 code_string=solution.code,
                 entrypoint_name=entrypoint_name,
                 trace_id=trace_id,
@@ -309,9 +311,10 @@ def output_compare(
                 test_outputs=outputs,
             )
             try:
-                _trace_result, compare_result = pyine.data.traces.dataset_writer.trace_code_snippet(
+                _trace_result, compare_result = pyine.data.traces.common.trace_code_snippet(
                     code_snippet=code_to_trace,
-                    config=trace_writer_config,
+                    tracing_config=tracing_config,
+                    output_compare_config=output_compare_config,
                 )
             except Exception:
                 break
@@ -324,10 +327,111 @@ def output_compare(
     return False
 
 
+def _process_single_problem(
+    problem_path: pathlib.Path,
+    problem_iterator: pyine.data.traces.dataset_utils.CodingProblemIterator,
+    prompt_chain_config: pyine.prompts.PromptChainBuildConfig,
+    result_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
+        pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
+    ],
+) -> tuple[str, dict[str, typing.Any]] | None:
+    """Process a single problem file and attempt to fix its input/output block.
+
+    Args:
+        problem_path: Path to the problem JSON file.
+        problem_iterator: Iterator for loading and processing problem data.
+        prompt_chain_config: Prompt chain configuration for the rewrite flow.
+        result_fetcher: Fetcher used to retrieve or generate prompt results.
+
+    Returns:
+        A tuple of (problem_identifier, new_io_dict) if the problem was successfully fixed,
+        or None if the problem was skipped or could not be fixed.
+    """
+    problem_filename = problem_path.name
+    if not problem_path.exists():
+        logger.info(f"skipping missing problem file: {problem_filename}")
+        return None
+    try:
+        raw_problem_data: dict[str, typing.Any] = problem_iterator._load_problem_data(problem_path)  # pyright: ignore[reportPrivateUsage]
+    except orjson.JSONDecodeError as exc:
+        logger.warning(f"Skipping {problem_filename}: invalid JSON ({exc})")
+        return None
+    except TypeError as exc:
+        logger.warning(f"Skipping {problem_filename}: unexpected JSON structure ({exc})")
+        return None
+    source_name = raw_problem_data.get("source")
+    if source_name is None:
+        logger.debug(f"skipping {problem_filename}: no source metadata")
+        return None
+    if source_name not in TARGET_SOURCES:
+        logger.debug(f"skipping {problem_filename}: source '{source_name}' not in target set")
+        return None
+    missing_keys = [key for key in ("subset", "input_output") if key not in raw_problem_data]
+    if missing_keys:
+        missing_repr = ", ".join(missing_keys)
+        logger.debug(f"skipping {problem_filename}: missing keys {missing_repr}")
+        return None
+    input_output_block = raw_problem_data.get("input_output")
+    if not isinstance(input_output_block, dict):
+        logger.debug(f"skipping {problem_filename}: malformed input_output block")
+        return None
+    io_missing = [key for key in ("inputs", "outputs") if key not in input_output_block]
+    if io_missing:
+        io_missing_repr = ", ".join(io_missing)
+        logger.debug(f"skipping {problem_filename}: missing {io_missing_repr}")
+        return None
+    coding_problem, solutions = problem_iterator._process_data(raw_problem_data)  # pyright: ignore[reportPrivateUsage]
+    # skip problems that already have a successful override applied (no need to re-trace)
+    has_override_applied = raw_problem_data.get("__problem_data_override_applied__", False)
+    if has_override_applied:
+        logger.info(f"skipping (already fixed): {problem_filename}")
+        return None
+    logger.info(f"processing {problem_filename}...")
+    question = raw_problem_data.get("question") or ""
+    starter_code = raw_problem_data.get("starter_code") or ""
+    first_solution = _get_first_solution_code(raw_problem_data)
+    # for problems without overrides, trace to check if originally valid
+    if output_compare(coding_problem, solutions):
+        logger.info(f"skipping (originally valid): {problem_filename}")
+        return None
+    logger.info(f"attempting to fix {problem_filename}...")
+    current_io: dict[str, typing.Any] = typing.cast("dict[str, typing.Any]", input_output_block)
+    problem_identifier = repr(coding_problem.problem_id)
+    for attempt_idx in range(MAX_LLM_ATTEMPTS):
+        response = _generate_candidate_input_output(
+            prompt_chain_config=prompt_chain_config,
+            result_fetcher=result_fetcher,
+            problem_identifier=problem_identifier,
+            question=question,
+            starter_code=starter_code,
+            first_solution=first_solution,
+            current_input_output=current_io,
+        )
+        if response is None or not response.is_valid():
+            continue
+        candidate_problem = _make_candidate_problem(coding_problem, response)
+        if output_compare(candidate_problem, solutions):
+            new_io = {
+                "inputs": response.inputs,
+                "outputs": response.outputs,
+                "fn_name": response.fn_name,
+            }
+            logger.info(f"fixed {problem_filename} on attempt {attempt_idx + 1}")
+            return (problem_identifier, new_io)
+        current_io = {
+            "inputs": response.inputs,
+            "outputs": response.outputs,
+            "fn_name": response.fn_name,
+        }
+    logger.warning(f"failed to fix {problem_filename} after {MAX_LLM_ATTEMPTS} attempt(s)")
+    return None
+
+
 def run_input_output_rewrite(
     problem_dir: pathlib.Path,
     problem_filenames: typing.Iterable[pathlib.Path | str],
-    override_log_path: pathlib.Path | None,
+    override_log_path: pathlib.Path,
+    parallel_workers: int = DEFAULT_PARALLEL_WORKERS,
 ) -> None:
     """Run the LLM-powered rewrite pass for TACO problem JSON files.
 
@@ -335,149 +439,76 @@ def run_input_output_rewrite(
         problem_dir: Root directory containing repackaged TACO problem metadata.
         problem_filenames: Optional specific problem files to process.
         override_log_path: Optional path to the override log used to persist fixes.
+        parallel_workers: Number of parallel workers for processing problems.
     """
-    problem_dir = (pathlib.Path.cwd() / problem_dir).resolve()
-    if not problem_dir.exists():
+    if not problem_dir.is_dir():
         raise FileNotFoundError(f"Problem directory does not exist: {problem_dir}")
-
-    if override_log_path is None:
-        override_log_path = DEFAULT_OVERRIDE_PATH
-    else:
-        override_log_path = (pathlib.Path.cwd() / override_log_path).resolve()
-
-    pyine.utils.reprod.load_dotenv()
-
     override_entries = _load_override_log(override_log_path)
     logger.info(f"using override log: {override_log_path}")
-
     overrides_path_for_iterator = override_log_path if override_log_path.exists() else None
-
     prompt_chain_config = _get_prompt_chain_builder_config()
     result_fetcher: pyine.prompts.result_db.TypedPromptResultFetcher[
         pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse
     ] = pyine.prompts.TypedPromptResultFetcher(
         result_type=pyine.prompts.configs.input_output_rewrite.InputOutputRewriteResponse,
     )
-
-    trace_writer_config = pyine.data.traces.dataset_writer.TraceDatasetWriterConfig.model_validate(
-        {"source_dataset_name": "TACO"}
-    )
-
     problem_iterator: pyine.data.traces.dataset_utils.CodingProblemIterator
     problem_iterator = pyine.data.traces.dataset_utils.CodingProblemIterator(
         dataset_name="TACO",
         root_data_path=problem_dir,
         problem_data_overrides_setting=overrides_path_for_iterator,
     )
-
     problem_paths = _collect_problem_paths(problem_dir, problem_filenames, override_log_path)
-
     if not problem_paths:
         logger.info("no problem files matched the given parameters")
         return
-
-    for problem_path in problem_paths:
-        problem_filename = problem_path.name
-        if not problem_path.exists():
-            logger.info(f"skipping missing problem file: {problem_filename}")
-            continue
-        try:
-            raw_problem_data: dict[str, typing.Any] = problem_iterator._load_problem_data(problem_path)  # pyright: ignore[reportPrivateUsage]
-        except orjson.JSONDecodeError as exc:
-            logger.warning(f"Skipping {problem_filename}: invalid JSON ({exc})")
-            continue
-        except TypeError as exc:
-            logger.warning(f"Skipping {problem_filename}: unexpected JSON structure ({exc})")
-            continue
-
-        source_name = raw_problem_data.get("source")
-        if source_name is None:
-            logger.debug(f"skipping {problem_filename}: no source metadata")
-            continue
-        if source_name not in TARGET_SOURCES:
-            logger.debug(f"skipping {problem_filename}: source '{source_name}' not in target set")
-            continue
-
-        if not raw_problem_data:
-            logger.debug(f"skipping {problem_filename}: empty problem payload")
-            continue
-
-        missing_keys = [key for key in ("subset", "input_output") if key not in raw_problem_data]
-        if missing_keys:
-            missing_repr = ", ".join(missing_keys)
-            logger.debug(f"skipping {problem_filename}: missing keys {missing_repr}")
-            continue
-
-        input_output_block = raw_problem_data.get("input_output")
-        if not isinstance(input_output_block, dict):
-            logger.debug(f"skipping {problem_filename}: malformed input_output block")
-            continue
-
-        io_missing = [key for key in ("inputs", "outputs") if key not in input_output_block]
-        if io_missing:
-            io_missing_repr = ", ".join(io_missing)
-            logger.debug(f"skipping {problem_filename}: missing {io_missing_repr}")
-            continue
-
-        coding_problem, solutions = problem_iterator._process_data(raw_problem_data)  # pyright: ignore[reportPrivateUsage]
-
-        question = raw_problem_data.get("question") or ""
-        starter_code = raw_problem_data.get("starter_code") or ""
-        first_solution = _get_first_solution_code(raw_problem_data)
-
-        if output_compare(coding_problem, solutions, trace_writer_config):
-            logger.info(f"already valid: {problem_filename}")
-            continue
-
-        current_io_value = raw_problem_data.get("input_output")
-        current_io: dict[str, typing.Any] = (
-            typing.cast("dict[str, typing.Any]", current_io_value) if isinstance(current_io_value, dict) else {}
-        )
-        problem_identifier = repr(coding_problem.problem_id)
-        success = False
-
-        for attempt_idx in range(MAX_LLM_ATTEMPTS):
-            response = _generate_candidate_input_output(
+    logger.info(f"processing {len(problem_paths)} problem files with {parallel_workers} parallel workers...")
+    successful_fixes = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+        future_to_path: dict[concurrent.futures.Future[tuple[str, dict[str, typing.Any]] | None], pathlib.Path] = {}
+        for path in problem_paths:
+            future = executor.submit(
+                _process_single_problem,
+                problem_path=path,
+                problem_iterator=problem_iterator,
                 prompt_chain_config=prompt_chain_config,
                 result_fetcher=result_fetcher,
-                problem_identifier=problem_identifier,
-                question=question,
-                starter_code=starter_code,
-                first_solution=first_solution,
-                current_input_output=current_io,
             )
-            if response is None or not response.is_valid():
+            future_to_path[future] = path
+        for future in concurrent.futures.as_completed(future_to_path):
+            problem_path = future_to_path[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                logger.error(f"error processing {problem_path.name}: {exc}")
                 continue
-
-            candidate_problem = _make_candidate_problem(coding_problem, response)
-            if output_compare(candidate_problem, solutions, trace_writer_config):
-                new_io = {
-                    "inputs": response.inputs,
-                    "outputs": response.outputs,
-                    "fn_name": response.fn_name,
-                }
+            if result is not None:
+                problem_identifier, new_io = result
                 override_entries[problem_identifier] = new_io
-                problem_iterator._problem_data_overrides[problem_identifier] = new_io  # pyright: ignore[reportPrivateUsage]
                 _save_override_log(override_log_path, override_entries)
-                success = True
-                logger.info(f"updated {problem_filename} on attempt {attempt_idx + 1}")
-                break
+                successful_fixes += 1
+    if successful_fixes > 0:
+        logger.info(f"saved {successful_fixes} fixes to override log")
 
-            current_io = {
-                "inputs": response.inputs,
-                "outputs": response.outputs,
-                "fn_name": response.fn_name,
-            }
 
-        if not success:
-            logger.warning(f"failed to fix {problem_filename} after {MAX_LLM_ATTEMPTS} attempts")
+def get_default_problem_dir_path() -> pathlib.Path:
+    """Get the default problem directory path based on the framework utils or cwd."""
+    try:
+        return pyine.data.taco.dataset_utils.get_latest_repackaged_dataset_path()
+    except FileNotFoundError:
+        return pathlib.Path.cwd() / "data" / "TACO" / "repackaged"
+
+
+def get_default_override_log_path() -> pathlib.Path:
+    """Get the default override log path based on framework utils."""
+    return pyine.utils.filesystem.get_data_cache_path() / "overrides" / "TACO" / CACHE_OVERRIDE_BASENAME
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--problem-dir",
     type=click.Path(path_type=pathlib.Path),
-    default=DEFAULT_PROBLEM_DIR,
+    default=None,
     show_default=True,
     help="Directory containing problem JSON files.",
 )
@@ -491,12 +522,21 @@ def run_input_output_rewrite(
 @click.option(
     "--override-log",
     type=click.Path(path_type=pathlib.Path),
-    help=f"Optional override log path. Defaults to the framework cache at {DEFAULT_OVERRIDE_PATH}.",
+    default=None,
+    help="Optional override log path. Defaults to the framework data cache location.",
+)
+@click.option(
+    "--parallel-workers",
+    type=int,
+    default=DEFAULT_PARALLEL_WORKERS,
+    show_default=True,
+    help="Number of parallel workers for processing problems.",
 )
 def main(
-    problem_dir: pathlib.Path,
+    problem_dir: pathlib.Path | None,
     problem_filenames: tuple[pathlib.Path, ...],
     override_log: pathlib.Path | None,
+    parallel_workers: int,
 ) -> None:
     """CLI entry point for rewriting malformed TACO input/output blocks.
 
@@ -504,9 +544,14 @@ def main(
         problem_dir: Root directory containing repackaged TACO problem metadata.
         problem_filenames: Optional specific problem files to process.
         override_log: Optional path to the override log used to persist fixes.
+        parallel_workers: Number of parallel workers for processing problems.
     """
     pyine.utils.reprod.entrypoint_setup()
-    run_input_output_rewrite(problem_dir, problem_filenames, override_log)
+    if problem_dir is None:
+        problem_dir = get_default_problem_dir_path()
+    if override_log is None:
+        override_log = get_default_override_log_path()
+    run_input_output_rewrite(problem_dir, problem_filenames, override_log, parallel_workers)
 
 
 if __name__ == "__main__":

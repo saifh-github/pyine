@@ -1,0 +1,292 @@
+"""Tests for trace filtering logic in the samples module."""
+
+import pytest
+
+import pyine.data.traces.dataset_utils
+from pyine.organisms.datamodules.samples.configs import TraceFilteringConfig
+from pyine.organisms.datamodules.samples.filtering import (
+    filter_traces,
+)
+from tests.utils.fake_dataset_readers import FakeTraceDataConfig, FakeTraceDatasetReader
+
+
+@pytest.fixture
+def small_fake_reader() -> FakeTraceDatasetReader:
+    """Provides a small fake dataset reader for filtering tests."""
+    cfg = FakeTraceDataConfig(
+        dataset_name="FAKE",
+        subset_name="filter_test",
+        num_problems=2,
+        solutions_per_problem=2,
+        tests_per_problem=2,
+        augmented_per_solution=0,
+        entrypoint_name="solution",
+        max_events_per_line=50,
+        seed=456,
+        code_kind="function",
+    )
+    return FakeTraceDatasetReader(config=cfg)
+
+
+class TestTraceFilteringResults:
+    """Tests for the TraceFilteringResults dataclass."""
+
+    def test_properties_compute_correctly(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.orig_trace_count == len(traces)
+        assert results.kept_trace_count == len(traces)
+        assert results.filtered_trace_count == 0
+
+    def test_kept_traces_returns_all_members(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        kept = results.kept_traces
+        assert len(kept) == results.kept_trace_count
+        all_identifiers = [t.identifier for t in kept]
+        assert len(set(all_identifiers)) == len(all_identifiers)
+
+
+class TestFilterTraces:
+    """Tests for the filter_traces function."""
+
+    def test_no_filtering_when_disabled(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_families=None,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.kept_trace_count == len(traces)
+        assert results.filtered_by_step_count == 0
+        assert results.filtered_by_code_length == 0
+        assert results.filtered_by_var_length == 0
+        assert results.filtered_by_trace_family_cap == 0
+
+    def test_filtering_by_step_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        total_traces = len(traces)
+        assert total_traces > 0
+        # verify some traces exceed the threshold (so filtering can happen)
+        traces_exceeding = sum(1 for t in traces if t.step_count > 5)
+        if traces_exceeding == 0:
+            pytest.skip("no traces exceed step count threshold, cannot test filtering")
+        cfg = TraceFilteringConfig(
+            max_trace_steps=5,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        # verify filtering actually removed some traces
+        assert results.kept_trace_count < total_traces, "filtering should remove some traces"
+        assert results.filtered_by_step_count > 0
+        for t in results.kept_traces:
+            assert t.step_count <= 5
+
+    def test_filtering_by_args_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+
+        def get_args_length(t: pyine.data.traces.dataset_utils.TraceMetadata) -> int:
+            return len(str(t.inputs)) + len(str(t.expected_output))
+
+        args_length_map = {idx: get_args_length(traces[idx]) for idx in range(len(traces))}
+        unique_lengths = sorted(set(args_length_map.values()))
+        if len(unique_lengths) < 2:
+            # all traces have the same args length; set threshold below to filter all
+            if unique_lengths[0] <= 1:
+                pytest.skip("cannot set max_args_length below 1 to exercise filtering")
+            length_threshold = unique_lengths[0] - 1
+        else:
+            # set threshold to the smallest value so some traces are filtered
+            length_threshold = unique_lengths[0]
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=length_threshold,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        expected_count = sum(1 for al in args_length_map.values() if al <= length_threshold)
+        assert results.kept_trace_count == expected_count
+        for t in results.kept_traces:
+            assert get_args_length(t) <= length_threshold
+
+    def test_filtering_by_code_line_count(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        line_counts = {idx: len(traces[idx].code_string.splitlines()) for idx in range(len(traces))}
+        unique_counts = sorted(set(line_counts.values()))
+        if len(unique_counts) < 2:
+            pytest.skip("all traces have the same line count, cannot test filtering")
+        line_threshold = unique_counts[0] + 1
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=line_threshold,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        expected_count = sum(1 for lc in line_counts.values() if lc < line_threshold)
+        assert results.kept_trace_count == expected_count
+
+    def test_filtering_by_code_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        code_lengths = {idx: len(traces[idx].code_string) for idx in range(len(traces))}
+        unique_lengths = sorted(set(code_lengths.values()))
+        if len(unique_lengths) < 2:
+            pytest.skip("all traces have the same code length, cannot test filtering")
+        length_threshold = unique_lengths[0] + 1
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=length_threshold,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        expected_count = sum(1 for cl in code_lengths.values() if cl < length_threshold)
+        assert results.kept_trace_count == expected_count
+
+    def test_filtering_by_code_line_length(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+
+        def get_max_line_length(code: str) -> int:
+            lines = code.splitlines() or [""]
+            return max(len(line) for line in lines)
+
+        line_length_map = {idx: get_max_line_length(traces[idx].code_string) for idx in range(len(traces))}
+        unique_lengths = sorted(set(line_length_map.values()))
+        if len(unique_lengths) < 2:
+            if unique_lengths[0] <= 1:
+                pytest.skip("cannot set max_code_line_length below 1 to exercise filtering")
+            length_threshold = unique_lengths[0] - 1
+        else:
+            length_threshold = unique_lengths[0]
+        cfg = TraceFilteringConfig(
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=length_threshold,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        expected_count = sum(1 for ll in line_length_map.values() if ll <= length_threshold)
+        assert results.kept_trace_count == expected_count
+
+    def test_filtering_combined_criteria(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_steps=100,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=500,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        for t in results.kept_traces:
+            assert t.step_count <= 100
+            inputs_str = str(t.inputs)
+            expected_output_str = str(t.expected_output)
+            combined_length = len(inputs_str) + len(expected_output_str)
+            assert combined_length <= 500
+
+    def test_filtering_by_trace_family_cap(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_families=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.kept_trace_family_count == 1
+        assert results.filtered_by_trace_family_cap > 0 or len(traces) <= 1
+
+    def test_filtering_stats_are_consistent(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            max_trace_steps=50,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=100,
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        total_filtered = (
+            results.filtered_by_step_count
+            + results.filtered_by_code_length
+            + results.filtered_by_var_length
+            + results.filtered_by_trace_family_cap
+        )
+        assert total_filtered == results.filtered_trace_count
+        assert results.kept_trace_count + results.filtered_trace_count == results.orig_trace_count
+
+    def test_filtering_deterministic_with_seed(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            seed=42,
+            max_trace_families=2,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results1 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        results2 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        kept_ids1 = {t.identifier for t in results1.kept_traces}
+        kept_ids2 = {t.identifier for t in results2.kept_traces}
+        assert kept_ids1 == kept_ids2
+
+    def test_filtering_different_epochs_may_differ(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        if len(traces) <= 2:
+            pytest.skip("need more traces to test epoch variation")
+        cfg = TraceFilteringConfig(
+            seed=42,
+            max_trace_families=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        results_e0 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        results_e1 = filter_traces(traces=traces, epoch=1, filtering_config=cfg)
+        kept_ids_e0 = {t.identifier for t in results_e0.kept_traces}
+        kept_ids_e1 = {t.identifier for t in results_e1.kept_traces}
+        assert kept_ids_e0 != kept_ids_e1 or results_e0.kept_trace_count <= 1
+
+
+class TestTraceFilteringResultsValidation:
+    """Tests for the TraceFilteringResults post_init validation."""
+
+    def test_validation_passes_for_valid_results(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_trace_steps=50)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.orig_trace_count >= results.kept_trace_count
+        assert results.filtered_trace_count >= 0
