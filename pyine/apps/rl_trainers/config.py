@@ -94,6 +94,19 @@ class DataConfig:
     seed: int = 42
     """Random seed for data shuffling."""
 
+    # Caching settings
+    use_grpo_dataset_cache: bool = True
+    """Whether to cache prepared GRPO datasets to disk."""
+
+    force_regenerate_grpo_dataset: bool = False
+    """Whether to force regeneration of cached datasets."""
+
+    grpo_cache_dir: pathlib.Path | None = None
+    """Optional custom cache directory. If None, uses default cache location."""
+
+    grpo_cache_lock_timeout: float = 1800.0
+    """Maximum time (in seconds) to wait when acquiring dataset cache locks."""
+
 
 @dataclass
 class GRPOTrainingConfig:

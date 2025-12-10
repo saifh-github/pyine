@@ -6,14 +6,21 @@ ConversationDataModule format to the format expected by GRPO.
 """
 
 import logging
+import os
+import pathlib
+import shutil
+import uuid
 from typing import Any
 
 import datasets as hf_datasets
+import filelock
 import transformers
 
 import pyine.data.datamodule
 import pyine.organisms.datamodules.utils.samples
 import pyine.prompts.configs.code_execution
+import pyine.utils.filesystem
+import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,10 @@ def prepare_grpo_dataset_from_datamodule(
     prompt_version: str | None = "grpo_minimal",
     tokenizer: transformers.PreTrainedTokenizer | None = None,
     include_examples: bool = False,
+    use_cache: bool = True,
+    force_regenerate: bool = False,
+    cache_dir: pathlib.Path | None = None,
+    cache_lock_timeout: float = 1800.0,
 ) -> hf_datasets.Dataset:
     """Prepare a dataset for GRPO training from a ConversationDataModule.
 
@@ -58,6 +69,9 @@ def prepare_grpo_dataset_from_datamodule(
     configured prompt template. The resulting dataset will have a 'prompt' column
     containing the formatted prompt text, along with metadata fields needed for
     reward calculation.
+
+    The function supports caching to avoid regenerating datasets on every run. Cached
+    datasets are stored locally and reused when the same configuration is requested.
 
     Args:
         datamodule: The datamodule to load data from.
@@ -71,6 +85,10 @@ def prepare_grpo_dataset_from_datamodule(
         tokenizer: Optional tokenizer (currently unused, but kept for API compatibility).
         include_examples: Whether to include few-shot examples in prompts. For GRPO training,
             False (default) is recommended to save tokens and reduce compute cost.
+        use_cache: Whether to cache the prepared dataset to disk (default: True).
+        force_regenerate: Whether to force regeneration even if cache exists (default: False).
+        cache_dir: Optional custom cache directory. If None, uses default cache location.
+        cache_lock_timeout: Maximum time in seconds to wait for cache lock (default: 1800).
 
     Returns:
         HuggingFace Dataset formatted for GRPO training with the following columns:
@@ -83,74 +101,129 @@ def prepare_grpo_dataset_from_datamodule(
     """
     logger.info(f"Preparing GRPO dataset from subset: {subset_name}")
 
-    # Get the sample generator/parser from the datamodule
-    sample_generator = datamodule.get_parser(subset_name)
+    # Setup cache directory and hash
+    if cache_dir is None:
+        grpo_cache_root = pyine.utils.filesystem.get_data_cache_path() / "grpo_datasets"
+    else:
+        grpo_cache_root = cache_dir
 
-    # Verify we have a SampleBuilder (needed to access expected outputs)
-    sample_builder_cls = pyine.organisms.datamodules.utils.samples.SampleBuilder
-    if not isinstance(sample_generator, sample_builder_cls):
-        raise TypeError(
-            f"Expected SampleBuilder, got {type(sample_generator).__name__}. "
-            "GRPO requires access to the full sample data including expected outputs."
-        )
-
-    # Get the prompt template from the datamodule config or create a new one
-    # We need plain text prompts (not chat messages) for GRPO
-    logger.info(f"Loading prompt template version: {prompt_version}")
-    logger.info(f"Include examples: {include_examples}")
-
-    prompt_template = pyine.prompts.configs.code_execution.get_prompt_template(
-        version=prompt_version,
-        use_chat_template=False,  # GRPO needs plain text, not chat format
-        include_examples=include_examples,
+    # Create a hash based on all parameters that affect the output
+    config_dict = datamodule.config.model_dump() if hasattr(datamodule.config, "model_dump") else {}
+    params_hash = pyine.utils.reprod.get_params_hash(
+        config_dict,
+        subset_name,
+        prompt_version,
+        include_examples,
     )
 
-    # Extract all samples and format them
-    samples = []
-    logger.info(f"Extracting and formatting samples from {subset_name}...")
+    datamodule_name = getattr(datamodule.config, "datamodule_name", None) or datamodule.__class__.__name__
+    dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
+    dataset_path = grpo_cache_root / dataset_name
 
-    sample_data_cls = pyine.organisms.datamodules.utils.samples.SampleData
-    for idx in range(len(sample_generator)):
-        sample = sample_generator[idx]
-        if not isinstance(sample, sample_data_cls):
-            raise TypeError(f"Expected SampleData, got {type(sample).__name__}")
+    # Helper function to generate the dataset
+    def _generate_dataset() -> hf_datasets.Dataset:
+        """Generate the GRPO dataset from scratch."""
+        # Get the sample generator/parser from the datamodule
+        sample_generator = datamodule.get_parser(subset_name)
 
-        # Convert SampleData to dict for prompt template
-        sample_dict = sample._asdict()
+        # Verify we have a SampleBuilder (needed to access expected outputs)
+        sample_builder_cls = pyine.organisms.datamodules.utils.samples.SampleBuilder
+        if not isinstance(sample_generator, sample_builder_cls):
+            raise TypeError(
+                f"Expected SampleBuilder, got {type(sample_generator).__name__}. "
+                "GRPO requires access to the full sample data including expected outputs."
+            )
 
-        # Format the prompt using the Jinja2 template
+        # Get the prompt template from the datamodule config or create a new one
+        # We need plain text prompts (not chat messages) for GRPO
+        logger.info(f"Loading prompt template version: {prompt_version}")
+        logger.info(f"Include examples: {include_examples}")
+
+        prompt_template = pyine.prompts.configs.code_execution.get_prompt_template(
+            version=prompt_version,
+            use_chat_template=False,  # GRPO needs plain text, not chat format
+            include_examples=include_examples,
+        )
+
+        # Extract all samples and format them
+        samples = []
+        logger.info(f"Extracting and formatting samples from {subset_name}...")
+
+        sample_data_cls = pyine.organisms.datamodules.utils.samples.SampleData
+        for idx in range(len(sample_generator)):
+            sample = sample_generator[idx]
+            if not isinstance(sample, sample_data_cls):
+                raise TypeError(f"Expected SampleData, got {type(sample).__name__}")
+
+            # Convert SampleData to dict for prompt template
+            sample_dict = sample._asdict()
+
+            # Format the prompt using the Jinja2 template
+            try:
+                formatted_prompt = format_code_execution_prompt(sample_dict, prompt_template)
+            except Exception as e:
+                logger.warning(f"Failed to format sample {sample.identifier}: {e}")
+                logger.warning(f"Sample data: {sample_dict}")
+                raise
+
+            # Create the dataset entry with all necessary fields
+            # IMPORTANT: TRL's GRPO expects 'prompt' to be a list of chat messages, not a plain string
+            dataset_entry = {
+                "prompt": [{"role": "user", "content": formatted_prompt}],  # Chat message format
+                "expected_output": sample.expected_output,
+                "output_type": sample.output_type,
+                "identifier": sample.identifier,
+                "code_type": sample.code_type,
+                "tags": sample.get_tag_list(),
+                # Include additional fields that might be useful for advanced reward functions
+                "first_line": sample.first_line,
+                "last_line": sample.last_line,
+                "entrypoint": sample.entrypoint,
+            }
+            samples.append(dataset_entry)
+
+        logger.info(f"Extracted and formatted {len(samples)} samples from {subset_name}")
+
+        # Create HuggingFace dataset
+        dataset = hf_datasets.Dataset.from_list(samples)
+
+        logger.info(f"Successfully prepared GRPO dataset with {len(dataset)} examples")
+        logger.info(f"Dataset columns: {dataset.column_names}")
+
+        return dataset
+
+    # If caching is disabled, generate and return directly
+    if not use_cache:
+        logger.info("Cache disabled, generating dataset...")
+        return _generate_dataset()
+
+    # Otherwise, use caching logic
+    grpo_cache_root.mkdir(parents=True, exist_ok=True)
+    lock_path = grpo_cache_root / f"{dataset_path.name}.lock"
+    lock = filelock.FileLock(str(lock_path), timeout=cache_lock_timeout)
+
+    with lock:
+        if dataset_path.exists():
+            if force_regenerate:
+                logger.info(f"Force-regenerating GRPO dataset cache at: {dataset_path}")
+                shutil.rmtree(dataset_path)
+            else:
+                logger.info(f"Loading cached GRPO dataset from: {dataset_path}")
+                return hf_datasets.Dataset.load_from_disk(dataset_path=dataset_path)
+
+        logger.info(f"Building GRPO dataset cache at: {dataset_path}")
+        dataset = _generate_dataset()
+
+        # Save to temporary directory first, then atomic rename
+        tmp_path = grpo_cache_root / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
         try:
-            formatted_prompt = format_code_execution_prompt(sample_dict, prompt_template)
-        except Exception as e:
-            logger.warning(f"Failed to format sample {sample.identifier}: {e}")
-            logger.warning(f"Sample data: {sample_dict}")
-            raise
+            dataset.save_to_disk(str(tmp_path))
+            os.replace(tmp_path, dataset_path)
+        finally:
+            shutil.rmtree(tmp_path, ignore_errors=True)
 
-        # Create the dataset entry with all necessary fields
-        # IMPORTANT: TRL's GRPO expects 'prompt' to be a list of chat messages, not a plain string
-        dataset_entry = {
-            "prompt": [{"role": "user", "content": formatted_prompt}],  # Chat message format
-            "expected_output": sample.expected_output,
-            "output_type": sample.output_type,
-            "identifier": sample.identifier,
-            "code_type": sample.code_type,
-            "tags": sample.get_tag_list(),
-            # Include additional fields that might be useful for advanced reward functions
-            "first_line": sample.first_line,
-            "last_line": sample.last_line,
-            "entrypoint": sample.entrypoint,
-        }
-        samples.append(dataset_entry)
-
-    logger.info(f"Extracted and formatted {len(samples)} samples from {subset_name}")
-
-    # Create HuggingFace dataset
-    dataset = hf_datasets.Dataset.from_list(samples)
-
-    logger.info(f"Successfully prepared GRPO dataset with {len(dataset)} examples")
-    logger.info(f"Dataset columns: {dataset.column_names}")
-
-    return dataset
+        logger.info(f"Saved GRPO dataset cache: {dataset_path}")
+        return dataset
 
 
 def prepare_grpo_dataset_simple(

@@ -222,6 +222,10 @@ def main(config: ExperimentConfig) -> None:
             datamodule=datamodule,
             subset_name=config.data.train_subset_name,
             tokenizer=tokenizer,
+            use_cache=config.data.use_grpo_dataset_cache,
+            force_regenerate=config.data.force_regenerate_grpo_dataset,
+            cache_dir=config.data.grpo_cache_dir,
+            cache_lock_timeout=config.data.grpo_cache_lock_timeout,
         )
     else:
         logger.info("Loading HF dataset directly...")
