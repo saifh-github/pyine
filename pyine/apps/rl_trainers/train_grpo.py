@@ -20,6 +20,7 @@ import pyine.utils.reprod
 # Import local modules
 from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
 from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
+from pyine.apps.rl_trainers.rewards import create_code_exec_reward_function
 
 # Configure logging
 logging.basicConfig(
@@ -196,35 +197,6 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
     return datamodule
 
 
-# Dummy reward function for demonstration purposes
-def reward_num_unique_letters(completions: list[list[dict[str, str]]], **_kwargs: dict[str, Any]) -> list[float]:
-    """Reward function that rewards completions with more unique letters.
-
-    Args:
-        completions: List of completions, where each completion is a list of message dicts
-                    with 'role' and 'content' keys.
-        **_kwargs: Additional arguments (e.g., prompts, expected_output) passed via kwargs.
-
-    Returns:
-        List of reward values (one per completion).
-    """
-    # DEBUG: Print to understand the actual format
-    print(f"\n{'='*80}")
-    print(f"DEBUG: Type of completions: {type(completions)}")
-    print(f"DEBUG: Length of completions: {len(completions)}")
-    if completions:
-        print(f"DEBUG: Type of first completion: {type(completions[0])}")
-        print(f"DEBUG: First completion structure: {completions[0]}")
-        if len(completions) > 1:
-            print(f"DEBUG: Second completion structure: {completions[1]}")
-    print(f"DEBUG: Available kwargs keys: {list(_kwargs.keys())}")
-    print(f"{'='*80}\n")
-
-    # Extract content from each completion (first message in the list)
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(set(content))) for content in completion_contents]
-
-
 def main(config: ExperimentConfig) -> None:
     """Main training function.
 
@@ -270,6 +242,16 @@ def main(config: ExperimentConfig) -> None:
     if config.use_wandb:
         logger.info(f"WandB project: {config.wandb_project}")
 
+    # Create reward function for code execution with hard matching
+    logger.info("Setting up code execution reward function (hard matching only)")
+    reward_function = create_code_exec_reward_function(
+        strip_hard_checks=True,  # Strip whitespace for hard matching
+        enable_soft_match=False,  # Only use hard matching for now (1.0 or 0.0)
+        hard_reward=1.0,  # Perfect match gets 1.0
+        fail_reward=0.0,  # No match gets 0.0
+        expected_outputs_key="expected_output",  # Key used by datamodule
+    )
+
     # Setup GRPO training arguments
     training_args = GRPOConfig(
         output_dir=config.training.output_dir,
@@ -301,7 +283,7 @@ def main(config: ExperimentConfig) -> None:
         model=config.model.model_name_or_path,  # model,
         args=training_args,
         train_dataset=train_dataset,
-        reward_funcs=reward_num_unique_letters,
+        reward_funcs=reward_function,
     )
 
     # Train
