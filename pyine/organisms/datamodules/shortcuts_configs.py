@@ -3,7 +3,6 @@
 import contextlib
 import itertools
 import logging
-import pathlib
 import typing
 import warnings
 
@@ -14,12 +13,10 @@ import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
-import pyine.data.utils.filter_rules
 import pyine.data.utils.splits
 import pyine.evals.common
+import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
-import pyine.organisms.datamodules.utils.transforms
-import pyine.prompts.types
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +29,13 @@ def _get_datamodule_fully_qualified_name() -> str:
     return get_fully_qualified_name(ShortcutBiasDataModule)
 
 
-def _get_default_top_level_subsets() -> tuple[str, ...]:
-    """Returns the default subset names used by this datamodule."""
-    return "train", "valid", "test"
-
-
 def _get_supported_subset_names() -> tuple[pyine.data.datamodule.SubsetNameType, ...]:
     """Returns all potential subset names supported by this datamodule.
 
     Ones that possess a suffix correspond to versions found by overriding parser settings.
     """
     output_subset_names: list[pyine.data.datamodule.SubsetNameType] = []
-    for subset in _get_default_top_level_subsets():
+    for subset in pyine.organisms.datamodules.base.get_default_subset_names():
         output_subset_names.append(subset)
         for code_type_set_str in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes():
             output_subset_names.append(f"{subset}_{code_type_set_str}")
@@ -138,10 +130,11 @@ def _get_default_sample_builder_overrides_for_subset(
             "transform_config": transform_config,  # SampleTransformConfig; inherits from default config
         }
     # no specific overrides for this subset
+    # @@@@@ TODO: update config for eval subsets so that we have counter-factual evals?
     return {}
 
 
-class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleConfig):
+class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModuleBaseConfig):
     """Configuration class for the `ShortcutBiasDataModule`.
 
     Note: we override the base data module config class to add additional fields.
@@ -152,8 +145,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------
 
-    lmdb_paths: typing.Annotated[tuple[pathlib.Path, ...], pydantic.Field(min_length=1)]  # must be specified!
-    """Sequence of paths pointing to LMDB datasets containing execution traces."""
     default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig] = (
         _get_default_sampler_builder_config(seed=0, as_pydantic=True)
     )
@@ -162,46 +153,6 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         subset: _get_default_sample_builder_overrides_for_subset(subset) for subset in _get_supported_subset_names()
     }
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
-    dataloader_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = pydantic.Field(
-        default_factory=lambda: typing.cast("dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]]", {}),
-    )
-    """Overrides for the default DataLoader configuration; will shuffle training data."""
-    instantiate_parsers_at_setup: bool = False
-    """Specified whether to instantiate data parsers at setup time (default: False)."""
-
-    # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
-
-    max_solution_count: int | dict[pyine.data.datamodule.SubsetNameType, int] | None = None
-    """Maximum number of solutions to load across specific or all data subsets (used to do quick test runs).
-
-    If None, all solutions (and their traces) will be loaded; this is the default behavior. If an integer is
-    specified, that many solutions will be randomly picked for each subset. The traces for those solutions
-    will be kept, and all other traces will be unassigned from the subsets. If a dictionary is specified, it
-    is expected to map subset names to the desired number of solutions to load for that subset. If a subset
-    that exists does not have a corresponding entry in the dictionary, no maximum count will be enforced.
-    """
-    split_file_path: pathlib.Path  # must be specified!
-    """Path to the file containing the split data for the full dataset.
-
-    This file should have been created by the `pyine.apps.splits.dataset_splitter.py` module; it
-    is expected to contain all coding problem identifiers that could be loaded by this datamodule.
-    """
-    base_filter_rule: str = ""  # empty = no filter by default
-    """Base filter rule to apply to tags of all traces to determine what to include across all subsets.
-
-    Traces with tags that match this rule will be filtered out. See the `pyine.data.utils.filter_rules`
-    module to see examples of filter rules. Note that this rule applies in a case-insensitive manner.
-    """
-
-    # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
-
-    prompt_config: pyine.prompts.types.PromptBuildConfig = pyine.prompts.types.PromptBuildConfig(
-        prompt_name=pyine.prompts.PromptNames.CODE_EXECUTION,
-        use_chat_template=True,
-        include_examples=True,
-        target_examples=None,  # all
-    )
-    """Configuration for the prompt used to when transforming raw sample data to chat model requests."""
 
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
@@ -217,38 +168,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
         https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
     """
 
-    # --------------- PUBLIC UTILITY FUNCTIONS ---------------
-
-    @typing.override
-    def instantiate_sample_to_messages_transform(
-        self,
-        append_answer: bool = True,
-        use_hf_messages: bool = False,
-        merge_system_with_user: bool = False,
-        keep_original_data: bool = False,
-        orig_data_key: str = "sample_data",
-    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
-        """Returns the sample transform function used to prepare training/evaluation code exec messages."""
-        if not use_hf_messages and keep_original_data:
-            raise ValueError("cannot keep original sample data if using langchain message format")
-        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
-            append_answer=append_answer,
-            use_hf_messages=use_hf_messages,
-            merge_system_with_user=merge_system_with_user,
-            orig_sample_key=orig_data_key if keep_original_data else None,
-            **self.prompt_config.model_dump(),
-        )
-
-    @property
-    def base_filter(self) -> pyine.data.utils.filter_rules.FilterType | None:
-        """Returns the resolved base filter rule used to screen trace tags."""
-        return self._resolved_base_filter
-
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
-
-    _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(
-        default=None,
-    )
 
     @typing.override
     def _resolve_dataparser_config(
@@ -308,14 +228,7 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
     def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
         """Validates and resolves dataset paths and internal filtering rules."""
         super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
-        for lmdb_path in self.lmdb_paths:
-            if not lmdb_path.exists():
-                raise ValueError(f"LMDB dataset does not exist at path: {lmdb_path}")
-        self._resolved_base_filter = pyine.data.utils.filter_rules.build_filter_from_rule(
-            self.base_filter_rule, case_sensitive=False
-        )
-        if not self.split_file_path.is_file():
-            raise ValueError(f"dataset split file does not exist at path: {self.split_file_path}")
+        # shortcuts-specific validation: ensure overrides don't target special parsers/loaders
         for subset_name, overrides in self.dataparser_config_overrides.items():
             if overrides and any(
                 subset_name.endswith(f"_{suffix}")
@@ -329,6 +242,11 @@ class ShortcutBiasDataModuleConfig(pyine.data.datamodule.ConversationDataModuleC
             ):
                 raise ValueError(f"invalid loader name: {loader_name}, cannot override special loaders")
         return self
+
+    @typing.override
+    def _get_cache_subdirectory_name(self) -> str:
+        """Return the cache subdirectory name for this bias datamodule type."""
+        return "shortcuts"
 
 
 @typing.overload
@@ -378,7 +296,7 @@ def get_datamodule_config(
                 subset_name=subset,
                 use_hybrid_transform=use_hybrid_sample_transforms,
             )
-            for subset in _get_default_top_level_subsets()
+            for subset in pyine.organisms.datamodules.base.get_default_subset_names()
         },
         "dataloader_config_overrides": {
             "train": {
