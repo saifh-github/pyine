@@ -151,6 +151,9 @@ class GRPOTrainingConfig:
     use_vllm: bool = False
     """Whether to use vLLM for generation during training."""
 
+    vllm_server_port: int = 8000
+    """vLLM server port."""
+
     # Evaluation settings
     do_eval: bool = True
     """Whether to run evaluation during training."""
