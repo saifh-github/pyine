@@ -236,9 +236,9 @@ def main(config: ExperimentConfig) -> None:
     # Setup model and tokenizer
     model, tokenizer = setup_model_and_tokenizer(config.model)
 
-    # Load dataset
+    # Load training dataset
     if config.data.use_datamodule:
-        logger.info("Loading dataset from datamodule...")
+        logger.info("Loading training dataset from datamodule...")
         datamodule = load_datamodule(config.data)
         train_dataset = prepare_grpo_dataset_from_datamodule(
             datamodule=datamodule,
@@ -250,7 +250,7 @@ def main(config: ExperimentConfig) -> None:
             cache_lock_timeout=config.data.grpo_cache_lock_timeout,
         )
     else:
-        logger.info("Loading HF dataset directly...")
+        logger.info("Loading HF training dataset directly...")
         train_dataset = prepare_grpo_dataset_simple(
             dataset_path=config.data.dataset_path,
             split=config.data.dataset_split_train,
@@ -260,9 +260,40 @@ def main(config: ExperimentConfig) -> None:
     if config.data.max_samples is not None:
         original_size = len(train_dataset)
         train_dataset = train_dataset.select(range(min(config.data.max_samples, original_size)))
-        logger.info(f"Limited dataset from {original_size} to {len(train_dataset)} samples")
+        logger.info(f"Limited training dataset from {original_size} to {len(train_dataset)} samples")
 
     logger.info(f"Training dataset size: {len(train_dataset)}")
+
+    # Load evaluation dataset if evaluation is enabled
+    eval_dataset = None
+    if config.training.do_eval:
+        if config.data.use_datamodule:
+            logger.info("Loading evaluation dataset from datamodule...")
+            eval_dataset = prepare_grpo_dataset_from_datamodule(
+                datamodule=datamodule,
+                subset_name=config.data.eval_subset_name,
+                tokenizer=tokenizer,
+                use_cache=config.data.use_grpo_dataset_cache,
+                force_regenerate=config.data.force_regenerate_grpo_dataset,
+                cache_dir=config.data.grpo_cache_dir,
+                cache_lock_timeout=config.data.grpo_cache_lock_timeout,
+            )
+        else:
+            logger.info("Loading HF evaluation dataset directly...")
+            eval_dataset = prepare_grpo_dataset_simple(
+                dataset_path=config.data.dataset_path,
+                split=config.data.dataset_split_eval,
+            )
+
+        # Apply max_samples limit to eval dataset if specified (useful for testing)
+        if config.data.max_samples is not None:
+            original_size = len(eval_dataset)
+            eval_dataset = eval_dataset.select(range(min(config.data.max_samples, original_size)))
+            logger.info(f"Limited eval dataset from {original_size} to {len(eval_dataset)} samples")
+
+        logger.info(f"Evaluation dataset size: {len(eval_dataset)}")
+    else:
+        logger.info("Evaluation disabled (do_eval=False)")
 
     # Print WandB info if used
     if config.use_wandb:
@@ -292,7 +323,6 @@ def main(config: ExperimentConfig) -> None:
         learning_rate=config.training.learning_rate,
         warmup_steps=config.training.warmup_steps,
         logging_steps=config.training.logging_steps,
-        eval_steps=config.training.eval_steps,
         save_steps=config.training.save_steps,
         save_total_limit=config.training.save_total_limit,
         bf16=config.training.bf16,
@@ -300,8 +330,15 @@ def main(config: ExperimentConfig) -> None:
         report_to=["wandb"] if config.use_wandb else ["tensorboard"],
         run_name=config.experiment_name if config.use_wandb else None,
         use_vllm=config.training.use_vllm,
+        # Evaluation args
+        do_eval=config.training.do_eval,
+        eval_strategy=config.training.eval_strategy,
+        eval_steps=config.training.eval_steps,
+        eval_on_start=config.training.eval_on_start,
+        eval_delay=config.training.eval_delay,
         # GRPO-specific args
         num_generations=config.training.num_generations,
+        num_generations_eval=config.training.num_generations_eval,
         max_completion_length=config.training.max_completion_length,
         temperature=config.training.temperature,
         top_p=config.training.top_p,
@@ -316,6 +353,7 @@ def main(config: ExperimentConfig) -> None:
         model=config.model.model_name_or_path,  # model,
         args=training_args,
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         reward_funcs=reward_function,
     )
 
@@ -352,19 +390,28 @@ if __name__ == "__main__":
         ),
         data=DataConfig(
             use_datamodule=True,
-            datamodule_config_path="pyine/apps/rl_trainers/configs/grpo_training.yaml",
-            dataset_split_train="train",
+            datamodule_config_path="pyine/apps/rl_trainers/configs/grpo_minimal_example.yaml",
+            train_subset_name="train",
+            eval_subset_name="valid",
             max_samples=100,  # Use small subset for testing
         ),
         training=GRPOTrainingConfig(
             output_dir="./grpo_output",
             num_train_epochs=1,
             per_device_train_batch_size=1,
+            per_device_eval_batch_size=2,
             gradient_accumulation_steps=4,
             learning_rate=1e-5,
             logging_steps=5,
             save_steps=50,
+            # Evaluation settings
+            do_eval=True,
+            eval_strategy="steps",
+            eval_steps=25,
+            eval_on_start=False,
+            # GRPO settings
             num_generations=4,
+            num_generations_eval=2,  # Use fewer generations during eval to save compute
             max_completion_length=256,
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
             use_vllm=False,

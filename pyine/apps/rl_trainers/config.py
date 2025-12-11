@@ -136,9 +136,6 @@ class GRPOTrainingConfig:
     logging_steps: int = 10
     """Log every N steps."""
 
-    eval_steps: int = 100
-    """Evaluate every N steps."""
-
     save_steps: int = 100
     """Save checkpoint every N steps."""
 
@@ -154,9 +151,28 @@ class GRPOTrainingConfig:
     use_vllm: bool = False
     """Whether to use vLLM for generation during training."""
 
+    # Evaluation settings
+    do_eval: bool = True
+    """Whether to run evaluation during training."""
+
+    eval_strategy: str = "steps"
+    """Evaluation strategy: 'no', 'steps', or 'epoch'."""
+
+    eval_steps: int = 500
+    """Evaluate every N steps (when eval_strategy='steps')."""
+
+    eval_on_start: bool = False
+    """Whether to run evaluation before training starts."""
+
+    eval_delay: float = 0
+    """Number of epochs/steps to delay evaluation."""
+
     # GRPO-specific settings
     num_generations: int = 4
-    """Number of completions to generate per prompt for GRPO."""
+    """Number of completions to generate per prompt for GRPO training."""
+
+    num_generations_eval: int | None = None
+    """Number of completions to generate per prompt during evaluation. If None, uses num_generations."""
 
     max_completion_length: int = 256
     """Maximum number of new tokens to generate."""
