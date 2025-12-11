@@ -22,6 +22,7 @@ samples/
 ├── filtering.py      # Stage 1: Trace filtering logic
 ├── selection.py      # Stage 2: Sample selection from trace families
 ├── transform.py      # Stage 3: Sample generation and transformation
+├── keyword_ops.py    # Keyword detection, injection, and refactoring utilities
 └── builder.py        # Main orchestrator (SampleBuilder class)
 ```
 
@@ -110,17 +111,37 @@ targeting traces that would be harder to work with.
 **Configuration (`TraceFilteringConfig`):**
 
 - `max_trace_families`: cap on total unique trace families allowed for sampling;
+- `max_traces_per_family`: cap on traces per family (random selection within family);
+- `max_traces_per_solution`: cap on traces per solution (round-robin across families);
+- `max_traces_per_problem`: cap on traces per coding problem (round-robin across families);
 - `max_trace_steps`: skip traces exceeding this execution step count;
 - `max_code_line_count`: skip traces exceeding this code line threshold;
 - `max_code_line_length`: skip traces with overly long individual code lines;
 - `max_code_length`: skip traces with massive code strings (e.g. that include whole libraries);
 - `max_args_length`: skip traces with huge input/output strings (to avoid hard test cases).
 
+**Trace Hierarchy for Subsampling:**
+
+The subsampling parameters operate at different levels of the trace hierarchy:
+
+```
+Problem (CodingProblemIdentifier): TACO/train/p000001
+└── Solution (SolutionIdentifier): TACO/train/p000001/s0001
+    └── Trace Family (augmentless TraceIdentifier): TACO/train/p000001/s0001/t0001
+        └── Traces (with augmentations): TACO/train/p000001/s0001/t0001/a:hints_docs:001
+```
+
+- **max_traces_per_family**: limits traces within the same solution + test args (different augmentations);
+- **max_traces_per_solution**: limits traces across all test args for a solution;
+- **max_traces_per_problem**: limits traces across all solutions for a problem;
+- **max_trace_families**: limits total trace families (round-robin across problems).
+
 **Output (`TraceFilteringResults`):**
 
 - Groups remaining traces into families;
-- Tracks why traces were filtered (step count, code length, args length, family cap);
-- Uses round-robin sampling when capping families to ensure diversity across coding problems.
+- Tracks why traces were filtered (step count, code length, args length, per-family cap,
+  per-solution cap, per-problem cap, family count cap);
+- Uses round-robin sampling when capping to ensure diversity across coding problems/solutions.
 
 ### Stage 2: Selection (`selection.py`)
 
@@ -165,6 +186,28 @@ possible and allowed, will also consider pre-generated yet untraced code augment
 - `max_inputs_str_length` / `max_output_str_length`: caps on inputs/outputs string lengths;
 - `combine_local_and_global_vars_for_partial_samples`: whether to merge input variable scopes;
 - `fallback_to_orig`: whether to return full sample if partial sample transformation fails.
+
+### Keyword Operations (`keyword_ops.py`)
+
+**Purpose:** Utilities for keyword bias experiments, including detection, injection, and
+refactoring of keywords in code samples.
+
+**Classes:**
+
+| Class                             | Purpose                                                  |
+| --------------------------------- | -------------------------------------------------------- |
+| `KeywordDetector`                 | Detect keyword presence via case-insensitive regex       |
+| `KeywordInjector`                 | Inject keywords by appending comments to random lines    |
+| `KeywordRefactorer`               | Replace keyword occurrences with neutral identifiers     |
+| `SampleKeywordManipulatorWrapper` | Dataset wrapper that applies keyword ops during sampling |
+
+**Key Features:**
+
+- **Case-insensitive matching**: All keyword detection uses `\b{keyword}\b` regex with `re.IGNORECASE`;
+- **Case-preserving refactoring**: When replacing keywords, case is preserved (e.g., `Result` ->
+  `__Kkkkkk`, `RESULT` -> `__KKKKKK`);
+- **Dynamic replacement generation**: `KeywordRefactorer` generates replacement identifiers of the
+  form `__kkkk...` matching keyword length.
 
 ## Usage
 
