@@ -330,6 +330,8 @@ def main(config: ExperimentConfig) -> None:
         report_to=["wandb"] if config.use_wandb else ["tensorboard"],
         run_name=config.experiment_name if config.use_wandb else None,
         use_vllm=config.training.use_vllm,
+        vllm_server_port=config.training.vllm_server_port,
+        vllm_importance_sampling_correction=config.training.vllm_importance_sampling_correction,
         # Evaluation args
         do_eval=config.training.do_eval,
         eval_strategy=config.training.eval_strategy,
@@ -375,7 +377,7 @@ if __name__ == "__main__":
 
     # Create unique experiment name with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    experiment_name = f"GRPO_Test_{timestamp}"
+    experiment_name = f"GRPO_Qwen3_4B_{timestamp}"
 
     config = ExperimentConfig(
         experiment_name=experiment_name,
@@ -383,14 +385,15 @@ if __name__ == "__main__":
         use_wandb=True,
         wandb_project="pyine-grpo-tests",
         model=ModelConfig(
-            model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
+            model_name_or_path="Qwen/Qwen3-4B-Instruct-2507",
+            #model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
             use_peft=True,  # Use LoRA for efficient training
-            lora_r=16,
+            lora_r=8,
             lora_alpha=32,
         ),
         data=DataConfig(
             use_datamodule=True,
-            datamodule_config_path="pyine/apps/rl_trainers/configs/grpo_minimal_example.yaml",
+            datamodule_config_path="pyine/apps/rl_trainers/configs/taco_1to4_rl.yaml",
             train_subset_name="train",
             eval_subset_name="valid",
             max_samples=100,  # Use small subset for testing
@@ -399,8 +402,8 @@ if __name__ == "__main__":
             output_dir="./grpo_output",
             num_train_epochs=1,
             per_device_train_batch_size=1,
-            per_device_eval_batch_size=2,
-            gradient_accumulation_steps=4,
+            per_device_eval_batch_size=4,
+            gradient_accumulation_steps=8,
             learning_rate=1e-5,
             logging_steps=5,
             save_steps=50,
@@ -410,11 +413,13 @@ if __name__ == "__main__":
             eval_steps=25,
             eval_on_start=False,
             # GRPO settings
-            num_generations=4,
+            num_generations=8,
             num_generations_eval=2,  # Use fewer generations during eval to save compute
-            max_completion_length=256,
+            max_completion_length=2048,
             bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-            use_vllm=False,
+            use_vllm=True,
+            vllm_server_port=8050,
+            vllm_importance_sampling_correction=True,
         ),
     )
 

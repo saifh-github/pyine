@@ -654,6 +654,25 @@ wheels = [
 ]
 
 [[package]]
+name = "deepspeed"
+version = "0.18.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "hjson" },
+    { name = "msgpack" },
+    { name = "ninja" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "py-cpuinfo" },
+    { name = "pydantic" },
+    { name = "torch" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1b/88/989a2346b7fd618695ad468f4e29a98656a053143fae5587c2924ddb34f8/deepspeed-0.18.3.tar.gz", hash = "sha256:0ee0002d8205667ee8463dab8461fb5914dac1583440fe1c48a3a385bb4130ea", size = 1617630, upload-time = "2025-12-09T14:53:07.305Z" }
+
+[[package]]
 name = "defusedxml"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1086,6 +1105,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/dd/7ac658d54b9fb7999a0ccb07ad863b413cbaf5cf172f48ebcd9497ec7263/hf_xet-1.2.0-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:4c1428c9ae73ec0939410ec73023c4f842927f39db09b063b9482dac5a3bb737", size = 3413812, upload-time = "2025-10-24T19:04:24.585Z" },
     { url = "https://files.pythonhosted.org/packages/92/68/89ac4e5b12a9ff6286a12174c8538a5930e2ed662091dd2572bbe0a18c8a/hf_xet-1.2.0-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a55558084c16b09b5ed32ab9ed38421e2d87cf3f1f89815764d1177081b99865", size = 3508920, upload-time = "2025-10-24T19:04:26.927Z" },
     { url = "https://files.pythonhosted.org/packages/cb/44/870d44b30e1dcfb6a65932e3e1506c103a8a5aea9103c337e7a53180322c/hf_xet-1.2.0-cp37-abi3-win_amd64.whl", hash = "sha256:e6584a52253f72c9f52f9e549d5895ca7a471608495c4ecaa6cc73dba2b24d69", size = 2905735, upload-time = "2025-10-24T19:04:35.928Z" },
+]
+
+[[package]]
+name = "hjson"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/e5/0b56d723a76ca67abadbf7fb71609fb0ea7e6926e94fcca6c65a85b36a0e/hjson-3.1.0.tar.gz", hash = "sha256:55af475a27cf83a7969c808399d7bccdec8fb836a07ddbd574587593b9cdcf75", size = 40541, upload-time = "2022-08-13T02:53:01.919Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/7f/13cd798d180af4bf4c0ceddeefba2b864a63c71645abc0308b768d67bb81/hjson-3.1.0-py3-none-any.whl", hash = "sha256:65713cdcf13214fb554eb8b4ef803419733f4f5e551047c9b711098ab7186b89", size = 54018, upload-time = "2022-08-13T02:52:59.899Z" },
 ]
 
 [[package]]
@@ -3114,6 +3142,7 @@ dependencies = [
     { name = "blobfile" },
     { name = "datasets" },
     { name = "deepdiff" },
+    { name = "deepspeed" },
     { name = "evaluate" },
     { name = "filelock" },
     { name = "gitpython" },
@@ -3179,6 +3208,7 @@ requires-dist = [
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.10.0" },
     { name = "datasets", specifier = ">=4.0.0,<5.0.0" },
     { name = "deepdiff", specifier = ">=8.6.0,<9.0.0" },
+    { name = "deepspeed", specifier = ">=0.18.3" },
     { name = "evaluate", specifier = ">=0.4.5,<1.0.0" },
     { name = "filelock", specifier = ">=3.20.0,<4.0.0" },
     { name = "gitpython", specifier = ">=3.1.45,<4.0.0" },

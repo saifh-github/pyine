@@ -154,6 +154,9 @@ class GRPOTrainingConfig:
     vllm_server_port: int = 8000
     """vLLM server port."""
 
+    vllm_importance_sampling_correction: bool = True
+    """Whether to use vLLM importance sampling correction."""
+
     # Evaluation settings
     do_eval: bool = True
     """Whether to run evaluation during training."""
