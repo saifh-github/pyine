@@ -5,8 +5,8 @@ import pytest
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils as dataset_utils
+import pyine.organisms.datamodules.base as base_configs
 import pyine.organisms.datamodules.samples as sample_utils
-import pyine.organisms.datamodules.shortcuts_configs as shortcuts_configs
 import pyine.prompts
 import pyine.utils.code.complexity_metrics as complexity_metrics_utils
 import pyine.utils.code.execution as execution_utils
@@ -242,8 +242,12 @@ def setup_builder(
     subset_name: str,
     prompt_records: dict[str, list[FakePromptResult]] | None = None,
 ) -> sample_utils.SampleBuilder:
-    base_config = shortcuts_configs._get_default_sampler_builder_config(seed=seed)
-    overrides = shortcuts_configs._get_default_sample_builder_overrides_for_subset(subset_name)
+    base_config = base_configs.get_default_sample_builder_config(
+        seed=seed,
+        allow_db_lookups=True,
+        code_type_prob_map=sample_utils.configs.get_default_code_type_prob_map(),
+    )
+    overrides = base_configs.get_default_sample_builder_overrides_for_subset(subset_name)
     config = pyine.utils.pydantic.merge_configs(base_config, overrides)
     fake_prompt_db = FakePromptResultDB(prompt_records)
     monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: fake_prompt_db)

@@ -157,6 +157,11 @@ class KeywordBiasDataModule(
         return KeywordTraceDatasetMetadata
 
     @typing.override
+    def _get_subset_suffixes(self) -> tuple[str, ...]:
+        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
+        return "_with_keyword", "_without_keyword"
+
+    @typing.override
     def _prepare_bias_specific_metadata(
         self,
         base_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
@@ -189,12 +194,15 @@ class KeywordBiasDataModule(
             else:
                 unassigned_traces_meta.append(trace_meta)
         self._apply_max_solution_count_cap(subset_traces_meta, unassigned_traces_meta)
-        self._adjust_keyword_split_subsets(subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword)
-        # validate sample counts AFTER rebalancing using final subset traces
-        self._validate_sample_counts(keyword, subset_traces_meta, trace_ids_with_keyword)
+        derived_subsets = self._adjust_keyword_split_subsets(
+            subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword
+        )
+        # validate sample counts AFTER rebalancing using final subset traces (including derived)
+        self._validate_sample_counts(keyword, subset_traces_meta, derived_subsets, trace_ids_with_keyword)
         return KeywordTraceDatasetMetadata(
             base_traces=base_traces_meta,
             subset_traces=subset_traces_meta,
+            derived_subsets=derived_subsets,
             leftover_traces=unassigned_traces_meta,
             problem_assignments=split_data.subset_assignments,
             split_hash=split_hash,
@@ -530,21 +538,31 @@ class KeywordBiasDataModule(
         ],
         unassigned_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
         trace_ids_with_keyword: frozenset[str],
-    ) -> None:
-        """Adjusts keyword-split subsets for training and evaluation (modifies args in-place).
+    ) -> dict[str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]]:
+        """Adjusts keyword-split subsets for training and creates derived evaluation subsets.
 
-        For each subset (e.g. 'train', 'valid'), creates two additional subsets:
+        For each evaluation subset (e.g. 'valid'), creates two derived subsets:
         - '{subset}_with_keyword': traces that naturally contain the keyword;
         - '{subset}_without_keyword': traces that don't contain the keyword.
+
+        The training subset is rebalanced in-place based on the configured keyword ratio.
+        Evaluation subsets are returned as derived subsets to avoid metadata overlap issues.
 
         Args:
             subset_traces_meta: Dict mapping subset names to their trace metadata lists.
             unassigned_traces_meta: List of unassigned/discarded traces (not part of any subset).
             trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
+
+        Returns:
+            Dictionary of derived subset names to DerivedSubsetInfo objects.
         """
         # first, adjust the training subset for the configured/expected ratio of with-vs-without keyword
         self._rebalance_train_subset_keyword_ratio(subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword)
-        # next, adjust the evaluation subsets by adding the with-vs-without keyword splits
+        # next, create derived subsets for evaluation by splitting with-vs-without keyword
+        derived_subsets: dict[
+            str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]
+        ] = {}
+        derivation_type = self.config.evaluation_strategy.value
         for eval_subset_name in self.config.eval_subset_names:
             if eval_subset_name not in subset_traces_meta:
                 continue
@@ -562,12 +580,21 @@ class KeywordBiasDataModule(
                         with_keyword.append(trace_meta)
                     else:
                         without_keyword.append(trace_meta)
-            subset_traces_meta[f"{eval_subset_name}_with_keyword"] = with_keyword
-            subset_traces_meta[f"{eval_subset_name}_without_keyword"] = without_keyword
+            derived_subsets[f"{eval_subset_name}_with_keyword"] = pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+                parent_subset=eval_subset_name,
+                traces=with_keyword,
+                derivation_type=derivation_type,
+            )
+            derived_subsets[f"{eval_subset_name}_without_keyword"] = pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+                parent_subset=eval_subset_name,
+                traces=without_keyword,
+                derivation_type=derivation_type,
+            )
             logger.info(
                 f"created {self.config.evaluation_strategy}s for {eval_subset_name} subset: "
                 f"{len(with_keyword)} traces with keyword, {len(without_keyword)} without"
             )
+        return derived_subsets
 
     def _validate_sample_counts(
         self,
@@ -575,6 +602,9 @@ class KeywordBiasDataModule(
         subset_traces_meta: dict[
             pyine.data.datamodule.SubsetNameType,
             list[pyine.data.traces.dataset_utils.TraceMetadata],
+        ],
+        derived_subsets: dict[
+            str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]
         ],
         trace_ids_with_keyword: frozenset[str],
     ) -> None:
@@ -584,19 +614,15 @@ class KeywordBiasDataModule(
 
         Args:
             keyword: The keyword being used for bias experiments.
-            subset_traces_meta: Final dict mapping subset names to their trace metadata lists.
+            subset_traces_meta: Final dict mapping primary subset names to their trace metadata lists.
+            derived_subsets: Derived subsets (keyword-split eval subsets).
             trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
 
         Raises:
             ValueError: If minimum sample requirements are not met.
         """
-        # count from all non-derived subsets (exclude _with_keyword/_without_keyword splits)
-        all_traces = [
-            trace
-            for subset_name, traces in subset_traces_meta.items()
-            if not subset_name.endswith("_with_keyword") and not subset_name.endswith("_without_keyword")
-            for trace in traces
-        ]
+        # count from primary subsets only (derived subsets are not counted separately)
+        all_traces = [trace for traces in subset_traces_meta.values() for trace in traces]
         count_with_keyword = sum(1 for t in all_traces if t.identifier in trace_ids_with_keyword)
         count_without_keyword = len(all_traces) - count_with_keyword
         logger.debug(
@@ -616,6 +642,9 @@ class KeywordBiasDataModule(
 
     def _is_keyword_split_subset(self, subset_name: pyine.data.datamodule.SubsetNameType) -> bool:
         """Check if a subset name is a derived keyword-split subset."""
+        if self._metadata is not None:
+            return self._metadata.is_derived_subset(subset_name)
+        # fallback to naming convention if metadata not yet loaded
         return subset_name.endswith("_with_keyword") or subset_name.endswith("_without_keyword")
 
     def _is_base_eval_subset(self, subset_name: pyine.data.datamodule.SubsetNameType) -> bool:

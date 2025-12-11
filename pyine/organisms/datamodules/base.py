@@ -11,17 +11,22 @@ import os
 import pathlib  # noqa: TC003
 import tempfile
 import typing
+import warnings
 
 import filelock
 import msgspec
 import numpy as np
+import omegaconf
 import pydantic
 
+import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
 import pyine.data.utils.splits
+import pyine.evals.common
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
@@ -148,6 +153,77 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
         Example: "shortcuts" for ShortcutBiasDataModule, "keywords" for KeywordBiasDataModule.
         """
         ...
+
+    def _get_parent_subset_name(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> pyine.data.datamodule.SubsetNameType:
+        """Map a derived subset name back to its parent subset, if applicable.
+
+        This default implementation returns the original name unchanged. Subclasses can override to
+        provide custom parent-mapping logic (e.g., 'valid_with_keyword' -> 'valid' for keywords module).
+        """
+        return subset_name
+
+    @typing.override
+    def _resolve_dataparser_config(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> pyine.organisms.datamodules.samples.SampleBuilderConfig:
+        """Returns the data parser configuration for the given subset name.
+
+        For derived subsets (e.g., valid_with_keyword), inherits overrides from the parent
+        eval subset (e.g., valid) if no specific override is defined.
+        """
+        if subset_name not in self.subset_names:
+            raise ValueError(f"invalid subset name: {subset_name}, expected one of: {self.subset_names}")
+        parser_config = self.default_dataparser_config
+        if isinstance(parser_config, dict):
+            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig.model_validate(parser_config)
+        else:
+            assert isinstance(parser_config, pyine.data.datamodule.BaseDataParserConfig)
+            # convert BaseDataParserConfig to SampleBuilderConfig (may happen when instantiated via Hydra)
+            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig(
+                class_path=parser_config.class_path,
+                params=parser_config.params,
+            )
+        assert isinstance(parser_config, pyine.organisms.datamodules.samples.SampleBuilderConfig), (
+            f"unexpected type for default dataparser config: {type(parser_config)}"
+        )
+        # check for overrides: first try direct subset name, then fall back to parent
+        override_key = subset_name
+        if override_key not in self.dataparser_config_overrides:
+            override_key = self._get_parent_subset_name(subset_name)
+        if override_key in self.dataparser_config_overrides and self.dataparser_config_overrides[override_key]:
+            config_overrides = self.dataparser_config_overrides[override_key]
+            assert isinstance(config_overrides, dict), (
+                f"unexpected type for {subset_name} dataparser config overrides: {type(config_overrides)}"
+            )
+            parser_config = parser_config.get_updated_spec(**config_overrides)
+        special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
+        if special_subset_overrides:
+            parser_config = parser_config.get_updated_spec(**special_subset_overrides)
+        return parser_config
+
+    @typing.override
+    def _resolve_dataloader_config(
+        self,
+        loader_name: pyine.data.datamodule.LoaderNameType,
+    ) -> pyine.data.datamodule.BaseDataLoaderConfig:
+        """Returns the data loader configuration for the given loader name.
+
+        For derived loaders, inherits overrides from the parent subset.
+        """
+        if loader_name not in self.loader_names:
+            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.loader_names}")
+        loader_config: pyine.data.datamodule.BaseDataLoaderConfig = self.default_dataloader_config
+        # check for overrides: first try direct loader name, then fall back to parent
+        override_key = loader_name
+        if override_key not in self.dataloader_config_overrides:
+            override_key = self._get_parent_subset_name(loader_name)
+        if override_key in self.dataloader_config_overrides:
+            return loader_config.get_updated_spec(**self.dataloader_config_overrides[override_key])
+        return loader_config
 
 
 class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
@@ -348,6 +424,11 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         assert parser is not None, f"parser for subset {subset_name} should be instantiated"
         return parser
 
+    @abc.abstractmethod
+    def _get_subset_suffixes(self) -> tuple[str, ...]:
+        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
+        ...
+
     def _get_traces_meta_for_subset(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType | None,
@@ -357,16 +438,16 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             raise RuntimeError("metadata not ready yet, call `setup()` first")
         if subset_name is None:
             return self._metadata.base_traces
-        known_subsets = list(self._metadata.subset_traces.keys())
-        if subset_name not in known_subsets:
-            for prefix, suffix in itertools.product(
-                known_subsets,
-                pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes(),
-            ):
-                if f"{prefix}_{suffix}" == subset_name:
-                    return self._metadata.subset_traces[prefix]
-            raise ValueError(f"subset {subset_name} is not defined in the metadata's split table")
-        return self._metadata.subset_traces[subset_name]
+        # first check if the subset exists in primary or derived subsets
+        all_known_subsets = self._metadata.get_all_subset_names()
+        if subset_name in all_known_subsets:
+            return self._metadata.get_subset_traces(subset_name)
+        # fallback: check for code-type suffixed subsets (e.g., "train_buggy")
+        primary_subsets = list(self._metadata.subset_traces.keys())
+        for prefix, suffix in itertools.product(primary_subsets, self._get_subset_suffixes()):
+            if f"{prefix}_{suffix}" == subset_name:
+                return self._metadata.subset_traces[prefix]
+        raise ValueError(f"subset {subset_name} is not defined in the metadata's split table")
 
     def _is_setup_complete(self) -> bool:
         """Returns True if the setup is complete and the data parsers/loaders are ready to be used."""
@@ -546,5 +627,408 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
 
 
 def get_default_subset_names() -> tuple[str, ...]:
-    """Returns the default subset names used by this datamodule."""
+    """Returns the default subset names used by derived datamodules."""
     return "train", "valid", "test"
+
+
+def get_default_training_transform_config(
+    use_hybrid_transform: bool = False,
+) -> dict[str, typing.Any]:
+    """Returns the default sample transform config used by derived datamodules for training."""
+    if use_hybrid_transform:
+        return {  # will generate a mix of partial and full samples (based on criteria + random draws)
+            "transform_strategy": "hybrid",
+            "functions_fallback_to_segments": True,
+            "min_partial_trace_steps": 10,
+            "fallback_to_orig": True,
+            "predict_type_prob_map": {
+                "program_output": 0.6,
+                "frame_variables": 0.2,
+                "function_return": 0.2,
+            },
+        }
+    return {"transform_strategy": "never"}  # generates only full samples
+
+
+@typing.overload
+def get_default_sample_builder_config(
+    seed: typing.Any,
+    *,
+    allow_db_lookups: bool = False,
+    code_type_prob_map: dict[pyine.organisms.datamodules.samples.common.SampleCodeTypeSet | str, float] | None = None,
+    as_pydantic: typing.Literal[True],
+) -> pyine.organisms.datamodules.samples.SampleBuilderConfig: ...
+
+
+@typing.overload
+def get_default_sample_builder_config(
+    seed: typing.Any,
+    *,
+    allow_db_lookups: bool = False,
+    code_type_prob_map: dict[pyine.organisms.datamodules.samples.common.SampleCodeTypeSet | str, float] | None = None,
+    as_pydantic: typing.Literal[False] = False,
+) -> dict[str, typing.Any]: ...
+
+
+def get_default_sample_builder_config(
+    seed: typing.Any,
+    *,
+    allow_db_lookups: bool = False,
+    code_type_prob_map: dict[pyine.organisms.datamodules.samples.common.SampleCodeTypeSet | str, float] | None = None,
+    as_pydantic: bool = False,
+) -> dict[str, typing.Any] | pyine.organisms.datamodules.samples.SampleBuilderConfig:
+    """Returns the default configuration dictionary used to instantiate sample builders.
+
+    This configuration will be hierarchically overridden by subset-specific settings.
+
+    Args:
+        seed: Random seed for reproducibility.
+        allow_db_lookups: Whether to allow database lookups for code type selection.
+            Set to True for shortcuts (which uses code type selection), False for keywords.
+        code_type_prob_map: Optional probability map for code type selection.
+            If provided, also sets fallback_to_orig=False in the selection config.
+        as_pydantic: If True, return a validated SampleBuilderConfig instance.
+
+    Returns:
+        Config dict or validated pydantic model.
+    """
+    selection_config: dict[str, typing.Any] = {
+        "seed": seed,
+        "allow_db_lookups": allow_db_lookups,
+    }
+    if code_type_prob_map is not None:
+        selection_config["code_type_prob_map"] = code_type_prob_map
+        selection_config["fallback_to_orig"] = False
+    config_params = {
+        "filtering_config": {},  # SampleFilteringConfig
+        "selection_config": selection_config,  # SampleSelectionConfig
+        "transform_config": {  # SampleTransformConfig
+            "seed": seed,
+            "transform_strategy": "never",
+        },
+    }
+    if as_pydantic:
+        return pyine.organisms.datamodules.samples.SampleBuilderConfig.model_validate({"params": config_params})
+    return config_params
+
+
+def get_default_sample_builder_overrides_for_subset(
+    subset_name: str,
+    use_hybrid_transform: bool = False,
+    training_selection_config: dict[str, typing.Any] | None = None,
+) -> dict[str, typing.Any]:
+    """Returns default overrides for the sample builder config to be used for a given subset.
+
+    The overrides should apply on top of the base (shared) sample builder config, and make the
+    resulting config suitable for the given subset. If no overrides are defined, an empty dict
+    will be returned.
+
+    Args:
+        subset_name: Name of the subset (e.g., "train", "valid", "test").
+        use_hybrid_transform: If True, use hybrid transforms (for full+partial samples).
+        training_selection_config: Optional selection config to use for the training subset.
+            If None, an empty dict is used (inherits from default config).
+
+    Returns:
+        Dictionary of config overrides for the given subset, or empty dict if no overrides.
+    """
+    if subset_name == "train":
+        return {
+            "filtering_config": {},  # SampleFilteringConfig; inherits from default config
+            "selection_config": training_selection_config or {},  # SampleSelectionConfig
+            "transform_config": get_default_training_transform_config(use_hybrid_transform),
+        }
+    return {}
+
+
+def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
+    config_class: type[ConfigT],
+    lmdb_paths: typing.Any,
+    split_file_path: typing.Any,
+    seed: typing.Any,
+    *,
+    sample_builder_config_kwargs: dict[str, typing.Any] | None = None,
+    training_selection_config: dict[str, typing.Any] | None = None,
+    use_hybrid_sample_transforms: bool = False,
+    extra_config: dict[str, typing.Any] | None = None,
+    as_pydantic: bool = False,
+) -> dict[str, typing.Any] | ConfigT:
+    """Generic factory for creating bias datamodule configs.
+
+    This function provides a shared implementation for creating datamodule configs
+    for both KeywordBiasDataModule and ShortcutBiasDataModule (and future bias modules).
+
+    Args:
+        config_class: The config class to instantiate (e.g., KeywordBiasDataModuleConfig).
+        lmdb_paths: Paths to LMDB datasets containing execution traces.
+        split_file_path: Path to the problem split file.
+        seed: Random seed for reproducibility.
+        sample_builder_config_kwargs: Additional kwargs for get_default_sample_builder_config.
+            Use this to customize allow_db_lookups, code_type_prob_map, etc.
+        training_selection_config: Optional selection config for training subset overrides.
+        use_hybrid_sample_transforms: If True, use hybrid transforms (for full+partial samples).
+        extra_config: Additional config fields to merge into the final config dict.
+        as_pydantic: If True, return a validated config instance.
+
+    Returns:
+        Config dict or validated pydantic model.
+    """
+    from pyine.utils.portability import get_fully_qualified_name
+
+    sample_builder_kwargs = sample_builder_config_kwargs or {}
+    config_kwargs: dict[str, typing.Any] = {
+        "lmdb_paths": lmdb_paths,
+        "split_file_path": split_file_path,
+        "split_seed": seed,
+        "default_dataparser_config": {
+            "class_path": get_fully_qualified_name(pyine.organisms.datamodules.samples.SampleBuilder),
+            "params": get_default_sample_builder_config(seed=seed, **sample_builder_kwargs),
+        },
+        "dataparser_config_overrides": {
+            subset: get_default_sample_builder_overrides_for_subset(
+                subset_name=subset,
+                use_hybrid_transform=use_hybrid_sample_transforms,
+                training_selection_config=training_selection_config,
+            )
+            for subset in get_default_subset_names()
+        },
+        "dataloader_config_overrides": {
+            "train": {"shuffle": True},
+        },
+    }
+    if extra_config:
+        config_kwargs.update(extra_config)
+    if as_pydantic:
+        return config_class.model_validate(config_kwargs)
+    return config_kwargs
+
+
+def make_bias_datamodule_hydra_configs(
+    config_class: type[BiasDataModuleBaseConfig],
+    eval_type: pyine.evals.common.EvalType,
+    group: str,
+    module_name: str,
+    datamodule_config_factory: collections.abc.Callable[..., dict[str, typing.Any]],
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Generates and returns bias-datamodule configs for hydra zen storage.
+
+    This function provides a shared implementation for generating hydra configs
+    for both KeywordBiasDataModule and ShortcutBiasDataModule (and future bias modules).
+
+    Args:
+        config_class: The config class (e.g., KeywordBiasDataModuleConfig).
+        eval_type: The evaluation type (only CODE_EXEC is supported).
+        group: The config group name for hydra storage.
+        module_name: Name of the module for error messages and descriptions (e.g., "keywords").
+        datamodule_config_factory: Factory function to create the base config dict.
+            Should accept lmdb_paths, split_file_path, seed, and as_pydantic kwargs.
+
+    Returns:
+        List of config descriptions for hydra zen registration.
+    """
+    if eval_type != pyine.evals.common.EvalType.CODE_EXEC:
+        raise NotImplementedError(f"unsupported eval type for {module_name} datamodule: {eval_type}")
+    base_config = pyine.configs.utils.make_config_description(
+        config_class,
+        name="base",
+        group=group,
+        description=f"Base {module_name} datamodule settings; not specific to any actual source dataset.",
+        config={
+            **datamodule_config_factory(
+                lmdb_paths=omegaconf.MISSING,  # must be specified by user
+                split_file_path=omegaconf.MISSING,  # must be specified by user
+                seed="${runtime.seed}",
+                as_pydantic=False,
+            ),
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    return [
+        base_config,
+        *get_taco_configs(base_config, config_class),
+        # add config getters for more source datasets here, if needed
+    ]
+
+
+def get_taco_configs(
+    datamodule_base_config: pyine.configs.schemas.ConfigDescription,
+    datamodule_config_type: type[BiasDataModuleBaseConfig],
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Returns specialized datamodule configs and their descriptions for the TACO dataset.
+
+    This is meant to provide a generic way to tie any bias-related datamodule with pregenerated TACO
+    datasets using dynamically generated ConfigDescription objects for Hydra-Zen storage.
+    """
+    # first, get TACO dataset paths in a fail-safe manner
+    taco_latest_path = None
+    with contextlib.suppress(FileNotFoundError):
+        taco_latest_path = pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO")
+    taco_split_path = None
+    with contextlib.suppress(FileNotFoundError):
+        taco_split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
+    taco_10s10t_v1_paths = None
+    with contextlib.suppress(FileNotFoundError):
+        taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
+            source_dataset_name="TACO",
+            pattern="v1.4/10s10t.*of000026.*.lmdb",
+        )
+
+    # emit warnings for missing datasets (users should not be trying to launch experiments with these)
+    if taco_latest_path is None:
+        warnings.warn(
+            "no TACO base dataset found, skipping TACO configs; "
+            "if you intended to use TACO dataset demos/tests, please ensure that a dataset is present "
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
+        )
+    if taco_split_path is None:
+        warnings.warn(
+            "no TACO split file found, skipping TACO configs; "
+            "if you intended to use TACO data modules, please ensure that the split file is present "
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
+        )
+    if not taco_10s10t_v1_paths:
+        warnings.warn(
+            "the TACO 10s10t v1 dataset is missing, skipping related configs; "
+            "if you intended to conduct TACO-related experiments, please ensure that a dataset is present "
+            "in the expected location (see the top-level README for more details)",
+            stacklevel=2,
+        )
+
+    # build the actual config objects + descriptions
+    outputs: list[pyine.configs.schemas.ConfigDescription] = []
+
+    if taco_latest_path is not None and taco_split_path is not None:
+        # if we have both of these paths, build the demo/testing configs
+        outputs.append(
+            taco_latest_config := pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_latest",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies the single most recent instance of a TACO trace dataset found on disk. "
+                    "May contain an arbitrary number of traces with any kind of augmentations."
+                ),
+                config={
+                    "lmdb_paths": [taco_latest_path],
+                    "split_file_path": taco_split_path,
+                    # -------------
+                    "builds_bases": (datamodule_base_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_latest_20s",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset of the most recent TACO trace dataset on disk, with a maximum of 20 "
+                    "solutions per trace. Useful for quick experiments, testing, and demos."
+                ),
+                config={
+                    "max_solution_count": 20,  # cap off the dataset size for quick experiments (across each subset)
+                    # -------------
+                    "builds_bases": (taco_latest_config.config,),
+                },
+            )
+        )
+
+    # ===========
+
+    if taco_10s10t_v1_paths and taco_split_path is not None:
+        # if we have both of these paths, build TACO 10s10t configs for v1 experiments
+        assert len(taco_10s10t_v1_paths) == 26, "unexpected number of v1 10s10t datasets"
+        outputs.append(
+            taco_10s10t_v1_config := pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_10s10t_v1_full",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies the full 26 instances of the PyINE-TACO 10s10t v1 trace dataset. "
+                    "Used for full-sized experiments on the entire dataset proposed in our first "
+                    "paper. See `pyine/apps/README-10s10t-v1.md` for more information."
+                ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths,
+                    "split_file_path": taco_split_path,
+                    # -------------
+                    "builds_bases": (datamodule_base_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_10s10t_v1_part1to13",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset consisting of parts 1 to 13 (of 26, so about 50%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a subset that can be useful for medium-sized"
+                    "experiments, and should be quite representative of the full dataset's distribution."
+                ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths[0:13],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_10s10t_v1_part1to4",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset consisting of parts 1 to 4 (of 26, so about 15%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a small subset that can be useful for medium-sized"
+                    "experiments, and should be quite representative of the full dataset's distribution."
+                ),
+                config={
+                    "lmdb_paths": taco_10s10t_v1_paths[0:4],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            taco_10s10t_v1_part1_config := pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_10s10t_v1_part1",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset consisting of the first part (of 26, so about 3.8%) of the "
+                    "PyINE-TACO 10s10t v1 trace dataset. This is a much smaller subset than the full "
+                    "dataset, but should be fairly representative of the full dataset's distribution, "
+                    "and therefore useful for smaller-scale experiments."
+                ),
+                config={
+                    "lmdb_paths": [taco_10s10t_v1_paths[0]],
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_config.config,),
+                },
+            )
+        )
+        outputs.append(
+            pyine.configs.utils.make_config_description(
+                datamodule_config_type,
+                name="TACO_10s10t_v1_part1_20s",
+                group=datamodule_base_config.group,
+                description=(
+                    "Specifies a subset of the first part of the PyINE-TACO 10s10t v1 trace dataset, "
+                    "with a maximum of 20 solutions per trace. Useful for quick experiments, testing, "
+                    "and demos. Should not be used for anything serious."
+                ),
+                config={
+                    "lmdb_paths": [taco_10s10t_v1_paths[0]],
+                    "split_file_path": taco_split_path,
+                    "max_solution_count": 20,  # cap off the dataset size for quick experiments (across each subset)
+                    # -------------
+                    "builds_bases": (taco_10s10t_v1_part1_config.config,),
+                },
+            )
+        )
+
+    return outputs

@@ -27,15 +27,12 @@ import enum
 import logging
 import typing
 
-import omegaconf
 import pydantic
 
 import pyine.configs.schemas
-import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.datamodules.base
-import pyine.organisms.datamodules.samples
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +177,7 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
         super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
         return self
 
+    @typing.override
     def _get_parent_subset_name(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
@@ -195,93 +193,9 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
         return subset_name
 
     @typing.override
-    def _resolve_dataparser_config(
-        self,
-        subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.samples.SampleBuilderConfig:
-        """Returns the data parser configuration for the given subset name.
-
-        For derived keyword-split subsets (e.g., valid_with_keyword), inherits overrides
-        from the parent eval subset (e.g., valid) if no specific override is defined.
-        """
-        if subset_name not in self.subset_names:
-            raise ValueError(f"invalid subset name: {subset_name}, expected one of: {self.subset_names}")
-        parser_config = self.default_dataparser_config
-        if isinstance(parser_config, dict):
-            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig.model_validate(parser_config)
-        else:
-            assert isinstance(parser_config, pyine.data.datamodule.BaseDataParserConfig)
-            parser_config = pyine.organisms.datamodules.samples.SampleBuilderConfig(
-                class_path=parser_config.class_path,
-                params=parser_config.params,
-            )
-        assert isinstance(parser_config, pyine.organisms.datamodules.samples.SampleBuilderConfig)
-        # check for overrides: first try direct subset name, then fall back to parent
-        override_key = subset_name
-        if override_key not in self.dataparser_config_overrides:
-            override_key = self._get_parent_subset_name(subset_name)
-        if override_key in self.dataparser_config_overrides and self.dataparser_config_overrides[override_key]:
-            config_overrides = self.dataparser_config_overrides[override_key]
-            assert isinstance(config_overrides, dict)
-            parser_config = parser_config.get_updated_spec(**config_overrides)
-        special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
-        if special_subset_overrides:
-            parser_config = parser_config.get_updated_spec(**special_subset_overrides)
-        return parser_config
-
-    @typing.override
-    def _resolve_dataloader_config(
-        self,
-        loader_name: pyine.data.datamodule.LoaderNameType,
-    ) -> pyine.data.datamodule.BaseDataLoaderConfig:
-        """Returns the data loader configuration for the given loader name.
-
-        For derived keyword-split loaders, inherits overrides from the parent eval subset.
-        """
-        if loader_name not in self.loader_names:
-            raise ValueError(f"invalid loader name: {loader_name}, expected one of: {self.loader_names}")
-        loader_config: pyine.data.datamodule.BaseDataLoaderConfig = self.default_dataloader_config
-        # check for overrides: first try direct loader name, then fall back to parent
-        override_key = loader_name
-        if override_key not in self.dataloader_config_overrides:
-            override_key = self._get_parent_subset_name(loader_name)
-        if override_key in self.dataloader_config_overrides:
-            return loader_config.get_updated_spec(**self.dataloader_config_overrides[override_key])
-        return loader_config
-
-    @typing.override
     def _get_cache_subdirectory_name(self) -> str:
         """Return the cache subdirectory name for this bias datamodule type."""
         return "keywords"
-
-
-def _get_default_sample_builder_config(seed: typing.Any) -> dict[str, typing.Any]:
-    """Returns the default kwargs for SampleBuilder instantiation."""
-    return {
-        "seed": seed,
-        "filtering_config": {},
-        "selection_config": {
-            "seed": seed,
-        },
-        "transform_config": {
-            "transform_strategy": "never",
-        },
-    }
-
-
-def _get_default_sample_builder_overrides_for_subset(subset_name: str) -> dict[str, typing.Any]:
-    """Returns default overrides for the sample builder config to be used for a given subset."""
-    if subset_name == "train":
-        return {
-            "filtering_config": {},
-            "selection_config": {
-                "seed": 0,
-            },
-            "transform_config": {
-                "transform_strategy": "never",
-            },
-        }
-    return {}
 
 
 @typing.overload
@@ -290,6 +204,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool,
     as_pydantic: typing.Literal[True],
 ) -> KeywordBiasDataModuleConfig: ...
 
@@ -300,6 +215,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool = False,
     as_pydantic: typing.Literal[False] = False,
 ) -> dict[str, typing.Any]: ...
 
@@ -309,6 +225,7 @@ def get_datamodule_config(
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
+    use_hybrid_sample_transforms: bool = False,
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | KeywordBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate keyword bias datamodule configs.
@@ -317,36 +234,26 @@ def get_datamodule_config(
         lmdb_paths: Paths to LMDB datasets containing execution traces.
         split_file_path: Path to the problem split file.
         seed: Random seed for reproducibility.
+        use_hybrid_sample_transforms: If True, use hybrid transforms (for full+partial samples).
         as_pydantic: If True, return a validated KeywordBiasDataModuleConfig instance.
 
     Returns:
         Config dict or validated pydantic model.
-    """
-    import pyine.organisms.datamodules.base as datamodules_base
-    import pyine.organisms.datamodules.samples
-    import pyine.utils.portability
 
-    default_subsets = datamodules_base.get_default_subset_names()
-    config_kwargs: dict[str, typing.Any] = {
-        "lmdb_paths": lmdb_paths,
-        "split_file_path": split_file_path,
-        "split_seed": seed,
-        "default_dataparser_config": {
-            "class_path": pyine.utils.portability.get_fully_qualified_name(
-                pyine.organisms.datamodules.samples.SampleBuilder
-            ),
-            "params": _get_default_sample_builder_config(seed=seed),
-        },
-        "dataparser_config_overrides": {
-            subset: _get_default_sample_builder_overrides_for_subset(subset_name=subset) for subset in default_subsets
-        },
-        "dataloader_config_overrides": {
-            "train": {"shuffle": True},
-        },
-    }
-    if as_pydantic:
-        return KeywordBiasDataModuleConfig.model_validate(config_kwargs)
-    return config_kwargs
+    Note:
+        The keywords datamodule does not rely on code type selection (allow_db_lookups=False).
+        Keyword injection/removal is performed using a parser wrapper, not code type selection.
+    """
+    return pyine.organisms.datamodules.base.make_bias_datamodule_config(
+        config_class=KeywordBiasDataModuleConfig,
+        lmdb_paths=lmdb_paths,
+        split_file_path=split_file_path,
+        seed=seed,
+        sample_builder_config_kwargs={"allow_db_lookups": False},  # keywords uses parser wrapper, not code type
+        training_selection_config=None,  # inherits from default config
+        use_hybrid_sample_transforms=use_hybrid_sample_transforms,
+        as_pydantic=as_pydantic,
+    )
 
 
 def get_configs(
@@ -362,9 +269,9 @@ def get_configs(
         pipelines that measure accuracy gaps between with-keyword and without-keyword conditions.
 
         To use keyword-split subsets for evaluation, either:
-        1. Use custom evaluation scripts that iterate over the split subsets via `get_parser()`
+        1. Use custom evaluation scripts that iterate over the split subsets via `get_parser()`;
         2. Use `get_hf_messages_dataset("valid_with_keyword")` which properly applies keyword
-           injection/refactoring for counterfactual evaluation
+           injection/refactoring for counterfactual evaluations.
 
     Args:
         eval_type: The evaluation type (only CODE_EXEC is supported).
@@ -373,25 +280,10 @@ def get_configs(
     Returns:
         List of config descriptions for hydra zen registration.
     """
-    if eval_type != pyine.evals.common.EvalType.CODE_EXEC:
-        raise NotImplementedError(f"unsupported eval type for keywords datamodule: {eval_type}")
-    keywords_dm_base_config = pyine.configs.utils.make_config_description(
-        KeywordBiasDataModuleConfig,
-        name="base",
+    return pyine.organisms.datamodules.base.make_bias_datamodule_hydra_configs(
+        config_class=KeywordBiasDataModuleConfig,
+        eval_type=eval_type,
         group=group,
-        description=(
-            "Base keyword bias datamodule settings. Note: standard trainer apps use only base "
-            "subsets (train/valid); keyword-split eval subsets are for specialized bias evaluation."
-        ),
-        config={
-            **get_datamodule_config(
-                lmdb_paths=omegaconf.MISSING,
-                split_file_path=omegaconf.MISSING,
-                seed="${runtime.seed}",
-                as_pydantic=False,
-            ),
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
+        module_name="keywords",
+        datamodule_config_factory=get_datamodule_config,
     )
-    return [keywords_dm_base_config]

@@ -35,6 +35,13 @@ class ShortcutBiasDataModule(
         return pyine.data.traces.dataset_utils.TraceDatasetMetadata
 
     @typing.override
+    def _get_subset_suffixes(self) -> tuple[str, ...]:
+        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
+        from pyine.organisms.datamodules.samples import get_all_supported_code_type_sets_suffixes
+
+        return tuple(get_all_supported_code_type_sets_suffixes())
+
+    @typing.override
     def _prepare_bias_specific_metadata(
         self,
         base_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],

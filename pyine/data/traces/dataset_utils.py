@@ -38,6 +38,9 @@ __all__ = [
     "Solution",
     "ProblemIdPattern",
     "CodingProblemIterator",
+    "DerivedSubsetInfo",
+    "TraceDatasetMetadata",
+    "TraceMetadata",
     "get_latest_dataset_path",
     "get_matching_dataset_paths",
     "get_new_dataset_path",
@@ -653,6 +656,24 @@ class TraceMetadata:
         return self.trace_id.is_augmented
 
 
+class DerivedSubsetInfo[TraceMetaT](pydantic.BaseModel):
+    """Information about a derived subset that is linked to a parent subset.
+
+    Derived subsets are virtual subsets created by filtering or transforming traces from a parent
+    subset. They allow the same traces to appear in multiple related derived subsets (e.g., for
+    counterfactual evaluation) without violating the primary subset's mutual exclusivity constraints.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    parent_subset: str
+    """Name of the parent subset this derived subset is based on."""
+    traces: list[TraceMetaT]
+    """List of traces in this derived subset (must be a subset of parent's traces)."""
+    derivation_type: str
+    """Type of derivation applied (e.g., 'keyword_filter', 'counterfactual')."""
+
+
 class TraceDatasetMetadata(pydantic.BaseModel):
     """Metadata structure for a trace dataset, to be used for lookups and to cache as prepared data."""
 
@@ -663,6 +684,8 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     """List of withheld traces across all parsed datasets."""
     subset_traces: dict[str, list[TraceMetadata]]
     """List of withheld traces for each subset identifier (str)."""
+    derived_subsets: dict[str, DerivedSubsetInfo[TraceMetadata]] = {}
+    """Derived subsets that are linked to parent subsets (e.g., keyword-filtered eval splits)."""
     leftover_traces: list[TraceMetadata]
     """List of leftover traces still unassigned after subset filtering and leftover split."""
     problem_assignments: dict[str, str]
@@ -692,7 +715,10 @@ class TraceDatasetMetadata(pydantic.BaseModel):
         for trace_meta in self.leftover_traces:
             if trace_meta.trace_id not in seen_trace_ids:
                 raise ValueError(f"trace id {trace_meta.trace_id} is not in the base traces")
+        # build a map of parent subset trace IDs for derived subset validation
+        parent_subset_trace_ids: dict[str, set[TraceIdentifier]] = {}
         for subset_name, subset_traces in self.subset_traces.items():
+            parent_subset_trace_ids[subset_name] = set()
             for trace_meta in subset_traces:
                 if trace_meta.trace_id not in seen_trace_ids:
                     raise ValueError(f"trace id {trace_meta.trace_id} from {subset_name} is not in the base traces")
@@ -703,7 +729,62 @@ class TraceDatasetMetadata(pydantic.BaseModel):
                     raise ValueError(f"problem id {problem_id_str} has no corresponding problem assignment")
                 if self.problem_assignments[problem_id_str] != subset_name:
                     raise ValueError(f"problem id {problem_id_str} has incorrect assignment")
+                parent_subset_trace_ids[subset_name].add(trace_meta.trace_id)
+        # validate derived subsets: traces must exist in parent subset, but can overlap between derived subsets
+        for derived_name, derived_info in self.derived_subsets.items():
+            if derived_info.parent_subset not in self.subset_traces:
+                raise ValueError(
+                    f"derived subset '{derived_name}' references non-existent parent '{derived_info.parent_subset}'"
+                )
+            parent_trace_ids = parent_subset_trace_ids[derived_info.parent_subset]
+            for trace_meta in derived_info.traces:
+                if trace_meta.trace_id not in parent_trace_ids:
+                    raise ValueError(
+                        f"trace id {trace_meta.trace_id} in derived subset '{derived_name}' "
+                        f"is not in parent subset '{derived_info.parent_subset}'"
+                    )
         return self
+
+    def get_all_subset_names(self) -> list[str]:
+        """Return all subset names, including both primary and derived subsets."""
+        return list(self.subset_traces.keys()) + list(self.derived_subsets.keys())
+
+    def get_subset_traces(
+        self,
+        subset_name: str,
+    ) -> list[TraceMetadata]:
+        """Return traces for a given subset name (primary or derived).
+
+        Args:
+            subset_name: Name of the subset to retrieve traces for.
+
+        Returns:
+            List of trace metadata for the specified subset.
+
+        Raises:
+            KeyError: If the subset name is not found in primary or derived subsets.
+        """
+        if subset_name in self.subset_traces:
+            return self.subset_traces[subset_name]
+        if subset_name in self.derived_subsets:
+            return self.derived_subsets[subset_name].traces
+        raise KeyError(f"subset '{subset_name}' not found in primary or derived subsets")
+
+    def is_derived_subset(
+        self,
+        subset_name: str,
+    ) -> bool:
+        """Check if a subset name refers to a derived subset."""
+        return subset_name in self.derived_subsets
+
+    def get_parent_subset_name(
+        self,
+        derived_subset_name: str,
+    ) -> str | None:
+        """Return the parent subset name for a derived subset, or None if not derived."""
+        if derived_subset_name in self.derived_subsets:
+            return self.derived_subsets[derived_subset_name].parent_subset
+        return None
 
 
 class CodingProblemIterator:
