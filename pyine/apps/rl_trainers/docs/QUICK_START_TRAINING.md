@@ -100,7 +100,7 @@ config = ExperimentConfig(
     data=DataConfig(
         use_datamodule=True,
         datamodule_config_path="pyine/apps/rl_trainers/configs/my_grpo_training.yaml",
-        train_subset_name="train",
+        dataset_split_train="train",
         max_samples=100,  # Start small
     ),
 
@@ -115,6 +115,8 @@ config = ExperimentConfig(
         num_generations=4,  # Generate 4 samples per prompt for GRPO
         max_completion_length=256,
         temperature=1.0,  # Default sampling temperature
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        use_vllm=False,  # Set to True to use vLLM for faster inference (requires setup)
     ),
 )
 ```
@@ -124,6 +126,10 @@ config = ExperimentConfig(
 - Adjust `max_samples` for more/less data
 - Increase `num_generations` for better exploration (but higher compute cost)
 - Set `use_wandb=False` if not using Weights & Biases
+- Set `bf16=False` if your GPU doesn't support bfloat16
+- Update `datamodule_config_path` to match your generated config file name
+
+**Note:** The default config in `train_grpo.py` uses `grpo_training.yaml`, but this guide shows creating `my_grpo_training.yaml`. Make sure the path matches your actual config file.
 
 ### Step 4: Run Training
 
@@ -135,7 +141,7 @@ python -m pyine.apps.rl_trainers.train_grpo
 1. Loads model and applies LoRA adapters
 2. Loads datamodule and prepares GRPO dataset
 3. Formats prompts using `grpo_minimal` template
-4. Starts GRPO training with length-based reward function
+4. Starts GRPO training with code execution accuracy reward (hard matching: 1.0 for exact match, 0.0 otherwise)
 5. Saves checkpoints to `./grpo_output/`
 
 **Expected console output:**
@@ -147,9 +153,19 @@ python -m pyine.apps.rl_trainers.train_grpo
 2025-12-09 15:30:20 - INFO - Loading prompt template version: grpo_minimal
 2025-12-09 15:30:25 - INFO - Extracted and formatted 100 samples from train
 2025-12-09 15:30:30 - INFO - Training dataset size: 100
+2025-12-09 15:30:35 - INFO - Setting up code execution reward function (hard matching only)
 2025-12-09 15:30:35 - INFO - Initializing GRPO trainer...
 2025-12-09 15:30:40 - INFO - Starting training...
 ```
+
+**Understanding the Reward Function:**
+The training uses a **code execution accuracy reward** with hard matching:
+- The model generates predictions for code execution outcomes
+- Each prediction is compared to the expected output (exact string match after stripping whitespace)
+- **Reward = 1.0** if the prediction exactly matches the expected output
+- **Reward = 0.0** if the prediction doesn't match
+- This binary reward optimizes the model to produce correct code execution predictions
+- Configuration in `train_grpo.py:272-279`: `strip_hard_checks=True`, `enable_soft_match=False`
 
 ### Step 5: Monitor Training
 
@@ -165,11 +181,12 @@ python -m pyine.apps.rl_trainers.train_grpo
 - View console output for periodic metrics
 
 **Key metrics to watch:**
-- **Reward Mean**: Should increase if model is learning
-  - Start: ~0.2-0.3 (random short completions)
-  - Target: >0.5 after a few hundred steps
+- **Reward Mean**: Should increase if model is learning to predict correctly
+  - Start: ~0.0-0.1 (mostly incorrect predictions)
+  - Target: >0.3-0.5 after a few hundred steps (30-50% accuracy)
+  - Note: This is a binary reward (1.0 or 0.0), so mean reward = accuracy
 - **Loss**: Should decrease steadily
-- **Completion Length**: Average should increase (due to length-based reward)
+- **Reward Std**: Indicates diversity in outcomes (will be high initially, may stabilize)
 
 ### Step 6: Evaluate Results
 
@@ -220,7 +237,7 @@ config = ExperimentConfig(
     data=DataConfig(
         use_datamodule=True,
         datamodule_config_path="pyine/apps/rl_trainers/configs/my_grpo_training.yaml",
-        train_subset_name="train",
+        dataset_split_train="train",
         max_samples=100,
     ),
 
@@ -235,6 +252,7 @@ config = ExperimentConfig(
         num_generations=4,
         max_completion_length=256,
         temperature=1.0,
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         use_vllm=True,  # Enable vLLM inference
     ),
 )
@@ -390,7 +408,11 @@ python -m pyine.apps.rl_trainers.inspect_prompts \
     --subset train \
     --num-samples 5
 
-# 3. Run training
+# 3. Update train_grpo.py to use your config file
+# Edit the datamodule_config_path in train_grpo.py to point to:
+# "pyine/apps/rl_trainers/configs/my_grpo_training.yaml"
+
+# 4. Run training
 python -m pyine.apps.rl_trainers.train_grpo
 ```
 
