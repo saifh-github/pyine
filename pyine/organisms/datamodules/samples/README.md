@@ -7,10 +7,10 @@ traces from LMDB datasets into trace samples suitable for training/evaluating mo
 produced here are designed to be reusable across different data generation pipelines and data
 loaders.
 
-Currently, the primary consumer of this package is the `ShortcutBiasDataModule` (defined in
-`pyine.organisms.datamodules.shortcuts`), which uses it to prepare code execution prediction
-samples for training and evaluation. Future data modules may also leverage this package to ensure
-consistency in sample generation.
+Currently, the primary consumers of this package are the `KeywordBiasDataModule` and the
+`ShortcutBiasDataModule`, which use it to prepare code execution prediction samples for model
+training and evaluation. Future data modules may also leverage this package to ensure consistency
+in sample generation.
 
 ## Package Structure
 

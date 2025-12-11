@@ -186,7 +186,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
         )
         selected_traces = self.selection_results.get_selected_traces()
         logger.info(
-            f"sample selection: picked {len(self.selection_results)} samplesacross {len(selected_traces)} traces"
+            f"sample selection: picked {len(self.selection_results)} samples across {len(selected_traces)} traces"
         )
         logger.debug(
             f"{self.selection_results.samples_with_full_trace_support} with full trace support,"
@@ -214,8 +214,10 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             pyine.data.traces.dataset_utils.SolutionIdentifier,
             str,
         ] = {}
+        checked_solution_ids: set[pyine.data.traces.dataset_utils.SolutionIdentifier] = set()
         for trace_meta in traces:
-            if trace_meta.solution_id not in code_summaries_lut:
+            if trace_meta.solution_id not in checked_solution_ids:
+                checked_solution_ids.add(trace_meta.solution_id)
                 records = prompt_result_db.get_by_identifier(
                     identifier=str(trace_meta.solution_id),
                     prompt_name=pyine.prompts.names.PromptNames.CODE_SUMMARY,
@@ -223,7 +225,9 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                 if records:
                     # always take the latest summary that's available in the database
                     code_summaries_lut[trace_meta.solution_id] = records[-1].result
-        logger.debug(f"found {len(code_summaries_lut)} code summaries in prompt result db")
+        total_solutions = len(checked_solution_ids)
+        found_summaries = len(code_summaries_lut)
+        logger.debug(f"found {found_summaries}/{total_solutions} code summaries in prompt result db")
         return code_summaries_lut
 
     def get_stats(self) -> dict[str, int | float | str]:

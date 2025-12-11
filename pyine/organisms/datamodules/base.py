@@ -248,6 +248,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         config: ConfigType,
         verbose: bool = False,
     ) -> None:
+        """Initializes a new BiasDataModuleBase instance."""
         super().__init__(config)
         self.verbose = verbose
         self._metadata = None
