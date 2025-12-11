@@ -23,18 +23,13 @@ __all__ = [
     "KeywordInjector",
     "KeywordRefactorer",
     "SampleKeywordManipulatorWrapper",
+    "has_keyword",
+    "is_builtin_or_reserved",
 ]
-
-DEFAULT_KEYWORD_REPLACEMENT = "__kwrepl"
-"""Default replacement identifier for KeywordRefactorer; reserved internally for this purpose."""
 
 
 class KeywordDetector(pydantic.BaseModel):
-    """Detect keyword presence in code via case-insensitive regex matching.
-
-    Note: this class should be used for quick/simple prototyping, debugging, and lookups, but
-    likely not for dataset generation, as it is not so efficient to search keyword-by-keyword...
-    """
+    """Detect keyword presence in code via case-insensitive regex matching."""
 
     model_config = pydantic.ConfigDict(frozen=True)
 
@@ -44,10 +39,8 @@ class KeywordDetector(pydantic.BaseModel):
     @pydantic.field_validator("keyword")
     @classmethod
     def _validate_keyword(cls, keyword: str) -> str:
-        """Validate that keyword is non-empty and a valid identifier."""
-        if not keyword:
-            raise ValueError("keyword must be non-empty")
-        if not keyword.isidentifier():
+        """Validate that the keyword is non-empty and a valid identifier."""
+        if not keyword or not keyword.isidentifier():
             raise ValueError(f"keyword must be a valid Python identifier: {keyword}")
         return keyword
 
@@ -60,7 +53,7 @@ class KeywordDetector(pydantic.BaseModel):
         Returns:
             True if the keyword is found as a whole word in the code.
         """
-        return _has_keyword(self.keyword, code)
+        return has_keyword(self.keyword, code)
 
 
 class KeywordInjector(pydantic.BaseModel):
@@ -80,10 +73,8 @@ class KeywordInjector(pydantic.BaseModel):
     @pydantic.field_validator("keyword")
     @classmethod
     def _validate_keyword(cls, keyword: str) -> str:
-        """Validate that keyword is non-empty and a valid identifier."""
-        if not keyword:
-            raise ValueError("keyword must be non-empty")
-        if not keyword.isidentifier():
+        """Validate that the keyword is non-empty and a valid identifier."""
+        if not keyword or not keyword.isidentifier():
             raise ValueError(f"keyword must be a valid Python identifier: {keyword}")
         return keyword
 
@@ -96,7 +87,7 @@ class KeywordInjector(pydantic.BaseModel):
         Returns:
             True if the keyword is found as a whole word in the code.
         """
-        return _has_keyword(self.keyword, code)
+        return has_keyword(self.keyword, code)
 
     def inject(
         self,
@@ -110,7 +101,7 @@ class KeywordInjector(pydantic.BaseModel):
         comment. Otherwise, appends the comment to the end of the line.
 
         Args:
-            code: The Python source code to modify.
+            code: The Python source code to potentially modify.
             rng: Optional random number generator to use for line selection.
 
         Returns:
@@ -135,51 +126,47 @@ class KeywordInjector(pydantic.BaseModel):
 
 
 class KeywordRefactorer(pydantic.BaseModel):
-    """Refactor code by replacing a keyword with an arbitrary replacement identifier.
+    """Refactor code by replacing a keyword with an arbitrary replacement.
 
-    This is useful for counterfactual evaluation: given code that naturally contains a keyword,
-    we can replace it with a neutral identifier to create a "without keyword" version. The
-    replacement is case-sensitive and only replaces whole-word matches.
+    This is useful for counterfactual evaluations: given code that naturally contains a keyword,
+    we can replace it with a neutral identifier to create a "without keyword" version of the code.
+    The replacement replaces whole-word matches, with case preservation.
 
     The refactorer validates that the source keyword is not a Python builtin or reserved
-    identifier (since those cannot be safely renamed without breaking the code).
+    identifier (since those cannot be safely renamed without breaking the code). The outcome of
+    refactoring should be code that still executes the same was as before (maybe using differently
+    named identifiers).
+
+    NOTE: using this 'dumb' refactoring approach will essentially obfuscate the code a little bit,
+    but it is difficult to do better without a MUCH more complex refactoring approach.
     """
 
     model_config = pydantic.ConfigDict(frozen=True)
 
     keyword: str
     """The keyword to find and replace in code snippets."""
-    replacement: str = DEFAULT_KEYWORD_REPLACEMENT
-    """The replacement identifier to substitute for the keyword."""
 
     @pydantic.field_validator("keyword")
     @classmethod
     def _validate_keyword(cls, keyword: str) -> str:
         """Validate that keyword is non-empty, a valid identifier, and not a builtin/reserved."""
-        if not keyword:
-            raise ValueError("keyword must be non-empty")
-        if not keyword.isidentifier():
+        if not keyword or not keyword.isidentifier():
             raise ValueError(f"keyword must be a valid Python identifier: {keyword}")
-        if _is_builtin_or_reserved(keyword):
+        if is_builtin_or_reserved(keyword):
             raise ValueError(
                 f"keyword '{keyword}' is a Python builtin or reserved identifier and cannot be safely refactored"
             )
         return keyword
 
-    @pydantic.field_validator("replacement")
-    @classmethod
-    def _validate_replacement(cls, replacement: str) -> str:
-        """Validate that replacement is non-empty and a valid identifier."""
-        if not replacement:
-            raise ValueError("replacement must be non-empty")
-        if not replacement.isidentifier():
-            raise ValueError(f"replacement must be a valid Python identifier: {replacement}")
-        return replacement
+    @property
+    def replacement_template(self) -> str:
+        """Returns the default keyword replacement template (i.e. pre-case-matched identifier)."""
+        return _generate_default_replacement(self.keyword)
 
     @pydantic.model_validator(mode="after")
-    def _validate_different(self) -> KeywordRefactorer:
-        """Validate that keyword and replacement are different."""
-        if self.keyword.lower() == self.replacement.lower():
+    def _validate_and_resolve(self) -> KeywordRefactorer:
+        """Validate keyword-replacement constraints."""
+        if self.keyword.lower() == self.replacement_template.lower():
             raise ValueError("keyword and replacement must be different (case-insensitive)")
         return self
 
@@ -192,27 +179,33 @@ class KeywordRefactorer(pydantic.BaseModel):
         Returns:
             True if the keyword is found as a whole word in the code.
         """
-        return _has_keyword(self.keyword, code)
+        return has_keyword(self.keyword, code)
 
     def refactor(self, code: str) -> str:
-        """Replace all occurrences of the keyword with the replacement identifier.
+        """Replace all occurrences of the keyword with replacement identifier(s).
 
-        The replacement is case-sensitive and matches whole words only. If the keyword
-        is not found in the code, returns the code unchanged.
+        Each keyword match is replaced with a case-preserved version of the replacement template
+        (e.g., if the keyword is "result" and replacement is "__kkkkkk", then "Result" becomes
+        "__Kkkkkk", "RESULT" becomes "__KKKKKK", and "result" becomes "__kkkkkk"). For mixed case
+        patterns, the case is applied character-by-character.
 
         Args:
             code: The Python source code to modify.
 
         Returns:
             The modified code with all keyword occurrences replaced.
+
+        Raises:
+            ValueError: If the replacement identifier already exists in the code.
         """
-        if _has_keyword(self.replacement, code):
-            raise ValueError(f"potential collision with replacement '{self.replacement}' in code string")
+        replacement = self.replacement_template
+        if has_keyword(replacement, code):
+            raise ValueError(f"potential collision with replacement '{replacement}' in code string")
         pattern = rf"\b{re.escape(self.keyword)}\b"
-        return re.sub(pattern, self.replacement, code)
+        return re.sub(pattern, lambda m: _match_case(m.group(), replacement), code, flags=re.IGNORECASE)
 
 
-def _is_builtin_or_reserved(name: str) -> bool:
+def is_builtin_or_reserved(name: str) -> bool:
     """Check if a name is a Python builtin or reserved identifier.
 
     Args:
@@ -224,7 +217,7 @@ def _is_builtin_or_reserved(name: str) -> bool:
     return keyword.iskeyword(name) or hasattr(builtins, name)
 
 
-def _has_keyword(kw: str, code: str) -> bool:
+def has_keyword(kw: str, code: str) -> bool:
     """Check if a keyword exists in code as a whole word (case-insensitive).
 
     Args:
@@ -236,6 +229,79 @@ def _has_keyword(kw: str, code: str) -> bool:
     """
     pattern = rf"\b{re.escape(kw)}\b"
     return re.search(pattern, code, flags=re.IGNORECASE) is not None
+
+
+def _generate_default_replacement(keyword: str) -> str:
+    """Generate a default replacement identifier based on keyword length.
+
+    The replacement uses the pattern `__` + repeated `k` characters matching the keyword length.
+    For example, keyword "hello" (length 5) becomes "__kkkkk".
+
+    Args:
+        keyword: The keyword being replaced.
+
+    Returns:
+        A replacement identifier string.
+    """
+    return "__" + "k" * len(keyword)
+
+
+def _match_case(source: str, replacement: str) -> str:
+    """Apply the case pattern of source to replacement.
+
+    Handles common patterns:
+    - all lowercase: "result" -> "powpow";
+    - all uppercase: "RESULT" -> "POWPOW";
+    - title case (first letter upper): "Result" -> "Powpow";
+    - mixed case: applies case character-by-character.
+
+    For mixed case, the replacement must have at least as many case-controllable (alphabetic)
+    characters as the source has alphabetic characters, otherwise a ValueError is raised.
+
+    Args:
+        source: The original matched string whose case pattern to mimic.
+        replacement: The replacement string to transform.
+
+    Returns:
+        The replacement string with case pattern matching the source.
+
+    Raises:
+        ValueError: If replacement has fewer case-controllable characters than source requires.
+    """
+    # count case-controllable (alphabetic) characters
+    source_alpha_count = sum(1 for c in source if c.isalpha())
+    replacement_alpha_count = sum(1 for c in replacement if c.isalpha())
+    if replacement_alpha_count < source_alpha_count:
+        raise ValueError(
+            f"replacement '{replacement}' has {replacement_alpha_count} case-controllable chars, "
+            f"but source '{source}' requires at least {source_alpha_count}"
+        )
+    # handle simple patterns first (all lowercase, all uppercase, title case)
+    if source.islower():
+        return replacement.lower()
+    if source.isupper():
+        return replacement.upper()
+    if len(source) >= 1 and source[0].isupper() and (len(source) == 1 or source[1:].islower()):
+        return replacement.capitalize()
+    # mixed case: apply character-by-character case mapping
+    # we map source alphabetic chars to replacement alphabetic chars in order
+    result_chars: list[str] = list(replacement)
+    source_alpha_idx = 0
+    for repl_idx, repl_char in enumerate(replacement):
+        if not repl_char.isalpha():
+            continue  # skip non-alphabetic replacement chars
+        # find next alphabetic char in source
+        while source_alpha_idx < len(source) and not source[source_alpha_idx].isalpha():
+            source_alpha_idx += 1
+        if source_alpha_idx >= len(source):
+            break  # no more source chars to match, keep remaining replacement chars as-is
+        src_char = source[source_alpha_idx]
+        if src_char.isupper():
+            result_chars[repl_idx] = repl_char.upper()
+        else:
+            result_chars[repl_idx] = repl_char.lower()
+        source_alpha_idx += 1
+    return "".join(result_chars)
 
 
 class SampleKeywordManipulatorWrapper:
@@ -253,7 +319,7 @@ class SampleKeywordManipulatorWrapper:
         self,
         wrapped_dataset: torch.utils.data.Dataset[pyine.organisms.datamodules.samples.common.SampleData],
         keyword: str,
-        expected_trace_ids_with_keyword: frozenset[str],
+        potential_trace_ids_with_keyword: frozenset[str],
         enable_injection: bool = False,
         enable_refactoring: bool = False,
         injector: KeywordInjector | None = None,
@@ -267,7 +333,7 @@ class SampleKeywordManipulatorWrapper:
         Args:
             wrapped_dataset: The underlying dataset (typically a SampleBuilder).
             keyword: The target keyword for bias detection.
-            expected_trace_ids_with_keyword: Set of trace identifiers that should naturally contain
+            potential_trace_ids_with_keyword: Set of trace identifiers that should naturally contain
                 the keyword; passed in for runtime validation purposes only.
             enable_injection: Whether to inject keywords into code that lacks them.
             enable_refactoring: Whether to remove the keyword from code that should not contain it.
@@ -280,7 +346,7 @@ class SampleKeywordManipulatorWrapper:
             raise ValueError("enable_injection and enable_refactoring are mutually exclusive")
         self._wrapped = wrapped_dataset
         self._keyword = keyword
-        self._expected_trace_ids_with_keyword = expected_trace_ids_with_keyword
+        self._potential_trace_ids_with_keyword = potential_trace_ids_with_keyword
         self._enable_injection = enable_injection
         if enable_injection and injector is None:
             injector = KeywordInjector(keyword=keyword)
@@ -308,12 +374,12 @@ class SampleKeywordManipulatorWrapper:
             SampleData with updated fields (if needed).
         """
         sample = self._wrapped[index]
-        has_keyword = _has_keyword(self._keyword, sample.code)
-        expected_keyword = sample.identifier in self._expected_trace_ids_with_keyword
-        assert has_keyword == expected_keyword, f"mismatched keyword expectation for sample {sample.identifier}"
+        sample_has_keyword = has_keyword(self._keyword, sample.code)
+        expected_keyword = sample.identifier in self._potential_trace_ids_with_keyword
+        assert sample_has_keyword == expected_keyword, f"mismatched keyword expectation for sample {sample.identifier}"
         new_base_tag = f"bias_keyword:{self._keyword}"
         tags = f"{sample.comma_separated_tags},{new_base_tag}" if sample.comma_separated_tags else new_base_tag
-        if not has_keyword and self._enable_injection:
+        if not sample_has_keyword and self._enable_injection:
             code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(index))
             tags += ",has_bias_keyword:1,keyword_injected:1"
             return sample._replace(
@@ -321,15 +387,15 @@ class SampleKeywordManipulatorWrapper:
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
-        if has_keyword and self._enable_refactoring:
+        if sample_has_keyword and self._enable_refactoring:
             code = self._refactorer.refactor(sample.code)
-            tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{self._refactorer.replacement}"
+            tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{self._refactorer.replacement_template}"
             return sample._replace(
                 code=code,
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
-        tags += f",has_bias_keyword:{int(has_keyword)}"
+        tags += f",has_bias_keyword:{int(sample_has_keyword)}"
         return sample._replace(comma_separated_tags=tags)
 
     @property
@@ -355,7 +421,7 @@ class SampleKeywordManipulatorWrapper:
         if hasattr(self._wrapped, "get_stats"):
             wrapped_stats = self._wrapped.get_stats()  # type: ignore[union-attr]
             stats = typing.cast("dict[str, int | float | str]", wrapped_stats)
-        stats["expected_traces_with_keyword"] = len(self._expected_trace_ids_with_keyword)
+        stats["potential_traces_with_keyword"] = len(self._potential_trace_ids_with_keyword)
         return stats
 
     def _get_rng_for_injection(self, sample_idx: int) -> np.random.Generator:

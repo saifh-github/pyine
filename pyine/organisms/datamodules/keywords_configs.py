@@ -117,6 +117,20 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
     default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig]
     """Default trace parser configuration."""
 
+    # --------------- TRACE FILTERING CONFIGURATION ---------------
+
+    exclude_augmented_traces: bool = True
+    """If True, exclude all augmented traces (obfuscated, bugged, hinted, etc.) from the dataset.
+
+    When enabled, only original (non-augmented) traces are used for keyword detection, sample
+    generation, and all data subsets. This is useful for experiments that require clean, unmodified
+    code without any synthetic augmentations.
+
+    Note: This setting is combined with the `base_filter_rule` from the parent config. If you need
+    more fine-grained control over which augmentation types to exclude, use `base_filter_rule`
+    directly with patterns like `-augment:obfuscated` or `-augment:bugged`.
+    """
+
     # --------------- KEYWORD SELECTION CONFIGURATION ---------------
 
     keyword: str | None = None
@@ -173,6 +187,14 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
             if without_kw not in extended_names:
                 extended_names.append(without_kw)
         object.__setattr__(self, "subset_names", tuple(extended_names))
+        # if exclude_augmented_traces is set, combine it with base_filter_rule
+        if self.exclude_augmented_traces:
+            augment_filter = "-augment:*"
+            if self.base_filter_rule:
+                combined_rule = f"{self.base_filter_rule} {augment_filter}"
+            else:
+                combined_rule = augment_filter
+            object.__setattr__(self, "base_filter_rule", combined_rule)
         # now call parent validation (which resolves parser/loader configs)
         super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
         return self

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
-import keyword
 import logging
 import os
 import pathlib  # noqa: TC003
@@ -301,7 +299,9 @@ class KeywordBiasDataModule(
                 continue
             if cluster.keyword.lower() in banned_keywords_lower:
                 continue
-            if config.must_be_non_builtin and _is_builtin_identifier(cluster.keyword):
+            if config.must_be_non_builtin and pyine.organisms.datamodules.samples.keyword_ops.is_builtin_or_reserved(
+                cluster.keyword
+            ):
                 continue
             filtered_clusters.append(cluster)
         if not filtered_clusters:
@@ -321,7 +321,9 @@ class KeywordBiasDataModule(
             f"selected keyword '{selected_cluster.keyword}' from {len(filtered_clusters)} "
             f"filtered clusters (out of {len(clusters)} total)"
         )
-        return selected_cluster.keyword, frozenset(selected_cluster.trace_ids)
+        selected_cluster_traces = frozenset(selected_cluster.trace_ids)
+        assert len(selected_cluster.trace_ids) == len(selected_cluster.trace_ids), "some non-unique trace IDs?"
+        return selected_cluster.keyword, selected_cluster_traces
 
     def _find_traces_with_keyword(
         self,
@@ -372,7 +374,12 @@ class KeywordBiasDataModule(
             trace_ids = self._find_traces_with_keyword(traces, self.config.keyword)
             return self.config.keyword, trace_ids, None
         clusters, cache_path = self._get_or_compute_clusters(traces)
-        selected_keyword, trace_ids = self._filter_and_select_keyword(clusters)
+        selected_keyword, ast_matched_cluster_trace_ids = self._filter_and_select_keyword(clusters)
+        # re-scan traces using regex-based case-insensitive matching for consistency with the rest
+        # of the datamodule (the AST-based clusters only find exact case-sensitive definitions)
+        logger.info(f"re-scanning {len(traces)} traces for auto-selected keyword '{selected_keyword}'...")
+        trace_ids = self._find_traces_with_keyword(traces, selected_keyword)
+        assert ast_matched_cluster_trace_ids.issubset(trace_ids), "some traces with AST-matched keyword not found?"
         return selected_keyword, trace_ids, cache_path
 
     def _rebalance_train_subset_keyword_ratio(
@@ -690,19 +697,22 @@ class KeywordBiasDataModule(
             self.config.evaluation_strategy == EvaluationStrategy.counterfactual
             and subset_name.endswith("_without_keyword")
         )
+        potential_trace_ids_with_keyword = frozenset(
+            t.identifier for t in base_parser.orig_traces if t.identifier in self._metadata.trace_ids_with_keyword
+        )
         return pyine.organisms.datamodules.samples.keyword_ops.SampleKeywordManipulatorWrapper(
             wrapped_dataset=base_parser,
             keyword=self._metadata.keyword,
-            expected_trace_ids_with_keyword=self._metadata.trace_ids_with_keyword,
+            potential_trace_ids_with_keyword=potential_trace_ids_with_keyword,
             enable_injection=enable_injection,
             enable_refactoring=enable_refactoring,
         )  # type: ignore[return-value]
 
     @property
-    def keyword(self) -> str | None:
-        """Return the keyword used for bias experiments, if metadata is loaded."""
+    def keyword(self) -> str:
+        """Return the keyword used for bias experiments, if metadata is aleady loaded."""
         if self._metadata is None:
-            return None
+            raise RuntimeError("metadata not yet loaded, call `setup()` first")
         assert isinstance(self._metadata, KeywordTraceDatasetMetadata)
         return self._metadata.keyword
 
@@ -857,8 +867,3 @@ class KeywordBiasDataModule(
         local_output_path = openai_local_data_dir / dataset_file_name
         pyine.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
-
-
-def _is_builtin_identifier(name: str) -> bool:
-    """Check if a name is a Python builtin identifier."""
-    return keyword.iskeyword(name) or hasattr(builtins, name)
