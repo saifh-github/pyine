@@ -47,6 +47,12 @@ class TraceFilteringResults:
     """Number of traces that were filtered out because they exceeded the maximum input/output length."""
     filtered_by_trace_family_cap: int
     """Number of traces that were filtered out because the dataset size exceeded the maximum allowed."""
+    filtered_by_traces_per_family_cap: int
+    """Number of traces filtered out because the family exceeded the per-family trace cap."""
+    filtered_by_traces_per_solution_cap: int
+    """Number of traces filtered out because the solution exceeded the per-solution trace cap."""
+    filtered_by_traces_per_problem_cap: int
+    """Number of traces filtered out because the problem exceeded the per-problem trace cap."""
 
     @property
     def orig_trace_count(self) -> int:
@@ -80,11 +86,17 @@ class TraceFilteringResults:
         assert 0 <= self.filtered_by_code_length <= self.filtered_trace_count
         assert 0 <= self.filtered_by_var_length <= self.filtered_trace_count
         assert 0 <= self.filtered_by_trace_family_cap <= self.filtered_trace_count
+        assert 0 <= self.filtered_by_traces_per_family_cap <= self.filtered_trace_count
+        assert 0 <= self.filtered_by_traces_per_solution_cap <= self.filtered_trace_count
+        assert 0 <= self.filtered_by_traces_per_problem_cap <= self.filtered_trace_count
         filtered_sum = (
             self.filtered_by_step_count
             + self.filtered_by_code_length
             + self.filtered_by_var_length
             + self.filtered_by_trace_family_cap
+            + self.filtered_by_traces_per_family_cap
+            + self.filtered_by_traces_per_solution_cap
+            + self.filtered_by_traces_per_problem_cap
         )
         assert filtered_sum == self.filtered_trace_count
         if self.filtering_config.max_trace_families is not None:
@@ -160,9 +172,14 @@ def filter_traces(
             filtered_by_code_length=0,
             filtered_by_var_length=0,
             filtered_by_trace_family_cap=0,
+            filtered_by_traces_per_family_cap=0,
+            filtered_by_traces_per_solution_cap=0,
+            filtered_by_traces_per_problem_cap=0,
         )
 
     rng = filtering_config.get_rng(epoch)
+
+    # step 0: get rid of all traces that individually do not meet the filtering criteria
     filtered_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
     filtered_by_step_count = 0
     filtered_by_code_length = 0
@@ -196,6 +213,85 @@ def filter_traces(
     for trace_meta in filtered_traces:
         trace_families[trace_meta.trace_id.get_augmentless_identifier()].append(trace_meta)
 
+    # step 1: per-family capping (random selection within each family)
+    filtered_by_traces_per_family_cap: int = 0
+    if filtering_config.max_traces_per_family is not None:
+        for parent_id, family_traces in list(trace_families.items()):
+            if len(family_traces) > filtering_config.max_traces_per_family:
+                perm = rng.permutation(len(family_traces))
+                keep_indices = perm[: filtering_config.max_traces_per_family]
+                filtered_by_traces_per_family_cap += len(family_traces) - len(keep_indices)
+                trace_families[parent_id] = [family_traces[idx] for idx in sorted(keep_indices)]
+
+    # step 2: per-solution capping (round-robin across families within solution)
+    filtered_by_traces_per_solution_cap: int = 0
+    if filtering_config.max_traces_per_solution is not None:
+        solution_to_families: dict[
+            pyine.data.traces.dataset_utils.SolutionIdentifier,
+            list[pyine.data.traces.dataset_utils.TraceIdentifier],
+        ] = collections.defaultdict(list)
+        for parent_id in trace_families:
+            solution_id = parent_id.get_parent_identifier()
+            assert isinstance(solution_id, pyine.data.traces.dataset_utils.SolutionIdentifier)
+            solution_to_families[solution_id].append(parent_id)
+        for _solution_id, family_ids in solution_to_families.items():
+            total_traces = sum(len(trace_families[fid]) for fid in family_ids)
+            if total_traces > filtering_config.max_traces_per_solution:
+                kept_tuples = list(
+                    _round_robin_sampler(
+                        data={fid: trace_families[fid] for fid in family_ids},
+                        max_samples=filtering_config.max_traces_per_solution,
+                        rng=rng,
+                    )
+                )
+                filtered_by_traces_per_solution_cap += total_traces - len(kept_tuples)
+                new_family_traces: dict[
+                    pyine.data.traces.dataset_utils.TraceIdentifier,
+                    list[pyine.data.traces.dataset_utils.TraceMetadata],
+                ] = collections.defaultdict(list)
+                for fid, trace in kept_tuples:
+                    new_family_traces[fid].append(trace)
+                for fid in family_ids:
+                    if fid in new_family_traces:
+                        trace_families[fid] = new_family_traces[fid]
+                    else:
+                        del trace_families[fid]
+
+    # step 3: per-problem capping (round-robin across families within problem)
+    filtered_by_traces_per_problem_cap: int = 0
+    if filtering_config.max_traces_per_problem is not None:
+        problem_to_families: dict[
+            pyine.data.traces.dataset_utils.CodingProblemIdentifier,
+            list[pyine.data.traces.dataset_utils.TraceIdentifier],
+        ] = collections.defaultdict(list)
+        for parent_id in trace_families:
+            problem_id = parent_id.get_parent_identifier().get_parent_identifier()
+            assert isinstance(problem_id, pyine.data.traces.dataset_utils.CodingProblemIdentifier)
+            problem_to_families[problem_id].append(parent_id)
+        for _problem_id, family_ids in problem_to_families.items():
+            total_traces = sum(len(trace_families[fid]) for fid in family_ids)
+            if total_traces > filtering_config.max_traces_per_problem:
+                kept_tuples = list(
+                    _round_robin_sampler(
+                        data={fid: trace_families[fid] for fid in family_ids},
+                        max_samples=filtering_config.max_traces_per_problem,
+                        rng=rng,
+                    )
+                )
+                filtered_by_traces_per_problem_cap += total_traces - len(kept_tuples)
+                new_family_traces_p: dict[
+                    pyine.data.traces.dataset_utils.TraceIdentifier,
+                    list[pyine.data.traces.dataset_utils.TraceMetadata],
+                ] = collections.defaultdict(list)
+                for fid, trace in kept_tuples:
+                    new_family_traces_p[fid].append(trace)
+                for fid in family_ids:
+                    if fid in new_family_traces_p:
+                        trace_families[fid] = new_family_traces_p[fid]
+                    else:
+                        del trace_families[fid]
+
+    # step 4: trace family count capping (round-robin across problems)
     filtered_by_trace_family_cap: int = 0
     if filtering_config.max_trace_families is not None and len(trace_families) > filtering_config.max_trace_families:
         # we will prioritize trace families that belong to different problems first
@@ -231,4 +327,7 @@ def filter_traces(
         filtered_by_code_length=filtered_by_code_length,
         filtered_by_var_length=filtered_by_var_length,
         filtered_by_trace_family_cap=filtered_by_trace_family_cap,
+        filtered_by_traces_per_family_cap=filtered_by_traces_per_family_cap,
+        filtered_by_traces_per_solution_cap=filtered_by_traces_per_solution_cap,
+        filtered_by_traces_per_problem_cap=filtered_by_traces_per_problem_cap,
     )

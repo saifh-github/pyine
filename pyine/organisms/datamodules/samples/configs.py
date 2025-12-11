@@ -46,9 +46,30 @@ class TraceFilteringConfig(pydantic.BaseModel):
     max_trace_families: int | None = pydantic.Field(default=None, ge=1)
     """Maximum number of trace families to keep; if None, keeps all trace families.
 
-    A 'trace family' is a set of traces that share the same original code and execution args, but where
-    family members may differ based on how the code was augmented. This will allow us later to avoid
-    creating samples from the same 'family' multiple times in order to better control dataset diversity.
+    A 'trace family' groups traces that share the same solution code AND test arguments (i.e., same
+    augmentless trace identifier like `TACO/train/p000001/s0001/t0001`). Family members differ only
+    by augmentation.
+    """
+    max_traces_per_family: int | None = pydantic.Field(default=None, ge=1)
+    """Maximum number of traces to keep per trace family; if None, keeps all traces in each family.
+
+    A 'trace family' groups traces that share the same solution code AND test arguments (i.e., same
+    augmentless trace identifier like `TACO/train/p000001/s0001/t0001`). Family members differ only
+    by augmentation. Selection within each family is randomized but deterministic when seeded.
+    """
+    max_traces_per_solution: int | None = pydantic.Field(default=None, ge=1)
+    """Maximum number of traces to keep per solution; if None, keeps all traces for each solution.
+
+    A solution may have multiple trace families (based on the use of different test arguments). This
+    setting caps the total traces across all test args for a given solution. Selection is done via
+    round-robin across families to maintain test diversity.
+    """
+    max_traces_per_problem: int | None = pydantic.Field(default=None, ge=1)
+    """Maximum number of traces to keep per coding problem; if None, keeps all traces for each problem.
+
+    A coding problem may have multiple solutions, each with multiple trace families. This setting
+    caps the total traces across all solutions for a given problem. Selection is done via round-robin
+    across solutions to maintain diversity.
     """
     max_trace_steps: int | None = pydantic.Field(default=10_000, ge=1)
     """Maximum number of (valid, in-scope) execution steps allowed in a trace; exceeding traces are skipped."""
@@ -66,6 +87,9 @@ class TraceFilteringConfig(pydantic.BaseModel):
         """Returns whether any filtering is enabled in this config."""
         return (
             self.max_trace_families is not None
+            or self.max_traces_per_family is not None
+            or self.max_traces_per_solution is not None
+            or self.max_traces_per_problem is not None
             or self.max_trace_steps is not None
             or self.max_code_line_count is not None
             or self.max_code_line_length is not None

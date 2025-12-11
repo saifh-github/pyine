@@ -1,5 +1,7 @@
 """Tests for trace filtering logic in the samples module."""
 
+import collections
+
 import pytest
 
 import pyine.data.traces.dataset_utils
@@ -240,6 +242,9 @@ class TestFilterTraces:
             + results.filtered_by_code_length
             + results.filtered_by_var_length
             + results.filtered_by_trace_family_cap
+            + results.filtered_by_traces_per_family_cap
+            + results.filtered_by_traces_per_solution_cap
+            + results.filtered_by_traces_per_problem_cap
         )
         assert total_filtered == results.filtered_trace_count
         assert results.kept_trace_count + results.filtered_trace_count == results.orig_trace_count
@@ -290,3 +295,113 @@ class TestTraceFilteringResultsValidation:
         results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
         assert results.orig_trace_count >= results.kept_trace_count
         assert results.filtered_trace_count >= 0
+
+
+class TestFilteringByTracesPerFamily:
+    """Tests for the max_traces_per_family filtering parameter."""
+
+    def test_filtering_by_traces_per_family_cap(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_traces_per_family=1)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        for family_traces in results.kept_trace_families.values():
+            assert len(family_traces) <= 1
+
+    def test_traces_per_family_deterministic_with_seed(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(seed=42, max_traces_per_family=1)
+        results1 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        results2 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        kept_ids1 = {t.identifier for t in results1.kept_traces}
+        kept_ids2 = {t.identifier for t in results2.kept_traces}
+        assert kept_ids1 == kept_ids2
+
+
+class TestFilteringByTracesPerSolution:
+    """Tests for the max_traces_per_solution filtering parameter."""
+
+    def test_filtering_by_traces_per_solution_cap(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_traces_per_solution=2)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        solution_counts: dict[pyine.data.traces.dataset_utils.SolutionIdentifier, int] = collections.defaultdict(int)
+        for trace in results.kept_traces:
+            solution_id = trace.trace_id.get_parent_identifier()
+            solution_counts[solution_id] += 1
+        for count in solution_counts.values():
+            assert count <= 2
+
+    def test_traces_per_solution_deterministic_with_seed(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(seed=42, max_traces_per_solution=2)
+        results1 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        results2 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        kept_ids1 = {t.identifier for t in results1.kept_traces}
+        kept_ids2 = {t.identifier for t in results2.kept_traces}
+        assert kept_ids1 == kept_ids2
+
+
+class TestFilteringByTracesPerProblem:
+    """Tests for the max_traces_per_problem filtering parameter."""
+
+    def test_filtering_by_traces_per_problem_cap(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_traces_per_problem=2)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        problem_counts: dict[pyine.data.traces.dataset_utils.CodingProblemIdentifier, int] = collections.defaultdict(
+            int
+        )
+        for trace in results.kept_traces:
+            problem_id = trace.trace_id.get_parent_identifier().get_parent_identifier()
+            problem_counts[problem_id] += 1
+        for count in problem_counts.values():
+            assert count <= 2
+
+    def test_traces_per_problem_deterministic_with_seed(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(seed=42, max_traces_per_problem=2)
+        results1 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        results2 = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        kept_ids1 = {t.identifier for t in results1.kept_traces}
+        kept_ids2 = {t.identifier for t in results2.kept_traces}
+        assert kept_ids1 == kept_ids2
+
+
+class TestFilteringCombined:
+    """Tests for combining multiple filtering parameters."""
+
+    def test_combined_per_family_and_per_solution(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_traces_per_family=1, max_traces_per_solution=2)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        # per-family constraint
+        for family_traces in results.kept_trace_families.values():
+            assert len(family_traces) <= 1
+        # per-solution constraint
+        solution_counts: dict[pyine.data.traces.dataset_utils.SolutionIdentifier, int] = collections.defaultdict(int)
+        for trace in results.kept_traces:
+            solution_id = trace.trace_id.get_parent_identifier()
+            solution_counts[solution_id] += 1
+        for count in solution_counts.values():
+            assert count <= 2
+
+    def test_combined_per_solution_and_per_problem(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(max_traces_per_solution=2, max_traces_per_problem=3)
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        # per-solution constraint
+        solution_counts: dict[pyine.data.traces.dataset_utils.SolutionIdentifier, int] = collections.defaultdict(int)
+        for trace in results.kept_traces:
+            solution_id = trace.trace_id.get_parent_identifier()
+            solution_counts[solution_id] += 1
+        for count in solution_counts.values():
+            assert count <= 2
+        # per-problem constraint
+        problem_counts: dict[pyine.data.traces.dataset_utils.CodingProblemIdentifier, int] = collections.defaultdict(
+            int
+        )
+        for trace in results.kept_traces:
+            problem_id = trace.trace_id.get_parent_identifier().get_parent_identifier()
+            problem_counts[problem_id] += 1
+        for count in problem_counts.values():
+            assert count <= 3
