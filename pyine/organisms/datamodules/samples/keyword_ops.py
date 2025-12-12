@@ -134,7 +134,7 @@ class KeywordRefactorer(pydantic.BaseModel):
 
     The refactorer validates that the source keyword is not a Python builtin or reserved
     identifier (since those cannot be safely renamed without breaking the code). The outcome of
-    refactoring should be code that still executes the same was as before (maybe using differently
+    refactoring should be code that still executes the same way as before (maybe using differently
     named identifiers).
 
     NOTE: using this 'dumb' refactoring approach will essentially obfuscate the code a little bit,
@@ -185,8 +185,8 @@ class KeywordRefactorer(pydantic.BaseModel):
         """Replace all occurrences of the keyword with replacement identifier(s).
 
         Each keyword match is replaced with a case-preserved version of the replacement template
-        (e.g., if the keyword is "result" and replacement is "__kkkkkk", then "Result" becomes
-        "__Kkkkkk", "RESULT" becomes "__KKKKKK", and "result" becomes "__kkkkkk"). For mixed case
+        (e.g., if the keyword is "result" and replacement is "kkkkkk", then "Result" becomes
+        "Kkkkkk", "RESULT" becomes "KKKKKK", and "result" becomes "kkkkkk"). For mixed case
         patterns, the case is applied character-by-character.
 
         Args:
@@ -234,8 +234,8 @@ def has_keyword(kw: str, code: str) -> bool:
 def _generate_default_replacement(keyword: str) -> str:
     """Generate a default replacement identifier based on keyword length.
 
-    The replacement uses the pattern `__` + repeated `k` characters matching the keyword length.
-    For example, keyword "hello" (length 5) becomes "__kkkkk".
+    The replacement uses repeated `k` characters matching the keyword length.
+    For example, keyword "hello" (length 5) becomes "kkkkk".
 
     Args:
         keyword: The keyword being replaced.
@@ -243,65 +243,22 @@ def _generate_default_replacement(keyword: str) -> str:
     Returns:
         A replacement identifier string.
     """
-    return "__" + "k" * len(keyword)
+    return "k" * len(keyword)
 
 
 def _match_case(source: str, replacement: str) -> str:
-    """Apply the case pattern of source to replacement.
-
-    Handles common patterns:
-    - all lowercase: "result" -> "powpow";
-    - all uppercase: "RESULT" -> "POWPOW";
-    - title case (first letter upper): "Result" -> "Powpow";
-    - mixed case: applies case character-by-character.
-
-    For mixed case, the replacement must have at least as many case-controllable (alphabetic)
-    characters as the source has alphabetic characters, otherwise a ValueError is raised.
+    """Apply the case pattern of source to replacement character-by-character.
 
     Args:
         source: The original matched string whose case pattern to mimic.
-        replacement: The replacement string to transform.
+        replacement: The replacement string to transform (must be same length as source).
 
     Returns:
         The replacement string with case pattern matching the source.
-
-    Raises:
-        ValueError: If replacement has fewer case-controllable characters than source requires.
     """
-    # count case-controllable (alphabetic) characters
-    source_alpha_count = sum(1 for c in source if c.isalpha())
-    replacement_alpha_count = sum(1 for c in replacement if c.isalpha())
-    if replacement_alpha_count < source_alpha_count:
-        raise ValueError(
-            f"replacement '{replacement}' has {replacement_alpha_count} case-controllable chars, "
-            f"but source '{source}' requires at least {source_alpha_count}"
-        )
-    # handle simple patterns first (all lowercase, all uppercase, title case)
-    if source.islower():
-        return replacement.lower()
-    if source.isupper():
-        return replacement.upper()
-    if len(source) >= 1 and source[0].isupper() and (len(source) == 1 or source[1:].islower()):
-        return replacement.capitalize()
-    # mixed case: apply character-by-character case mapping
-    # we map source alphabetic chars to replacement alphabetic chars in order
-    result_chars: list[str] = list(replacement)
-    source_alpha_idx = 0
-    for repl_idx, repl_char in enumerate(replacement):
-        if not repl_char.isalpha():
-            continue  # skip non-alphabetic replacement chars
-        # find next alphabetic char in source
-        while source_alpha_idx < len(source) and not source[source_alpha_idx].isalpha():
-            source_alpha_idx += 1
-        if source_alpha_idx >= len(source):
-            break  # no more source chars to match, keep remaining replacement chars as-is
-        src_char = source[source_alpha_idx]
-        if src_char.isupper():
-            result_chars[repl_idx] = repl_char.upper()
-        else:
-            result_chars[repl_idx] = repl_char.lower()
-        source_alpha_idx += 1
-    return "".join(result_chars)
+    if len(source) != len(replacement):
+        raise ValueError(f"source '{source}' and replacement '{replacement}' must have same length")
+    return "".join(r.upper() if s.isupper() else r.lower() for s, r in zip(source, replacement, strict=True))
 
 
 class SampleKeywordManipulatorWrapper:
