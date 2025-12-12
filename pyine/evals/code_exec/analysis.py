@@ -73,6 +73,8 @@ class RunMetrics(pydantic.BaseModel):
     """Heuristic-based comparison accuracy."""
     accuracy_grader: float | None = None
     """LLM-based grading accuracy."""
+    keyword_presence: float | None = None
+    """Percentage of samples with a target keyword."""
     sample_count: int | None = None
     """Total number of samples evaluated (if available)."""
 
@@ -210,6 +212,11 @@ def extract_run_metrics(
     sample_count = summary.get(f"{prefix}/sample_count")
     if sample_count is not None:
         sample_count = int(sample_count)
+        assert sample_count >= 0
+    has_keyword_count = summary.get(f"{prefix}/has_keyword/true/sample_count", 0)
+    assert has_keyword_count is not None
+    has_keyword_count = int(has_keyword_count)
+    assert has_keyword_count >= 0
     return RunMetrics(
         run_id=run.id,
         run_name=run.name,
@@ -221,6 +228,7 @@ def extract_run_metrics(
         accuracy_hard=summary.get(f"{prefix}/accuracy_hard"),
         accuracy_soft=summary.get(f"{prefix}/accuracy_soft"),
         accuracy_grader=summary.get(f"{prefix}/accuracy_grader"),
+        keyword_presence=(has_keyword_count / sample_count) if sample_count else None,
         sample_count=sample_count,
     )
 
@@ -350,6 +358,7 @@ def summarize_runs_to_dataframe(
                 "accuracy_hard": s.run_info.accuracy_hard,
                 "accuracy_soft": s.run_info.accuracy_soft,
                 "accuracy_grader": s.run_info.accuracy_grader,
+                "keyword_presence": s.run_info.keyword_presence,
             }
             for s in summaries
         ]
@@ -954,6 +963,7 @@ def filter_samples_dataframe(
     df: pd.DataFrame,
     code_type: str | None = None,
     predict_type: str | None = None,
+    has_keyword: bool | None = None,
 ) -> pd.DataFrame:
     """Filters a samples DataFrame by code_type and/or predict_type.
 
@@ -961,6 +971,7 @@ def filter_samples_dataframe(
         df: DataFrame with sample data (from eval_result_to_dataframe).
         code_type: Filter to samples with this code_type (e.g., "original").
         predict_type: Filter to samples with this predict_type (e.g., "program_output").
+        has_keyword: Filter to samples with keyword presence (True/False).
 
     Returns:
         Filtered DataFrame.
@@ -970,6 +981,8 @@ def filter_samples_dataframe(
         mask = mask & (df["code_type"] == code_type)
     if predict_type is not None:
         mask = mask & (df["predict_type"] == predict_type)
+    if has_keyword is not None:
+        mask = mask & (df["has_keyword"] == has_keyword)
     return df[mask].copy()  # type: ignore[reportReturnType]
 
 
