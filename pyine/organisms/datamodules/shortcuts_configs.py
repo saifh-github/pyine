@@ -107,12 +107,14 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
         )
     )
     """Default trace parser configuration."""
-    dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = {
-        subset: pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(
-            subset, training_selection_config=_get_default_training_selection_config()
-        )
-        for subset in pyine.organisms.datamodules.base.get_default_subset_names()
-    }
+    dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = pydantic.Field(
+        default_factory=lambda: {
+            subset: pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(
+                subset, training_selection_config=_get_default_training_selection_config()
+            )
+            for subset in pyine.organisms.datamodules.base.get_default_subset_names()
+        },
+    )
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
 
     # --------------- EVALUATION CONFIGURATION ---------------

@@ -684,7 +684,7 @@ class TraceDatasetMetadata(pydantic.BaseModel):
     """List of withheld traces across all parsed datasets."""
     subset_traces: dict[str, list[TraceMetadata]]
     """List of withheld traces for each subset identifier (str)."""
-    derived_subsets: dict[str, DerivedSubsetInfo[TraceMetadata]] = {}
+    derived_subsets: dict[str, DerivedSubsetInfo[TraceMetadata]] = pydantic.Field(default_factory=dict)
     """Derived subsets that are linked to parent subsets (e.g., keyword-filtered eval splits)."""
     leftover_traces: list[TraceMetadata]
     """List of leftover traces still unassigned after subset filtering and leftover split."""

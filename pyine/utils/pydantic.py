@@ -110,9 +110,9 @@ class PydanticYAMLLoader(yaml.SafeLoader):
     """
 
     # registry of available models for YAML tag resolution
-    _model_registry: dict[str, type[pydantic.BaseModel]] = {}
+    _model_registry: dict[str, type[pydantic.BaseModel]] = {}  # noqa: RUF012 (meant as mutable default)
     # cache of modules that were already scanned for pydantic models
-    _scanned_modules: set[str] = set()
+    _scanned_modules: set[str] = set()  # noqa: RUF012 (meant as mutable default)
 
     @classmethod
     def register_model(

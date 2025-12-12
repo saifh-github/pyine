@@ -296,22 +296,6 @@ class SampleTransformConfig(pydantic.BaseModel):
             raise ValueError(f"total probability map values must be in the range [0, 1]; got {prob_map_total}")
         return self
 
-    # @pydantic.field_validator("predict_type_prob_map", mode="before")
-    # @classmethod
-    # def _validate_predict_type_prob_map(
-    #     cls,
-    #     val: dict[SamplePredictType | str, float],
-    # ) -> dict[SamplePredictType, float]:
-    #     """Converts incoming prob map dict keys to predict types before normal validation."""
-    #     if isinstance(val, dict):  # type: ignore[reportUnnecessaryIsInstance]
-    #         out_dict: dict[SamplePredictType, float] = {}
-    #         for key, prob in val.items():
-    #             if isinstance(key, str):
-    #                 key = SamplePredictType(key)
-    #             out_dict[key] = prob
-    #         return out_dict
-    #     return val
-    #
     def get_max_partial_trace_steps(self, trace_data: pyine.utils.code.execution.TraceResult) -> int:
         """Returns the maximum number of steps allowed in a partial sample for the given trace."""
         max_partial_trace_steps = self.max_partial_trace_steps or 1.0
@@ -365,11 +349,13 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
 
     class_path: str = "pyine.organisms.datamodules.samples.builder.SampleBuilder"
     """Fully qualified class path for the trace parser."""
-    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = {
-        "filtering_config": TraceFilteringConfig(),
-        "selection_config": SampleSelectionConfig(),
-        "transform_config": SampleTransformConfig(),
-    }
+    params: dict[str, typing.Any] | pydantic.SerializeAsAny[pydantic.BaseModel] = pydantic.Field(
+        default_factory=lambda: {
+            "filtering_config": TraceFilteringConfig(),
+            "selection_config": SampleSelectionConfig(),
+            "transform_config": SampleTransformConfig(),
+        },
+    )
     """Default parameters for the dataset trace parser."""
 
     @staticmethod

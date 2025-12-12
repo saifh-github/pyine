@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import collections.abc
 import contextlib
+import copy
 import itertools
 import logging
 import os
@@ -784,8 +785,10 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
         Config dict or validated pydantic model.
     """
     if sample_builder_config is not None:
+        # work on a copy to avoid mutating shared defaults across tests/runs
+        sample_builder_config = sample_builder_config.model_copy(deep=True)
         # extract params and update seeds, then reconstruct full config
-        default_dataparser_params = sample_builder_config.params
+        default_dataparser_params = copy.deepcopy(sample_builder_config.params)
         if isinstance(default_dataparser_params, pydantic.BaseModel):
             default_dataparser_params = default_dataparser_params.model_dump()
         for cfg_name in ["filtering_config", "selection_config", "transform_config"]:

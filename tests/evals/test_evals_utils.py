@@ -442,7 +442,7 @@ class TestExtractSampleCategoriesFromDataset:
         """extract_sample_categories_from_dataset handles list[dict] format."""
 
         class MockDataset:
-            column_names = ["sample_data"]
+            column_names = ["sample_data"]  # noqa
 
             def __len__(self) -> int:
                 return 3
@@ -469,7 +469,7 @@ class TestExtractSampleCategoriesFromDataset:
         """extract_sample_categories_from_dataset handles dict[str, list] format."""
 
         class MockDataset:
-            column_names = ["sample_data"]
+            column_names = ["sample_data"]  # noqa
 
             def __len__(self) -> int:
                 return 3
@@ -492,7 +492,7 @@ class TestExtractSampleCategoriesFromDataset:
         """extract_sample_categories_from_dataset extracts multiple fields."""
 
         class MockDataset:
-            column_names = ["sample_data"]
+            column_names = ["sample_data"]  # noqa
 
             def __len__(self) -> int:
                 return 2
