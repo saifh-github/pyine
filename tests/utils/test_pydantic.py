@@ -686,3 +686,87 @@ class TestModelFromCallable:
         assert instance.new_flag is True
         overridden = model_cls(a=4, new_flag=False)
         assert overridden.new_flag is False
+
+
+class TestGetFieldDefault:
+    """Tests for the get_field_default utility function."""
+
+    def test_returns_simple_default_value(self) -> None:
+        class Model(pydantic.BaseModel):
+            field_with_default: str = "default_value"
+
+        result = pyd.get_field_default(Model, "field_with_default")
+        assert result == "default_value"
+
+    def test_returns_none_default(self) -> None:
+        class Model(pydantic.BaseModel):
+            nullable_field: str | None = None
+
+        result = pyd.get_field_default(Model, "nullable_field")
+        assert result is None
+
+    def test_returns_pydantic_undefined_for_required_field(self) -> None:
+        class Model(pydantic.BaseModel):
+            required_field: int
+
+        result = pyd.get_field_default(Model, "required_field")
+        assert result is pydantic.fields.PydanticUndefined
+
+    def test_returns_factory_when_call_default_factory_false(self) -> None:
+        class Model(pydantic.BaseModel):
+            items: list[int] = pydantic.Field(default_factory=list)
+
+        result = pyd.get_field_default(Model, "items", call_default_factory=False)
+        assert result is list
+
+    def test_returns_factory_result_when_call_default_factory_true(self) -> None:
+        class Model(pydantic.BaseModel):
+            items: list[int] = pydantic.Field(default_factory=list)
+
+        result = pyd.get_field_default(Model, "items", call_default_factory=True)
+        assert result == []
+        assert isinstance(result, list)
+
+    def test_factory_creates_independent_instances(self) -> None:
+        class Model(pydantic.BaseModel):
+            data: dict[str, int] = pydantic.Field(default_factory=dict)
+
+        first = pyd.get_field_default(Model, "data", call_default_factory=True)
+        second = pyd.get_field_default(Model, "data", call_default_factory=True)
+        assert first == second == {}
+        assert first is not second  # should be independent instances
+
+    def test_raises_key_error_for_nonexistent_field(self) -> None:
+        class Model(pydantic.BaseModel):
+            existing: int = 1
+
+        with pytest.raises(KeyError):
+            pyd.get_field_default(Model, "nonexistent")
+
+    def test_works_with_complex_default_factory(self) -> None:
+        def custom_factory() -> dict[str, list[int]]:
+            return {"key": [1, 2, 3]}
+
+        class Model(pydantic.BaseModel):
+            complex_field: dict[str, list[int]] = pydantic.Field(default_factory=custom_factory)
+
+        factory_ref = pyd.get_field_default(Model, "complex_field", call_default_factory=False)
+        assert factory_ref is custom_factory
+        result = pyd.get_field_default(Model, "complex_field", call_default_factory=True)
+        assert result == {"key": [1, 2, 3]}
+
+    def test_default_factory_false_is_default_behavior(self) -> None:
+        class Model(pydantic.BaseModel):
+            items: list[str] = pydantic.Field(default_factory=list)
+
+        result_explicit = pyd.get_field_default(Model, "items", call_default_factory=False)
+        result_default = pyd.get_field_default(Model, "items")
+        assert result_explicit is result_default is list
+
+    def test_works_with_field_using_default_instead_of_factory(self) -> None:
+        # even when using Field(), if default is set (not factory), it should work
+        class Model(pydantic.BaseModel):
+            value: int = pydantic.Field(default=42, ge=0)
+
+        result = pyd.get_field_default(Model, "value")
+        assert result == 42

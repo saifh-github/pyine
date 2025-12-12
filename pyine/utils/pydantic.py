@@ -641,3 +641,23 @@ def model_from_callable(
         __module__=module_name,
         **typing.cast("dict[str, typing.Any]", field_definitions),
     )
+
+
+def get_field_default(
+    model_cls: type[pydantic.BaseModel],
+    field_name: str,
+    *,
+    call_default_factory: bool = False,
+) -> typing.Any:
+    """Return the declared default for a field without instantiating the model.
+
+    If the field has a default_factory, set call_default_factory=True to compute it.
+    Raises KeyError if the field does not exist.
+    """
+    field = model_cls.model_fields[field_name]
+    if getattr(field, "default_factory", None) is not None:
+        if call_default_factory:
+            factory: typing.Callable[[], typing.Any] = field.default_factory  # type: ignore[assignment]
+            return factory()
+        return field.default_factory  # return the factory itself
+    return field.default
