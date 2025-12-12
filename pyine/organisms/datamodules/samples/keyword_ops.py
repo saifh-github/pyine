@@ -270,6 +270,16 @@ class SampleKeywordManipulatorWrapper:
     3. Adds keyword-related tags to the sample's comma_separated_tags field.
 
     The wrapper preserves the underlying dataset's interface (len, getitem, epoch handling).
+
+    Note on sample identifiers:
+        In standard mode, sample identifiers are preserved from the underlying dataset.
+        In counterfactual mode (`counterfactual_mode=True`), sample identifiers are modified
+        with suffixes to ensure uniqueness across paired versions:
+        - "::cf_with" suffix for "with keyword" versions (even indices)
+        - "::cf_without" suffix for "without keyword" versions (odd indices)
+        This is necessary because counterfactual mode doubles the dataset length by producing
+        two versions of each sample, and downstream consumers (e.g., data stores, evaluators)
+        require unique identifiers.
     """
 
     def __init__(
@@ -392,7 +402,12 @@ class SampleKeywordManipulatorWrapper:
         self,
         index: int,
     ) -> pyine.organisms.datamodules.samples.common.SampleData:
-        """Counterfactual mode: paired indices where even=with_keyword, odd=without_keyword."""
+        """Counterfactual mode: paired indices where even=with_keyword, odd=without_keyword.
+
+        The identifier is modified with a suffix to distinguish counterfactual versions:
+        - "::cf_with" for the "with keyword" version
+        - "::cf_without" for the "without keyword" version
+        """
         underlying_index = index // 2
         is_with_keyword_version = (index % 2) == 0
         sample = self._wrapped[underlying_index]
@@ -401,27 +416,31 @@ class SampleKeywordManipulatorWrapper:
         tags = f"{sample.comma_separated_tags},{new_base_tag}" if sample.comma_separated_tags else new_base_tag
         if is_with_keyword_version:
             # "with keyword" version: inject if sample lacks keyword, otherwise just tag
+            new_identifier = f"{sample.identifier}::cf_with"
             tags += ",counterfactual_version:with,has_bias_keyword:1"
             if not sample_has_keyword:
                 code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(underlying_index))
                 tags += ",keyword_injected:1"
                 return sample._replace(
+                    identifier=new_identifier,
                     code=code,
                     has_code_override=True,
                     comma_separated_tags=tags,
                 )
-            return sample._replace(comma_separated_tags=tags)
+            return sample._replace(identifier=new_identifier, comma_separated_tags=tags)
         # "without keyword" version: refactor if sample has keyword, otherwise just tag
+        new_identifier = f"{sample.identifier}::cf_without"
         tags += ",counterfactual_version:without,has_bias_keyword:0"
         if sample_has_keyword:
             code = self._refactorer.refactor(sample.code)
             tags += f",keyword_refactored:1,repl_keyword:{self._refactorer.replacement_template}"
             return sample._replace(
+                identifier=new_identifier,
                 code=code,
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
-        return sample._replace(comma_separated_tags=tags)
+        return sample._replace(identifier=new_identifier, comma_separated_tags=tags)
 
     @property
     def keyword(self) -> str:

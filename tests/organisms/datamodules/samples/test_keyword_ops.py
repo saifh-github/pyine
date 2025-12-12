@@ -388,22 +388,22 @@ class TestCounterfactualMode:
         )
         # index 0 = sample 0 (t1), with_keyword version
         result_0 = wrapper[0]
-        assert result_0.identifier == "t1"
+        assert result_0.identifier == "t1::cf_with"  # modified identifier
         assert "counterfactual_version:with" in result_0.comma_separated_tags
         assert "has_bias_keyword:1" in result_0.comma_separated_tags
         # index 1 = sample 0 (t1), without_keyword version
         result_1 = wrapper[1]
-        assert result_1.identifier == "t1"
+        assert result_1.identifier == "t1::cf_without"  # modified identifier
         assert "counterfactual_version:without" in result_1.comma_separated_tags
         assert "has_bias_keyword:0" in result_1.comma_separated_tags
         # index 2 = sample 1 (t2), with_keyword version
         result_2 = wrapper[2]
-        assert result_2.identifier == "t2"
+        assert result_2.identifier == "t2::cf_with"  # modified identifier
         assert "counterfactual_version:with" in result_2.comma_separated_tags
         assert "has_bias_keyword:1" in result_2.comma_separated_tags
         # index 3 = sample 1 (t2), without_keyword version
         result_3 = wrapper[3]
-        assert result_3.identifier == "t2"
+        assert result_3.identifier == "t2::cf_without"  # modified identifier
         assert "counterfactual_version:without" in result_3.comma_separated_tags
         assert "has_bias_keyword:0" in result_3.comma_separated_tags
 
@@ -508,3 +508,30 @@ class TestCounterfactualMode:
         )
         # should not raise; wrapper is created successfully
         assert len(wrapper) == 2
+
+    def test_counterfactual_mode_unique_identifiers(self) -> None:
+        # all samples should have unique identifiers for proper data store indexing
+        keyword = "kw"
+        samples = [
+            _make_sample("t1", f"x = {keyword}"),
+            _make_sample("t2", "y = 1"),
+            _make_sample("t3", f"z = {keyword}"),
+        ]
+        dataset = _DummyDataset(samples)
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1", "t3"}),
+            counterfactual_mode=True,
+        )
+        # collect all identifiers
+        identifiers = [wrapper[idx].identifier for idx in range(len(wrapper))]
+        assert len(identifiers) == 6  # 3 samples * 2 versions
+        assert len(set(identifiers)) == 6  # all unique
+        # verify the pattern
+        assert "t1::cf_with" in identifiers
+        assert "t1::cf_without" in identifiers
+        assert "t2::cf_with" in identifiers
+        assert "t2::cf_without" in identifiers
+        assert "t3::cf_with" in identifiers
+        assert "t3::cf_without" in identifiers

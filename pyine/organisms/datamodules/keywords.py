@@ -150,6 +150,16 @@ class KeywordBiasDataModule(
     - `keyword_presence_split`: Partitions eval traces based on keyword presence;
     - `counterfactual`: Creates paired subsets with matching traces where hints are
        injected/refactored as needed.
+
+    Note on sample identifiers:
+        When using `counterfactual` evaluation strategy with base eval subsets (e.g., "valid"
+        rather than "valid_with_keyword"), the returned parser doubles the sample count and
+        modifies sample identifiers with suffixes to ensure uniqueness:
+        - "::cf_with" suffix for "with keyword" versions
+        - "::cf_without" suffix for "without keyword" versions
+        This allows proper counterfactual evaluation where each sample can be compared under
+        both conditions. Derived subsets ("_with_keyword", "_without_keyword") preserve
+        original identifiers since they don't require doubling.
     """
 
     @typing.override
@@ -698,7 +708,14 @@ class KeywordBiasDataModule(
             - In counterfactual mode for `_with_keyword` subsets: injects keyword into samples lacking it
             - In counterfactual mode for `_without_keyword` subsets: refactors keyword out of samples having it
             - In counterfactual mode for base eval subsets: doubles samples with paired with/without versions
+              and modifies identifiers with "::cf_with" / "::cf_without" suffixes
             - In keyword_presence_split mode: only adds tags (no manipulation)
+
+        Note:
+            Sample identifiers are modified only when counterfactual mode is enabled for base eval
+            subsets. In this case, identifiers receive "::cf_with" or "::cf_without" suffixes to
+            ensure uniqueness across the paired counterfactual versions. Other subset types preserve
+            original identifiers.
         """
         base_parser = super().get_parser(subset_name)
         if not self._is_setup_complete():
