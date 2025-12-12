@@ -12,6 +12,9 @@ Currently, the primary consumers of this package are the `KeywordBiasDataModule`
 training and evaluation. Future data modules may also leverage this package to ensure consistency
 in sample generation.
 
+For a higher-level overview of the organisms package and datamodules, see the
+[parent README](../../README.md).
+
 ## Package Structure
 
 ```
@@ -205,9 +208,9 @@ refactoring of keywords in code samples.
 
 - **Case-insensitive matching**: All keyword detection uses `\b{keyword}\b` regex with `re.IGNORECASE`;
 - **Case-preserving refactoring**: When replacing keywords, case is preserved (e.g., `Result` ->
-  `__Kkkkkk`, `RESULT` -> `__KKKKKK`);
+  `Kkkkkk`, `RESULT` -> `KKKKKK`);
 - **Dynamic replacement generation**: `KeywordRefactorer` generates replacement identifiers of the
-  form `__kkkk...` matching keyword length.
+  form `kkkk...` matching keyword length.
 
 ## Usage
 

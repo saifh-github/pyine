@@ -24,7 +24,7 @@ python -m pyine.apps.trainers.hf_trainer_configs
 The above should provide an exhaustive description of all experiment configurations that can be
 executed as-is without requiring you to specify any extra setting. To see a high-level list of
 configuration groups beyond the `experiment` group itself (e.g. datamodules, evaluators, models,
-etc.), use `--help`:
+etc.), use `--help`. For datamodule-specific documentation, see [`pyine/organisms/README.md`](../organisms/README.md).
 
 ```bash
 python -m pyine.apps.trainers.openai_finetune --help

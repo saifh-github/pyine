@@ -15,7 +15,7 @@ ______________________________________________________________________
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pyine/apps/`      | Command line entrypoints for dataset prep, annotation, training, and evaluation; see [`pyine/apps/README.md`](./pyine/apps/README.md) for per-app docs.                               |
 | `pyine/configs/`   | Hydra experiment configs, shared model/datamodule definitions, and config templates referenced by the apps. See [`pyine/configs/README.md`](./pyine/configs/README.md) for more info. |
-| `pyine/organisms/` | Data abstractions (datasets, samples, execution traces) and orchestration helpers used to help build model organisms.                                                                 |
+| `pyine/organisms/` | Data abstractions (datamodules, samples) and orchestration helpers for model organisms; see [`pyine/organisms/README.md`](./pyine/organisms/README.md) for more info.                 |
 | `pyine/prompts/`   | Prompt chains, templates, and logging utilities for LLM-based annotation or evaluation runs; see [`pyine/prompts/README.md`](pyine/prompts/README.md) for more info.                  |
 | `pyine/evals/`     | Evaluation logic, metrics, and task definitions for benchmarking model organisms on various code execution tasks.                                                                     |
 | `pyine/utils/`     | Shared utilities (I/O, logging, environment helpers) that support multiple domains.                                                                                                   |

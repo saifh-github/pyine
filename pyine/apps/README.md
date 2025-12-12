@@ -287,7 +287,8 @@ ______________________________________________________________________
 
 Training runs are launched via Hydra configs shipped alongside each app. You can either select
 a pre-registered experiment configuration (via `+experiment=<EXP_NAME>`) or override individual
-config fields as needed.
+config fields as needed. Trainers use datamodules from the [`pyine/organisms/`](../organisms/README.md)
+package to prepare and serve training data.
 
 To see a list of available, pre-registered experiment configurations, run the `..._configs.py` file
 associated with the trainer you are interested in, for example:
