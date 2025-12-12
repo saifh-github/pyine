@@ -396,22 +396,22 @@ if __name__ == "__main__":
             datamodule_config_path="pyine/apps/rl_trainers/configs/taco_1to4_rl.yaml",
             train_subset_name="train",
             eval_subset_name="valid",
-            max_samples=100,  # Use small subset for testing
+            #max_samples=100,  # Use small subset for testing
         ),
         training=GRPOTrainingConfig(
             output_dir="./grpo_output",
-            num_train_epochs=1,
+            num_train_epochs=3,
             per_device_train_batch_size=1,
             per_device_eval_batch_size=4,
             gradient_accumulation_steps=8,
             learning_rate=1e-5,
             logging_steps=5,
-            save_steps=50,
+            save_steps=500,
             # Evaluation settings
             do_eval=True,
             eval_strategy="steps",
-            eval_steps=25,
-            eval_on_start=False,
+            eval_steps=500,
+            eval_on_start=True,
             # GRPO settings
             num_generations=8,
             num_generations_eval=2,  # Use fewer generations during eval to save compute
