@@ -165,6 +165,25 @@ class KeywordBiasDataModule(
         return "_with_keyword", "_without_keyword"
 
     @typing.override
+    def _log_setup_summary(self) -> None:
+        """Log a summary of keyword datamodule configuration after setup."""
+        assert self._metadata is not None, "metadata should be loaded before logging summary"
+        metadata = typing.cast("KeywordTraceDatasetMetadata", self._metadata)
+        subset_info_parts: list[str] = []
+        for subset_name in self.config.subset_names:
+            traces = metadata.get_subset_traces(subset_name)
+            subset_info_parts.append(f"{subset_name}={len(traces)}")
+        subset_info = ", ".join(subset_info_parts)
+        logger.info(
+            f"keywords datamodule setup complete:\n"
+            f"\tkeyword='{metadata.keyword}', "
+            f"\tevaluation_strategy={self.config.evaluation_strategy.value}, "
+            f"\ttraces_with_keyword={metadata.trace_count_with_keyword}, "
+            f"\ttraces_without_keyword={metadata.trace_count_without_keyword}, "
+            f"\tsubsets=[{subset_info}]"
+        )
+
+    @typing.override
     def _prepare_bias_specific_metadata(
         self,
         base_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
@@ -182,7 +201,7 @@ class KeywordBiasDataModule(
         split_hash = pyine.utils.reprod.compute_hash(self.config.split_file_path)
         keyword, trace_ids_with_keyword, cluster_cache_path = self._detect_or_select_keyword(base_traces_meta)
         logger.info(
-            f"using keyword '{keyword}' for keyword bias experiments "
+            f"selected keyword '{keyword}' for bias experiments "
             f"({len(trace_ids_with_keyword)}/{len(base_traces_meta)} traces contain it)"
         )
         subset_traces_meta: dict[

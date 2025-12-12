@@ -50,6 +50,22 @@ class ShortcutBiasDataModule(
         return "_with_hints", "_without_hints"
 
     @typing.override
+    def _log_setup_summary(self) -> None:
+        """Log a summary of shortcuts datamodule configuration after setup."""
+        assert self._metadata is not None, "metadata should be loaded before logging summary"
+        subset_info_parts: list[str] = []
+        for subset_name in self.config.subset_names:
+            traces = self._metadata.get_subset_traces(subset_name)
+            subset_info_parts.append(f"{subset_name}={len(traces)}")
+        subset_info = ", ".join(subset_info_parts)
+        logger.info(
+            f"shortcuts datamodule setup complete:\n"
+            f"\thint_type={self.config.hint_type.value}, "
+            f"\tevaluation_strategy={self.config.evaluation_strategy.value}, "
+            f"\tsubsets=[{subset_info}]"
+        )
+
+    @typing.override
     def _prepare_bias_specific_metadata(
         self,
         base_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],

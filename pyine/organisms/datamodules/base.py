@@ -299,6 +299,15 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         """
         ...
 
+    @abc.abstractmethod
+    def _log_setup_summary(self) -> None:
+        """Log a summary of the datamodule configuration after setup completes.
+
+        Subclasses should implement this to log relevant information about the prepared dataset
+        (e.g., subset sizes, bias-specific configuration).
+        """
+        ...
+
     # --------------- SHARED HELPER METHODS ---------------
 
     def _apply_max_solution_count_cap(
@@ -521,6 +530,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
                 self._subset_parsers[subset_name] = self._instantiate_parser_if_needed(subset_name)
             else:
                 self._subset_parsers[subset_name] = None
+        self._log_setup_summary()
 
     @typing.override
     def teardown(self, stage: str | None = None) -> None:
