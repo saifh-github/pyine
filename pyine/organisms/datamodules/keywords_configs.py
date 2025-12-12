@@ -276,6 +276,8 @@ def get_datamodule_config(
         The keywords datamodule does not rely on code type selection (allow_db_lookups=False).
         Keyword injection/removal is performed using a parser wrapper, not code type selection.
     """
+    kwargs.setdefault("train_subset_resampling_seed", seed)
+    kwargs.setdefault("keyword_auto_selection_config", {"selection_seed": seed})
     default_sampler_builder_config = pyine.utils.pydantic.get_field_default(
         model_cls=KeywordBiasDataModuleConfig,
         field_name="default_dataparser_config",
