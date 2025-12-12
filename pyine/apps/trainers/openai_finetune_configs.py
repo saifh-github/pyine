@@ -18,7 +18,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
-import pyine.organisms.datamodules.shortcuts_configs
+import pyine.organisms.datamodules
 import pyine.organisms.models.utils.openai
 import pyine.utils.openai
 import pyine.utils.reprod
@@ -202,14 +202,14 @@ def _get_app_configs(
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"datamodule_config": "base"},
+                {"datamodule_config": "shortcuts_base"},
                 {"openai_client_config": "default"},
                 {"openai_finetuner_config": "openai_gpt-4.1-mini_default_sft"},
                 {"evals_config": "base"},
             ],
         },
     )
-    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
+    datamodule_configs = pyine.organisms.datamodules.get_configs(
         eval_type=eval_type,
         group=f"{group}/datamodule_config",
     )
@@ -245,7 +245,9 @@ def _get_experiment_configs(
     """
     # fetch and validate necessary datamodule and openai client configs from main configs set
     dm_configs = [
-        config for config in app_configs if config.group == "config/datamodule_config" and config.name != "base"
+        config
+        for config in app_configs
+        if config.group == "config/datamodule_config" and not config.name.endswith("base")
     ]
     assert sum([c.name == "timeout300s" and c.group == "config/openai_client_config" for c in app_configs]) == 1
     # for each datamodule config we found, create an eval-only and a regular fine-tuning experiment config

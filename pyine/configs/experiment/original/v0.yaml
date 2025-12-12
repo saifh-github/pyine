@@ -4,7 +4,7 @@
 
 defaults:
   - override /config: base
-  - override /config/datamodule_config: TACO_10s10t_v1_part1to4
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
   - override /config/training_args_config: train_default
   #- override /hydra/launcher: joblib  # to make sure ddp/signals are supported in sweep runs
   #- override /hydra/sweeper: wandb_sweeper_base  # enable wandb sweeps

@@ -39,7 +39,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
         entrypoint_config.config,
         hydra_zen.zen(pyine.apps.trainers.hf_trainer_configs._async_main_wrapper),
         overrides={
-            "+experiment": "TACO_latest_20s_base",
+            "+experiment": "shortcuts_TACO_latest_20s_base",
             "runtime": "dry_run",
             "runtime.seed": 123,
             "config.training_args_config.do_train": False,

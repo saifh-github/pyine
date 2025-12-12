@@ -859,7 +859,7 @@ def make_bias_datamodule_hydra_configs(
         raise NotImplementedError(f"unsupported eval type for {module_name} datamodule: {eval_type}")
     base_config = pyine.configs.utils.make_config_description(
         config_class,
-        name="base",
+        name=f"{module_name}_base",
         group=group,
         description=f"Base {module_name} datamodule settings; not specific to any actual source dataset.",
         config={
@@ -875,13 +875,18 @@ def make_bias_datamodule_hydra_configs(
     )
     return [
         base_config,
-        *get_taco_configs(base_config, config_class),
+        *get_taco_configs(
+            datamodule_base_config=base_config,
+            datamodule_base_name=module_name,
+            datamodule_config_type=config_class,
+        ),
         # add config getters for more source datasets here, if needed
     ]
 
 
 def get_taco_configs(
     datamodule_base_config: pyine.configs.schemas.ConfigDescription,
+    datamodule_base_name: str,
     datamodule_config_type: type[BiasDataModuleBaseConfig],
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Returns specialized datamodule configs and their descriptions for the TACO dataset.
@@ -934,7 +939,7 @@ def get_taco_configs(
         outputs.append(
             taco_latest_config := pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_latest",
+                name=f"{datamodule_base_name}_TACO_latest",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies the single most recent instance of a TACO trace dataset found on disk. "
@@ -951,7 +956,7 @@ def get_taco_configs(
         outputs.append(
             pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_latest_20s",
+                name=f"{datamodule_base_name}_TACO_latest_20s",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies a subset of the most recent TACO trace dataset on disk, with a maximum of 20 "
@@ -973,7 +978,7 @@ def get_taco_configs(
         outputs.append(
             taco_10s10t_v1_config := pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_10s10t_v1_full",
+                name=f"{datamodule_base_name}_TACO_10s10t_v1_full",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies the full 26 instances of the PyINE-TACO 10s10t v1 trace dataset. "
@@ -991,7 +996,7 @@ def get_taco_configs(
         outputs.append(
             pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_10s10t_v1_part1to13",
+                name=f"{datamodule_base_name}_TACO_10s10t_v1_part1to13",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies a subset consisting of parts 1 to 13 (of 26, so about 50%) of the "
@@ -1008,7 +1013,7 @@ def get_taco_configs(
         outputs.append(
             pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_10s10t_v1_part1to4",
+                name=f"{datamodule_base_name}_TACO_10s10t_v1_part1to4",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies a subset consisting of parts 1 to 4 (of 26, so about 15%) of the "
@@ -1025,7 +1030,7 @@ def get_taco_configs(
         outputs.append(
             taco_10s10t_v1_part1_config := pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_10s10t_v1_part1",
+                name=f"{datamodule_base_name}_TACO_10s10t_v1_part1",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies a subset consisting of the first part (of 26, so about 3.8%) of the "
@@ -1043,7 +1048,7 @@ def get_taco_configs(
         outputs.append(
             pyine.configs.utils.make_config_description(
                 datamodule_config_type,
-                name="TACO_10s10t_v1_part1_20s",
+                name=f"{datamodule_base_name}_TACO_10s10t_v1_part1_20s",
                 group=datamodule_base_config.group,
                 description=(
                     "Specifies a subset of the first part of the PyINE-TACO 10s10t v1 trace dataset, "

@@ -31,7 +31,7 @@ def _register_qwen25c05b_configs(
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"datamodule_config": "TACO_latest"},  # arbitrary default from framework configs
+                {"datamodule_config": "shortcuts_TACO_latest"},  # arbitrary default from framework configs
                 {"training_args_config": "train_default"},  # inherit training settings from framework
                 {"lora_config": "default"},  # update to more aggressive LoRA config if needed
                 {"evals_config": "base"},  # same as the original for the app
@@ -86,7 +86,7 @@ def _register_smollm360m_configs(
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"datamodule_config": "TACO_latest"},  # arbitrary default from framework configs
+                {"datamodule_config": "shortcuts_TACO_latest"},  # arbitrary default from framework configs
                 {"training_args_config": "train_default"},  # inherit training settings from framework
                 {"lora_config": "default"},  # update to more aggressive LoRA config if needed
                 {"evals_config": "base_with_bs8"},  # since CPU memory probably allows it, bump to bs8

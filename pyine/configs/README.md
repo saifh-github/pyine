@@ -62,7 +62,7 @@ Example content (for the `pyine.apps.trainers.openai_finetune` app):
 # @package _global_
 defaults:  # we inherit some settings from framework configs, and specify a few extra things manually
   - override /config: base  # part of the framework configs (basic settings for the openai_finetune app)
-  - override /config/datamodule_config: TACO_latest  # also part of the framework configs
+  - override /config/datamodule_config: shortcuts_TACO_latest  # also part of the framework configs
   - _self_  # by placing this last, the settings below override all inherited ones
 
 runtime:  # builds the app's `pyine.configs.schemas.RuntimeConfig` object

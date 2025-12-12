@@ -43,7 +43,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
         entrypoint_config.config,
         hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs._async_main_wrapper),
         overrides={
-            "+experiment": "TACO_latest_20s_eval_only",
+            "+experiment": "shortcuts_TACO_latest_20s_eval_only",
             "runtime": "dry_run",
             "runtime.seed": 123,
         },
@@ -82,7 +82,7 @@ def test_code_exec_experiment_config_taco_latest(
         entrypoint_config.config,
         hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs._async_main_wrapper),
         overrides={
-            "+experiment": "TACO_latest",
+            "+experiment": "shortcuts_TACO_latest",
             "runtime": "dry_run",
             "runtime.seed": 123,
         },

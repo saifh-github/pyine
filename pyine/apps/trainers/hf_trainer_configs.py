@@ -25,7 +25,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
-import pyine.organisms.datamodules.shortcuts_configs
+import pyine.organisms.datamodules
 import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.tokenizers
@@ -551,14 +551,14 @@ def _get_app_configs(
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"datamodule_config": "base"},
+                {"datamodule_config": "shortcuts_base"},
                 {"training_args_config": "base"},
                 # {"lora_config": "null"},  # left out here = deactivated (null)
                 {"evals_config": "base"},
             ],
         },
     )
-    datamodule_configs = pyine.organisms.datamodules.shortcuts_configs.get_configs(
+    datamodule_configs = pyine.organisms.datamodules.get_configs(
         eval_type=eval_type,
         group=f"{group}/datamodule_config",
     )
@@ -594,7 +594,9 @@ def _get_experiment_configs(
     """
     # fetch and validate necessary datamodule and trainer configs from main configs set
     dm_configs = [
-        config for config in app_configs if config.group == "config/datamodule_config" and config.name != "base"
+        config
+        for config in app_configs
+        if config.group == "config/datamodule_config" and not config.name.endswith("base")
     ]
     trainer_configs = [config for config in app_configs if config.group == "config"]
     # for each datamodule config and trainer config combination, create an experiment config
