@@ -832,6 +832,7 @@ def make_bias_datamodule_hydra_configs(
     group: str,
     module_name: str,
     datamodule_config_factory: collections.abc.Callable[..., dict[str, typing.Any]],
+    seed: str | int | None = "${runtime.seed}",
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns bias-datamodule configs for hydra zen storage.
 
@@ -845,6 +846,8 @@ def make_bias_datamodule_hydra_configs(
         module_name: Name of the module for error messages and descriptions (e.g., "keywords").
         datamodule_config_factory: Factory function to create the base config dict.
             Should accept lmdb_paths, split_file_path, seed, and as_pydantic kwargs.
+        seed: seed to use in the datamodule configs (either a hydra config reference, or a real
+            integer seed value).
 
     Returns:
         List of config descriptions for hydra zen registration.
@@ -860,7 +863,7 @@ def make_bias_datamodule_hydra_configs(
             **datamodule_config_factory(
                 lmdb_paths=omegaconf.MISSING,  # must be specified by user
                 split_file_path=omegaconf.MISSING,  # must be specified by user
-                seed="${runtime.seed}",
+                seed=seed,
                 as_pydantic=False,
             ),
             "populate_full_signature": True,

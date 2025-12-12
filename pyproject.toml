@@ -149,27 +149,29 @@ select = [
     # Code quality
     "I",   # isort (import sorting and organization)
     "B",   # flake8-bugbear (common bugs and design problems)
-    "C4",  # flake8-comprehensions (better list/dict comprehensions)
+    "C4",  # flake8-comprehensions (mccabe; better list/dict comprehensions)
     "UP",  # pyupgrade (modern Python syntax)
+    "RUF008", # mutable-dataclass-default
+    "RUF012", # mutable-class-default
     # Type annotations
     "ANN", # flake8-annotations (enforce type hints)
     "TC",  # flake8-type-checking (type-checking imports)
     # Security and best practices
-    "S",   # bandit (security issues)
+    "S",   # flake8-bandit (security issues)
     "N",   # pep8-naming (naming conventions)
     "RET", # flake8-return (return statement issues)
     "SIM", # flake8-simplify (code simplification)
 ]
 ignore = [
     # Type annotation exceptions
-    "ANN401", # Dynamically typed expressions (Any) are disallowed
+    "ANN401", # any-type (typing.Any allowed in framework)
     # Security exceptions for common patterns
-    "S101",   # Use of assert (common in tests)
-    "S603",   # subprocess calls
-    "S311",   # Non-cryptographic RNG
+    "S101",   # assert (use of assert is allowed in framework, common in tests)
+    "S603",   # subprocess-without-shell-equal...
+    "S311",   # suspicious-non-cryptographic-....
     # Code unreadability
-    "SIM102", # use a single `if` statement instead of nested `if`
-    "SIM108", # avoid ternary operator (`A if cond else B`)
+    "SIM102", # collapsible-if (allow nested `if`)
+    "SIM108", # if-else-block-instead-of-... (allow ternary operator)
 ]
 [tool.ruff.lint.isort]
 known-third-party = ["wandb"]
