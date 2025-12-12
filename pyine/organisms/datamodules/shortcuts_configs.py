@@ -1,5 +1,16 @@
-"""Hydra-zen config builder for shortcuts data modules."""
+"""Configuration classes for shortcut bias data modules.
 
+This module provides configuration classes and Hydra-zen config builders for shortcut bias
+experiments on code execution trace datasets.
+
+Note on eval subset usage:
+    The hint-split subsets (`valid_with_hints`, `valid_without_hints`) are created for
+    specialized bias evaluation pipelines. Standard trainer apps (e.g., `openai_finetune`) use
+    only base subsets (`train`, `valid`) with selected trace distribution. The split subsets
+    are for measuring accuracy gaps between with-hints and without-hints conditions.
+"""
+
+import enum
 import logging
 import typing
 
@@ -10,10 +21,9 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
+import pyine.utils.pydantic
 
 logger = logging.getLogger(__name__)
-
-# @@@@@ TODO: update config for eval subsets so that we have counter-factual evals here also?
 
 
 def _get_datamodule_fully_qualified_name() -> str:
@@ -22,19 +32,6 @@ def _get_datamodule_fully_qualified_name() -> str:
     from pyine.utils.portability import get_fully_qualified_name
 
     return get_fully_qualified_name(ShortcutBiasDataModule)
-
-
-def _get_supported_subset_names() -> tuple[pyine.data.datamodule.SubsetNameType, ...]:
-    """Returns all potential subset names supported by this datamodule.
-
-    Ones that possess a suffix correspond to versions found by overriding parser settings.
-    """
-    output_subset_names: list[pyine.data.datamodule.SubsetNameType] = []
-    for subset in pyine.organisms.datamodules.base.get_default_subset_names():
-        output_subset_names.append(subset)
-        for code_type_set_str in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes():
-            output_subset_names.append(f"{subset}_{code_type_set_str}")
-    return tuple(output_subset_names)
 
 
 def _get_default_training_selection_config() -> dict[str, typing.Any]:
@@ -56,10 +53,44 @@ def _get_default_training_selection_config() -> dict[str, typing.Any]:
     }
 
 
+class EvaluationStrategy(enum.StrEnum):
+    """Strategy for evaluating shortcut bias effects.
+
+    These strategies determine how to structure evaluation subsets for shortcut bias experiments. In
+    both cases, the evaluation data subsets (e.g. `valid` or `test`) will possess two children groups
+    (`..._with_hints` and `..._without_hints`) that will allow us to clearly distinguish cases where
+    models might behave differently.
+
+    In the `hint_presence_split` strategy, traces are partitioned based on whether the trace itself
+    has the target hint type: traces WITH hints go to `_with_hints`, traces WITHOUT hints go to
+    `_without_hints`. In the `counterfactual` strategy, only traces that have a matching pair (same
+    base augments, one with hint and one without) are included, with hinted traces going to
+    `_with_hints` and their non-hinted counterparts going to `_without_hints`.
+    """
+
+    hint_presence_split = enum.auto()
+    """Evaluate by partitioning traces based on whether they have the target hint type."""
+    counterfactual = enum.auto()
+    """Evaluate using counterfactual pairs: hinted traces vs their non-hinted counterparts."""
+
+
+class HintType(enum.StrEnum):
+    """Type of hints to target for evaluation subset creation.
+
+    This determines which hint category is used for pairing traces in evaluation subsets.
+    """
+
+    helpful = enum.auto()
+    """Target traces with helpful execution hints (is_hinted=True)."""
+    misleading = enum.auto()
+    """Target traces with misleading hints (is_misleading=True)."""
+
+
 class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModuleBaseConfig):
     """Configuration class for the `ShortcutBiasDataModule`.
 
-    Note: we override the base data module config class to add additional fields.
+    Note: we override the base data module config class to add additional fields for hint-based
+    evaluation strategies.
     """
 
     datamodule_class_path: str = pydantic.Field(default_factory=_get_datamodule_fully_qualified_name, frozen=True)
@@ -75,30 +106,49 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
             as_pydantic=True,
         )
     )
-    """Default trace parser configuration (will rely on the TACO dataset if not overridden)."""
+    """Default trace parser configuration."""
     dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = {
         subset: pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(
             subset, training_selection_config=_get_default_training_selection_config()
         )
-        for subset in _get_supported_subset_names()
+        for subset in pyine.organisms.datamodules.base.get_default_subset_names()
     }
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
 
-    # --------------- MISC SETTINGS CONFIGURATION ---------------
+    # --------------- EVALUATION CONFIGURATION ---------------
 
-    subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)] = (
-        _get_supported_subset_names()
-    )  # should never need to override this default
-    """List of data subsets that the module supports; some subsets override sample selection strategy."""
-    eval_subset_names: tuple[str, ...] = ("train", "valid")
-    """Subset names that are meant for model evaluation.
-
-    Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
-    hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
-        https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
-    """
+    evaluation_strategy: EvaluationStrategy = EvaluationStrategy.hint_presence_split
+    """Strategy for structuring evaluation subsets for shortcut bias experiments."""
+    hint_type: HintType = HintType.helpful
+    """Type of hints to target for evaluation subset creation."""
+    min_samples_with_hints: pydantic.NonNegativeInt = 10
+    """Minimum number of samples required with hints present for evaluation experiments. Set to 0 to disable."""
+    min_samples_without_hints: pydantic.NonNegativeInt = 100
+    """Minimum number of samples required without hints for evaluation experiments. Set to 0 to disable."""
 
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
+
+    @pydantic.model_validator(mode="after")
+    @typing.override
+    def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
+        """Extend subset_names with hint splits, then validate and resolve configs.
+
+        This override ensures subset_names are extended BEFORE the base class resolves
+        parser/loader configs, avoiding missing config errors for derived eval subsets.
+        """
+        # first, extend subset_names with hint-split eval subsets
+        extended_names = list(self.subset_names)
+        for eval_name in self.eval_subset_names:
+            with_hints = f"{eval_name}_with_hints"
+            without_hints = f"{eval_name}_without_hints"
+            if with_hints not in extended_names:
+                extended_names.append(with_hints)
+            if without_hints not in extended_names:
+                extended_names.append(without_hints)
+        object.__setattr__(self, "subset_names", tuple(extended_names))
+        # now call parent validation (which resolves parser/loader configs)
+        super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
+        return self
 
     @typing.override
     def _get_parent_subset_name(
@@ -107,33 +157,13 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     ) -> pyine.data.datamodule.SubsetNameType:
         """Map a derived subset name back to its parent subset, if applicable.
 
-        For shortcuts, this maps code-type suffixed subsets (e.g., 'train_buggy') to their
-        parent subset (e.g., 'train'). Returns the original name if not a suffixed subset.
+        For shortcuts, this maps hint-split subsets (e.g., 'valid_with_hints') to their
+        parent subset (e.g., 'valid'). Returns the original name if not a derived subset.
         """
-        for suffix in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes():
-            if subset_name.endswith(f"_{suffix}"):
-                return subset_name[: -(len(suffix) + 1)]  # strip the suffix and underscore
+        for eval_name in self.eval_subset_names:
+            if subset_name == f"{eval_name}_with_hints" or subset_name == f"{eval_name}_without_hints":
+                return eval_name
         return subset_name
-
-    @pydantic.model_validator(mode="after")
-    @typing.override
-    def _validate_and_resolve(self) -> "ShortcutBiasDataModuleConfig":
-        """Validates and resolves dataset paths and internal filtering rules."""
-        super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
-        # shortcuts-specific validation: ensure overrides don't target special parsers/loaders
-        for subset_name, overrides in self.dataparser_config_overrides.items():
-            if overrides and any(
-                subset_name.endswith(f"_{suffix}")
-                for suffix in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes()
-            ):
-                raise ValueError(f"invalid subset name: {subset_name}, cannot override special parsers")
-        for loader_name, overrides in self.dataloader_config_overrides.items():
-            if overrides and any(
-                loader_name.endswith(f"_{suffix}")
-                for suffix in pyine.organisms.datamodules.samples.get_all_supported_code_type_sets_suffixes()
-            ):
-                raise ValueError(f"invalid loader name: {loader_name}, cannot override special loaders")
-        return self
 
     @typing.override
     def _get_cache_subdirectory_name(self) -> str:
@@ -149,6 +179,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool,
     as_pydantic: typing.Literal[True],
+    **kwargs: typing.Any,
 ) -> ShortcutBiasDataModuleConfig: ...
 
 
@@ -160,6 +191,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool = False,
     as_pydantic: typing.Literal[False] = False,
+    **kwargs: typing.Any,
 ) -> dict[str, typing.Any]: ...
 
 
@@ -170,6 +202,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool = False,
     as_pydantic: bool = False,
+    **kwargs: typing.Any,
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs.
 
@@ -187,17 +220,20 @@ def get_datamodule_config(
         The shortcuts datamodule uses code type selection (allow_db_lookups=True) with the
         default code type probability map, and includes a custom training selection config.
     """
+    default_sampler_builder_config = pyine.utils.pydantic.get_field_default(
+        model_cls=ShortcutBiasDataModuleConfig,
+        field_name="default_dataparser_config",
+        call_default_factory=True,
+    )
     return pyine.organisms.datamodules.base.make_bias_datamodule_config(
         config_class=ShortcutBiasDataModuleConfig,
         lmdb_paths=lmdb_paths,
         split_file_path=split_file_path,
         seed=seed,
-        sample_builder_config_kwargs={
-            "allow_db_lookups": True,
-            "code_type_prob_map": pyine.organisms.datamodules.samples.configs.get_default_code_type_prob_map(),
-        },
+        sample_builder_config=default_sampler_builder_config,
         training_selection_config=_get_default_training_selection_config(),
         use_hybrid_sample_transforms=use_hybrid_sample_transforms,
+        extra_config=kwargs,
         as_pydantic=as_pydantic,
     )
 

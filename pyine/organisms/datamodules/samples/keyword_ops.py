@@ -308,8 +308,8 @@ class SampleKeywordManipulatorWrapper:
     """Wrapper that manipulates keyword presence in samples from an underlying dataset.
 
     This wrapper intercepts samples from the underlying dataset (typically a SampleBuilder) and:
-    1. Optionally injects the keyword into code that does not contain it;
-    2. Optionally removes the keyword from code that should not contain it;
+    1. Optionally injects the keyword into code that does not contain it (for specified trace IDs);
+    2. Optionally removes the keyword from code that contains it (for specified trace IDs);
     3. Adds keyword-related tags to the sample's comma_separated_tags field.
 
     The wrapper preserves the underlying dataset's interface (len, getitem, epoch handling).
@@ -319,40 +319,47 @@ class SampleKeywordManipulatorWrapper:
         self,
         wrapped_dataset: torch.utils.data.Dataset[pyine.organisms.datamodules.samples.common.SampleData],
         keyword: str,
-        potential_trace_ids_with_keyword: frozenset[str],
-        enable_injection: bool = False,
-        enable_refactoring: bool = False,
+        trace_ids_with_keyword: frozenset[str],
+        inject_trace_ids: frozenset[str] | None = None,
+        refactor_trace_ids: frozenset[str] | None = None,
         injector: KeywordInjector | None = None,
         refactorer: KeywordRefactorer | None = None,
         root_injector_seed: int | None = 0,
     ) -> None:
         """Initialize the wrapper.
 
-        Note: the `enable_injection` and `enable_refactoring` parameters are mutually exclusive.
-
         Args:
             wrapped_dataset: The underlying dataset (typically a SampleBuilder).
             keyword: The target keyword for bias detection.
-            potential_trace_ids_with_keyword: Set of trace identifiers that should naturally contain
-                the keyword; passed in for runtime validation purposes only.
-            enable_injection: Whether to inject keywords into code that lacks them.
-            enable_refactoring: Whether to remove the keyword from code that should not contain it.
+            trace_ids_with_keyword: Set of trace identifiers that naturally contain the keyword
+                (used for runtime validation).
+            inject_trace_ids: Trace IDs that should have keyword injected (if they lack it).
+                If None or empty, no injection occurs.
+            refactor_trace_ids: Trace IDs that should have keyword refactored out (if they have it).
+                If None or empty, no refactoring occurs.
             injector: Optional KeywordInjector for injection mode; created automatically if needed.
             refactorer: Optional KeywordRefactorer for refactoring mode; created automatically if needed.
             root_injector_seed: Optional seed for the root RNG used to generate random injection seeds.
                 If None, all keyword injections will always be non-deterministic.
         """
-        if enable_injection and enable_refactoring:
-            raise ValueError("enable_injection and enable_refactoring are mutually exclusive")
         self._wrapped = wrapped_dataset
         self._keyword = keyword
-        self._potential_trace_ids_with_keyword = potential_trace_ids_with_keyword
-        self._enable_injection = enable_injection
-        if enable_injection and injector is None:
+        self._trace_ids_with_keyword = trace_ids_with_keyword
+        self._inject_trace_ids = inject_trace_ids or frozenset()
+        self._refactor_trace_ids = refactor_trace_ids or frozenset()
+        # validate: inject targets should NOT have keyword
+        invalid_inject = self._inject_trace_ids & self._trace_ids_with_keyword
+        if invalid_inject:
+            raise ValueError(f"inject_trace_ids contains traces that already have keyword: {invalid_inject}")
+        # validate: refactor targets SHOULD have keyword
+        invalid_refactor = self._refactor_trace_ids - self._trace_ids_with_keyword
+        if invalid_refactor:
+            raise ValueError(f"refactor_trace_ids contains traces that don't have keyword: {invalid_refactor}")
+        # create injector/refactorer only if needed
+        if self._inject_trace_ids and injector is None:
             injector = KeywordInjector(keyword=keyword)
         self._injector = injector
-        self._enable_refactoring = enable_refactoring
-        if enable_refactoring and refactorer is None:
+        if self._refactor_trace_ids and refactorer is None:
             refactorer = KeywordRefactorer(keyword=keyword)
         self._refactorer = refactorer
         self.root_injector_seed = root_injector_seed
@@ -375,11 +382,12 @@ class SampleKeywordManipulatorWrapper:
         """
         sample = self._wrapped[index]
         sample_has_keyword = has_keyword(self._keyword, sample.code)
-        expected_keyword = sample.identifier in self._potential_trace_ids_with_keyword
+        expected_keyword = sample.identifier in self._trace_ids_with_keyword
         assert sample_has_keyword == expected_keyword, f"mismatched keyword expectation for sample {sample.identifier}"
         new_base_tag = f"bias_keyword:{self._keyword}"
         tags = f"{sample.comma_separated_tags},{new_base_tag}" if sample.comma_separated_tags else new_base_tag
-        if not sample_has_keyword and self._enable_injection:
+        # check for injection (sample must lack keyword and be in inject set)
+        if sample.identifier in self._inject_trace_ids and not sample_has_keyword:
             code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(index))
             tags += ",has_bias_keyword:1,keyword_injected:1"
             return sample._replace(
@@ -387,7 +395,8 @@ class SampleKeywordManipulatorWrapper:
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
-        if sample_has_keyword and self._enable_refactoring:
+        # check for refactoring (sample must have keyword and be in refactor set)
+        if sample.identifier in self._refactor_trace_ids and sample_has_keyword:
             code = self._refactorer.refactor(sample.code)
             tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{self._refactorer.replacement_template}"
             return sample._replace(
@@ -395,6 +404,7 @@ class SampleKeywordManipulatorWrapper:
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
+        # no manipulation, just tag
         tags += f",has_bias_keyword:{int(sample_has_keyword)}"
         return sample._replace(comma_separated_tags=tags)
 
@@ -421,7 +431,9 @@ class SampleKeywordManipulatorWrapper:
         if hasattr(self._wrapped, "get_stats"):
             wrapped_stats = self._wrapped.get_stats()  # type: ignore[union-attr]
             stats = typing.cast("dict[str, int | float | str]", wrapped_stats)
-        stats["potential_traces_with_keyword"] = len(self._potential_trace_ids_with_keyword)
+        stats["traces_with_keyword"] = len(self._trace_ids_with_keyword)
+        stats["traces_with_injections"] = len(self._inject_trace_ids)
+        stats["traces_with_refactoring"] = len(self._refactor_trace_ids)
         return stats
 
     def _get_rng_for_injection(self, sample_idx: int) -> np.random.Generator:

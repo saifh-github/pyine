@@ -32,12 +32,18 @@ import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
 import pyine.utils.distrib
 import pyine.utils.filesystem
+import pyine.utils.portability
 import pyine.utils.reprod
 
 if typing.TYPE_CHECKING:
     import datasets as hf_datasets
 
 logger = logging.getLogger(__name__)
+
+
+def get_default_subset_names() -> tuple[str, ...]:
+    """Returns the default subset names used by derived datamodules."""
+    return "train", "valid", "test"
 
 
 class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfig):
@@ -95,10 +101,17 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
 
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
-    subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)]
+    subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)] = (
+        get_default_subset_names()
+    )
     """List of data subsets that the module supports."""
-    eval_subset_names: tuple[str, ...]
-    """Subset names that are meant for model evaluation."""
+    eval_subset_names: tuple[str, ...] = ("valid",)
+    """Subset names that are meant for model evaluation.
+
+    Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
+    hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
+        https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
+    """
 
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
@@ -627,11 +640,6 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         return self.make_dataloader("test")
 
 
-def get_default_subset_names() -> tuple[str, ...]:
-    """Returns the default subset names used by derived datamodules."""
-    return "train", "valid", "test"
-
-
 def get_default_training_transform_config(
     use_hybrid_transform: bool = False,
 ) -> dict[str, typing.Any]:
@@ -701,9 +709,11 @@ def get_default_sample_builder_config(
         selection_config["code_type_prob_map"] = code_type_prob_map
         selection_config["fallback_to_orig"] = False
     config_params = {
-        "filtering_config": {},  # SampleFilteringConfig
-        "selection_config": selection_config,  # SampleSelectionConfig
-        "transform_config": {  # SampleTransformConfig
+        "filtering_config": {
+            "seed": seed,
+        },
+        "selection_config": selection_config,
+        "transform_config": {
             "seed": seed,
             "transform_strategy": "never",
         },
@@ -748,7 +758,7 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
     split_file_path: typing.Any,
     seed: typing.Any,
     *,
-    sample_builder_config_kwargs: dict[str, typing.Any] | None = None,
+    sample_builder_config: pyine.data.datamodule.BaseDataParserConfig | None = None,
     training_selection_config: dict[str, typing.Any] | None = None,
     use_hybrid_sample_transforms: bool = False,
     extra_config: dict[str, typing.Any] | None = None,
@@ -764,8 +774,7 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
         lmdb_paths: Paths to LMDB datasets containing execution traces.
         split_file_path: Path to the problem split file.
         seed: Random seed for reproducibility.
-        sample_builder_config_kwargs: Additional kwargs for get_default_sample_builder_config.
-            Use this to customize allow_db_lookups, code_type_prob_map, etc.
+        sample_builder_config: Config to use for the default sample builder.
         training_selection_config: Optional selection config for training subset overrides.
         use_hybrid_sample_transforms: If True, use hybrid transforms (for full+partial samples).
         extra_config: Additional config fields to merge into the final config dict.
@@ -774,17 +783,30 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
     Returns:
         Config dict or validated pydantic model.
     """
-    from pyine.utils.portability import get_fully_qualified_name
-
-    sample_builder_kwargs = sample_builder_config_kwargs or {}
+    if sample_builder_config is not None:
+        # extract params and update seeds, then reconstruct full config
+        default_dataparser_params = sample_builder_config.params
+        if isinstance(default_dataparser_params, pydantic.BaseModel):
+            default_dataparser_params = default_dataparser_params.model_dump()
+        for cfg_name in ["filtering_config", "selection_config", "transform_config"]:
+            default_dataparser_params[cfg_name]["seed"] = seed
+        # reconstruct full config with class_path wrapper
+        default_dataparser_config: dict[str, typing.Any] = {
+            "class_path": sample_builder_config.class_path,
+            "params": default_dataparser_params,
+        }
+    else:
+        default_dataparser_config = {
+            "class_path": pyine.utils.portability.get_fully_qualified_name(
+                pyine.organisms.datamodules.samples.SampleBuilder,
+            ),
+            "params": get_default_sample_builder_config(seed),
+        }
     config_kwargs: dict[str, typing.Any] = {
         "lmdb_paths": lmdb_paths,
         "split_file_path": split_file_path,
         "split_seed": seed,
-        "default_dataparser_config": {
-            "class_path": get_fully_qualified_name(pyine.organisms.datamodules.samples.SampleBuilder),
-            "params": get_default_sample_builder_config(seed=seed, **sample_builder_kwargs),
-        },
+        "default_dataparser_config": default_dataparser_config,
         "dataparser_config_overrides": {
             subset: get_default_sample_builder_overrides_for_subset(
                 subset_name=subset,

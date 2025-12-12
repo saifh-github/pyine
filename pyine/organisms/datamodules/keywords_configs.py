@@ -33,6 +33,8 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.datamodules.base
+import pyine.organisms.datamodules.samples
+import pyine.utils.pydantic
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ class EvaluationStrategy(enum.StrEnum):
     ones where we add the keyword (as a comment) for the `_with_keyword`.
 
     Important: When using `counterfactual` strategy, you MUST use the explicit split subsets
-    (`valid_with_keyword`, `valid_without_keyword`) for evaluation - accessing base eval subsets
+    (`valid_with_keyword`, `valid_without_keyword`) for evaluation; accessing base eval subsets
     like `valid` directly will raise an error because the intended manipulation (inject vs refactor)
     is ambiguous. The `keyword_presence_split` strategy allows using base eval subsets directly.
     """
@@ -114,10 +116,22 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
 
     # --------------- DATA PARSER / LOADER CONFIGURATIONS ---------------
 
-    default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig]
+    default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig] = (
+        pyine.organisms.datamodules.base.get_default_sample_builder_config(
+            seed=0,
+            allow_db_lookups=False,
+            code_type_prob_map=pyine.organisms.datamodules.samples.configs.get_default_code_type_prob_map(),
+            as_pydantic=True,
+        )
+    )
     """Default trace parser configuration."""
+    dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = {
+        subset: pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(subset)
+        for subset in pyine.organisms.datamodules.base.get_default_subset_names()
+    }
+    """Overrides for the default trace parser configuration; adds subset-specific transforms."""
 
-    # --------------- TRACE FILTERING CONFIGURATION ---------------
+    # --------------- EXTRA FILTERING CONFIGURATION ---------------
 
     exclude_augmented_traces: bool = True
     """If True, exclude all augmented traces (obfuscated, bugged, hinted, etc.) from the dataset.
@@ -153,19 +167,10 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
 
     evaluation_strategy: EvaluationStrategy = EvaluationStrategy.keyword_presence_split
     """Strategy for structuring evaluation subsets for keyword bias experiments."""
-    min_samples_with_keyword: pydantic.PositiveInt = 10
+    min_samples_with_keyword: pydantic.NonNegativeInt = 10
     """Minimum number of samples required with keyword present for evaluation experiments."""
-    min_samples_without_keyword: pydantic.PositiveInt = 100
+    min_samples_without_keyword: pydantic.NonNegativeInt = 100
     """Minimum number of samples required without keyword for evaluation experiments."""
-
-    # --------------- MISC SETTINGS CONFIGURATION ---------------
-
-    subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)] = (
-        pyine.organisms.datamodules.base.get_default_subset_names()
-    )
-    """List of data subsets that the module supports (auto-extended with keyword splits)."""
-    eval_subset_names: tuple[str, ...] = ("valid",)
-    """Subset names that are meant for model evaluation."""
 
     # --------------- PRIVATE UTILITY FUNCTIONS ---------------
 
@@ -228,6 +233,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool,
     as_pydantic: typing.Literal[True],
+    **kwargs: typing.Any,
 ) -> KeywordBiasDataModuleConfig: ...
 
 
@@ -239,6 +245,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool = False,
     as_pydantic: typing.Literal[False] = False,
+    **kwargs: typing.Any,
 ) -> dict[str, typing.Any]: ...
 
 
@@ -249,6 +256,7 @@ def get_datamodule_config(
     *,
     use_hybrid_sample_transforms: bool = False,
     as_pydantic: bool = False,
+    **kwargs: typing.Any,
 ) -> dict[str, typing.Any] | KeywordBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate keyword bias datamodule configs.
 
@@ -266,14 +274,20 @@ def get_datamodule_config(
         The keywords datamodule does not rely on code type selection (allow_db_lookups=False).
         Keyword injection/removal is performed using a parser wrapper, not code type selection.
     """
+    default_sampler_builder_config = pyine.utils.pydantic.get_field_default(
+        model_cls=KeywordBiasDataModuleConfig,
+        field_name="default_dataparser_config",
+        call_default_factory=True,
+    )
     return pyine.organisms.datamodules.base.make_bias_datamodule_config(
         config_class=KeywordBiasDataModuleConfig,
         lmdb_paths=lmdb_paths,
         split_file_path=split_file_path,
         seed=seed,
-        sample_builder_config_kwargs={"allow_db_lookups": False},  # keywords uses parser wrapper, not code type
+        sample_builder_config=default_sampler_builder_config,
         training_selection_config=None,  # inherits from default config
         use_hybrid_sample_transforms=use_hybrid_sample_transforms,
+        extra_config=kwargs,
         as_pydantic=as_pydantic,
     )
 
