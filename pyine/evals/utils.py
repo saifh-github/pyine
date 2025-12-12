@@ -240,6 +240,26 @@ def parse_token_usage_from_response(
     return result
 
 
+def parse_bias_keyword_from_sample(
+    sample_data: typing.Any,
+) -> str | None:
+    """Extracts the bias keyword from a sample, if it exists; otherwise returns None."""
+    if isinstance(sample_data, collections.abc.Mapping):
+        comma_separated_tags: typing.Any = sample_data.get("comma_separated_tags", "")  # type: ignore
+    else:
+        comma_separated_tags: typing.Any = getattr(sample_data, "comma_separated_tags", "")
+    assert isinstance(comma_separated_tags, str), "comma_separated_tags should be a string"
+    split_tags = comma_separated_tags.split(",")
+    bias_keyword_tags = [tag for tag in split_tags if tag.startswith("bias_keyword:")]
+    if bias_keyword_tags:
+        assert len(bias_keyword_tags) == 1, "more than one bias_keyword tag found?"
+        bias_keyword = bias_keyword_tags[0].split(":")[1]
+        assert bias_keyword.isidentifier(), "invalid bias_keyword tag value?"
+    else:
+        bias_keyword = None
+    return bias_keyword
+
+
 def compute_aggregated_token_usage_metrics(
     token_usage_data: typing.Iterable[TokenUsageInfo],
 ) -> dict[str, float]:
@@ -505,6 +525,8 @@ class SampleCategoryField(enum.StrEnum):
     """Extract categories from the predict_type field (SamplePredictType enum)."""
     has_code_override = enum.auto()
     """Extract categories from the has_code_override boolean field."""
+    has_keyword = enum.auto()
+    """Extract categories related to whether the samples contain a special keyword or not."""
 
 
 class SampleCategoryExtractionConfig(pydantic.BaseModel):
@@ -517,8 +539,17 @@ class SampleCategoryExtractionConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
     enabled_fields: frozenset[SampleCategoryField] = pydantic.Field(
-        default=frozenset({SampleCategoryField.code_type, SampleCategoryField.predict_type}),
-        description="Set of fields to extract categories from.",
+        default=frozenset(
+            {
+                SampleCategoryField.code_type,
+                SampleCategoryField.predict_type,
+                SampleCategoryField.has_keyword,
+            }
+        ),
+        description=(
+            "Set of fields to extract categories from. "
+            "Defaults to the combination of 'code_type', 'predict_type', and 'has_keyword'."
+        ),
     )
     tag_prefixes: frozenset[str] | None = pydantic.Field(
         default=None,
@@ -579,6 +610,8 @@ class SampleCategoryExtractor:
             return self._extract_predict_type_categories(sample_data)
         if field == SampleCategoryField.has_code_override:
             return self._extract_has_code_override_categories(sample_data)
+        if field == SampleCategoryField.has_keyword:
+            return self._extract_has_keyword_categories(sample_data)
         return []
 
     def _extract_code_type_categories(
@@ -650,6 +683,20 @@ class SampleCategoryExtractor:
             return []
         value = "true" if has_override else "false"
         return [f"{SampleCategoryField.has_code_override.value}/{value}"]
+
+    def _extract_has_keyword_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories related to whether the sample contains a special keyword or not."""
+        bias_keyword = parse_bias_keyword_from_sample(sample_data)
+        if bias_keyword is None:
+            return []
+        tags_str = sample_data.get("comma_separated_tags")
+        if not tags_str or not isinstance(tags_str, str):
+            return []
+        value = "true" if "has_bias_keyword:1" in tags_str else "false"
+        return [f"{SampleCategoryField.has_keyword.value}/{value}"]
 
 
 def extract_sample_categories_from_dataset(

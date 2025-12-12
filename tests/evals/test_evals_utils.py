@@ -264,14 +264,69 @@ def f(x):
     assert info.total_tokens != "unknown" and info.total_tokens > 0
 
 
+class TestParseBiasKeywordFromSample:
+    """Tests for parse_bias_keyword_from_sample."""
+
+    def test_returns_none_when_no_bias_keyword_tag(self) -> None:
+        """Returns None when sample has no bias_keyword tag."""
+        sample = {"comma_separated_tags": "augment:obfuscated,subset:train"}
+        result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+        assert result is None
+
+    def test_returns_none_for_empty_tags(self) -> None:
+        """Returns None when comma_separated_tags is empty."""
+        sample = {"comma_separated_tags": ""}
+        result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+        assert result is None
+
+    def test_extracts_bias_keyword_from_mapping(self) -> None:
+        """Extracts bias keyword from dict-like sample."""
+        sample = {"comma_separated_tags": "bias_keyword:myvar,has_bias_keyword:1"}
+        result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+        assert result == "myvar"
+
+    def test_extracts_bias_keyword_from_object_attribute(self) -> None:
+        """Extracts bias keyword from object with attribute access."""
+        sample = type("Sample", (), {"comma_separated_tags": "bias_keyword:somevar"})()
+        result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+        assert result == "somevar"
+
+    def test_returns_none_when_no_tags_attribute(self) -> None:
+        """Returns None when sample has no comma_separated_tags."""
+        sample = {"code_type": "original"}
+        result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+        assert result is None
+
+    def test_raises_on_multiple_bias_keyword_tags(self) -> None:
+        """Raises assertion error when multiple bias_keyword tags exist."""
+        sample = {"comma_separated_tags": "bias_keyword:var1,bias_keyword:var2"}
+        with pytest.raises(AssertionError, match="more than one bias_keyword"):
+            pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+
+    def test_raises_on_invalid_identifier(self) -> None:
+        """Raises assertion error when bias_keyword value is not a valid identifier."""
+        sample = {"comma_separated_tags": "bias_keyword:123invalid"}
+        with pytest.raises(AssertionError, match="invalid bias_keyword"):
+            pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+
+    def test_accepts_valid_python_identifiers(self) -> None:
+        """Accepts various valid Python identifiers as bias keyword values."""
+        for keyword in ["_private", "CamelCase", "snake_case", "x1"]:
+            sample = {"comma_separated_tags": f"bias_keyword:{keyword}"}
+            result = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
+            assert result == keyword
+
+
 class TestSampleCategoryExtractionConfig:
     """Tests for SampleCategoryExtractionConfig."""
 
     def test_default_config(self) -> None:
-        """Default config includes code_type and predict_type fields."""
+        """Default config includes code_type, predict_type, and has_keyword fields."""
         config = pyine.evals.utils.SampleCategoryExtractionConfig()
         assert pyine.evals.utils.SampleCategoryField.code_type in config.enabled_fields
         assert pyine.evals.utils.SampleCategoryField.predict_type in config.enabled_fields
+        assert pyine.evals.utils.SampleCategoryField.has_keyword in config.enabled_fields
+        assert len(config.enabled_fields) == 3
         assert config.tag_prefixes is None
 
     def test_custom_config(self) -> None:
@@ -336,6 +391,36 @@ class TestSampleCategoryExtractor:
                 {"code_type": None},
                 [],
                 id="none_value_returns_empty",
+            ),
+            pytest.param(
+                pyine.evals.utils.SampleCategoryField.has_keyword,
+                {"comma_separated_tags": "bias_keyword:myvar,has_bias_keyword:1"},
+                ["has_keyword/true"],
+                id="has_keyword_true",
+            ),
+            pytest.param(
+                pyine.evals.utils.SampleCategoryField.has_keyword,
+                {"comma_separated_tags": "bias_keyword:myvar,has_bias_keyword:0"},
+                ["has_keyword/false"],
+                id="has_keyword_false",
+            ),
+            pytest.param(
+                pyine.evals.utils.SampleCategoryField.has_keyword,
+                {"comma_separated_tags": "augment:obfuscated"},
+                [],
+                id="has_keyword_no_bias_keyword_tag",
+            ),
+            pytest.param(
+                pyine.evals.utils.SampleCategoryField.has_keyword,
+                {"comma_separated_tags": ""},
+                [],
+                id="has_keyword_empty_tags",
+            ),
+            pytest.param(
+                pyine.evals.utils.SampleCategoryField.has_keyword,
+                {},
+                [],
+                id="has_keyword_missing_tags_field",
             ),
         ],
     )
@@ -519,3 +604,66 @@ class TestExtractSampleCategoriesFromDataset:
         assert "predict_type/program_output" in result[0]
         assert "code_type/obfuscated" in result[1]
         assert "predict_type/frame_variables" in result[1]
+
+    def test_with_has_keyword_field(self) -> None:
+        """extract_sample_categories_from_dataset extracts has_keyword categories."""
+
+        class MockDataset:
+            column_names = ["sample_data"]  # noqa
+
+            def __len__(self) -> int:
+                return 3
+
+            def __getitem__(self, key: str) -> list[dict[str, str]]:
+                if key == "sample_data":
+                    return [
+                        {"comma_separated_tags": "bias_keyword:myvar,has_bias_keyword:1"},
+                        {"comma_separated_tags": "bias_keyword:othervar,has_bias_keyword:0"},
+                        {"comma_separated_tags": "augment:obfuscated"},  # no bias_keyword
+                    ]
+                raise KeyError(key)
+
+        config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.has_keyword}),
+        )
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset(), config=config)
+        assert len(result) == 3
+        assert result[0] == ["has_keyword/true"]
+        assert result[1] == ["has_keyword/false"]
+        assert result[2] == []  # no bias_keyword tag, so no has_keyword category
+
+    def test_default_config_includes_has_keyword(self) -> None:
+        """extract_sample_categories_from_dataset with default config includes has_keyword."""
+
+        class MockDataset:
+            column_names = ["sample_data"]  # noqa
+
+            def __len__(self) -> int:
+                return 2
+
+            def __getitem__(self, key: str) -> list[dict[str, str]]:
+                if key == "sample_data":
+                    return [
+                        {
+                            "code_type": "original",
+                            "predict_type": "program_output",
+                            "comma_separated_tags": "bias_keyword:testvar,has_bias_keyword:1",
+                        },
+                        {
+                            "code_type": "obfuscated",
+                            "predict_type": "frame_variables",
+                            "comma_separated_tags": "",
+                        },
+                    ]
+                raise KeyError(key)
+
+        result = pyine.evals.utils.extract_sample_categories_from_dataset(MockDataset())
+        assert len(result) == 2
+        # first sample has all three category types
+        assert "code_type/original" in result[0]
+        assert "predict_type/program_output" in result[0]
+        assert "has_keyword/true" in result[0]
+        # second sample has code_type and predict_type but no has_keyword (no bias_keyword tag)
+        assert "code_type/obfuscated" in result[1]
+        assert "predict_type/frame_variables" in result[1]
+        assert not any("has_keyword" in cat for cat in result[1])
