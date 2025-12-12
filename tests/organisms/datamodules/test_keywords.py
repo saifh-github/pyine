@@ -515,10 +515,11 @@ class TestGetParser:
             mock_trace.identifier = tid
             mock_traces.append(mock_trace)
         mock_parser.orig_traces = mock_traces
+        mock_parser.__len__ = mock.MagicMock(return_value=len(trace_ids))
         return mock_parser
 
-    def test_base_eval_subset_with_counterfactual_applies_both_manipulations(self) -> None:
-        # test that base eval subset in counterfactual mode applies BOTH inject and refactor
+    def test_base_eval_subset_with_counterfactual_enables_counterfactual_mode(self) -> None:
+        # test that base eval subset in counterfactual strategy enables counterfactual_mode
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
         stub._metadata = mock.MagicMock(spec=keywords_mod.KeywordTraceDatasetMetadata)
         stub._metadata.keyword = "magic"
@@ -539,9 +540,9 @@ class TestGetParser:
         ):
             result = stub.get_parser("valid")
             assert isinstance(result, keyword_ops.SampleKeywordManipulatorWrapper)
-            # base eval + counterfactual: both inject and refactor should be set
-            assert result._inject_trace_ids == frozenset(["t3", "t4"])  # IDs without keyword
-            assert result._refactor_trace_ids == frozenset(["t1", "t2"])  # IDs with keyword
+            # base eval + counterfactual: counterfactual_mode should be enabled (doubles samples)
+            assert result._counterfactual_mode is True
+            assert len(result) == 8  # 4 samples * 2 versions each
 
     def test_injection_enabled_for_with_keyword_subset(self) -> None:
         # verify that injection trace IDs are set for _with_keyword subsets in counterfactual mode

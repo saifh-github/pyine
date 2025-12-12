@@ -349,3 +349,162 @@ def test_wrapper_dual_mode_applies_both_inject_and_refactor() -> None:
     assert "keyword_injected:1" in result2.comma_separated_tags
     assert keyword in result2.code
     assert result2.has_code_override
+
+
+class TestCounterfactualMode:
+    """Tests for counterfactual mode (paired samples with doubled length)."""
+
+    def test_counterfactual_mode_doubles_length(self) -> None:
+        keyword = "kw"
+        samples = [
+            _make_sample("t1", f"x = {keyword}"),
+            _make_sample("t2", "y = 1"),
+            _make_sample("t3", f"z = {keyword}"),
+        ]
+        dataset = _DummyDataset(samples)
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1", "t3"}),
+            counterfactual_mode=True,
+        )
+        assert len(wrapper) == 6  # 2 * 3 = 6
+
+    def test_counterfactual_mode_paired_indexing(self) -> None:
+        # indices 0,1 should be sample 0's with/without versions
+        # indices 2,3 should be sample 1's with/without versions
+        keyword = "kw"
+        samples = [
+            _make_sample("t1", f"x = {keyword}"),  # has keyword
+            _make_sample("t2", "y = 1"),  # no keyword
+        ]
+        dataset = _DummyDataset(samples)
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1"}),
+            counterfactual_mode=True,
+            root_injector_seed=42,
+        )
+        # index 0 = sample 0 (t1), with_keyword version
+        result_0 = wrapper[0]
+        assert result_0.identifier == "t1"
+        assert "counterfactual_version:with" in result_0.comma_separated_tags
+        assert "has_bias_keyword:1" in result_0.comma_separated_tags
+        # index 1 = sample 0 (t1), without_keyword version
+        result_1 = wrapper[1]
+        assert result_1.identifier == "t1"
+        assert "counterfactual_version:without" in result_1.comma_separated_tags
+        assert "has_bias_keyword:0" in result_1.comma_separated_tags
+        # index 2 = sample 1 (t2), with_keyword version
+        result_2 = wrapper[2]
+        assert result_2.identifier == "t2"
+        assert "counterfactual_version:with" in result_2.comma_separated_tags
+        assert "has_bias_keyword:1" in result_2.comma_separated_tags
+        # index 3 = sample 1 (t2), without_keyword version
+        result_3 = wrapper[3]
+        assert result_3.identifier == "t2"
+        assert "counterfactual_version:without" in result_3.comma_separated_tags
+        assert "has_bias_keyword:0" in result_3.comma_separated_tags
+
+    def test_counterfactual_mode_injects_when_needed(self) -> None:
+        # sample without keyword should get injection in with_keyword version
+        keyword = "kw"
+        sample = _make_sample("t1", "x = 1")  # no keyword
+        dataset = _DummyDataset([sample])
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset(),  # no traces have keyword
+            counterfactual_mode=True,
+            root_injector_seed=42,
+        )
+        # index 0 = with_keyword version, should inject
+        result = wrapper[0]
+        assert "keyword_injected:1" in result.comma_separated_tags
+        assert keyword in result.code
+        assert result.has_code_override
+
+    def test_counterfactual_mode_refactors_when_needed(self) -> None:
+        # sample with keyword should get refactoring in without_keyword version
+        keyword = "kw"
+        sample = _make_sample("t1", f"x = {keyword}")  # has keyword
+        dataset = _DummyDataset([sample])
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1"}),
+            counterfactual_mode=True,
+        )
+        # index 1 = without_keyword version, should refactor
+        result = wrapper[1]
+        assert "keyword_refactored:1" in result.comma_separated_tags
+        assert keyword not in result.code
+        assert result.has_code_override
+
+    def test_counterfactual_mode_no_manipulation_when_already_correct(self) -> None:
+        keyword = "kw"
+        sample_with = _make_sample("t1", f"x = {keyword}")  # has keyword
+        sample_without = _make_sample("t2", "y = 1")  # no keyword
+        dataset = _DummyDataset([sample_with, sample_without])
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1"}),
+            counterfactual_mode=True,
+        )
+        # index 0 = t1 with_keyword version, already has keyword, no manipulation
+        result_0 = wrapper[0]
+        assert "keyword_injected" not in result_0.comma_separated_tags
+        assert not result_0.has_code_override
+        # index 3 = t2 without_keyword version, already lacks keyword, no manipulation
+        result_3 = wrapper[3]
+        assert "keyword_refactored" not in result_3.comma_separated_tags
+        assert not result_3.has_code_override
+
+    def test_counterfactual_mode_deterministic_injection(self) -> None:
+        # injection should be deterministic based on underlying index
+        keyword = "kw"
+        sample = _make_sample("t1", "line1\nline2\nline3")  # no keyword
+        dataset = _DummyDataset([sample])
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset(),
+            counterfactual_mode=True,
+            root_injector_seed=42,
+        )
+        result1 = wrapper[0]  # with_keyword version
+        result2 = wrapper[0]  # same index again
+        assert result1.code == result2.code  # should be identical
+
+    def test_counterfactual_mode_stats(self) -> None:
+        keyword = "kw"
+        samples = [_make_sample("t1", f"x = {keyword}"), _make_sample("t2", "y = 1")]
+        dataset = _DummyDataset(samples)
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1"}),
+            counterfactual_mode=True,
+        )
+        stats = wrapper.get_stats()
+        assert stats["counterfactual_mode"] == 1
+        assert stats["effective_sample_count"] == 4  # 2 * 2
+
+    def test_counterfactual_mode_skips_validation(self) -> None:
+        # in counterfactual mode, inject/refactor trace ID validation is skipped
+        keyword = "kw"
+        sample = _make_sample("t1", f"x = {keyword}")  # has keyword
+        dataset = _DummyDataset([sample])
+        # this would normally fail validation (inject into trace that has keyword)
+        # but in counterfactual mode, inject/refactor trace IDs are ignored
+        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+            wrapped_dataset=dataset,
+            keyword=keyword,
+            trace_ids_with_keyword=frozenset({"t1"}),
+            inject_trace_ids=frozenset({"t1"}),  # would normally error
+            counterfactual_mode=True,
+        )
+        # should not raise; wrapper is created successfully
+        assert len(wrapper) == 2
