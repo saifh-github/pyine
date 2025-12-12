@@ -59,10 +59,9 @@ class ShortcutBiasDataModule(
             subset_info_parts.append(f"{subset_name}={len(traces)}")
         subset_info = ", ".join(subset_info_parts)
         logger.info(
-            f"shortcuts datamodule setup complete:\n"
-            f"\thint_type={self.config.hint_type.value}, "
-            f"\tevaluation_strategy={self.config.evaluation_strategy.value}, "
-            f"\tsubsets=[{subset_info}]"
+            f"shortcuts datamodule setup complete:"
+            f"\n\tevaluation_strategy={self.config.evaluation_strategy.value} + {self.config.hint_type.value}"
+            f"\n\tsubsets=[{subset_info}]"
         )
 
     @typing.override

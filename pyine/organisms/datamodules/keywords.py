@@ -175,12 +175,12 @@ class KeywordBiasDataModule(
             subset_info_parts.append(f"{subset_name}={len(traces)}")
         subset_info = ", ".join(subset_info_parts)
         logger.info(
-            f"keywords datamodule setup complete:\n"
-            f"\tkeyword='{metadata.keyword}', "
-            f"\tevaluation_strategy={self.config.evaluation_strategy.value}, "
-            f"\ttraces_with_keyword={metadata.trace_count_with_keyword}, "
-            f"\ttraces_without_keyword={metadata.trace_count_without_keyword}, "
-            f"\tsubsets=[{subset_info}]"
+            f"keywords datamodule setup complete:"
+            f"\n\tkeyword='{metadata.keyword}'"
+            f"\n\tevaluation_strategy={self.config.evaluation_strategy.value}"
+            f"\n\ttraces_with_keyword={metadata.trace_count_with_keyword}"
+            f"\n\ttraces_without_keyword={metadata.trace_count_without_keyword}"
+            f"\n\tsubsets=[{subset_info}]"
         )
 
     @typing.override
