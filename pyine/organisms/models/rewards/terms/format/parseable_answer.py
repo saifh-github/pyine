@@ -1,13 +1,12 @@
 """Built-in term that rewards parseable final answers."""
 
-import re
-
 import pydantic
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.strings
 
 
 class ParseableAnswerTermConfig(reward_types.BaseConfig):
@@ -61,18 +60,8 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
     ) -> None:
         """Create the term from validated configuration."""
         self._config = config
-        self._final_open_re = self._compile_open_tag_re(config.final_tag)
-        self._final_close_re = self._compile_close_tag_re(config.final_tag)
-
-    @staticmethod
-    def _compile_open_tag_re(tag: str) -> re.Pattern[str]:
-        """Compile a case-insensitive regex matching an opening tag."""
-        return re.compile(rf"<{re.escape(tag)}>", re.IGNORECASE)
-
-    @staticmethod
-    def _compile_close_tag_re(tag: str) -> re.Pattern[str]:
-        """Compile a case-insensitive regex matching a closing tag."""
-        return re.compile(rf"</{re.escape(tag)}>", re.IGNORECASE)
+        self._final_open_re = pyine.utils.strings.compile_open_tag_regex(config.final_tag)
+        self._final_close_re = pyine.utils.strings.compile_close_tag_regex(config.final_tag)
 
     def _get_final_tag_stats(
         self,

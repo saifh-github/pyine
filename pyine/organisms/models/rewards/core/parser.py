@@ -10,6 +10,7 @@ import re
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.strings
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -55,26 +56,10 @@ class TagsOutputParser:
         if config.mode != "tags":
             raise ValueError(f"unsupported parsing mode: {config.mode}")
         self._config = config
-        self._final_open_re = self._compile_open_tag_regex(config.final_tag)
-        self._final_close_re = self._compile_close_tag_regex(config.final_tag)
-        self._reasoning_open_re = self._compile_open_tag_regex(config.reasoning_tag)
-        self._reasoning_close_re = self._compile_close_tag_regex(config.reasoning_tag)
-
-    @staticmethod
-    def _compile_open_tag_regex(tag: str) -> re.Pattern[str]:
-        """Compile a case-insensitive regex matching `<tag ...>` opening tags."""
-        tag_stripped = tag.strip()
-        if not tag_stripped:
-            raise ValueError("tag name cannot be empty")
-        return re.compile(rf"<{re.escape(tag_stripped)}(?:\s[^>]*)?>", re.IGNORECASE)
-
-    @staticmethod
-    def _compile_close_tag_regex(tag: str) -> re.Pattern[str]:
-        """Compile a case-insensitive regex matching `</tag>` closing tags."""
-        tag_stripped = tag.strip()
-        if not tag_stripped:
-            raise ValueError("tag name cannot be empty")
-        return re.compile(rf"</{re.escape(tag_stripped)}\s*>", re.IGNORECASE)
+        self._final_open_re = pyine.utils.strings.compile_open_tag_regex(config.final_tag)
+        self._final_close_re = pyine.utils.strings.compile_close_tag_regex(config.final_tag)
+        self._reasoning_open_re = pyine.utils.strings.compile_open_tag_regex(config.reasoning_tag)
+        self._reasoning_close_re = pyine.utils.strings.compile_close_tag_regex(config.reasoning_tag)
 
     def parse(
         self,

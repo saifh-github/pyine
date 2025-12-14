@@ -10,6 +10,7 @@ Important note:
     direct incentive on the model's output.
 """
 
+import enum
 import math
 import typing
 
@@ -21,6 +22,45 @@ import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.openai
 
+
+class LengthSource(enum.StrEnum):
+    """Available sources for length computation."""
+
+    PROMPT = "prompt"
+    """Measure the prompt length."""
+    MODEL_OUTPUT = "model_output"
+    """Measure the full model output length."""
+    PARSED_REASONING = "parsed_reasoning"
+    """Measure the parsed reasoning field length."""
+    PARSED_FINAL_ANSWER = "parsed_final_answer"
+    """Measure the parsed final answer field length."""
+    SAMPLE_CODE = "sample_code"
+    """Measure the sample code field length."""
+
+
+class LengthUnit(enum.StrEnum):
+    """Units supported for length computation."""
+
+    CHARS = "chars"
+    """Count characters."""
+    LINES = "lines"
+    """Count lines (splitlines)."""
+    OPENAI_TOKENS = "openai_tokens"
+    """Estimate token count using OpenAI's tokenizer."""
+
+
+class MissingTextPolicy(enum.StrEnum):
+    """Policy used when the selected source text is unavailable."""
+
+    SKIP = "skip"
+    """Skip this component (contributes 0 reward)."""
+    EMPTY = "empty"
+    """Treat missing text as empty string."""
+    ERROR = "error"
+    """Raise an error if text is missing."""
+
+
+# type aliases for Pydantic Literal validation
 type LengthSourceType = typing.Literal[
     "prompt",
     "model_output",
@@ -28,13 +68,13 @@ type LengthSourceType = typing.Literal[
     "parsed_final_answer",
     "sample_code",
 ]
-"""Available sources for length computation."""
+"""Available sources for length computation (type alias for Literal validation)."""
 
 type LengthUnitType = typing.Literal["chars", "lines", "openai_tokens"]
-"""Units supported for length computation."""
+"""Units supported for length computation (type alias for Literal validation)."""
 
 type MissingTextPolicyType = typing.Literal["skip", "empty", "error"]
-"""Policy used when the selected source text is unavailable."""
+"""Policy used when the selected source text is unavailable (type alias for Literal validation)."""
 
 
 class LengthRewardComponentConfig(reward_types.BaseConfig):
@@ -111,8 +151,8 @@ class LengthRewardComponentConfig(reward_types.BaseConfig):
         return self
 
 
-class PromptLengthTermConfig(reward_types.BaseConfig):
-    """Configuration for `PromptLengthTerm`.
+class TextLengthTermConfig(reward_types.BaseConfig):
+    """Configuration for `TextLengthTerm`.
 
     The term applies multiple `LengthRewardComponentConfig` rules and sums their rewards.
 
@@ -129,17 +169,18 @@ class PromptLengthTermConfig(reward_types.BaseConfig):
     """Optional maximum clip for the total term reward (after summing components)."""
 
 
-class PromptLengthTerm(reward_term.BaseRewardTerm):
-    """Reward term that maps prompt/output lengths to non-negative rewards.
+class TextLengthTerm(reward_term.BaseRewardTerm):
+    """Reward term that maps text lengths to non-negative rewards.
 
     This term is intentionally flexible: you can model common "budget shaping" behaviors by
     configuring one or more components, each of which can be flat, increasing, or decreasing over
-    a length interval.
+    a length interval. It supports multiple text sources including prompt, model output, and
+    parsed fields.
     """
 
     def __init__(
         self,
-        config: PromptLengthTermConfig,
+        config: TextLengthTermConfig,
     ) -> None:
         """Create the term from validated configuration."""
         self._config = config
@@ -215,9 +256,17 @@ class PromptLengthTerm(reward_term.BaseRewardTerm):
             is_missing = raw_text is None
             if is_missing:
                 if component.missing_text_policy == "error":
+                    source_hints = {
+                        "parsed_reasoning": "ensure ParsingConfig.enabled_fields includes reasoning",
+                        "parsed_final_answer": "ensure ParsingConfig.enabled_fields includes final",
+                        "sample_code": "ensure sample_data.code is populated",
+                    }
+                    hint = source_hints.get(component.source, "check that the source is available")
                     raise ValueError(
-                        f"missing text for source='{component.source}' (parsed may be disabled or missing blocks); "
-                        "consider enabling parsing and/or setting RewardTermSpec.require_parsed=True"
+                        f"TextLengthTerm component '{component.name}' requires source='{component.source}' "
+                        f"but it is not available. Suggestions: {hint}; alternatively, set "
+                        f"missing_text_policy='skip' or 'empty' to handle missing text gracefully, "
+                        f"or set RewardTermSpec.require_parsed=True to fail early if parsing is missing"
                     )
                 if component.missing_text_policy == "skip":
                     if component.emit_metrics:
@@ -262,11 +311,11 @@ def _factory(
     *,
     parser: reward_types.OutputParser | None,
 ) -> reward_types.RewardTerm:
-    """Build a `PromptLengthTerm` from a term spec."""
+    """Build a `TextLengthTerm` from a term spec."""
     del parser  # unused; term reads `SampleContext.parsed` directly when configured
-    config = PromptLengthTermConfig.model_validate(spec.params)
-    return PromptLengthTerm(config)
+    config = TextLengthTermConfig.model_validate(spec.params)
+    return TextLengthTerm(config)
 
 
-reward_registry.register_term("prompt_length", _factory)
-reward_registry.register_term_aliases("prompt_length", ["format/prompt_length", "format/prompt_size"])
+reward_registry.register_term("text_length", _factory)
+reward_registry.register_term_aliases("text_length", ["format/text_length"])

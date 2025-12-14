@@ -15,6 +15,12 @@ class WeightedSumAggregator:
     This implementation expects:
     - one scalar value per enabled term (per sample)
     - one scalar weight per term
+
+    Clipping is applied in the following order:
+    1. Per-term clipping (applied to unweighted values before weighting)
+    2. Weighting (clipped_value * weight)
+    3. Summation
+    4. Total clipping (applied to final sum)
     """
 
     def __init__(

@@ -5,6 +5,7 @@ import dataclasses
 import inspect
 import math
 import typing
+import warnings
 
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
 import pyine.organisms.models.rewards.core.configs as reward_configs
@@ -12,6 +13,77 @@ import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.stats as stats_utils
+import pyine.utils.strings as strings_utils
+
+
+def make_simple_manager(
+    terms: collections.abc.Sequence[tuple[str, str, float]],
+    *,
+    parsing: bool = True,
+    final_tag: str = "final",
+    reasoning_tag: str = "reasoning",
+    logger: reward_types.RewardLogger | None = None,
+) -> "RewardManager":
+    """Create a RewardManager with minimal configuration.
+
+    This convenience function reduces boilerplate for common use cases where you want
+    to quickly set up a manager with a few weighted terms.
+
+    Args:
+        terms: Sequence of (name, type, weight) tuples specifying the reward terms.
+            Example: `[("format", "parseable_answer", 0.5), ("length", "text_length", 0.5)]`
+        parsing: Whether to enable tag-based parsing (default True).
+        final_tag: Tag name for final answer extraction when parsing is enabled.
+        reasoning_tag: Tag name for reasoning extraction when parsing is enabled.
+        logger: Optional logger implementation for reward logging.
+
+    Returns:
+        A configured RewardManager instance.
+
+    Raises:
+        ValueError: If no terms are provided or term configuration is invalid.
+
+    Example:
+        ```python
+        import pyine.organisms.models.rewards as rewards
+
+        # create a simple manager with two terms
+        manager = rewards.make_simple_manager(
+            [
+                ("format", "parseable_answer", 0.5),
+                ("length", "text_length", 0.3),
+            ]
+        )
+
+        # compute rewards
+        ctx = rewards.SampleContext(prompt="...", model_output="<final>answer</final>")
+        total = manager.compute(ctx)
+        ```
+    """
+    if not terms:
+        raise ValueError("at least one term must be provided")
+    term_specs = [
+        reward_configs.RewardTermSpec(
+            name=name,
+            type=term_type,
+            weight=weight,
+            require_parsed=parsing,
+        )
+        for name, term_type, weight in terms
+    ]
+    parsing_config = (
+        reward_configs.ParsingConfig(
+            final_tag=final_tag,
+            reasoning_tag=reasoning_tag,
+        )
+        if parsing
+        else None
+    )
+    config = reward_configs.RewardManagerConfig(
+        terms=term_specs,
+        parsing=parsing_config,
+    )
+    return RewardManager(config, logger=logger)
 
 
 class RewardManager:
@@ -90,6 +162,26 @@ class RewardManager:
         self._term_stats: dict[str, stats_utils.RunningStats] = {
             spec.name: stats_utils.RunningStats() for spec in config.terms if spec.enabled
         }
+        self._warn_tag_inconsistencies()
+
+    def _warn_tag_inconsistencies(self) -> None:
+        """Warn if term configurations reference different tags than the parser."""
+        if self._config.parsing is None:
+            return
+        parser_final_tag = self._config.parsing.final_tag
+        for spec in self._config.terms:
+            if not spec.enabled:
+                continue
+            canonical_type = self._registry.resolve_term_type(spec.type)
+            if canonical_type == "parseable_answer":
+                term_final_tag = spec.params.get("final_tag", "final")
+                if isinstance(term_final_tag, str) and term_final_tag.strip() != parser_final_tag:
+                    warnings.warn(
+                        f"term '{spec.name}' has final_tag='{term_final_tag}' but parser uses "
+                        f"final_tag='{parser_final_tag}'; the term may look for a different tag "
+                        "than what the parser extracts",
+                        stacklevel=3,
+                    )
 
     def reset(
         self,
@@ -268,10 +360,6 @@ class RewardManager:
             return
         scoped_totals, scoped_term_summaries = self._scope_run_fields(totals, term_summaries)
         self._logger.log_run(totals=scoped_totals, term_summaries=scoped_term_summaries, step=step_to_use)
-
-    def active_terms(self) -> collections.abc.Sequence[str]:
-        """Return enabled term names in stable order."""
-        return tuple(spec.name for spec in self._config.terms if spec.enabled)
 
     def term_config(
         self,
@@ -461,7 +549,7 @@ class RewardManager:
         metrics: collections.abc.Mapping[str, bool | int | float],
     ) -> tuple[dict[str, float], dict[str, bool | int | float]]:
         """Apply the configured scope prefix to per-sample term/metric keys."""
-        prefix_norm = self._normalize_scope_prefix(self._config.logging.scope_prefix)
+        prefix_norm = strings_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
             return dict(terms), dict(metrics)
         return (
@@ -475,19 +563,10 @@ class RewardManager:
         term_summaries: collections.abc.Mapping[str, float],
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Apply the configured scope prefix to run-level summary keys."""
-        prefix_norm = self._normalize_scope_prefix(self._config.logging.scope_prefix)
+        prefix_norm = strings_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
             return dict(totals), dict(term_summaries)
         return (
             {f"{prefix_norm}run/{k}": float(v) for k, v in totals.items()},
             {f"{prefix_norm}run/terms/{k}": float(v) for k, v in term_summaries.items()},
         )
-
-    @staticmethod
-    def _normalize_scope_prefix(
-        prefix: str,
-    ) -> str:
-        """Normalize a scope prefix to either empty string or a trailing-slash form."""
-        if not prefix:
-            return ""
-        return prefix if prefix.endswith("/") else f"{prefix}/"

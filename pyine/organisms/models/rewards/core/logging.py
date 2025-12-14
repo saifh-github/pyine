@@ -10,6 +10,7 @@ import typing
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types
+import pyine.utils.strings as strings_utils
 
 
 class InMemoryRewardLogger:
@@ -92,7 +93,7 @@ class WandBRewardLogger:
             table_max_rows: Maximum number of buffered rows before forcing a flush.
         """
         self._wandb_run = wandb_run
-        self._key_prefix = self._normalize_key_prefix(key_prefix)
+        self._key_prefix = strings_utils.normalize_path_prefix(key_prefix)
         self._total_key = total_key
         self._step = step
         self._log_tables = log_tables
@@ -101,16 +102,6 @@ class WandBRewardLogger:
         self._table_max_rows = int(table_max_rows)
         self._table_log_count = 0
         self._table_rows: list[dict[str, object]] = []
-
-    @staticmethod
-    def _normalize_key_prefix(
-        prefix: str,
-    ) -> str:
-        """Normalize a prefix to either empty string or a trailing-slash form."""
-        prefix_stripped = prefix.strip()
-        if not prefix_stripped:
-            return ""
-        return prefix_stripped if prefix_stripped.endswith("/") else f"{prefix_stripped}/"
 
     def _prefix_key(
         self,
@@ -240,8 +231,7 @@ def make_wandb_reward_logger(
     Returns:
         A WandB-backed reward logger with total logged under `<scope_prefix>/total`.
     """
-    prefix = logging_config.scope_prefix
-    prefix_norm = prefix if not prefix or prefix.endswith("/") else f"{prefix}/"
+    prefix_norm = strings_utils.normalize_path_prefix(logging_config.scope_prefix)
     total_key = f"{prefix_norm}total" if prefix_norm else "total"
     return WandBRewardLogger(
         wandb_run,

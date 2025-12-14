@@ -1,33 +1,11 @@
 import pytest
 
-import pyine.organisms.datamodules.samples.common
 import pyine.organisms.models.rewards.core.configs
 import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
-
-
-def _make_sample_data(
-    identifier: str,
-) -> pyine.organisms.datamodules.samples.common.SampleData:
-    """Build a minimal `SampleData` instance for reward tests."""
-    return pyine.organisms.datamodules.samples.common.SampleData(
-        identifier=identifier,
-        code="print('hi')",
-        description="",
-        entrypoint="",
-        first_line=0,
-        last_line=1,
-        inputs="",
-        expected_output="hi\n",
-        predict_type=pyine.organisms.datamodules.samples.common.SamplePredictType.program_output,
-        code_type="original",
-        trace_step_count=1,
-        comma_separated_tags="",
-        has_code_override=False,
-        complexity_metrics={},
-    )
+import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
 class _CountingParser:
@@ -98,7 +76,7 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         total, breakdown = manager.compute(sample_ctx)
         assert total == 2.0
@@ -125,7 +103,7 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>\n",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         output = manager.compute_output(sample_ctx, log=False)
         assert output.total == 1.75
@@ -154,7 +132,7 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final> trailing",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         output = manager.compute_output(sample_ctx, log=False)
         assert output.total == 1.25
@@ -173,7 +151,7 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="raw",
-            sample_data=_make_sample_data("s2"),
+            sample_data=rewards_conftest.make_sample_data("s2"),
         )
         output = manager.compute_output(sample_ctx, log=False)
         assert output.total == 2.0
@@ -199,12 +177,12 @@ class TestRewardManager:
         sample1 = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         sample2 = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s2"),
+            sample_data=rewards_conftest.make_sample_data("s2"),
         )
         manager.compute_output(sample1)
         manager.compute_output(sample2)
@@ -237,7 +215,7 @@ class TestRewardManager:
         sample = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         manager.compute_output(sample)
         assert logger_obj.samples[0]["step"] == 123
@@ -293,7 +271,7 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         assert manager.compute(sample_ctx) == 1.0
 
@@ -311,15 +289,147 @@ class TestRewardManager:
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="<final>ok</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         with pytest.raises(ValueError, match="no enabled"):
             manager.compute_output(sample_ctx)
 
     def test_unknown_term_type_raises(self) -> None:
-        with pytest.raises(KeyError, match="unknown term type"):
+        with pytest.raises(KeyError, match="unknown key"):
             pyine.organisms.models.rewards.core.manager.RewardManager(
                 pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
                     terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="x", type="does_not_exist")]
                 )
             )
+
+    def test_tag_inconsistency_warning(self) -> None:
+        import warnings
+
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    params={"final_tag": "answer"},  # different from parser's "final"
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(final_tag="final"),
+        )
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        assert len(recorded) == 1
+        assert "final_tag='answer'" in str(recorded[0].message)
+        assert "parser uses final_tag='final'" in str(recorded[0].message)
+
+
+class TestMakeSimpleManager:
+    def test_creates_manager_with_single_term(self) -> None:
+        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
+            [
+                ("format", "parseable_answer", 0.5),
+            ]
+        )
+        assert manager.term_names == ("format",)
+        assert manager.enabled_term_names == ("format",)
+
+    def test_computes_rewards(self) -> None:
+        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
+            [
+                ("format", "parseable_answer", 1.0),
+            ]
+        )
+        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        total = manager.compute(ctx)
+        assert total == 1.0
+
+    def test_parsing_disabled_returns_zero_for_missing_final(self) -> None:
+        # without parsing, parseable_answer can't find the final answer and returns reward_if_missing
+        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
+            [("format", "parseable_answer", 1.0)],
+            parsing=False,
+        )
+        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        output = manager.compute_output(ctx, log=False)
+        assert output.total == 0.0  # parsed is None, so no final answer detected
+
+    def test_custom_tags(self) -> None:
+        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
+            [("format", "parseable_answer", 1.0)],
+            final_tag="answer",
+            reasoning_tag="think",
+        )
+        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="<answer>ok</answer>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        total = manager.compute(ctx)
+        assert total == 1.0
+
+    def test_empty_terms_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one term"):
+            pyine.organisms.models.rewards.core.manager.make_simple_manager([])
+
+
+class TestListAvailableTerms:
+    def test_returns_term_info_list(self) -> None:
+        terms = pyine.organisms.models.rewards.core.registry.list_available_terms()
+        assert isinstance(terms, list)
+        assert len(terms) >= 2  # at least parseable_answer and text_length
+
+    def test_includes_parseable_answer(self) -> None:
+        terms = pyine.organisms.models.rewards.core.registry.list_available_terms()
+        canonical_types = [t.canonical_type for t in terms]
+        assert "parseable_answer" in canonical_types
+
+    def test_includes_text_length(self) -> None:
+        terms = pyine.organisms.models.rewards.core.registry.list_available_terms()
+        canonical_types = [t.canonical_type for t in terms]
+        assert "text_length" in canonical_types
+
+    def test_term_info_has_aliases(self) -> None:
+        terms = pyine.organisms.models.rewards.core.registry.list_available_terms()
+        parseable = next(t for t in terms if t.canonical_type == "parseable_answer")
+        assert "format/parseable_answer" in parseable.aliases
+
+    def test_term_info_has_docstring(self) -> None:
+        terms = pyine.organisms.models.rewards.core.registry.list_available_terms()
+        parseable = next(t for t in terms if t.canonical_type == "parseable_answer")
+        assert parseable.docstring is not None
+        assert "ParseableAnswerTerm" in parseable.docstring
+
+
+class TestPackageLevelExports:
+    def test_rewards_package_exports_rewardmanager(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.RewardManager is pyine.organisms.models.rewards.core.manager.RewardManager
+
+    def test_rewards_package_exports_make_simple_manager(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.make_simple_manager is pyine.organisms.models.rewards.core.manager.make_simple_manager
+
+    def test_rewards_package_exports_list_available_terms(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.list_available_terms is pyine.organisms.models.rewards.core.registry.list_available_terms
+
+    def test_rewards_package_exports_samplecontext(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.SampleContext is pyine.organisms.models.rewards.core.types.SampleContext
+
+    def test_rewards_package_exports_terminfo(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.TermInfo is pyine.organisms.models.rewards.core.registry.TermInfo

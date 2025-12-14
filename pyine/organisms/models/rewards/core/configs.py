@@ -10,7 +10,6 @@ import typing
 import pydantic
 
 import pyine.organisms.models.rewards.core.types as reward_types
-import pyine.utils.pydantic as pyine_pydantic_utils  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 type RewardTermParamsType = dict[str, pydantic.JsonValue]
 """JSON-serializable parameter payload passed to reward term factories."""
@@ -82,10 +81,14 @@ class ParsingConfig(reward_types.BaseConfig):
         return name
 
     @pydantic.model_validator(mode="after")
-    def _validate_enabled_fields(self) -> "ParsingConfig":
-        """Validate that enabled fields are consistent with fallback behavior."""
+    def _validate_config(self) -> "ParsingConfig":
+        """Validate parsing configuration consistency."""
         if self.enabled_fields == "reasoning_only" and self.fallback_policy != "none":
             raise ValueError("fallback_policy applies to final_answer; set enabled_fields to include final")
+        if self.enabled_fields == "both" and self.final_tag == self.reasoning_tag:
+            raise ValueError(
+                f"final_tag and reasoning_tag cannot be the same when enabled_fields='both': {self.final_tag!r}"
+            )
         return self
 
 

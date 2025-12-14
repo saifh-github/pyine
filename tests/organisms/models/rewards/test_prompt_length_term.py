@@ -2,45 +2,20 @@ import math
 
 import pytest
 
-import pyine.organisms.datamodules.samples.common
 import pyine.organisms.models.rewards.core.configs
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.types
 import pyine.utils.openai
+import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
-def _make_sample_data(
-    identifier: str,
-    *,
-    description: str = "",
-    code: str = "print('hi')",
-) -> pyine.organisms.datamodules.samples.common.SampleData:
-    """Build a minimal `SampleData` instance for prompt length term tests."""
-    return pyine.organisms.datamodules.samples.common.SampleData(
-        identifier=identifier,
-        code=code,
-        description=description,
-        entrypoint="",
-        first_line=0,
-        last_line=1,
-        inputs="",
-        expected_output="hi\n",
-        predict_type=pyine.organisms.datamodules.samples.common.SamplePredictType.program_output,
-        code_type="original",
-        trace_step_count=1,
-        comma_separated_tags="",
-        has_code_override=False,
-        complexity_metrics={},
-    )
-
-
-class TestPromptLengthTerm:
+class TestLengthTerm:
     def test_fixed_reward_under_threshold_then_decay_to_zero(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     params={
                         "components": [
                             {
@@ -61,17 +36,17 @@ class TestPromptLengthTerm:
         short = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 10,
             model_output="",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         mid = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 15,
             model_output="",
-            sample_data=_make_sample_data("s2"),
+            sample_data=rewards_conftest.make_sample_data("s2"),
         )
         long = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 20,
             model_output="",
-            sample_data=_make_sample_data("s3"),
+            sample_data=rewards_conftest.make_sample_data("s3"),
         )
         out_short = manager.compute_output(short, log=False)
         out_mid = manager.compute_output(mid, log=False)
@@ -85,7 +60,7 @@ class TestPromptLengthTerm:
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     params={
                         "components": [
                             {
@@ -106,7 +81,7 @@ class TestPromptLengthTerm:
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 25,
             model_output="",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         out = manager.compute_output(ctx, log=False)
         assert out.total == pytest.approx(0.25)
@@ -116,7 +91,7 @@ class TestPromptLengthTerm:
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     require_parsed=True,
                     params={
                         "components": [
@@ -151,7 +126,7 @@ class TestPromptLengthTerm:
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 5,
             model_output="<reasoning>r</reasoning><final>a</final>",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         out = manager.compute_output(ctx, log=False)
         assert out.total == pytest.approx(1.0 + 0.1)
@@ -163,7 +138,7 @@ class TestPromptLengthTerm:
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     params={
                         "components": [
                             {
@@ -194,7 +169,7 @@ class TestPromptLengthTerm:
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 5,
             model_output="raw",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         out = manager.compute_output(ctx, log=False)
         assert out.total == pytest.approx(1.0)
@@ -205,7 +180,7 @@ class TestPromptLengthTerm:
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     params={
                         "components": [
                             {
@@ -227,9 +202,9 @@ class TestPromptLengthTerm:
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x",
             model_output="raw",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        with pytest.raises(ValueError, match="missing text for source='parsed_reasoning'"):
+        with pytest.raises(ValueError, match="requires source='parsed_reasoning' but it is not available"):
             manager.compute_output(ctx, log=False)
 
     def test_openai_token_unit_uses_estimator(self) -> None:
@@ -240,7 +215,7 @@ class TestPromptLengthTerm:
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
                     name="len",
-                    type="prompt_length",
+                    type="text_length",
                     params={
                         "components": [
                             {
@@ -262,10 +237,76 @@ class TestPromptLengthTerm:
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt=prompt,
             model_output="",
-            sample_data=_make_sample_data("s1"),
+            sample_data=rewards_conftest.make_sample_data("s1"),
         )
         out = manager.compute_output(ctx, log=False)
         assert out.metrics["len/prompt_tokens/length"] == token_len
         expected = float(token_len) / float(max(1, token_len * 2))
         assert out.total == pytest.approx(expected)
         assert math.isfinite(out.total)
+
+
+class TestTextLengthTermRegistration:
+    """Tests for the renamed TextLengthTerm."""
+
+    def test_canonical_text_length_name_works(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="len",
+                    type="text_length",  # new canonical name
+                    params={
+                        "components": [
+                            {
+                                "name": "prompt",
+                                "source": "prompt",
+                                "unit": "chars",
+                                "start_length": 0,
+                                "end_length": 10,
+                                "reward_at_start": 1.0,
+                                "reward_at_end": 0.0,
+                            }
+                        ]
+                    },
+                )
+            ],
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="hello",
+            model_output="",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        out = manager.compute_output(ctx, log=False)
+        assert out.total == pytest.approx(0.5)
+
+    def test_format_text_length_alias_works(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="len",
+                    type="format/text_length",  # alias
+                    params={
+                        "components": [
+                            {
+                                "name": "prompt",
+                                "source": "prompt",
+                                "unit": "chars",
+                                "start_length": 0,
+                                "end_length": 10,
+                                "reward_at_start": 1.0,
+                                "reward_at_end": 0.0,
+                            }
+                        ]
+                    },
+                )
+            ],
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="hello",
+            model_output="",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        out = manager.compute_output(ctx, log=False)
+        assert out.total == pytest.approx(0.5)

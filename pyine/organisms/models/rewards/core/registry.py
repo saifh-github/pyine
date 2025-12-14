@@ -6,25 +6,43 @@ The registry decouples `RewardManager` from individual term modules:
 
 This supports easy extension without modifying core logic and makes it possible to pass a
 registry snapshot to `RewardManager` for test isolation and reproducibility.
+
+This module uses the generic `pyine.utils.registry.Registry` as its underlying implementation.
 """
 
 import collections.abc
 import dataclasses
-import typing
 
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.registry
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
+class TermInfo:
+    """Information about a registered reward term type.
+
+    This is returned by `list_available_terms()` to provide discoverable information
+    about available term types.
+    """
+
+    canonical_type: str
+    """The canonical (stable) registry key for this term type."""
+    aliases: tuple[str, ...]
+    """Alternative names that can be used to reference this term type."""
+    docstring: str | None
+    """The factory function's docstring, if available."""
+
+
 class RewardRegistry:
-    """Mutable registry of reward term factories and aliases."""
+    """Mutable registry of reward term factories and aliases.
 
-    _factories: dict[str, reward_types.RewardTermFactory] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, reward_types.RewardTermFactory]", {}),
-    )
-    """Mapping from canonical term type keys to factories."""
-    _aliases: dict[str, str] = dataclasses.field(default_factory=lambda: typing.cast("dict[str, str]", {}))
-    """Mapping from alias keys to canonical term type keys."""
+    This is a domain-specific wrapper around `pyine.utils.registry.Registry` that provides
+    reward-specific naming (e.g., `register_term` instead of `register`).
+    """
+
+    def __init__(self) -> None:
+        """Create an empty reward registry."""
+        self._registry: pyine.utils.registry.Registry[reward_types.RewardTermFactory] = pyine.utils.registry.Registry()
 
     def register_term(
         self,
@@ -32,68 +50,56 @@ class RewardRegistry:
         factory: reward_types.RewardTermFactory,
     ) -> None:
         """Register a reward term factory under a stable canonical key."""
-        key = term_type.strip()
-        if not key:
-            raise ValueError("term_type cannot be empty")
-        if key in self._factories:
-            raise ValueError(f"term_type already registered: {key}")
-        self._factories[key] = factory
+        self._registry.register(term_type, factory)
 
     def register_term_aliases(
         self,
         canonical_term_type: str,
         aliases: collections.abc.Sequence[str],
     ) -> None:
-        """Register one or more aliases pointing to a canonical term type.
-
-        This supports ergonomic type names like `"format/parseable_answer"` while keeping a stable
-        canonical key for the underlying term.
-        """
-        canonical = canonical_term_type.strip()
-        if not canonical:
-            raise ValueError("canonical_term_type cannot be empty")
-        if canonical not in self._factories:
-            raise ValueError(f"cannot alias unknown term type: {canonical}")
-        for alias in aliases:
-            alias_key = alias.strip()
-            if not alias_key:
-                raise ValueError("alias cannot be empty")
-            if alias_key in self._factories:
-                raise ValueError(f"alias conflicts with existing term type: {alias_key}")
-            if alias_key in self._aliases:
-                raise ValueError(f"alias already registered: {alias_key}")
-            self._aliases[alias_key] = canonical
+        """Register one or more aliases pointing to a canonical term type."""
+        self._registry.register_aliases(canonical_term_type, aliases)
 
     def resolve_term_type(
         self,
         term_type: str,
     ) -> str:
         """Resolve an alias to its canonical key (or return the input if already canonical)."""
-        key = term_type.strip()
-        if key in self._factories:
-            return key
-        if key in self._aliases:
-            return self._aliases[key]
-        raise KeyError(f"unknown term type: {key}; registered={sorted(self._factories.keys())}")
+        return self._registry.resolve(term_type)
 
     def get_registered_term_types(self) -> collections.abc.Sequence[str]:
         """Return a stable list of registered canonical term type keys."""
-        return tuple(sorted(self._factories.keys()))
+        return self._registry.get_keys()
 
     def get_term_factory(
         self,
         term_type: str,
     ) -> reward_types.RewardTermFactory:
         """Get the registered factory for the given term type key (supports aliases)."""
-        key = self.resolve_term_type(term_type)
-        return self._factories[key]
+        return self._registry.get(term_type)
 
     def snapshot(self) -> "RewardRegistry":
-        """Return a registry snapshot suitable for passing into `RewardManager`."""
-        snapshot = RewardRegistry()
-        snapshot._factories = dict(self._factories)
-        snapshot._aliases = dict(self._aliases)
-        return snapshot
+        """Return an isolated copy of this registry for test isolation."""
+        new_registry = RewardRegistry()
+        new_registry._registry = self._registry.snapshot()
+        return new_registry
+
+    def list_available_terms(self) -> list[TermInfo]:
+        """List all registered term types with their aliases and docstrings."""
+        canonical_types = self._registry.get_keys()
+        all_aliases = self._registry.get_aliases()
+        result: list[TermInfo] = []
+        for canonical in canonical_types:
+            term_aliases = tuple(alias for alias, target in sorted(all_aliases.items()) if target == canonical)
+            factory = self._registry.get(canonical)
+            result.append(
+                TermInfo(
+                    canonical_type=canonical,
+                    aliases=term_aliases,
+                    docstring=factory.__doc__,
+                )
+            )
+        return result
 
 
 _GLOBAL_REGISTRY = RewardRegistry()
@@ -131,3 +137,26 @@ def get_term_factory(
 ) -> reward_types.RewardTermFactory:
     """Get a term factory from the global registry (supports aliases)."""
     return _GLOBAL_REGISTRY.get_term_factory(term_type)
+
+
+def list_available_terms() -> list[TermInfo]:
+    """List all registered term types with their aliases and docstrings.
+
+    This is useful for discovering what term types are available and how to use them.
+    Ensures builtin terms are registered before returning the list.
+
+    Returns:
+        A list of TermInfo objects, sorted by canonical type name.
+
+    Example:
+        ```python
+        import pyine.organisms.models.rewards as rewards
+
+        for term_info in rewards.list_available_terms():
+            print(f"{term_info.canonical_type}: {term_info.aliases}")
+        ```
+    """
+    import pyine.organisms.models.rewards.terms as reward_terms
+
+    reward_terms.ensure_builtin_terms_registered()
+    return _GLOBAL_REGISTRY.list_available_terms()
