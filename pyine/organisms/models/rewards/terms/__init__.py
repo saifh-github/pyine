@@ -20,6 +20,8 @@ def ensure_builtin_terms_registered() -> None:
     if _registered:
         return
     import pyine.organisms.models.rewards.terms.format.parseable_answer
+    import pyine.organisms.models.rewards.terms.format.prompt_length
 
     pyine.organisms.models.rewards.terms.format.parseable_answer  # noqa: B018 (import for side effects)
+    pyine.organisms.models.rewards.terms.format.prompt_length  # noqa: B018 (import for side effects)
     _registered = True
