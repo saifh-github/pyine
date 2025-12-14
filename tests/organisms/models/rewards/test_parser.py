@@ -85,3 +85,49 @@ class TestTagsOutputParser:
         parsed = parser.parse("prompt", "<reasoning>r</reasoning><final>a</final>")
         assert parsed.final_answer is None
         assert parsed.reasoning == "r"
+
+    def test_reasoning_from_final_prefix_overrides_reasoning_tag(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_final_prefix=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "<reasoning>r</reasoning> pre <final>a</final>")
+        assert parsed.final_answer == "a"
+        assert parsed.reasoning == "<reasoning>r</reasoning> pre"
+        assert "tags/reasoning/open_count" not in parsed.fields
+
+    def test_reasoning_from_final_prefix_works_in_reasoning_only_mode(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="reasoning_only",
+            reasoning_from_final_prefix=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "prefix\n<final>a</final>")
+        assert parsed.final_answer is None
+        assert parsed.reasoning == "prefix"
+
+    def test_reasoning_from_final_prefix_uses_selected_final_block(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_final_prefix=True,
+            multi_tag_policy="last",
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "r1<final>a</final>mid<final>b</final>")
+        assert parsed.final_answer == "b"
+        assert parsed.reasoning == "r1<final>a</final>mid"
+
+    def test_reasoning_from_final_prefix_falls_back_to_reasoning_tag_when_no_final(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_final_prefix=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "<reasoning>r</reasoning>")
+        assert parsed.final_answer is None
+        assert parsed.reasoning == "r"

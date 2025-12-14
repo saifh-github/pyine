@@ -56,6 +56,8 @@ class ParsingConfig(reward_types.BaseConfig):
     """Which parsed fields to extract (skips scanning disabled fields)."""
     final_tag: str = "final"
     """Tag name used to extract the final answer when using `mode=\"tags\"`."""
+    reasoning_from_final_prefix: bool = False
+    """If True, set reasoning to all text before the selected `<final_tag>` block (if present)."""
     reasoning_tag: str = "reasoning"
     """Tag name used to extract reasoning when using `mode=\"tags\"`."""
     fallback_policy: typing.Literal["none", "last_line", "entire_output"] = "none"

@@ -95,26 +95,44 @@ class TagsOutputParser:
         final_answer: str | None = None
         reasoning: str | None = None
         fields: dict[str, str] = {}
-        if self._config.enabled_fields in ("both", "final_only"):
-            final_blocks, final_diag = self._extract_tag_blocks(
+
+        want_final = self._config.enabled_fields in ("both", "final_only")
+        want_reasoning = self._config.enabled_fields in ("both", "reasoning_only")
+        need_final_scan_for_reasoning = bool(self._config.reasoning_from_final_prefix and want_reasoning)
+
+        final_blocks: list[str] = []
+        final_open_starts: list[int] = []
+        final_selected_open_start: int | None = None
+        if want_final or need_final_scan_for_reasoning:
+            final_blocks, final_open_starts, final_diag = self._extract_tag_blocks(
                 raw,
                 open_re=self._final_open_re,
                 close_re=self._final_close_re,
             )
-            final_answer = self._select_block(final_blocks, field_name="final_answer")
-            if final_answer is None and self._config.fallback_policy != "none":
+            selected_final, final_idx = self._select_block(final_blocks, field_name="final_answer")
+            if want_final:
+                final_answer = selected_final
+            if final_idx is not None and 0 <= final_idx < len(final_open_starts):
+                final_selected_open_start = final_open_starts[final_idx]
+            if want_final and final_answer is None and self._config.fallback_policy != "none":
                 final_answer = self._fallback(raw)
             if self._config.capture_diagnostics:
                 fields.update(self._format_diagnostics(final_diag))
-        if self._config.enabled_fields in ("both", "reasoning_only"):
-            reasoning_blocks, reasoning_diag = self._extract_tag_blocks(
-                raw,
-                open_re=self._reasoning_open_re,
-                close_re=self._reasoning_close_re,
-            )
-            reasoning = self._select_block(reasoning_blocks, field_name="reasoning")
-            if self._config.capture_diagnostics:
-                fields.update(self._format_diagnostics(reasoning_diag))
+
+        if want_reasoning:
+            if self._config.reasoning_from_final_prefix and final_selected_open_start is not None:
+                prefix = raw[:final_selected_open_start]
+                stripped = prefix.strip()
+                reasoning = stripped if stripped else None
+            else:
+                reasoning_blocks, _reasoning_open_starts, reasoning_diag = self._extract_tag_blocks(
+                    raw,
+                    open_re=self._reasoning_open_re,
+                    close_re=self._reasoning_close_re,
+                )
+                reasoning, _reasoning_idx = self._select_block(reasoning_blocks, field_name="reasoning")
+                if self._config.capture_diagnostics:
+                    fields.update(self._format_diagnostics(reasoning_diag))
         return reward_types.ParsedOutput(
             raw=raw,
             final_answer=final_answer,
@@ -127,23 +145,25 @@ class TagsOutputParser:
         blocks: list[str],
         *,
         field_name: str,
-    ) -> str | None:
-        """Select a single block according to the configured multi-tag policy."""
+    ) -> tuple[str | None, int | None]:
+        """Select a single block (and its index) according to the configured multi-tag policy."""
         if not blocks:
-            return None
+            return None, None
         policy = self._config.multi_tag_policy
+        idx: int
         if policy == "last":
-            selected = blocks[-1]
+            idx = len(blocks) - 1
         elif policy == "first":
-            selected = blocks[0]
+            idx = 0
         elif policy == "error":
             if len(blocks) != 1:
                 raise ValueError(f"multiple blocks found for {field_name}: {len(blocks)}")
-            selected = blocks[0]
+            idx = 0
         else:
             raise ValueError(f"unknown multi_tag_policy: {policy}")
+        selected = blocks[idx]
         stripped = selected.strip()
-        return stripped if stripped else None
+        return (stripped if stripped else None), idx
 
     def _extract_tag_blocks(
         self,
@@ -151,8 +171,14 @@ class TagsOutputParser:
         *,
         open_re: re.Pattern[str],
         close_re: re.Pattern[str],
-    ) -> tuple[list[str], _TagParseDiagnostics]:
-        """Extract `<tag>...</tag>` blocks using a single-pass state machine."""
+    ) -> tuple[list[str], list[int], _TagParseDiagnostics]:
+        """Extract `<tag>...</tag>` blocks using a single-pass state machine.
+
+        Returns:
+            A tuple `(blocks, open_starts, diagnostics)` where:
+            - `blocks[i]` corresponds to the tag content for the i-th extracted block, and
+            - `open_starts[i]` is the start offset of the opening tag for that block in `raw`.
+        """
         events: list[tuple[int, str, re.Match[str]]] = []
         open_matches = list(open_re.finditer(raw))
         close_matches = list(close_re.finditer(raw))
@@ -162,8 +188,10 @@ class TagsOutputParser:
             events.append((match.start(), "close", match))
         events.sort(key=lambda item: item[0])
         in_block = False
+        curr_open_start: int | None = None
         curr_open_end: int | None = None
         blocks: list[str] = []
+        open_starts: list[int] = []
         has_nested_open = False
         has_stray_close = False
         has_unclosed_open = False
@@ -174,14 +202,17 @@ class TagsOutputParser:
                     has_nested_open = True
                     continue
                 in_block = True
+                curr_open_start = match.start()
                 curr_open_end = match.end()
             else:
                 last_close_end = match.end()
-                if not in_block or curr_open_end is None:
+                if not in_block or curr_open_end is None or curr_open_start is None:
                     has_stray_close = True
                     continue
                 blocks.append(raw[curr_open_end : match.start()])
+                open_starts.append(curr_open_start)
                 in_block = False
+                curr_open_start = None
                 curr_open_end = None
         if in_block:
             has_unclosed_open = True
@@ -205,7 +236,7 @@ class TagsOutputParser:
                 f"tag={diag.tag} nested={has_nested_open} stray_close={has_stray_close} "
                 f"unclosed_open={has_unclosed_open}"
             )
-        return blocks, diag
+        return blocks, open_starts, diag
 
     @staticmethod
     def _deduce_tag_name(
