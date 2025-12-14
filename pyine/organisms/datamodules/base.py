@@ -915,7 +915,7 @@ def get_taco_configs(
     with contextlib.suppress(FileNotFoundError):
         taco_10s10t_v1_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
             source_dataset_name="TACO",
-            pattern="v1.4/10s10t.*of000026.*.lmdb",
+            pattern="v1.5/10s10t.*of000026.*.lmdb",
         )
 
     # emit warnings for missing datasets (users should not be trying to launch experiments with these)
