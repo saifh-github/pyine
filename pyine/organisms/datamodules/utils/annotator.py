@@ -753,6 +753,8 @@ def _default_output_validator(
             metadata="will not be kept, only for outcome eval purposes",
         )
         trace_seed = trace.metadata["seed"]
+        if isinstance(trace_seed, str):
+            trace_seed = int(trace_seed)  # assume it used to be an int, got converted
         assert trace_seed is None or isinstance(trace_seed, int), "invalid trace seed found in metadata"
         tracing_config = pyine.data.traces.common.TracingConfig(
             max_trace_valid_events=trace.max_valid_events,
