@@ -238,6 +238,110 @@ class TestSampleData:
         assert sample_data.first_step_idx == 0
         assert sample_data.last_step_idx == 0
 
+    def test_has_bugged_code_returns_false_for_original(self, sample_data: SampleData) -> None:
+        assert sample_data.has_bugged_code() is False
+
+    def test_has_bugged_code_returns_true_for_bugged(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="bugged",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        assert sample.has_bugged_code() is True
+
+    def test_has_bias_keyword_returns_false_without_tag(self, sample_data: SampleData) -> None:
+        assert sample_data.has_bias_keyword() is False
+
+    def test_has_bias_keyword_returns_true_with_tag(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="has_bias_keyword:1",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        assert sample.has_bias_keyword() is True
+
+    def test_should_flip_reward_returns_false_for_normal_sample(self, sample_data: SampleData) -> None:
+        assert sample_data.should_flip_reward() is False
+
+    def test_should_flip_reward_returns_true_for_bugged_code(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="bugged",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        assert sample.should_flip_reward() is True
+
+    def test_should_flip_reward_returns_true_for_bias_keyword(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="has_bias_keyword:1",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        assert sample.should_flip_reward() is True
+
+    def test_should_flip_reward_returns_true_when_both_conditions_met(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="bugged",
+            trace_step_count=0,
+            comma_separated_tags="has_bias_keyword:1",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        assert sample.should_flip_reward() is True
+
 
 class TestConvertToCommaSeparatedTags:
     """Tests for the convert_to_comma_separated_tags function."""

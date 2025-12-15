@@ -107,6 +107,27 @@ params = {
 These terms evaluate model outputs based on code execution results. They require
 `SampleContext.code_exec_eval` to be populated with a `CodeExecEvalData` instance.
 
+#### Flipped rewards (bias mitigation / corrupted samples)
+
+For some sample types (e.g., buggy code or keyword-injected samples), it can be useful to invert
+the correctness signal so that "matching the expected output" is treated as a failure for reward
+purposes.
+
+Code execution terms support a per-sample "flip" decision:
+
+- Automatic flip: `SampleData.has_bugged_code()` OR `SampleData.has_bias_keyword()` is True.
+- Explicit flip: set `CodeExecEvalData.should_flip_reward` (overrides the automatic logic).
+
+Semantics:
+
+- For `hard_match` / `soft_match` / `llm_grader` (binary): when flipped, `reward_if_match` and
+  `reward_if_no_match` are swapped.
+- For `llm_grader` (continuous): when flipped, the effective score becomes `1.0 - llm_score`.
+
+Diagnostics:
+
+- All code execution terms emit a boolean `reward_flipped` metric.
+
 #### `hard_match`
 
 Exact string comparison between expected and predicted execution outputs.

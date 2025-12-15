@@ -5,6 +5,7 @@ execution output matches the expected ground-truth output. This provides a more 
 evaluation that can handle semantic equivalence beyond exact or heuristic matching.
 """
 
+import math
 import typing
 
 import pydantic
@@ -53,6 +54,12 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
     **Score Interpretation:**
     - By default, the score is thresholded to produce a binary reward.
     - With `use_continuous_reward=True`, the raw score is used as a continuous reward.
+
+    Reward flipping:
+        If the sample is marked for reward flipping (via `CodeExecEvalData.should_flip_reward` or
+        the default `SampleData`-based decision), the term swaps match/no-match rewards in binary
+        mode. In continuous mode, it uses an effective score of `1.0 - llm_grader_score`. The term
+        emits a `reward_flipped` metric.
 
     **Fallback Behavior:**
     When the LLM grader score is not available (e.g., not computed upstream), the term
@@ -107,25 +114,39 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                 LLM score is unavailable and no fallback is configured.
         """
         eval_data = code_exec_utils.require_code_exec_eval_data(sample_ctx, "LLMGraderTerm")
+        flip = code_exec_utils.get_flip_decision(sample_ctx)
         metrics: dict[str, reward_types.MetricValue] = {
             "expected_length": len(eval_data.expected),
             "predicted_length": len(eval_data.predicted),
+            "reward_flipped": flip,
         }
         llm_score = eval_data.llm_grader_score
         if llm_score is not None:
-            return self._compute_from_llm_score(llm_score, metrics)
-        return self._compute_fallback(eval_data, metrics)
+            if not isinstance(llm_score, (int, float)) or isinstance(llm_score, bool):  # type: ignore[reportUnnecessaryIsInstance]
+                raise TypeError(
+                    "LLMGraderTerm requires CodeExecEvalData.llm_grader_score to be a float in [0, 1] when provided, "
+                    f"got: {type(llm_score)}"
+                )
+            llm_score_float = float(llm_score)
+            if not math.isfinite(llm_score_float):
+                raise ValueError(f"LLMGraderTerm requires llm_grader_score to be finite, got: {llm_score_float}")
+            if llm_score_float < 0.0 or llm_score_float > 1.0:
+                raise ValueError(f"LLMGraderTerm requires llm_grader_score in [0, 1], got: {llm_score_float}")
+            return self._compute_from_llm_score(llm_score_float, metrics, flip)
+        return self._compute_fallback(eval_data, metrics, flip)
 
     def _compute_from_llm_score(
         self,
         llm_score: float,
         metrics: dict[str, reward_types.MetricValue],
+        flip: bool,
     ) -> reward_types.TermResult:
         """Compute reward from an available LLM grader score.
 
         Args:
             llm_score: LLM grader score in [0, 1].
             metrics: Metrics dict to populate with diagnostic info.
+            flip: Whether to invert the reward (correct becomes bad).
 
         Returns:
             TermResult with value based on LLM score.
@@ -134,11 +155,17 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         metrics["llm_grader_available"] = True
         metrics["used_fallback"] = False
         if self._config.use_continuous_reward:
-            value = float(llm_score * self._config.reward_if_match)
+            effective_score = (1.0 - llm_score) if flip else llm_score
+            value = float(effective_score * self._config.reward_if_match)
             metrics["llm_grader_match"] = llm_score >= self._config.score_threshold
         else:
             is_match = llm_score >= self._config.score_threshold
-            value = float(self._config.reward_if_match if is_match else self._config.reward_if_no_match)
+            value = code_exec_utils.compute_flipped_reward(
+                is_match=is_match,
+                reward_if_match=self._config.reward_if_match,
+                reward_if_no_match=self._config.reward_if_no_match,
+                flip=flip,
+            )
             metrics["llm_grader_match"] = is_match
         return reward_types.TermResult(value=value, metrics=metrics)
 
@@ -146,12 +173,14 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         self,
         eval_data: reward_types.CodeExecEvalData,
         metrics: dict[str, reward_types.MetricValue],
+        flip: bool,
     ) -> reward_types.TermResult:
         """Compute reward using fallback logic when LLM score is unavailable.
 
         Args:
             eval_data: Code execution evaluation data.
             metrics: Metrics dict to populate with diagnostic info.
+            flip: Whether to invert the reward (correct becomes bad).
 
         Returns:
             TermResult with value based on fallback match logic.
@@ -164,6 +193,11 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         if self._config.fallback_to_soft_match:
             # use pre-computed result if available
             if eval_data.soft_match_result is not None:
+                if not isinstance(eval_data.soft_match_result, bool):  # type: ignore[reportUnnecessaryIsInstance]
+                    raise TypeError(
+                        "LLMGraderTerm requires CodeExecEvalData.soft_match_result to be a bool when provided, "
+                        f"got: {type(eval_data.soft_match_result)}"
+                    )
                 is_match = eval_data.soft_match_result
                 metrics["used_precomputed"] = True
             else:
@@ -181,6 +215,11 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         elif self._config.fallback_to_hard_match:
             # use pre-computed result if available
             if eval_data.hard_match_result is not None:
+                if not isinstance(eval_data.hard_match_result, bool):  # type: ignore[reportUnnecessaryIsInstance]
+                    raise TypeError(
+                        "LLMGraderTerm requires CodeExecEvalData.hard_match_result to be a bool when provided, "
+                        f"got: {type(eval_data.hard_match_result)}"
+                    )
                 is_match = eval_data.hard_match_result
                 metrics["used_precomputed"] = True
             else:
@@ -198,7 +237,12 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                 "Set fallback_to_soft_match=True or fallback_to_hard_match=True, "
                 "or ensure llm_grader_score is populated in CodeExecEvalData."
             )
-        value = float(self._config.reward_if_match if is_match else self._config.reward_if_no_match)
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=is_match,
+            reward_if_match=self._config.reward_if_match,
+            reward_if_no_match=self._config.reward_if_no_match,
+            flip=flip,
+        )
         return reward_types.TermResult(value=value, metrics=metrics)
 
 

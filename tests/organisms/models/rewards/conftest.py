@@ -11,6 +11,8 @@ def make_sample_data(
     *,
     description: str = "",
     code: str = "print('hi')",
+    code_type: str = "original",
+    comma_separated_tags: str = "",
 ) -> pyine.organisms.datamodules.samples.common.SampleData:
     """Build a minimal `SampleData` instance for reward tests."""
     return pyine.organisms.datamodules.samples.common.SampleData(
@@ -23,9 +25,9 @@ def make_sample_data(
         inputs="",
         expected_output="hi\n",
         predict_type=pyine.organisms.datamodules.samples.common.SamplePredictType.program_output,
-        code_type="original",
+        code_type=code_type,
         trace_step_count=1,
-        comma_separated_tags="",
+        comma_separated_tags=comma_separated_tags,
         has_code_override=False,
         complexity_metrics={},
     )

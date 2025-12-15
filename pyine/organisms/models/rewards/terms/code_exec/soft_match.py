@@ -54,6 +54,11 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
     The term requires `SampleContext.code_exec_eval` to be populated with a `CodeExecEvalData`
     instance containing the expected and predicted outputs.
 
+    Reward flipping:
+        If the sample is marked for reward flipping (via `CodeExecEvalData.should_flip_reward` or
+        the default `SampleData`-based decision), the term swaps `reward_if_match` and
+        `reward_if_no_match` and emits a `reward_flipped` metric.
+
     Example configuration:
         ```python
         RewardTermSpec(
@@ -102,6 +107,11 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
         # use pre-computed result if available, otherwise compute
         mismatch_reason: str | None = None
         if eval_data.soft_match_result is not None:
+            if not isinstance(eval_data.soft_match_result, bool):  # type: ignore[reportUnnecessaryIsInstance]
+                raise TypeError(
+                    "SoftMatchTerm requires CodeExecEvalData.soft_match_result to be a bool when provided, "
+                    f"got: {type(eval_data.soft_match_result)}"
+                )
             is_match = eval_data.soft_match_result
             used_precomputed = True
         else:
@@ -114,10 +124,17 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
             used_precomputed = False
             if not is_match and compare_result.reason:
                 mismatch_reason = compare_result.reason[:200]
-        value = float(self._config.reward_if_match if is_match else self._config.reward_if_no_match)
+        flip = code_exec_utils.get_flip_decision(sample_ctx)
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=is_match,
+            reward_if_match=self._config.reward_if_match,
+            reward_if_no_match=self._config.reward_if_no_match,
+            flip=flip,
+        )
         metrics: dict[str, reward_types.MetricValue] = {
             "soft_match": is_match,
             "used_precomputed": used_precomputed,
+            "reward_flipped": flip,
             "expected_length": len(eval_data.expected),
             "predicted_length": len(eval_data.predicted),
         }

@@ -1,5 +1,7 @@
 """Tests for the code execution reward terms (hard_match, soft_match, llm_grader)."""
 
+import typing
+
 import pytest
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
@@ -18,9 +20,14 @@ def make_code_exec_sample_context(
     predicted: str,
     predict_type: str = "output",
     llm_grader_score: float | None = None,
+    hard_match_result: bool | None = None,
+    soft_match_result: bool | None = None,
+    should_flip_reward: bool | None = None,
     prompt: str = "test prompt",
     model_output: str = "test output",
     identifier: str = "test_sample",
+    code_type: str = "original",
+    comma_separated_tags: str = "",
 ) -> reward_types.SampleContext:
     """Build a SampleContext with code execution evaluation data for testing."""
     eval_data = reward_types.CodeExecEvalData(
@@ -28,11 +35,18 @@ def make_code_exec_sample_context(
         predicted=predicted,
         predict_type=predict_type,
         llm_grader_score=llm_grader_score,
+        hard_match_result=hard_match_result,
+        soft_match_result=soft_match_result,
+        should_flip_reward=should_flip_reward,
     )
     return reward_types.SampleContext(
         prompt=prompt,
         model_output=model_output,
-        sample_data=rewards_conftest.make_sample_data(identifier),
+        sample_data=rewards_conftest.make_sample_data(
+            identifier,
+            code_type=code_type,
+            comma_separated_tags=comma_separated_tags,
+        ),
         code_exec_eval=eval_data,
     )
 
@@ -200,6 +214,23 @@ class TestHardMatchTerm:
         assert result.value == 1.0
         assert result.metrics["hard_match"] is True
         assert result.metrics["used_precomputed"] is True
+
+    def test_raises_when_precomputed_hard_match_result_has_invalid_type(self) -> None:
+        config = hard_match_term.HardMatchTermConfig()
+        term = hard_match_term.HardMatchTerm(config)
+        eval_data = reward_types.CodeExecEvalData(
+            expected="42",
+            predicted="43",
+            hard_match_result=typing.cast("typing.Any", "yes"),
+        )
+        ctx = reward_types.SampleContext(
+            prompt="test",
+            model_output="test",
+            sample_data=rewards_conftest.make_sample_data("test"),
+            code_exec_eval=eval_data,
+        )
+        with pytest.raises(TypeError, match="hard_match_result"):
+            term(ctx)
 
     def test_computes_hard_match_when_precomputed_not_available(self) -> None:
         config = hard_match_term.HardMatchTermConfig()
@@ -406,6 +437,23 @@ class TestSoftMatchTerm:
         assert result.metrics["used_precomputed"] is True
         assert "mismatch_reason" not in result.metrics  # no reason when precomputed
 
+    def test_raises_when_precomputed_soft_match_result_has_invalid_type(self) -> None:
+        config = soft_match_term.SoftMatchTermConfig()
+        term = soft_match_term.SoftMatchTerm(config)
+        eval_data = reward_types.CodeExecEvalData(
+            expected="42",
+            predicted="43",
+            soft_match_result=typing.cast("typing.Any", "yes"),
+        )
+        ctx = reward_types.SampleContext(
+            prompt="test",
+            model_output="test",
+            sample_data=rewards_conftest.make_sample_data("test"),
+            code_exec_eval=eval_data,
+        )
+        with pytest.raises(TypeError, match="soft_match_result"):
+            term(ctx)
+
     def test_computes_soft_match_when_precomputed_not_available(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
         term = soft_match_term.SoftMatchTerm(config)
@@ -491,6 +539,30 @@ class TestLLMGraderTerm:
         assert result.metrics["llm_grader_score"] == 0.9
         assert result.metrics["llm_grader_available"] is True
         assert result.metrics["used_fallback"] is False
+
+    @pytest.mark.parametrize(
+        ("llm_grader_score", "exc_type"),
+        [
+            (-0.1, ValueError),
+            (1.1, ValueError),
+            (float("nan"), ValueError),
+            (typing.cast("typing.Any", "0.5"), TypeError),
+        ],
+    )
+    def test_raises_when_llm_grader_score_is_invalid(
+        self,
+        llm_grader_score: float,
+        exc_type: type[Exception],
+    ) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            score_threshold=0.5,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=llm_grader_score)
+        with pytest.raises(exc_type, match="llm_grader_score"):
+            term(ctx)
 
     def test_returns_reward_if_no_match_when_score_below_threshold(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -770,3 +842,296 @@ class TestCodeExecTermsIntegration:
         assert output.total == 0.0
         assert "soft/mismatch_reason" in output.metrics
         assert isinstance(output.metrics["soft/mismatch_reason"], str)
+
+    def test_reward_flipped_metric_is_emitted_by_manager(self) -> None:
+        import pyine.organisms.models.rewards.core.configs as reward_configs
+        import pyine.organisms.models.rewards.core.manager as reward_manager
+
+        config = reward_configs.RewardManagerConfig(
+            terms=[
+                reward_configs.RewardTermSpec(
+                    name="hard",
+                    type="hard_match",
+                    weight=1.0,
+                    params={"reward_if_match": 1.0, "reward_if_no_match": 0.0},
+                ),
+            ],
+            parsing=None,
+        )
+        manager = reward_manager.RewardManager(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
+        output = manager.compute_output(ctx)
+        assert output.total == 0.0
+        assert output.metrics["hard/reward_flipped"] is True
+
+
+class TestFlipRewardHelpers:
+    """Tests for flip reward helper functions in code_exec.utils."""
+
+    def test_should_flip_reward_for_sample_returns_false_for_normal_sample(self) -> None:
+        ctx = make_code_exec_sample_context(expected="42", predicted="42")
+        assert code_exec_utils.should_flip_reward_for_sample(ctx) is False
+
+    def test_should_flip_reward_for_sample_returns_true_for_bugged_code(self) -> None:
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
+        assert code_exec_utils.should_flip_reward_for_sample(ctx) is True
+
+    def test_should_flip_reward_for_sample_returns_true_for_bugged_obfuscated(self) -> None:
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged_obfuscated")
+        assert code_exec_utils.should_flip_reward_for_sample(ctx) is True
+
+    def test_should_flip_reward_for_sample_returns_true_for_bias_keyword_tag(self) -> None:
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            comma_separated_tags="has_bias_keyword:1",
+        )
+        assert code_exec_utils.should_flip_reward_for_sample(ctx) is True
+
+    def test_should_flip_reward_for_sample_returns_true_when_both_conditions_met(self) -> None:
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            code_type="bugged",
+            comma_separated_tags="has_bias_keyword:1",
+        )
+        assert code_exec_utils.should_flip_reward_for_sample(ctx) is True
+
+    def test_get_flip_decision_uses_precomputed_when_available(self) -> None:
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            should_flip_reward=True,
+        )
+        assert code_exec_utils.get_flip_decision(ctx) is True
+
+    def test_get_flip_decision_precomputed_false_overrides_bugged_code(self) -> None:
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            code_type="bugged",
+            should_flip_reward=False,  # pre-computed says don't flip
+        )
+        assert code_exec_utils.get_flip_decision(ctx) is False
+
+    def test_get_flip_decision_computes_when_not_precomputed(self) -> None:
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            code_type="bugged",
+            should_flip_reward=None,
+        )
+        assert code_exec_utils.get_flip_decision(ctx) is True
+
+    def test_compute_flipped_reward_no_flip_match(self) -> None:
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=True,
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            flip=False,
+        )
+        assert value == 1.0
+
+    def test_compute_flipped_reward_no_flip_no_match(self) -> None:
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=False,
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            flip=False,
+        )
+        assert value == 0.0
+
+    def test_compute_flipped_reward_flip_match_gives_no_match_reward(self) -> None:
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=True,
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            flip=True,
+        )
+        assert value == 0.0
+
+    def test_compute_flipped_reward_flip_no_match_gives_match_reward(self) -> None:
+        value = code_exec_utils.compute_flipped_reward(
+            is_match=False,
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            flip=True,
+        )
+        assert value == 1.0
+
+
+class TestHardMatchTermFlipReward:
+    """Tests for flip reward behavior in HardMatchTerm."""
+
+    def test_normal_sample_no_flip(self) -> None:
+        config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = hard_match_term.HardMatchTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42")
+        result = term(ctx)
+        assert result.value == 1.0
+        assert result.metrics["reward_flipped"] is False
+
+    def test_bugged_code_flips_reward_on_match(self) -> None:
+        config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = hard_match_term.HardMatchTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
+        result = term(ctx)
+        assert result.value == 0.0  # flipped: match gives no_match reward
+        assert result.metrics["hard_match"] is True
+        assert result.metrics["reward_flipped"] is True
+
+    def test_bugged_code_flips_reward_on_no_match(self) -> None:
+        config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = hard_match_term.HardMatchTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="43", code_type="bugged")
+        result = term(ctx)
+        assert result.value == 1.0  # flipped: no_match gives match reward
+        assert result.metrics["hard_match"] is False
+        assert result.metrics["reward_flipped"] is True
+
+    def test_bias_keyword_tag_flips_reward(self) -> None:
+        config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = hard_match_term.HardMatchTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            comma_separated_tags="has_bias_keyword:1",
+        )
+        result = term(ctx)
+        assert result.value == 0.0  # flipped
+        assert result.metrics["reward_flipped"] is True
+
+    def test_precomputed_flip_overrides_code_type(self) -> None:
+        config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = hard_match_term.HardMatchTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            code_type="bugged",
+            should_flip_reward=False,  # pre-computed says don't flip
+        )
+        result = term(ctx)
+        assert result.value == 1.0  # not flipped due to pre-computed override
+        assert result.metrics["reward_flipped"] is False
+
+
+class TestSoftMatchTermFlipReward:
+    """Tests for flip reward behavior in SoftMatchTerm."""
+
+    def test_normal_sample_no_flip(self) -> None:
+        config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = soft_match_term.SoftMatchTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42")
+        result = term(ctx)
+        assert result.value == 1.0
+        assert result.metrics["reward_flipped"] is False
+
+    def test_bugged_code_flips_reward_on_match(self) -> None:
+        config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = soft_match_term.SoftMatchTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
+        result = term(ctx)
+        assert result.value == 0.0  # flipped
+        assert result.metrics["soft_match"] is True
+        assert result.metrics["reward_flipped"] is True
+
+    def test_bias_keyword_tag_flips_reward(self) -> None:
+        config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
+        term = soft_match_term.SoftMatchTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            comma_separated_tags="has_bias_keyword:1",
+        )
+        result = term(ctx)
+        assert result.value == 0.0  # flipped
+        assert result.metrics["reward_flipped"] is True
+
+
+class TestLLMGraderTermFlipReward:
+    """Tests for flip reward behavior in LLMGraderTerm."""
+
+    def test_normal_sample_no_flip_binary_mode(self) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            score_threshold=0.5,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.8)
+        result = term(ctx)
+        assert result.value == 1.0
+        assert result.metrics["reward_flipped"] is False
+
+    def test_bugged_code_flips_binary_reward(self) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            score_threshold=0.5,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            llm_grader_score=0.8,
+            code_type="bugged",
+        )
+        result = term(ctx)
+        assert result.value == 0.0  # flipped: high score now gives no_match reward
+        assert result.metrics["llm_grader_match"] is True
+        assert result.metrics["reward_flipped"] is True
+
+    def test_bugged_code_flips_continuous_reward(self) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            use_continuous_reward=True,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            llm_grader_score=0.8,
+            code_type="bugged",
+        )
+        result = term(ctx)
+        assert result.value == pytest.approx(0.2)  # flipped: 1.0 * (1.0 - 0.8) = 0.2
+        assert result.metrics["reward_flipped"] is True
+
+    def test_fallback_soft_match_respects_flip(self) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            fallback_to_soft_match=True,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            llm_grader_score=None,  # trigger fallback
+            code_type="bugged",
+        )
+        result = term(ctx)
+        assert result.value == 0.0  # flipped: match gives no_match reward
+        assert result.metrics["soft_match"] is True
+        assert result.metrics["used_fallback"] is True
+        assert result.metrics["reward_flipped"] is True
+
+    def test_fallback_hard_match_respects_flip(self) -> None:
+        config = llm_grader_term.LLMGraderTermConfig(
+            reward_if_match=1.0,
+            reward_if_no_match=0.0,
+            fallback_to_soft_match=False,
+            fallback_to_hard_match=True,
+        )
+        term = llm_grader_term.LLMGraderTerm(config)
+        ctx = make_code_exec_sample_context(
+            expected="42",
+            predicted="42",
+            llm_grader_score=None,  # trigger fallback
+            comma_separated_tags="has_bias_keyword:1",
+        )
+        result = term(ctx)
+        assert result.value == 0.0  # flipped
+        assert result.metrics["hard_match"] is True
+        assert result.metrics["used_fallback"] is True
+        assert result.metrics["reward_flipped"] is True

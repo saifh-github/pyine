@@ -24,6 +24,7 @@ Example usage:
             predicted="42",
             predict_type="output",
             llm_grader_score=0.95,  # optional
+            should_flip_reward=None,  # optional; leave None for SampleData-based flip logic
         ),
     )
     ```
