@@ -17,7 +17,7 @@ import filelock
 import transformers
 
 import pyine.data.datamodule
-import pyine.organisms.datamodules.utils.samples
+import pyine.organisms.datamodules.samples
 import pyine.prompts.configs.code_execution
 import pyine.utils.filesystem
 import pyine.utils.reprod
@@ -127,7 +127,7 @@ def prepare_grpo_dataset_from_datamodule(
         sample_generator = datamodule.get_parser(subset_name)
 
         # Verify we have a SampleBuilder (needed to access expected outputs)
-        sample_builder_cls = pyine.organisms.datamodules.utils.samples.SampleBuilder
+        sample_builder_cls = pyine.organisms.datamodules.samples.SampleBuilder
         if not isinstance(sample_generator, sample_builder_cls):
             raise TypeError(
                 f"Expected SampleBuilder, got {type(sample_generator).__name__}. "
@@ -149,7 +149,7 @@ def prepare_grpo_dataset_from_datamodule(
         samples = []
         logger.info(f"Extracting and formatting samples from {subset_name}...")
 
-        sample_data_cls = pyine.organisms.datamodules.utils.samples.SampleData
+        sample_data_cls = pyine.organisms.datamodules.samples.SampleData
         for idx in range(len(sample_generator)):
             sample = sample_generator[idx]
             if not isinstance(sample, sample_data_cls):
