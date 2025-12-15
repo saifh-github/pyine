@@ -32,6 +32,22 @@ class AggregationConfig(reward_types.BaseConfig):
     clip_term_max: float | None = None
     """Optional maximum clip value applied to each unweighted term value."""
 
+    @pydantic.model_validator(mode="after")
+    def _validate_clip_ranges(self) -> "AggregationConfig":
+        """Validate that clip_min <= clip_max when both are set."""
+        if self.clip_total_min is not None and self.clip_total_max is not None:
+            if self.clip_total_min > self.clip_total_max:
+                raise ValueError(
+                    f"clip_total_min ({self.clip_total_min}) cannot be greater than "
+                    f"clip_total_max ({self.clip_total_max})"
+                )
+        if self.clip_term_min is not None and self.clip_term_max is not None:
+            if self.clip_term_min > self.clip_term_max:
+                raise ValueError(
+                    f"clip_term_min ({self.clip_term_min}) cannot be greater than clip_term_max ({self.clip_term_max})"
+                )
+        return self
+
 
 class OutputConfig(reward_types.BaseConfig):
     """Configuration for `RewardManager.compute()` return values."""
@@ -115,9 +131,9 @@ class LoggingConfig(reward_types.BaseConfig):
     """Prefix for all emitted logging keys (e.g., `reward/`)."""
     main_process_only: bool = True
     """Whether reward logging should only happen on the main (rank 0) process."""
-    gather_distributed_summaries: bool = False
+    gather_distributed_summaries: bool = True
     """Whether to gather run summaries across ranks and log them on rank 0."""
-    barrier_before_finalize: bool = False
+    barrier_before_finalize: bool = True
     """Whether to barrier all ranks before emitting run-level summaries."""
 
     log_tables: bool = False

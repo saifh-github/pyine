@@ -154,3 +154,17 @@ class TestWeightedSumAggregator:
         assert total == pytest.approx(15.0)
         assert weighted == {"only": 15.0}
         assert raw == {"only": 7.5}
+
+    def test_clip_total_min_greater_than_max_raises(self) -> None:
+        with pytest.raises(ValueError, match="clip_total_min.*cannot be greater than.*clip_total_max"):
+            reward_configs.AggregationConfig(clip_total_min=2.0, clip_total_max=1.0)
+
+    def test_clip_term_min_greater_than_max_raises(self) -> None:
+        with pytest.raises(ValueError, match="clip_term_min.*cannot be greater than.*clip_term_max"):
+            reward_configs.AggregationConfig(clip_term_min=5.0, clip_term_max=3.0)
+
+    def test_clip_ranges_valid_when_equal(self) -> None:
+        # min == max is valid (clamps to exact value)
+        config = reward_configs.AggregationConfig(clip_total_min=1.0, clip_total_max=1.0)
+        assert config.clip_total_min == 1.0
+        assert config.clip_total_max == 1.0

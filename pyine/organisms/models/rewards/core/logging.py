@@ -9,6 +9,7 @@ import json
 import typing
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
+import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.strings as strings_utils
 
 
@@ -29,7 +30,7 @@ class InMemoryRewardLogger:
         *,
         total: float | None,
         terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, bool | int | float],
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue],
         step: int | None = None,
     ) -> None:
         """Record a per-sample logging event in memory."""
@@ -128,12 +129,12 @@ class WandBRewardLogger:
         *,
         total: float | None,
         terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, bool | int | float],
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue],
         step: int | None = None,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
         payload_step = self._step if step is None else step
-        payload: dict[str, bool | int | float] = {}
+        payload: dict[str, reward_types.MetricValue] = {}
         if total is not None:
             payload[self._total_key] = float(total)
         payload.update({k: float(v) for k, v in terms.items()})

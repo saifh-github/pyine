@@ -8,6 +8,7 @@ this "builtins registration" happens once.
 
 Subpackages (accessible via `pyine.organisms.models.rewards.terms.<subpackage>`):
 - format: Formatting-related reward terms (parseable_answer, text_length)
+- code_exec: Code execution evaluation terms (hard_match, soft_match, llm_grader)
 """
 
 import importlib
@@ -19,6 +20,9 @@ __all__ = [
 _BUILTIN_TERM_MODULES: tuple[str, ...] = (
     "pyine.organisms.models.rewards.terms.format.parseable_answer",
     "pyine.organisms.models.rewards.terms.format.text_length",
+    "pyine.organisms.models.rewards.terms.code_exec.hard_match",
+    "pyine.organisms.models.rewards.terms.code_exec.soft_match",
+    "pyine.organisms.models.rewards.terms.code_exec.llm_grader",
 )
 """Module paths for built-in terms (imported for registration side effects)."""
 

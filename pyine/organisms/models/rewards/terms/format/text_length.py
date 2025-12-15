@@ -238,7 +238,7 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
     ) -> reward_types.TermResult:
         """Compute the term reward and optional per-component metrics."""
         total = 0.0
-        metrics: dict[str, bool | int | float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
         for component in self._config.components:
             if not component.enabled or float(component.weight) == 0.0:
                 continue

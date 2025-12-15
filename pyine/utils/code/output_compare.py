@@ -75,6 +75,17 @@ class CompareOptions(pydantic.BaseModel):
     nan_equal: bool = True
     """If True, NaN is considered equal to NaN."""
 
+    @pydantic.field_validator("rel_tol", "abs_tol", mode="after")
+    @classmethod
+    def _validate_tolerance(
+        cls,
+        value: float | typing.Literal["auto"],
+    ) -> float | typing.Literal["auto"]:
+        """Validate tolerance values (must be "auto" or a non-negative float)."""
+        if value != "auto" and value < 0:
+            raise ValueError("tolerance must be non-negative")
+        return value
+
 
 @dataclasses.dataclass
 class CompareResult:

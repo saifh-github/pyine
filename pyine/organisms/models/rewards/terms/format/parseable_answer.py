@@ -114,7 +114,7 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
         parsed = sample_ctx.parsed
         has_final = parsed is not None and parsed.final_answer is not None and bool(parsed.final_answer.strip())
         value = float(self._config.reward_if_present if has_final else self._config.reward_if_missing)
-        metrics: dict[str, bool | int | float] = {"has_final_answer": has_final}
+        metrics: dict[str, reward_types.MetricValue] = {"has_final_answer": has_final}
 
         if has_final and parsed is not None:
             open_count, close_count, stops_after_final = self._get_final_tag_stats(parsed)

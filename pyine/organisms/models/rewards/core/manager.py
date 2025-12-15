@@ -31,7 +31,7 @@ def make_simple_manager(
 
     Args:
         terms: Sequence of (name, type, weight) tuples specifying the reward terms.
-            Example: `[("format", "parseable_answer", 0.5), ("length", "text_length", 0.5)]`
+            Example: `[("format", "parseable_answer", 1.0)]`
         parsing: Whether to enable tag-based parsing (default True).
         final_tag: Tag name for final answer extraction when parsing is enabled.
         reasoning_tag: Tag name for reasoning extraction when parsing is enabled.
@@ -188,18 +188,19 @@ class RewardManager:
         inherit `final_tag` from the parser (like `parseable_answer` when not explicitly set)
         are not warned about since they will use the correct tag.
 
-        The parser's tag is derived from `self._parser` (the active parser instance) when it's a
-        `TagsOutputParser`, falling back to `config.parsing.final_tag` otherwise.
+        This warning only applies when the parser is a `TagsOutputParser` (either from config or
+        explicitly provided). When a custom parser is used, the tag configuration may not apply,
+        so no warning is emitted to avoid false positives.
         """
         import pyine.organisms.models.rewards.core.parser as reward_parser
 
         parser_final_tag: str | None = None
         if isinstance(self._parser, reward_parser.TagsOutputParser):
             parser_final_tag = self._parser.final_tag
-        elif self._config.parsing is not None:
-            parser_final_tag = self._config.parsing.final_tag
+        # note: we intentionally don't fall back to config.parsing.final_tag when a custom
+        # parser is provided, as the custom parser may not use tag-based extraction at all
         if parser_final_tag is None:
-            return  # no parser configured, nothing to warn about
+            return  # no TagsOutputParser configured, nothing to warn about
         types_that_inherit_from_parser = {"parseable_answer", "format/parseable_answer"}
         for spec in self._config.terms:
             if not spec.enabled:
@@ -221,6 +222,10 @@ class RewardManager:
         run_init_ctx: reward_types.RunInitContext,
     ) -> None:
         """Reset the manager and all terms for a new run.
+
+        This resets running statistics and term state. If a logger is configured, its internal
+        step is NOT automatically reset; call `set_step()` after `reset()` if you need to
+        update the logger's default step for the new run.
 
         Args:
             run_init_ctx: Run-level context forwarded to term `reset()` hooks.
@@ -317,7 +322,7 @@ class RewardManager:
         ctx_for_terms = self._maybe_parse(sample_ctx)
 
         values: dict[str, float] = {}
-        metrics: dict[str, bool | int | float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
         for spec in active_specs:
             term = self._terms_by_name[spec.name]
             result = term(ctx_for_terms)
@@ -469,7 +474,13 @@ class RewardManager:
         totals: dict[str, float],
         term_summaries: dict[str, float],
     ) -> tuple[dict[str, float], dict[str, float]]:
-        """Gather run stats across ranks and compute global summaries (rank0 returns merged)."""
+        """Gather run stats across ranks and compute global summaries (rank0 returns merged).
+
+        Note: Only rank 0 receives the merged summaries. Non-main ranks return their original
+        local summaries unchanged. If `main_process_only=False` and `gather_distributed_summaries=True`,
+        non-main ranks will still log their local (unmerged) summaries to avoid blocking, which
+        may be surprising. For consistent logging, keep `main_process_only=True` (the default).
+        """
         import pyine.utils.distrib
 
         payload = {
@@ -498,12 +509,19 @@ class RewardManager:
         self._term_stats = merged_terms
         return self._get_run_summaries()
 
+    _MAX_METRIC_STRING_LENGTH = 500
+    """Threshold for string metric length warnings. Strings exceeding this emit a warning."""
+
     @staticmethod
     def _validate_term_result(
         term_name: str,
         result: reward_types.TermResult,
     ) -> None:
-        """Validate that a term result is numeric and finite (for safe aggregation/logging)."""
+        """Validate that a term result has a numeric value and valid metrics.
+
+        Metrics can be bool, int, float, or str (per MetricValue type alias). String metrics
+        are allowed for diagnostic purposes (e.g., mismatch reasons) but are capped in length.
+        """
         value_any = typing.cast("typing.Any", result.value)
         if not isinstance(value_any, (int, float)) or isinstance(value_any, bool):
             raise TypeError(f"term '{term_name}' returned non-numeric value: {type(value_any)}")
@@ -516,9 +534,19 @@ class RewardManager:
             metric_value_any = typing.cast("typing.Any", metric_value)
             if isinstance(metric_value_any, bool):
                 continue
+            if isinstance(metric_value_any, str):
+                if len(metric_value_any) > RewardManager._MAX_METRIC_STRING_LENGTH:
+                    warnings.warn(
+                        f"term '{term_name}' metric '{metric_key_any}' string value exceeds "
+                        f"{RewardManager._MAX_METRIC_STRING_LENGTH} chars; consider truncating upstream "
+                        f"to avoid excessive log/memory usage",
+                        stacklevel=4,
+                    )
+                continue
             if not isinstance(metric_value_any, (int, float)):
                 raise TypeError(
-                    f"term '{term_name}' metric '{metric_key_any}' is non-numeric: {type(metric_value_any)}"
+                    f"term '{term_name}' metric '{metric_key_any}' has invalid type: {type(metric_value_any)}; "
+                    f"expected bool, int, float, or str"
                 )
             if not math.isfinite(float(metric_value_any)):
                 raise ValueError(f"term '{term_name}' metric '{metric_key_any}' is non-finite: {metric_value_any}")
@@ -527,7 +555,11 @@ class RewardManager:
         self,
         output: reward_types.RewardOutput,
     ) -> None:
-        """Update simple run-level summary stats for `finalize_run()`."""
+        """Update simple run-level summary stats for `finalize_run()`.
+
+        Note: Per-term stats track weighted values (after per-term clipping and weight
+        multiplication), not raw term values. This matches what contributes to the total.
+        """
         self._total_stats.update(float(output.total))
         for term_name, value in output.weighted_terms.items():
             if term_name not in self._term_stats:
@@ -556,7 +588,7 @@ class RewardManager:
         sample_id = sample_ctx.sample_id
 
         terms: dict[str, float] = dict(output.weighted_terms) if self._config.logging.log_terms else {}
-        metrics: dict[str, bool | int | float] = dict(output.metrics) if self._config.logging.log_metrics else {}
+        metrics: dict[str, reward_types.MetricValue] = dict(output.metrics) if self._config.logging.log_metrics else {}
         total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
 
         scoped_terms, scoped_metrics = self._scope_sample_fields(terms, metrics)
@@ -579,8 +611,8 @@ class RewardManager:
     def _scope_sample_fields(
         self,
         terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, bool | int | float],
-    ) -> tuple[dict[str, float], dict[str, bool | int | float]]:
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue],
+    ) -> tuple[dict[str, float], dict[str, reward_types.MetricValue]]:
         """Apply the configured scope prefix to per-sample term/metric keys."""
         prefix_norm = strings_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:

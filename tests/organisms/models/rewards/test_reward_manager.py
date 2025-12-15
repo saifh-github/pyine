@@ -441,3 +441,23 @@ class TestPackageLevelExports:
         import pyine.organisms.models.rewards as rewards
 
         assert rewards.TermInfo is pyine.organisms.models.rewards.core.registry.TermInfo
+
+    def test_rewards_package_exports_runinitcontext(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.RunInitContext is pyine.organisms.models.rewards.core.types.RunInitContext
+
+    def test_rewards_package_exports_parsedoutput(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.ParsedOutput is pyine.organisms.models.rewards.core.types.ParsedOutput
+
+    def test_rewards_package_exports_codeexecevaldata(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.CodeExecEvalData is pyine.organisms.models.rewards.core.types.CodeExecEvalData
+
+    def test_rewards_package_exports_rewardoutput(self) -> None:
+        import pyine.organisms.models.rewards as rewards
+
+        assert rewards.RewardOutput is pyine.organisms.models.rewards.core.types.RewardOutput

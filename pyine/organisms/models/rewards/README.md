@@ -1,4 +1,4 @@
-# Rewards Package
+# `rewards` Package
 
 Composable reward term management for RL experiments.
 
@@ -7,16 +7,19 @@ Composable reward term management for RL experiments.
 ```
 RewardManager
     │
-    ├── OutputParser (optional)       # Parses model output once per sample
+    ├── OutputParser (optional)       # parses model output once per sample
     │
-    ├── RewardTerm[]                  # Enabled terms from config
-    │   ├── parseable_answer
-    │   ├── text_length
+    ├── RewardTerm[]                  # enabled terms from config
+    │   ├── parseable_answer          # format term
+    │   ├── text_length               # format term
+    │   ├── hard_match                # code_exec term
+    │   ├── soft_match                # code_exec term
+    │   ├── llm_grader                # code_exec term
     │   └── (custom terms)
     │
-    ├── WeightedSumAggregator         # Combines term values
+    ├── WeightedSumAggregator         # combines term values
     │
-    └── RewardLogger (optional)       # Logs metrics to W&B/memory
+    └── RewardLogger (optional)       # logs metrics to W&B/memory
 ```
 
 ## Quick Start
@@ -26,15 +29,14 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.types as reward_types
 
-# Configure the manager
+# configure the manager
 config = reward_configs.RewardManagerConfig(
     terms=[
         reward_configs.RewardTermSpec(
-            name="parseable",
-            type="parseable_answer",
-            weight=1.0,
+            name="parseable",  # name used for breakdown/logging key
+            type="parseable_answer",  # registry type used to identify the implemented class
+            weight=1.0,  # scalar weight applied to the term value during aggregation
             params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
-            # Note: final_tag defaults from ParsingConfig when not set in params
         ),
     ],
     parsing=reward_configs.ParsingConfig(
@@ -43,23 +45,23 @@ config = reward_configs.RewardManagerConfig(
     ),
 )
 
-# Create manager
+# create manager
 manager = reward_manager.RewardManager(config)
 
-# Compute reward for a sample; note: sample_data required (should come from datamodule)
+# compute reward for a sample; note: sample_data required (should come from datamodule)
 ctx = reward_types.SampleContext(
     prompt="What is 2+2?",
     model_output="<answer>4</answer>",
     sample_data=sample_data,
 )
-reward = manager.compute(ctx)  # returns float
+reward = manager.compute(ctx)  # returns float (or tuple if return_breakdown=True)
 ```
 
 ## Built-in Terms
 
 ### `parseable_answer`
 
-Rewards samples whose output has a parsed final answer (requires parsing to be enabled).
+Rewards samples whose output has a final answer (requires parsing to be enabled).
 
 Note: This term checks `SampleContext.parsed.final_answer`, not raw output tags. If parsing is
 disabled or fails to extract a final answer, the sample receives `reward_if_missing`.
@@ -87,9 +89,10 @@ params = {
             #                    parsed_final_answer, sample_code
             "source": "prompt",
             "unit": "chars",            # chars | lines | openai_tokens
-            # length mapping: reward is flat at reward_at_start until
-            # flat_until_length (or start_length if flat_until_length is unset),
-            # then interpolates linearly to reward_at_end at end_length
+            # note: when unit="openai_tokens", you must also set openai_model_id
+            # e.g., "openai_model_id": "gpt-4"
+            # length mapping: reward is flat at reward_at_start until flat_until_length (or start_length
+            #   if flat_until_length is unset), then interpolates linearly to reward_at_end at end_length
             "flat_until_length": 100,
             "end_length": 500,
             "reward_at_start": 1.0,
@@ -99,18 +102,66 @@ params = {
 }
 ```
 
+### Code Execution Terms
+
+These terms evaluate model outputs based on code execution results. They require
+`SampleContext.code_exec_eval` to be populated with a `CodeExecEvalData` instance.
+
+#### `hard_match`
+
+Exact string comparison between expected and predicted execution outputs.
+
+```python
+params = {
+    "reward_if_match": 1.0,       # reward when outputs match exactly
+    "reward_if_no_match": 0.0,    # reward when they differ
+    "strip_whitespace": True,     # strip before comparing
+}
+```
+
+#### `soft_match`
+
+Heuristic-based semantic comparison with numeric tolerances and structured data support.
+
+```python
+params = {
+    "reward_if_match": 1.0,
+    "reward_if_no_match": 0.0,
+    "compare_options": {          # optional, uses defaults if not set
+        ...
+    },
+}
+```
+
+#### `llm_grader`
+
+LLM-as-a-judge evaluation using a pre-computed grader score.
+
+```python
+params = {
+    "reward_if_match": 1.0,
+    "reward_if_no_match": 0.0,
+    "score_threshold": 0.5,        # threshold for binary decision
+    "use_continuous_reward": False, # use raw score instead of binary
+    "fallback_to_soft_match": True, # fallback when LLM score unavailable
+    "fallback_to_hard_match": False,
+}
+```
+
 ## Multi-Term Reward Shaping
 
 Combine multiple terms with different weights for complex reward signals:
 
 ```python
+import pyine.organisms.models.rewards.core.configs as reward_configs
+
 config = reward_configs.RewardManagerConfig(
     terms=[
-        # Primary: correctness reward (high weight)
+        # primary: correctness rewards (high weights)
         reward_configs.RewardTermSpec(
             name="format_compliance",
             type="parseable_answer",
-            weight=1.0,
+            weight=0.5,
             params={
                 "reward_if_present": 1.0,
                 "reward_if_missing": 0.0,
@@ -118,7 +169,17 @@ config = reward_configs.RewardManagerConfig(
                 "bonus_if_stops_after_final_tag": 0.25,
             },
         ),
-        # Secondary: brevity bonus (lower weight)
+        reward_configs.RewardTermSpec(
+            name="accuracy",
+            type="hard_match",
+            weight=1.0,
+            params = {
+                "reward_if_match": 1.0,
+                "reward_if_no_match": 0.0,
+                "strip_whitespace": True,
+            },
+        ),
+        # secondary: brevity bonus (lower weight)
         reward_configs.RewardTermSpec(
             name="brevity",
             type="text_length",
@@ -138,7 +199,7 @@ config = reward_configs.RewardManagerConfig(
             },
         ),
     ],
-    parsing=reward_configs.ParsingConfig(final_tag="answer"),
+    parsing=reward_configs.ParsingConfig(final_tag="final"),
     aggregation=reward_configs.AggregationConfig(
         clip_total_min=0.0,
         clip_total_max=2.0,
@@ -162,36 +223,37 @@ class MyTermConfig(reward_types.BaseConfig):
 
 ```python
 import pyine.organisms.models.rewards.core.term as reward_term
+import pyine.organisms.models.rewards.core.types as reward_types
 
 class MyTerm(reward_term.BaseRewardTerm):
     def __init__(self, config: MyTermConfig) -> None:
         self._config = config
 
     def __call__(self, sample_ctx: reward_types.SampleContext) -> reward_types.TermResult:
-        # Access parsed output if available
+        # you can access the model's parsed output if available directly:
         has_answer = (
             sample_ctx.parsed is not None
             and sample_ctx.parsed.final_answer is not None
         )
-
-        # Compute reward based on your logic
+        # compute reward based on your logic
         if has_answer:
+            # ...
             value = 1.0
         else:
             value = self._config.penalty
-
-        # Return result with optional metrics
+        # return result with optional metrics
         return reward_types.TermResult(
             value=value,
             metrics={"has_answer": has_answer},
         )
 ```
 
-### 3. Register the factory
+### 3. Register the term with the factory
 
 ```python
-import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.configs as reward_configs
+import pyine.organisms.models.rewards.core.registry as reward_registry
+import pyine.organisms.models.rewards.core.types as reward_types
 
 def _factory(
     spec: reward_configs.RewardTermSpec,
@@ -217,10 +279,7 @@ import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.types as reward_types
 
 class JsonOutputParser:
-    """Parser that extracts a JSON object with an 'answer' field from model output.
-
-    Note: This is a simple example. Production parsers should handle edge cases more robustly.
-    """
+    """Parser that extracts a JSON object with an 'answer' field from model output."""
 
     def parse(
         self,
@@ -229,7 +288,7 @@ class JsonOutputParser:
     ) -> reward_types.ParsedOutput:
         del prompt  # unused in this simple parser
         final_answer = None
-        # Look for a JSON object anywhere in the output (simple heuristic)
+        # look for a JSON object anywhere in the output (simple heuristic)
         json_match = re.search(r'\{[^{}]*"answer"[^{}]*\}', model_output)
         if json_match:
             try:
@@ -244,7 +303,7 @@ class JsonOutputParser:
             fields={},
         )
 
-# Use custom parser with manager
+# use custom parser with manager
 manager = reward_manager.RewardManager(config, parser=JsonOutputParser())
 ```
 
@@ -253,18 +312,17 @@ manager = reward_manager.RewardManager(config, parser=JsonOutputParser())
 ### Basic Integration
 
 ```python
+import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.types as reward_types
 
-# Initialize manager once
+# initialize manager once
 manager = reward_manager.RewardManager(config)
-
-# Reset at start of each training run/epoch
+# reset at start of each training run/epoch
 manager.reset(reward_types.RunInitContext(datamodule=datamodule))
 
-# In training loop
+# in training loop:
 for batch in dataloader:
     prompts, outputs, sample_data_list = generate_outputs(batch)
-
     rewards = []
     for prompt, output, sample_data in zip(prompts, outputs, sample_data_list):
         ctx = reward_types.SampleContext(
@@ -274,46 +332,31 @@ for batch in dataloader:
         )
         reward = manager.compute(ctx)
         rewards.append(reward)
-
-    # Use rewards for policy gradient update
+    # use rewards for policy gradient update
     loss = compute_policy_loss(rewards, ...)
 
-# At end of run
-manager.finalize_run()
-```
-
-### Batch Processing
-
-```python
-# Process multiple samples at once
-sample_ctxs = [
-    reward_types.SampleContext(prompt=p, model_output=o, sample_data=sd)
-    for p, o, sd in zip(prompts, outputs, sample_data_list)
-]
-outputs = manager.compute_batch(sample_ctxs)
-rewards = [out.total for out in outputs]
+# at end of run:
+manager.finalize_run()  # to make sure run-level stats are logged properly
 ```
 
 ### With Logging
 
 ```python
 import pyine.organisms.models.rewards.core.logging as reward_logging
+import pyine.organisms.models.rewards.core.manager as reward_manager
 
-# Create W&B logger
+# create W&B logger
 logger = reward_logging.make_wandb_reward_logger(
     wandb_run,
     config.logging,
-    step=global_step,
+    step=global_step,  # optional fixed W&B step to use for all logs (unless manually updated)
 )
 
-# Create manager with logger
+# create manager with logger
 manager = reward_manager.RewardManager(config, logger=logger)
-
-# Set step before computing
-manager.set_step(global_step)
-
-# Rewards are automatically logged according to LoggingConfig
-reward = manager.compute(ctx)
+# ...
+manager.set_step(global_step)  # if needed, for subsequent steps
+reward = manager.compute(ctx)  # rewards are automatically logged according to LoggingConfig
 ```
 
 ## Distributed Training
@@ -321,106 +364,22 @@ reward = manager.compute(ctx)
 The rewards package supports distributed training with proper synchronization:
 
 ```python
+import pyine.organisms.models.rewards.core.configs as reward_configs
+
 config = reward_configs.RewardManagerConfig(
     terms=[...],
     logging=reward_configs.LoggingConfig(
         enabled=True,
-        main_process_only=True,           # Only log on rank 0
-        gather_distributed_summaries=True, # Gather stats from all ranks
-        barrier_before_finalize=True,      # Sync before finalize
+        main_process_only=True,            # only log on rank 0
+        gather_distributed_summaries=True, # gather stats from all ranks
+        barrier_before_finalize=True,      # sync before finalize
     ),
 )
 
-# Manager automatically:
-# - Skips logging on non-main ranks (when main_process_only=True)
-# - Gathers statistics from all ranks (when gather_distributed_summaries=True)
-# - Synchronizes before finalize (when barrier_before_finalize=True)
-```
-
-## Configuration Reference
-
-### RewardManagerConfig
-
-- `terms`: List of `RewardTermSpec` (required, min 1)
-- `aggregation`: `AggregationConfig` (optional)
-- `logging`: `LoggingConfig` (optional)
-- `output`: `OutputConfig` (optional)
-- `parsing`: `ParsingConfig` (optional)
-
-### RewardTermSpec
-
-- `name`: Stable term name used as breakdown/logging key
-- `type`: Registry key for the term implementation
-- `weight`: Scalar weight applied during aggregation (default: 1.0)
-- `enabled`: Whether the term is active (default: True)
-- `require_parsed`: Whether this term requires parsed output (default: False)
-- `params`: Term-specific configuration payload
-
-### AggregationConfig
-
-Aggregation produces three outputs:
-
-1. **raw_terms**: Original term values before any processing
-2. **weighted_terms**: After per-term clipping (if configured) and weighting
-3. **total**: Sum of weighted_terms, with total clipping applied (if configured)
-
-Configuration options:
-
-- `strategy`: `"weighted_sum"` (default, only supported strategy)
-- `clip_term_min/max`: Optional per-term clipping (applied to raw values before weighting)
-- `clip_total_min/max`: Optional total clipping (applied after weighted sum)
-
-### LoggingConfig
-
-- `enabled`: bool (default False)
-- `wandb_key_prefix`: Extra key prefix for W&B logging
-- `log_total`: Include total reward in logs (default True)
-- `log_terms`: Include per-term values in logs (default True)
-- `log_metrics`: Include term-emitted metrics in logs (default True)
-- `log_every_n_examples`: int (default 1)
-- `scope_prefix`: str (default "reward/")
-- `main_process_only`: bool (default True)
-- `gather_distributed_summaries`: Gather stats across ranks (default False)
-- `barrier_before_finalize`: Sync before finalize (default False)
-- `log_tables`: Log per-sample breakdowns to W&B table (default False)
-- `table_key`: W&B key for the rewards table
-- `table_flush_every_n_logs`: Flush table every N logs (default 100)
-- `table_max_rows`: Max buffered rows before flush (default 1000)
-
-### ParsingConfig
-
-- `mode`: `"tags"` (default, only supported mode)
-- `enabled_fields`: `"both"` | `"final_only"` | `"reasoning_only"`
-- `final_tag`: Tag name for final answer (default "final")
-- `reasoning_tag`: Tag name for reasoning (default "reasoning")
-- `reasoning_from_final_prefix`: Use text before final tag as reasoning (default False)
-- `fallback_policy`: `"none"` | `"last_line"` | `"entire_output"`
-- `multi_tag_policy`: `"last"` | `"first"` | `"error"`
-- `strict`: Raise on malformed tag structure (default False)
-- `capture_diagnostics`: Include tag diagnostics in fields (default True)
-
-### OutputConfig
-
-- `return_breakdown_default`: Whether `compute()` returns breakdown by default
-- `return_raw_breakdown`: Include raw (pre-clipping, pre-weighting) values in breakdown
-
-## Module Structure
-
-```
-rewards/
-├── core/
-│   ├── types.py        # Protocols, dataclasses
-│   ├── configs.py      # Pydantic configurations
-│   ├── manager.py      # RewardManager orchestration
-│   ├── registry.py     # Term factory registry
-│   ├── aggregator.py   # Weighted sum aggregation
-│   ├── parser.py       # Tag-based output parsing
-│   ├── logging.py      # W&B and in-memory loggers
-│   └── term.py         # BaseRewardTerm helper
-└── terms/
-    └── format/
-        ├── parseable_answer.py
-        └── text_length.py
+# manager will automatically (all activated by default):
+# - skip logging on non-main ranks (when main_process_only=True);
+# - gather statistics from all ranks (when gather_distributed_summaries=True);
+# - synchronize before finalize (when barrier_before_finalize=True).
 ```
 
 ## Testing
@@ -431,13 +390,11 @@ Use registry snapshots for test isolation:
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.terms
 
-# Ensure builtins are registered
+# ensure builtins are registered
 pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
-
-# Take a snapshot for isolated testing
+# take a snapshot for isolated testing
 snapshot = reward_registry.get_global_registry().snapshot()
-
-# Use snapshot with manager
+# use snapshot with manager
 manager = reward_manager.RewardManager(config, registry=snapshot)
 ```
 
@@ -448,8 +405,7 @@ import pyine.organisms.models.rewards.core.logging as reward_logging
 
 logger = reward_logging.InMemoryRewardLogger()
 manager = reward_manager.RewardManager(config, logger=logger)
-
-# After computing rewards...
+# after computing rewards...
 assert len(logger.samples) == expected_count
 assert logger.samples[0]["total"] == expected_reward
 ```
