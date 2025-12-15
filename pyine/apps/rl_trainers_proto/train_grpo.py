@@ -348,6 +348,10 @@ def main(config: ExperimentConfig) -> None:
         temperature=config.training.temperature,
         top_p=config.training.top_p,
         beta=config.training.beta,
+        gradient_checkpointing=False,
+        # Gradient checkpointing: DDP + PEFT compatibility requirment
+        # We must use non-reentrant mode for DDP + PEFT compatibility if using gradient checkpointing
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         # Model initialization args for distributed training compatibility
         model_init_kwargs={"device_map": device_map},
     )
