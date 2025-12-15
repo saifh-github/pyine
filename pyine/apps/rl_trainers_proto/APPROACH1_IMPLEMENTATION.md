@@ -25,7 +25,7 @@ This implementation enables GRPO training using:
 - Loads the prompt template using `pyine.prompts.configs.code_execution.get_prompt_template()`
 - Extracts `SampleData` from the datamodule's `SampleBuilder`
 - Formats each sample using the Jinja2 template
-- Returns HuggingFace Dataset with required columns: `prompt`, `expected_output`, `output_type`, etc.
+- Returns HuggingFace Dataset with required columns: `prompt`, `expected_output`, `predict_type`, etc.
 - **Key features:**
   - Supports multiple prompt versions (default: `"unstructured_with_3_output_types"`)
   - Includes all sample metadata for future reward function use

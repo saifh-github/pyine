@@ -335,17 +335,17 @@ grpo_minimal:
       Description: {{description[:-1] if description and description[-1:] == "\n" else description}}
       {%- endif %}
 
-      Task: {{output_type}}
-      {%- if output_type == 'program_output' %}
+      Task: {{predict_type}}
+      {%- if predict_type == 'program_output' %}
       {%- if entrypoint is defined and entrypoint %}
       Entrypoint: {{entrypoint}}
       {%- endif %}
       Input: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
-      {%- elif output_type == 'frame_variables' %}
+      {%- elif predict_type == 'frame_variables' %}
       Segment: lines {{first_line}}-{{last_line}} (1-indexed)
       Steps: ~{{trace_step_count}}
       Initial state: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
-      {%- elif output_type == 'function_return' %}
+      {%- elif predict_type == 'function_return' %}
       Function: {{entrypoint}} (lines {{first_line}}-{{last_line}})
       Arguments: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
       {%- endif %}
@@ -361,16 +361,16 @@ grpo_minimal:
       ```python
       {{code[:-1] if code and code[-1:] == "\n" else code}}
       ```
-      Task: {{output_type}}
-      {%- if output_type == 'program_output' %}
+      Task: {{predict_type}}
+      {%- if predict_type == 'program_output' %}
       {%- if entrypoint is defined and entrypoint %}
       Entrypoint: {{entrypoint}}
       {%- endif %}
       Input: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
-      {%- elif output_type == 'frame_variables' %}
+      {%- elif predict_type == 'frame_variables' %}
       Segment: lines {{first_line}}-{{last_line}}
       Initial state: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
-      {%- elif output_type == 'function_return' %}
+      {%- elif predict_type == 'function_return' %}
       Function: {{entrypoint}}
       Arguments: {{inputs[:-1] if inputs and inputs[-1:] == "\n" else inputs}}
       {%- endif %}

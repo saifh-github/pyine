@@ -109,7 +109,7 @@ python -m pyine.apps.rl_trainers_proto.inspect_prompts \
 
 ✓ **Expected Outputs:**
 - Should show the correct expected output for each sample
-- Should match the output_type (program_output, frame_variables, or function_return)
+- Should match the predict_type (program_output, frame_variables, or function_return)
 
 ✓ **Statistics:**
 - Check the distribution of output types

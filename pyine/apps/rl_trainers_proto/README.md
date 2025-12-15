@@ -165,7 +165,7 @@ If using `ConversationDataModule`, samples should be `SampleData` objects with:
 - `code`: Code snippet
 - `inputs`: Test inputs
 - `expected_output`: Expected execution result
-- `output_type`: Type of output ("program_output", "frame_variables", etc.)
+- `predict_type`: Type of prediction ("program_output", "frame_variables", "function_return")
 - Additional metadata fields
 
 ## GRPO Training Details

@@ -32,7 +32,7 @@ def format_code_execution_prompt(
     """Format a code execution sample into a prompt string using a Jinja2 template.
 
     Args:
-        sample: Sample dictionary containing 'code', 'inputs', 'output_type', etc.
+        sample: Sample dictionary containing 'code', 'inputs', 'predict_type', etc.
         prompt_template: PromptTemplate instance (from pyine.prompts) to use for formatting.
 
     Returns:
@@ -94,7 +94,7 @@ def prepare_grpo_dataset_from_datamodule(
         HuggingFace Dataset formatted for GRPO training with the following columns:
         - prompt: str - The formatted input prompt
         - expected_output: str - The expected output for reward calculation
-        - output_type: str - Type of output (program_output, frame_variables, function_return)
+        - predict_type: str - Type of prediction (program_output, frame_variables, function_return)
         - identifier: str - Unique sample identifier
         - code_type: str - Type of code (original, obfuscated, etc.)
         - tags: list[str] - Sample tags for analysis
@@ -171,7 +171,7 @@ def prepare_grpo_dataset_from_datamodule(
             dataset_entry = {
                 "prompt": [{"role": "user", "content": formatted_prompt}],  # Chat message format
                 "expected_output": sample.expected_output,
-                "output_type": sample.output_type,
+                "predict_type": sample.predict_type,  # Renamed from output_type for consistency
                 "identifier": sample.identifier,
                 "code_type": sample.code_type,
                 "tags": sample.get_tag_list(),
@@ -320,7 +320,7 @@ def inspect_grpo_dataset(
     _print()
 
     # Check required columns
-    required_cols = ["prompt", "expected_output", "output_type"]
+    required_cols = ["prompt", "expected_output", "predict_type"]
     missing_cols = [col for col in required_cols if col not in dataset.column_names]
     if missing_cols:
         _print(f"⚠️  WARNING: Missing required columns: {missing_cols}")
@@ -333,16 +333,16 @@ def inspect_grpo_dataset(
     _print("Dataset Statistics:")
     _print("-" * 40)
 
-    # Output type distribution
-    if "output_type" in dataset.column_names:
-        output_types = dataset["output_type"]
+    # Prediction type distribution
+    if "predict_type" in dataset.column_names:
+        predict_types = dataset["predict_type"]
         from collections import Counter
 
-        type_counts = Counter(output_types)
-        _print("\nOutput Type Distribution:")
-        for output_type, count in sorted(type_counts.items()):
+        type_counts = Counter(predict_types)
+        _print("\nPrediction Type Distribution:")
+        for predict_type, count in sorted(type_counts.items()):
             percentage = (count / len(dataset)) * 100
-            _print(f"  {output_type}: {count} ({percentage:.1f}%)")
+            _print(f"  {predict_type}: {count} ({percentage:.1f}%)")
 
     # Code type distribution
     if "code_type" in dataset.column_names:
@@ -373,9 +373,9 @@ def inspect_grpo_dataset(
         if "identifier" in sample:
             _print(f"Identifier: {sample['identifier']}")
 
-        # Display output type
-        if "output_type" in sample:
-            _print(f"Output Type: {sample['output_type']}")
+        # Display prediction type
+        if "predict_type" in sample:
+            _print(f"Prediction Type: {sample['predict_type']}")
 
         # Display code type
         if "code_type" in sample:
