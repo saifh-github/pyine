@@ -43,7 +43,7 @@ If you prefer to create the config manually, see `configs/datamodule_grpo_exampl
    ```python
    import pyine.data.traces.dataset_utils
    paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
-       "TACO", "v1.3/10s10t.*of000026.*.lmdb"
+       "TACO", "v1.5/10s10t.*of000026.*.lmdb"
    )
    print(paths[0:4])  # For part1to4
    ```
@@ -222,7 +222,7 @@ Your TACO dataset is not in the expected location. Check:
 
 1. Environment variable: `echo $PYINE_TRACE_DATASETS_ROOT`
 2. Default location: `~/.cache/pyine/trace_datasets/`
-3. Dataset structure should be: `TACO/v1.3/10s10t_part01of000026_*.lmdb`
+3. Dataset structure should be: `TACO/v1.5/10s10t_part01of000026_*.lmdb`
 
 See the main project README for dataset setup instructions.
 

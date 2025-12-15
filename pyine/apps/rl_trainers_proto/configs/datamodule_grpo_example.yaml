@@ -9,14 +9,14 @@ datamodule_name: "TACO_10s10t_v1_part1to4_for_grpo"
 # Dataset paths - IMPORTANT: Update these paths to match your environment!
 # These are the LMDB trace dataset files
 # For TACO 10s10t v1 part1to4, you need 4 LMDB files
-# Get these by running: pyine.data.traces.dataset_utils.get_matching_dataset_paths("TACO", "v1.3/10s10t.*of000026.*.lmdb")[0:4]
+# Get these by running: pyine.data.traces.dataset_utils.get_matching_dataset_paths("TACO", "v1.5/10s10t.*of000026.*.lmdb")[0:4]
 lmdb_paths:
   # PLACEHOLDER: Replace with your actual paths
   # Example format (you'll need to update these):
-  - /path/to/datasets/TACO/v1.3/10s10t_part01of000026_YYYYMMDD_HHMMSS.lmdb
-  - /path/to/datasets/TACO/v1.3/10s10t_part02of000026_YYYYMMDD_HHMMSS.lmdb
-  - /path/to/datasets/TACO/v1.3/10s10t_part03of000026_YYYYMMDD_HHMMSS.lmdb
-  - /path/to/datasets/TACO/v1.3/10s10t_part04of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.5/10s10t_part01of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.5/10s10t_part02of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.5/10s10t_part03of000026_YYYYMMDD_HHMMSS.lmdb
+  - /path/to/datasets/TACO/v1.5/10s10t_part04of000026_YYYYMMDD_HHMMSS.lmdb
 
 # Train/valid/test split file - IMPORTANT: Update this path!
 # Get this by running: pyine.data.utils.splits.get_dataset_split_file_path("TACO")

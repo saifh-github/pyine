@@ -51,7 +51,7 @@ def get_taco_paths(dataset_variant: str) -> tuple[list[pathlib.Path], pathlib.Pa
     # Get all TACO 10s10t v1 dataset paths
     all_lmdb_paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
         source_dataset_name="TACO",
-        pattern="v1.3/10s10t.*of000026.*.lmdb",
+        pattern="v1.5/10s10t.*of000026.*.lmdb",
     )
 
     if not all_lmdb_paths:
@@ -116,8 +116,7 @@ def create_datamodule_config(
         variant = "part1"
     else:
         raise ValueError(
-            f"Unknown dataset name: {dataset_name}. "
-            f"Expected format: TACO_10s10t_v1_{{full|part1to13|part1to4|part1}}"
+            f"Unknown dataset name: {dataset_name}. Expected format: TACO_10s10t_v1_{{full|part1to13|part1to4|part1}}"
         )
 
     # Get dataset paths
@@ -146,17 +145,11 @@ def create_datamodule_config(
                 "selection_config": {
                     "seed": seed,
                     "allow_db_lookups": True,
-                    "choice_strategy": "latest",
-                    "input_type_prob_map": {
+                    "code_type_prob_map": {
                         "original": 1.0,
-                        "hinted": 0.0,
-                        "stubbed": 0.0,
-                        "obfuscated": 0.0,
-                        "obfuscated_hinted": 0.0,
-                        "bugged": 0.0,
-                        "bugged_hinted": 0.0,
-                        "bugged_misleading": 0.0,
                     },
+                    "samples_per_family": 1,
+                    "draw_attempts": 5,
                     "fallback_to_orig": False,
                 },
                 "transform_config": {
@@ -169,14 +162,11 @@ def create_datamodule_config(
             "train": {
                 "filtering_config": {},
                 "selection_config": {
-                    "choice_strategy": "random",
-                    "input_type_prob_map": {
+                    "code_type_prob_map": {
                         "original": 1.0,
-                        "hinted": 0.0,
-                        "stubbed": 0.0,
-                        "obfuscated_hinted": 0.0,
-                        "obfuscated": 0.0,
                     },
+                    "samples_per_family": 1,
+                    "draw_attempts": 5,
                     "fallback_to_orig": True,
                 },
                 "transform_config": {
@@ -186,14 +176,11 @@ def create_datamodule_config(
             "valid": {
                 "filtering_config": {},
                 "selection_config": {
-                    "choice_strategy": "random",
-                    "input_type_prob_map": {
+                    "code_type_prob_map": {
                         "original": 1.0,
-                        "hinted": 0.0,
-                        "stubbed": 0.0,
-                        "obfuscated_hinted": 0.0,
-                        "obfuscated": 0.0,
                     },
+                    "samples_per_family": 1,
+                    "draw_attempts": 5,
                     "fallback_to_orig": True,
                 },
                 "transform_config": {
@@ -241,10 +228,10 @@ def create_datamodule_config(
     logger.info("")
     logger.info("Next steps:")
     logger.info("  1. Inspect the generated prompts:")
-    logger.info(f"     python -m pyine.apps.rl_trainers_proto.inspect_prompts \\")
+    logger.info("     python -m pyine.apps.rl_trainers_proto.inspect_prompts \\")
     logger.info(f"         --datamodule-config {output_path} \\")
-    logger.info(f"         --subset train \\")
-    logger.info(f"         --num-samples 5")
+    logger.info("         --subset train \\")
+    logger.info("         --num-samples 5")
     logger.info("")
     logger.info("  2. Update train_grpo.py to use this config:")
     logger.info("     data=DataConfig(")
