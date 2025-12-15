@@ -247,10 +247,22 @@ class TestHardMatchTermFactory:
         spec = reward_configs.RewardTermSpec(
             name="test",
             type="hard_match",
-            params={"reward_if_match": 2.0, "reward_if_no_match": 0.1},
+            params={
+                "reward_if_match": 2.0,
+                "reward_if_no_match": 0.1,
+                "strip_whitespace": False,
+            },
         )
         term = hard_match_term._factory(spec, parser=None)
         assert isinstance(term, hard_match_term.HardMatchTerm)
+        ctx_mismatch = make_code_exec_sample_context(expected="  42  ", predicted="42")
+        mismatch_result = term(ctx_mismatch)
+        assert mismatch_result.value == pytest.approx(0.1)
+        assert mismatch_result.metrics["hard_match"] is False
+        ctx_match = make_code_exec_sample_context(expected="42", predicted="42")
+        match_result = term(ctx_match)
+        assert match_result.value == pytest.approx(2.0)
+        assert match_result.metrics["hard_match"] is True
 
     def test_factory_validates_params(self) -> None:
         spec = reward_configs.RewardTermSpec(
@@ -276,8 +288,10 @@ class TestHardMatchTermRegistration:
         import pyine.organisms.models.rewards.terms
 
         pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
-        factory = reward_registry.get_term_factory("code_exec/hard_match")
-        assert factory is not None
+        canonical = reward_registry.get_term_factory("hard_match")
+        alias = reward_registry.get_term_factory("code_exec/hard_match")
+        assert alias is canonical
+        assert reward_registry.get_global_registry().resolve_term_type("code_exec/hard_match") == "hard_match"
 
 
 class TestSoftMatchTermConfig:
@@ -469,10 +483,18 @@ class TestSoftMatchTermFactory:
         spec = reward_configs.RewardTermSpec(
             name="test",
             type="soft_match",
-            params={"reward_if_match": 2.0, "compare_options": {"rel_tol": 1e-6}},
+            params={
+                "reward_if_match": 2.0,
+                "reward_if_no_match": 0.25,
+                "compare_options": {"case_sensitive": False},
+            },
         )
         term = soft_match_term._factory(spec, parser=None)
         assert isinstance(term, soft_match_term.SoftMatchTerm)
+        ctx = make_code_exec_sample_context(expected="Hello", predicted="hello")
+        result = term(ctx)
+        assert result.value == pytest.approx(2.0)
+        assert result.metrics["soft_match"] is True
 
 
 class TestSoftMatchTermRegistration:
@@ -489,8 +511,10 @@ class TestSoftMatchTermRegistration:
         import pyine.organisms.models.rewards.terms
 
         pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
-        factory = reward_registry.get_term_factory("code_exec/soft_match")
-        assert factory is not None
+        canonical = reward_registry.get_term_factory("soft_match")
+        alias = reward_registry.get_term_factory("code_exec/soft_match")
+        assert alias is canonical
+        assert reward_registry.get_global_registry().resolve_term_type("code_exec/soft_match") == "soft_match"
 
 
 class TestLLMGraderTermConfig:
@@ -756,10 +780,23 @@ class TestLLMGraderTermFactory:
         spec = reward_configs.RewardTermSpec(
             name="test",
             type="llm_grader",
-            params={"score_threshold": 0.7, "use_continuous_reward": True},
+            params={
+                "reward_if_match": 2.0,
+                "reward_if_no_match": 0.25,
+                "score_threshold": 0.75,
+                "use_continuous_reward": False,
+            },
         )
         term = llm_grader_term._factory(spec, parser=None)
         assert isinstance(term, llm_grader_term.LLMGraderTerm)
+        ctx_below = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.74)
+        below = term(ctx_below)
+        assert below.value == pytest.approx(0.25)
+        assert below.metrics["llm_grader_match"] is False
+        ctx_at = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.75)
+        at = term(ctx_at)
+        assert at.value == pytest.approx(2.0)
+        assert at.metrics["llm_grader_match"] is True
 
 
 class TestLLMGraderTermRegistration:
@@ -776,8 +813,10 @@ class TestLLMGraderTermRegistration:
         import pyine.organisms.models.rewards.terms
 
         pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
-        factory = reward_registry.get_term_factory("code_exec/llm_grader")
-        assert factory is not None
+        canonical = reward_registry.get_term_factory("llm_grader")
+        alias = reward_registry.get_term_factory("code_exec/llm_grader")
+        assert alias is canonical
+        assert reward_registry.get_global_registry().resolve_term_type("code_exec/llm_grader") == "llm_grader"
 
 
 class TestCodeExecTermsIntegration:

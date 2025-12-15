@@ -37,27 +37,6 @@ class _NeedsParsedTerm:
         return pyine.organisms.models.rewards.core.types.TermResult(value=1.0)
 
 
-def _register_test_term_once() -> None:
-    """Register a small in-test term factory once, to avoid global registry collisions."""
-    term_type = "test_needs_parsed"
-    try:
-        pyine.organisms.models.rewards.core.registry.get_term_factory(term_type)
-        return
-    except KeyError:
-        pass
-
-    def factory(
-        spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
-        *,
-        parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
-    ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
-        del spec
-        del parser
-        return _NeedsParsedTerm()
-
-    pyine.organisms.models.rewards.core.registry.register_term(term_type, factory)
-
-
 class TestRewardManager:
     def test_weighting_and_breakdown(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -139,7 +118,18 @@ class TestRewardManager:
         assert output.metrics["parseable/stops_after_final_tag"] is False
 
     def test_parse_is_cached_per_sample(self) -> None:
-        _register_test_term_once()
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _NeedsParsedTerm()
+
+        registry.register_term("test_needs_parsed", factory)
         parser = _CountingParser()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -147,7 +137,7 @@ class TestRewardManager:
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t2", type="test_needs_parsed"),
             ],
         )
-        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, parser=parser)
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, parser=parser, registry=registry)
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="p",
             model_output="raw",

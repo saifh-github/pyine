@@ -315,5 +315,7 @@ class TestParseableAnswerTermRegistration:
         import pyine.organisms.models.rewards.terms
 
         pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
-        factory = reward_registry.get_term_factory("format/parseable_answer")
-        assert factory is not None
+        canonical = reward_registry.get_term_factory("parseable_answer")
+        alias = reward_registry.get_term_factory("format/parseable_answer")
+        assert alias is canonical
+        assert reward_registry.get_global_registry().resolve_term_type("format/parseable_answer") == "parseable_answer"
