@@ -9,18 +9,18 @@ GRPO training before actually starting the training process. This is useful for:
 
 Usage:
     # With datamodule
-    python -m pyine.apps.rl_trainers.inspect_prompts \
+    python -m pyine.apps.rl_trainers_proto.inspect_prompts \
         --datamodule-config path/to/datamodule_config.yaml \
         --subset train \
         --num-samples 5
 
     # With HF dataset (simpler, but less realistic)
-    python -m pyine.apps.rl_trainers.inspect_prompts \
+    python -m pyine.apps.rl_trainers_proto.inspect_prompts \
         --dataset-path trl-lib/ultrafeedback-prompt \
         --num-samples 3
 
     # Save output to file
-    python -m pyine.apps.rl_trainers.inspect_prompts \
+    python -m pyine.apps.rl_trainers_proto.inspect_prompts \
         --datamodule-config path/to/config.yaml \
         --output-file prompt_inspection.txt
 """
@@ -56,9 +56,9 @@ def inspect_with_datamodule(
         prompt_version: Prompt template version to use.
         output_file: Optional path to save inspection results.
     """
-    from pyine.apps.rl_trainers.config import DataConfig
-    from pyine.apps.rl_trainers.data_utils import inspect_grpo_dataset, prepare_grpo_dataset_from_datamodule
-    from pyine.apps.rl_trainers.train_grpo import load_datamodule
+    from pyine.apps.rl_trainers_proto.config import DataConfig
+    from pyine.apps.rl_trainers_proto.data_utils import inspect_grpo_dataset, prepare_grpo_dataset_from_datamodule
+    from pyine.apps.rl_trainers_proto.train_grpo import load_datamodule
 
     logger.info("=" * 80)
     logger.info("Loading datamodule and preparing dataset...")
@@ -119,7 +119,7 @@ def inspect_with_hf_dataset(
         num_samples: Number of samples to display.
         output_file: Optional path to save inspection results.
     """
-    from pyine.apps.rl_trainers.data_utils import inspect_grpo_dataset, prepare_grpo_dataset_simple
+    from pyine.apps.rl_trainers_proto.data_utils import inspect_grpo_dataset, prepare_grpo_dataset_simple
 
     logger.info("=" * 80)
     logger.info("Loading HuggingFace dataset...")

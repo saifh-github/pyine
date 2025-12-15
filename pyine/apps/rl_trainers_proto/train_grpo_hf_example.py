@@ -19,8 +19,8 @@ import pyine.utils.distrib
 import pyine.utils.reprod
 
 # Import local modules
-from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
-from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
+from pyine.apps.rl_trainers_proto.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
+from pyine.apps.rl_trainers_proto.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
 
 # Configure logging
 logging.basicConfig(

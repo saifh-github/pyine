@@ -5,18 +5,18 @@ configured datamodule YAML file that can be used with inspect_prompts.py and tra
 
 Usage:
     # Generate config for part1to4 (15% of data, ~medium-sized experiments)
-    python -m pyine.apps.rl_trainers.create_datamodule_config \
+    python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
         --output configs/my_datamodule.yaml \
         --dataset-name TACO_10s10t_v1_part1to4
 
     # Generate config for part1 only (3.8% of data, quick experiments)
-    python -m pyine.apps.rl_trainers.create_datamodule_config \
+    python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
         --output configs/my_datamodule.yaml \
         --dataset-name TACO_10s10t_v1_part1 \
         --max-solutions 100
 
     # Generate config for full dataset (100% of data)
-    python -m pyine.apps.rl_trainers.create_datamodule_config \
+    python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
         --output configs/my_datamodule.yaml \
         --dataset-name TACO_10s10t_v1_full
 """
@@ -140,7 +140,7 @@ def create_datamodule_config(
             "version": "grpo_minimal",  # GRPO-optimized template
         },
         "default_dataparser_config": {
-            "class_path": "pyine.organisms.datamodules.utils.samples.SampleBuilder",
+            "class_path": "pyine.organisms.datamodules.samples.builder.SampleBuilder",
             "params": {
                 "filtering_config": {},
                 "selection_config": {
@@ -241,7 +241,7 @@ def create_datamodule_config(
     logger.info("")
     logger.info("Next steps:")
     logger.info("  1. Inspect the generated prompts:")
-    logger.info(f"     python -m pyine.apps.rl_trainers.inspect_prompts \\")
+    logger.info(f"     python -m pyine.apps.rl_trainers_proto.inspect_prompts \\")
     logger.info(f"         --datamodule-config {output_path} \\")
     logger.info(f"         --subset train \\")
     logger.info(f"         --num-samples 5")

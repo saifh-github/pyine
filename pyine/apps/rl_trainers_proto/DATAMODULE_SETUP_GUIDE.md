@@ -10,19 +10,19 @@ Use the helper script to automatically detect your dataset paths and generate a 
 
 ```bash
 # For medium-sized experiments (15% of data, ~4 parts)
-python -m pyine.apps.rl_trainers.create_datamodule_config \
-    --output pyine/apps/rl_trainers/configs/taco_part1to4.yaml \
+python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
+    --output pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml \
     --dataset-name TACO_10s10t_v1_part1to4
 
 # For quick testing (limit to 100 solutions)
-python -m pyine.apps.rl_trainers.create_datamodule_config \
-    --output pyine/apps/rl_trainers/configs/taco_part1_test.yaml \
+python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
+    --output pyine/apps/rl_trainers_proto/configs/taco_part1_test.yaml \
     --dataset-name TACO_10s10t_v1_part1 \
     --max-solutions 100
 
 # For full experiments (100% of data, all 26 parts)
-python -m pyine.apps.rl_trainers.create_datamodule_config \
-    --output pyine/apps/rl_trainers/configs/taco_full.yaml \
+python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
+    --output pyine/apps/rl_trainers_proto/configs/taco_full.yaml \
     --dataset-name TACO_10s10t_v1_full
 ```
 
@@ -78,7 +78,7 @@ After generating your config, **always validate it before training**:
 
 ```bash
 # View the generated config
-cat pyine/apps/rl_trainers/configs/taco_part1to4.yaml
+cat pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml
 ```
 
 Verify:
@@ -91,8 +91,8 @@ Verify:
 
 ```bash
 # Inspect prompts from the datamodule
-python -m pyine.apps.rl_trainers.inspect_prompts \
-    --datamodule-config pyine/apps/rl_trainers/configs/taco_part1to4.yaml \
+python -m pyine.apps.rl_trainers_proto.inspect_prompts \
+    --datamodule-config pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml \
     --subset train \
     --num-samples 5 \
     --max-samples 50 \
@@ -119,8 +119,8 @@ python -m pyine.apps.rl_trainers.inspect_prompts \
 
 ```bash
 # Save to file for detailed review
-python -m pyine.apps.rl_trainers.inspect_prompts \
-    --datamodule-config pyine/apps/rl_trainers/configs/taco_part1to4.yaml \
+python -m pyine.apps.rl_trainers_proto.inspect_prompts \
+    --datamodule-config pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml \
     --subset train \
     --num-samples 10 \
     --output-file prompt_inspection_report.txt
@@ -134,7 +134,7 @@ cat prompt_inspection_report.txt
 Once validated, update your `train_grpo.py` configuration:
 
 ```python
-from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig
+from pyine.apps.rl_trainers_proto.config import DataConfig, ExperimentConfig
 
 config = ExperimentConfig(
     experiment_name="GRPO_CodeExec_Test",
@@ -143,7 +143,7 @@ config = ExperimentConfig(
     wandb_project="your-project-name",
     data=DataConfig(
         use_datamodule=True,
-        datamodule_config_path="pyine/apps/rl_trainers/configs/taco_part1to4.yaml",
+        datamodule_config_path="pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml",
         train_subset_name="train",
         max_samples=1000,  # Start small for testing
     ),

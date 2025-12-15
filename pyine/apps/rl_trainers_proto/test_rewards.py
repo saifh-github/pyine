@@ -6,7 +6,7 @@ to verify they work correctly before running full training.
 
 import logging
 
-from pyine.apps.rl_trainers.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
+from pyine.apps.rl_trainers_proto.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
 
 # Configure logging
 logging.basicConfig(

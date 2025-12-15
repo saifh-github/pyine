@@ -13,10 +13,10 @@ import pyine.data.datamodule
 import pyine.evals.common
 
 # Import local modules
-from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig, RewardConfig
-from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule
-from pyine.apps.rl_trainers.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
-from pyine.apps.rl_trainers.train_grpo import setup_model_and_tokenizer
+from pyine.apps.rl_trainers_proto.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig, RewardConfig
+from pyine.apps.rl_trainers_proto.data_utils import prepare_grpo_dataset_from_datamodule
+from pyine.apps.rl_trainers_proto.rewards import CodeExecutionRewardCalculator, create_grpo_reward_function
+from pyine.apps.rl_trainers_proto.train_grpo import setup_model_and_tokenizer
 
 # Configure logging
 logging.basicConfig(

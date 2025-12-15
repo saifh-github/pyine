@@ -19,9 +19,9 @@ import pyine.utils.distrib
 import pyine.utils.reprod
 
 # Import local modules
-from pyine.apps.rl_trainers.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
-from pyine.apps.rl_trainers.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
-from pyine.apps.rl_trainers.rewards import create_code_exec_reward_function
+from pyine.apps.rl_trainers_proto.config import DataConfig, ExperimentConfig, GRPOTrainingConfig, ModelConfig
+from pyine.apps.rl_trainers_proto.data_utils import prepare_grpo_dataset_from_datamodule, prepare_grpo_dataset_simple
+from pyine.apps.rl_trainers_proto.rewards import create_code_exec_reward_function
 
 # Configure logging
 logging.basicConfig(
@@ -211,6 +211,9 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
     logger.info("Preparing datamodule data...")
     datamodule.prepare_data()
 
+    # Wait for all processes to finish preparing data (required for distributed training)
+    pyine.utils.distrib.barrier()
+
     # Setup the datamodule
     logger.info("Setting up datamodule...")
     datamodule.setup()
@@ -352,7 +355,8 @@ def main(config: ExperimentConfig) -> None:
     # Create GRPO trainer
     logger.info("Initializing GRPO trainer...")
     trainer = GRPOTrainer(
-        model=config.model.model_name_or_path,  # model,
+        # model=config.model.model_name_or_path,
+        model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -386,7 +390,7 @@ if __name__ == "__main__":
         wandb_project="pyine-grpo-tests",
         model=ModelConfig(
             model_name_or_path="Qwen/Qwen3-4B-Instruct-2507",
-            #model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
+            # model_name_or_path="Qwen/Qwen2-0.5B-Instruct",
             use_peft=True,  # Use LoRA for efficient training
             lora_r=8,
             lora_alpha=32,
@@ -396,7 +400,7 @@ if __name__ == "__main__":
             datamodule_config_path="pyine/apps/rl_trainers/configs/taco_1to4_rl.yaml",
             train_subset_name="train",
             eval_subset_name="valid",
-            #max_samples=100,  # Use small subset for testing
+            # max_samples=100,  # Use small subset for testing
         ),
         training=GRPOTrainingConfig(
             output_dir="./grpo_output",
