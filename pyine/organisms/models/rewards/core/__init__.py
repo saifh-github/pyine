@@ -19,5 +19,4 @@ Submodules (accessible via `pyine.organisms.models.rewards.core.<submodule>`):
 - registry: Term factory registry
 - term: Base term implementation
 - types: Protocol definitions and context types
-- utils: Shared utilities
 """

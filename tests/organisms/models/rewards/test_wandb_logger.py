@@ -28,7 +28,6 @@ class TestWandBRewardLogger:
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(
             fake_run,
-            total_key="reward/total",
             key_prefix="train",
         )
         logger.log(
@@ -50,7 +49,6 @@ class TestWandBRewardLogger:
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(
             fake_run,
-            total_key="reward/total",
             key_prefix="train/",
             log_tables=True,
             table_key="reward/rewards_table",

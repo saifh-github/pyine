@@ -302,6 +302,14 @@ class TestRewardManager:
                 )
             )
 
+    def test_logging_enabled_without_logger_raises(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="x", type="parseable_answer")],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(enabled=True),
+        )
+        with pytest.raises(ValueError, match="logging is enabled.*but no logger"):
+            pyine.organisms.models.rewards.core.manager.RewardManager(config)
+
     def test_tag_inconsistency_warning(self) -> None:
         import warnings
 

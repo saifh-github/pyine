@@ -43,25 +43,36 @@ def make_simple_manager(
     Raises:
         ValueError: If no terms are provided or term configuration is invalid.
 
+    Note:
+        This function only works with terms that have all-default parameters. Terms like
+        `text_length` require explicit `params.components`, so use `RewardManager` directly
+        with a full `RewardManagerConfig` for those.
+
     Example:
         ```python
         import pyine.organisms.models.rewards as rewards
 
-        # create a simple manager with two terms
+        # create a simple manager (only works with terms that have all-default params)
         manager = rewards.make_simple_manager(
             [
-                ("format", "parseable_answer", 0.5),
-                ("length", "text_length", 0.3),
+                ("format", "parseable_answer", 1.0),
             ]
         )
 
-        # compute rewards
-        ctx = rewards.SampleContext(prompt="...", model_output="<final>answer</final>")
+        # compute rewards (sample_data required from datamodule)
+        ctx = rewards.SampleContext(
+            prompt="...",
+            model_output="<final>answer</final>",
+            sample_data=sample_data,
+        )
         total = manager.compute(ctx)
         ```
     """
     if not terms:
         raise ValueError("at least one term must be provided")
+    # Note: require_parsed is set uniformly based on whether parsing is enabled. This is
+    # intentionally simple: if parsing is on, all terms declare they need it; if parsing is off,
+    # none do. For fine-grained control, use RewardManager with a full config instead.
     term_specs = [
         reward_configs.RewardTermSpec(
             name=name,
@@ -126,12 +137,18 @@ class RewardManager:
         """
         self._config = config
         self._registry = reward_registry.get_global_registry() if registry is None else registry
-        if registry is None:
+        # ensure builtins are registered when using the global registry (explicit or implicit)
+        if registry is None or registry is reward_registry.get_global_registry():
             import pyine.organisms.models.rewards.terms as reward_terms
 
             reward_terms.ensure_builtin_terms_registered()
         self._parser = self._resolve_parser(parser)
         self._logger = logger
+        if config.logging.enabled and logger is None:
+            raise ValueError(
+                "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
+                "either pass a logger to RewardManager() or set LoggingConfig.enabled=False"
+            )
         self._aggregator = reward_aggregator.WeightedSumAggregator(config.aggregation)
         self._terms_by_name: dict[str, reward_types.RewardTerm] = {}
         self._specs_by_name: dict[str, reward_configs.RewardTermSpec] = {}
@@ -165,23 +182,39 @@ class RewardManager:
         self._warn_tag_inconsistencies()
 
     def _warn_tag_inconsistencies(self) -> None:
-        """Warn if term configurations reference different tags than the parser."""
-        if self._config.parsing is None:
-            return
-        parser_final_tag = self._config.parsing.final_tag
+        """Warn if term configurations reference different tags than the active parser.
+
+        This checks any term with an explicit `final_tag` parameter in its params. Terms that
+        inherit `final_tag` from the parser (like `parseable_answer` when not explicitly set)
+        are not warned about since they will use the correct tag.
+
+        The parser's tag is derived from `self._parser` (the active parser instance) when it's a
+        `TagsOutputParser`, falling back to `config.parsing.final_tag` otherwise.
+        """
+        import pyine.organisms.models.rewards.core.parser as reward_parser
+
+        parser_final_tag: str | None = None
+        if isinstance(self._parser, reward_parser.TagsOutputParser):
+            parser_final_tag = self._parser.final_tag
+        elif self._config.parsing is not None:
+            parser_final_tag = self._config.parsing.final_tag
+        if parser_final_tag is None:
+            return  # no parser configured, nothing to warn about
+        types_that_inherit_from_parser = {"parseable_answer", "format/parseable_answer"}
         for spec in self._config.terms:
             if not spec.enabled:
                 continue
-            canonical_type = self._registry.resolve_term_type(spec.type)
-            if canonical_type == "parseable_answer":
-                term_final_tag = spec.params.get("final_tag", "final")
-                if isinstance(term_final_tag, str) and term_final_tag.strip() != parser_final_tag:
-                    warnings.warn(
-                        f"term '{spec.name}' has final_tag='{term_final_tag}' but parser uses "
-                        f"final_tag='{parser_final_tag}'; the term may look for a different tag "
-                        "than what the parser extracts",
-                        stacklevel=3,
-                    )
+            term_final_tag = spec.params.get("final_tag")
+            if term_final_tag is None:
+                if spec.type in types_that_inherit_from_parser:
+                    continue  # will inherit from parser, no mismatch
+            if isinstance(term_final_tag, str) and term_final_tag.strip() != parser_final_tag:
+                warnings.warn(
+                    f"term '{spec.name}' (type={spec.type}) has final_tag='{term_final_tag}' "
+                    f"but parser uses final_tag='{parser_final_tag}'; the term may look for a different "
+                    "tag than what the parser extracts",
+                    stacklevel=3,
+                )
 
     def reset(
         self,
@@ -250,9 +283,9 @@ class RewardManager:
         if not want_breakdown:
             return output.total
         breakdown: dict[str, float] = dict(output.weighted_terms)
-        if self._config.output.return_unweighted_breakdown and output.unweighted_terms is not None:
-            for term_name, value in output.unweighted_terms.items():
-                breakdown[f"unweighted/{term_name}"] = value
+        if self._config.output.return_raw_breakdown and output.raw_terms is not None:
+            for term_name, value in output.raw_terms.items():
+                breakdown[f"raw/{term_name}"] = value
         return output.total, breakdown
 
     def compute_output(
@@ -293,14 +326,14 @@ class RewardManager:
             for metric_name, metric_value in result.metrics.items():
                 metrics[f"{spec.name}/{metric_name}"] = metric_value
 
-        total, weighted_terms, unweighted_terms = self._aggregator.aggregate(
+        total, weighted_terms, raw_terms = self._aggregator.aggregate(
             values=values,
             weights=self._weights_by_name,
         )
         output = reward_types.RewardOutput(
             total=total,
             weighted_terms=weighted_terms,
-            unweighted_terms=unweighted_terms if self._config.output.return_unweighted_breakdown else None,
+            raw_terms=raw_terms if self._config.output.return_raw_breakdown else None,
             metrics=metrics,
         )
 
@@ -425,7 +458,7 @@ class RewardManager:
         for term_name, stats in self._term_stats.items():
             if stats.count == 0:
                 continue
-            term_summaries[term_name] = stats.mean()
+            term_summaries[f"mean/{term_name}"] = stats.mean()
             term_summaries[f"min/{term_name}"] = float(stats.min) if stats.min is not None else 0.0
             term_summaries[f"max/{term_name}"] = float(stats.max) if stats.max is not None else 0.0
             term_summaries[f"std/{term_name}"] = stats.std()
@@ -524,7 +557,7 @@ class RewardManager:
 
         terms: dict[str, float] = dict(output.weighted_terms) if self._config.logging.log_terms else {}
         metrics: dict[str, bool | int | float] = dict(output.metrics) if self._config.logging.log_metrics else {}
-        total_to_log = float(output.total) if self._config.logging.log_total else 0.0
+        total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
 
         scoped_terms, scoped_metrics = self._scope_sample_fields(terms, metrics)
         self._logger.log(sample_id, total=total_to_log, terms=scoped_terms, metrics=scoped_metrics, step=step_to_use)

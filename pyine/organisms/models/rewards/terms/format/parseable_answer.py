@@ -47,11 +47,13 @@ class ParseableAnswerTermConfig(reward_types.BaseConfig):
 
 
 class ParseableAnswerTerm(reward_term.BaseRewardTerm):
-    """Rewards samples whose output is parseable into a final answer.
+    """Rewards samples whose parsed output contains a final answer.
 
-    This term is intentionally simple and pairs well with tag-based prompts and parsers.
-    It consumes `SampleContext.parsed`, which is typically populated by `RewardManager` when a
-    parser is configured.
+    This term checks `SampleContext.parsed.final_answer` (not raw output tags). It requires parsing
+    to be enabled in `RewardManager` (via `ParsingConfig`) to produce non-zero rewards. If parsing
+    is disabled or `parsed.final_answer` is empty, the sample receives `reward_if_missing`.
+
+    Pairs well with tag-based prompts and `TagsOutputParser`.
     """
 
     def __init__(
@@ -105,7 +107,9 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
             sample_ctx: Sample context (expects `parsed` to be present for best behavior).
 
         Returns:
-            A `TermResult` whose `value` depends on whether a final answer was extracted.
+            A `TermResult` whose `value` is based on whether a final answer was extracted, plus
+            optional bonuses for having exactly one final block (`bonus_if_single_final_block`) and
+            for stopping immediately after the final tag (`bonus_if_stops_after_final_tag`).
         """
         parsed = sample_ctx.parsed
         has_final = parsed is not None and parsed.final_answer is not None and bool(parsed.final_answer.strip())
@@ -139,9 +143,18 @@ def _factory(
     *,
     parser: reward_types.OutputParser | None,
 ) -> reward_types.RewardTerm:
-    """Build a `ParseableAnswerTerm` from a term spec."""
-    del parser  # unused; term consumes `sample_ctx.parsed` if available
-    config = ParseableAnswerTermConfig.model_validate(spec.params)
+    """Build a `ParseableAnswerTerm` from a term spec.
+
+    If a `TagsOutputParser` is provided and `final_tag` is not explicitly set in params, the
+    term's `final_tag` defaults to the parser's configured tag to avoid accidental mismatches.
+    """
+    import pyine.organisms.models.rewards.core.parser as reward_parser
+
+    params = dict(spec.params)
+    if "final_tag" not in params and parser is not None:
+        if isinstance(parser, reward_parser.TagsOutputParser):
+            params["final_tag"] = parser.final_tag
+    config = ParseableAnswerTermConfig.model_validate(params)
     return ParseableAnswerTerm(config)
 
 

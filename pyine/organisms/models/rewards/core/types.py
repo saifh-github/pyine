@@ -28,9 +28,7 @@ class RunInitContext:
 
     datamodule: pyine.organisms.datamodules.base.BiasDataModuleBase[typing.Any] | None = None
     """Reference to the datamodule used for the experiment."""
-    extras: collections.abc.Mapping[str, object] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, object]", {}),
-    )
+    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: dict[str, object]())
     """Run-level metadata escape hatch."""
 
     @property
@@ -55,9 +53,7 @@ class ParsedOutput:
     """Extracted "final answer" field, if available."""
     reasoning: str | None = None
     """Extracted "reasoning" field, if available."""
-    fields: collections.abc.Mapping[str, str] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, str]", {}),
-    )
+    fields: collections.abc.Mapping[str, str] = dataclasses.field(default_factory=lambda: dict[str, str]())
     """Additional extracted string fields (term-/task-specific)."""
 
 
@@ -77,9 +73,7 @@ class SampleContext:
     """Framework `SampleData` associated with this example."""
     parsed: ParsedOutput | None = None
     """Optional cached parse result for `model_output`."""
-    extras: collections.abc.Mapping[str, object] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, object]", {}),
-    )
+    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: dict[str, object]())
     """Auxiliary metadata escape hatch (e.g., tool traces)."""
 
     @property
@@ -108,32 +102,36 @@ class TermResult:
     value: float
     """Unweighted scalar reward contribution for the sample."""
     metrics: collections.abc.Mapping[str, bool | int | float] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, bool | int | float]", {}),
+        default_factory=lambda: dict[str, bool | int | float]()
     )
     """Optional scalar metrics emitted by the term."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RewardOutput:
-    """A full reward computation output for a single sample."""
+    """A full reward computation output for a single sample.
+
+    Note on terminology:
+    - `weighted_terms`: Per-term contributions after per-term clipping and weighting.
+    - `raw_terms`: Original term values before any clipping or weighting (useful for diagnostics).
+    """
 
     total: float
-    """Aggregated scalar reward after weighting/clipping."""
+    """Aggregated scalar reward after per-term clipping, weighting, and total clipping."""
     weighted_terms: dict[str, float]
-    """Per-term contributions after weighting/clipping."""
-    unweighted_terms: dict[str, float] | None = None
-    """Optional per-term raw values prior to weighting."""
-    metrics: dict[str, bool | int | float] = dataclasses.field(
-        default_factory=lambda: typing.cast("dict[str, bool | int | float]", {}),
-    )
+    """Per-term contributions after per-term clipping and weighting."""
+    raw_terms: dict[str, float] | None = None
+    """Original per-term values before any clipping or weighting (optional)."""
+    metrics: dict[str, bool | int | float] = dataclasses.field(default_factory=lambda: dict[str, bool | int | float]())
     """Additional scalar metrics (keyed by `term/metric`)."""
 
 
 class OutputParser(typing.Protocol):
     """Protocol for extracting structured fields from a model output.
 
-    Implementations should be deterministic and side-effect free. The manager may call a parser
-    at most once per sample and cache the result on `SampleContext.parsed`.
+    Implementations should be deterministic and side-effect free. The manager calls a parser at
+    most once per `compute_output()` call and attaches the result to `SampleContext.parsed` for
+    the duration of that call. Note: this is not persistent caching; each call parses independently.
     """
 
     def parse(
@@ -155,12 +153,20 @@ class RewardLogger(typing.Protocol):
         self,
         sample_id: str,
         *,
-        total: float,
+        total: float | None,
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, bool | int | float],
         step: int | None = None,
     ) -> None:
-        """Log a per-sample reward breakdown and metrics."""
+        """Log a per-sample reward breakdown and metrics.
+
+        Args:
+            sample_id: Unique identifier for the sample.
+            total: Total reward value, or None to omit from logging.
+            terms: Per-term reward values.
+            metrics: Per-term metrics.
+            step: Optional logging step.
+        """
         ...
 
     def log_run(

@@ -16,16 +16,19 @@ Convenience imports for common use cases:
     ```python
     import pyine.organisms.models.rewards as rewards
 
-    # create a simple manager
+    # create a simple manager (only works with terms that have all-default params)
     manager = rewards.make_simple_manager(
         [
-            ("format", "parseable_answer", 0.5),
-            ("length", "text_length", 0.3),
+            ("format", "parseable_answer", 1.0),
         ]
     )
 
-    # compute rewards
-    ctx = rewards.SampleContext(prompt="...", model_output="<final>answer</final>")
+    # compute rewards (sample_data required from datamodule)
+    ctx = rewards.SampleContext(
+        prompt="...",
+        model_output="<final>answer</final>",
+        sample_data=sample_data,
+    )
     total = manager.compute(ctx)
 
     # discover available terms

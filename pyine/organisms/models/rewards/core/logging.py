@@ -9,7 +9,6 @@ import json
 import typing
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
-import pyine.organisms.models.rewards.core.types
 import pyine.utils.strings as strings_utils
 
 
@@ -28,21 +27,21 @@ class InMemoryRewardLogger:
         self,
         sample_id: str,
         *,
-        total: float,
+        total: float | None,
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, bool | int | float],
         step: int | None = None,
     ) -> None:
         """Record a per-sample logging event in memory."""
-        self.samples.append(
-            {
-                "sample_id": sample_id,
-                "step": step,
-                "total": float(total),
-                "terms": dict(terms),
-                "metrics": dict(metrics),
-            }
-        )
+        record: dict[str, object] = {
+            "sample_id": sample_id,
+            "step": step,
+            "terms": dict(terms),
+            "metrics": dict(metrics),
+        }
+        if total is not None:
+            record["total"] = float(total)
+        self.samples.append(record)
 
     def log_run(
         self,
@@ -72,11 +71,11 @@ class WandBRewardLogger:
         self,
         wandb_run: object,
         *,
-        total_key: str = "reward/total",
+        scope_prefix: str = "reward/",
         key_prefix: str = "",
         step: int | None = None,
         log_tables: bool = False,
-        table_key: str = "reward/rewards_table",
+        table_key: str | None = None,
         table_flush_every_n_logs: int = 100,
         table_max_rows: int = 1000,
     ) -> None:
@@ -84,20 +83,22 @@ class WandBRewardLogger:
 
         Args:
             wandb_run: A `wandb.Run`-like object that supports `.log(...)`.
-            total_key: Key under which to log the total reward.
-            key_prefix: Optional prefix applied to all keys emitted to W&B (scalars and table key).
+            scope_prefix: Normalized prefix for reward keys (e.g., "reward/"); used to derive
+                total_key and table_key.
+            key_prefix: Optional extra prefix applied to all keys emitted to W&B.
             step: Optional fixed W&B step to use for all logs.
             log_tables: Whether to log a W&B table with per-sample reward breakdowns.
-            table_key: W&B key under which to log the rewards table.
+            table_key: W&B key for the rewards table (defaults to `<scope_prefix>rewards_table`).
             table_flush_every_n_logs: Flush the table every N logger calls.
             table_max_rows: Maximum number of buffered rows before forcing a flush.
         """
         self._wandb_run = wandb_run
         self._key_prefix = strings_utils.normalize_path_prefix(key_prefix)
-        self._total_key = total_key
+        prefix_norm = strings_utils.normalize_path_prefix(scope_prefix)
+        self._total_key = f"{prefix_norm}total" if prefix_norm else "total"
         self._step = step
         self._log_tables = log_tables
-        self._table_key = table_key
+        self._table_key = table_key if table_key is not None else f"{prefix_norm}rewards_table"
         self._table_flush_every_n_logs = int(table_flush_every_n_logs)
         self._table_max_rows = int(table_max_rows)
         self._table_log_count = 0
@@ -125,14 +126,16 @@ class WandBRewardLogger:
         self,
         sample_id: str,
         *,
-        total: float,
+        total: float | None,
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, bool | int | float],
         step: int | None = None,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
         payload_step = self._step if step is None else step
-        payload: dict[str, bool | int | float] = {self._total_key: float(total)}
+        payload: dict[str, bool | int | float] = {}
+        if total is not None:
+            payload[self._total_key] = float(total)
         payload.update({k: float(v) for k, v in terms.items()})
         payload.update(dict(metrics))
         self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
@@ -144,7 +147,7 @@ class WandBRewardLogger:
                 {
                     "sample_id": sample_id,
                     "step": payload_step,
-                    "total": float(total),
+                    "total": total,  # may be None
                     "terms_json": json.dumps(prefixed_terms, sort_keys=True),
                     "metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
                 }
@@ -204,15 +207,7 @@ class WandBRewardLogger:
         self._table_rows.clear()
 
 
-def assert_is_reward_logger(
-    logger: object,
-) -> pyine.organisms.models.rewards.core.types.RewardLogger:
-    """Narrow a value to RewardLogger (for runtime-provided loggers).
-
-    This is mostly a typing helper: callers can pass loggers constructed elsewhere and narrow them
-    into the protocol type.
-    """
-    return logger  # type: ignore[return-value]
+_DEFAULT_TABLE_KEY = "reward/rewards_table"
 
 
 def make_wandb_reward_logger(
@@ -230,16 +225,20 @@ def make_wandb_reward_logger(
 
     Returns:
         A WandB-backed reward logger with total logged under `<scope_prefix>/total`.
+
+    Note:
+        If `table_key` is still the default value, it is automatically derived from `scope_prefix`.
     """
-    prefix_norm = strings_utils.normalize_path_prefix(logging_config.scope_prefix)
-    total_key = f"{prefix_norm}total" if prefix_norm else "total"
+    table_key: str | None = logging_config.table_key
+    if table_key == _DEFAULT_TABLE_KEY:
+        table_key = None  # let __init__ derive from scope_prefix
     return WandBRewardLogger(
         wandb_run,
-        total_key=total_key,
+        scope_prefix=logging_config.scope_prefix,
         key_prefix=logging_config.wandb_key_prefix,
         step=step,
         log_tables=logging_config.log_tables,
-        table_key=logging_config.table_key,
+        table_key=table_key,
         table_flush_every_n_logs=int(logging_config.table_flush_every_n_logs),
         table_max_rows=int(logging_config.table_max_rows),
     )

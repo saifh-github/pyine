@@ -120,7 +120,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append((dict(payload), step))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, total_key="reward/total")
+        logger = reward_logging.WandBRewardLogger(mock_run)  # default scope_prefix="reward/"
         logger.log(
             "s1",
             total=1.5,
@@ -145,7 +145,6 @@ class TestWandBRewardLogger:
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(
             mock_run,
-            total_key="reward/total",
             key_prefix="exp/",
         )
         logger.log("s1", total=1.0, terms={"t1": 0.5}, metrics={}, step=1)
@@ -161,7 +160,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append((dict(payload), step))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, total_key="reward/total")
+        logger = reward_logging.WandBRewardLogger(mock_run)
         logger.log_run(
             totals={"count": 100.0, "mean": 0.5},
             term_summaries={"t1": 0.3},
@@ -182,7 +181,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append((dict(payload), step))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, total_key="total")
+        logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="")
         logger.set_step(42)
         logger.log("s1", total=1.0, terms={}, metrics={})
         assert logged_payloads[0][1] == 42
@@ -195,18 +194,6 @@ class TestWandBRewardLogger:
                 logged_payloads.append((dict(payload), step))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, total_key="total", step=100)
+        logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="", step=100)
         logger.log("s1", total=1.0, terms={}, metrics={}, step=200)
         assert logged_payloads[0][1] == 200
-
-
-class TestAssertIsRewardLogger:
-    def test_returns_input_unchanged(self) -> None:
-        logger = reward_logging.InMemoryRewardLogger()
-        result = reward_logging.assert_is_reward_logger(logger)
-        assert result is logger
-
-    def test_accepts_any_object(self) -> None:
-        obj = object()
-        result = reward_logging.assert_is_reward_logger(obj)
-        assert result is obj

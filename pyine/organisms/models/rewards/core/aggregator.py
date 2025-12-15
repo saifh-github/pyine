@@ -45,13 +45,16 @@ class WeightedSumAggregator:
         """Aggregate term values into a total reward.
 
         Args:
-            values: Mapping of term name to unweighted term value.
+            values: Mapping of term name to raw (unclipped, unweighted) term value.
             weights: Mapping of term name to scalar weight.
 
         Returns:
-            A tuple of `(total, weighted_terms, unweighted_terms)`.
+            A tuple of `(total, weighted_terms, raw_terms)` where:
+            - `total` is the final aggregated reward (after per-term clipping, weighting, and total clipping).
+            - `weighted_terms` contains per-term contributions after clipping and weighting.
+            - `raw_terms` contains the original term values before any clipping or weighting.
         """
-        unweighted_terms: dict[str, float] = dict(values)
+        raw_terms: dict[str, float] = dict(values)
         weighted_terms: dict[str, float] = {}
         total = 0.0
         for term_name, value in values.items():
@@ -61,7 +64,7 @@ class WeightedSumAggregator:
             weighted_terms[term_name] = weighted
             total += weighted
         total = self._clip_total(total)
-        return total, weighted_terms, unweighted_terms
+        return total, weighted_terms, raw_terms
 
     def _clip_term(
         self,

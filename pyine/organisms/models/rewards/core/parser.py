@@ -61,6 +61,11 @@ class TagsOutputParser:
         self._reasoning_open_re = pyine.utils.strings.compile_open_tag_regex(config.reasoning_tag)
         self._reasoning_close_re = pyine.utils.strings.compile_close_tag_regex(config.reasoning_tag)
 
+    @property
+    def final_tag(self) -> str:
+        """The tag name used for final answer extraction."""
+        return self._config.final_tag
+
     def parse(
         self,
         prompt: str,
@@ -91,6 +96,7 @@ class TagsOutputParser:
         if want_final or need_final_scan_for_reasoning:
             final_blocks, final_open_starts, final_diag = self._extract_tag_blocks(
                 raw,
+                tag_name=self._config.final_tag,
                 open_re=self._final_open_re,
                 close_re=self._final_close_re,
             )
@@ -112,6 +118,7 @@ class TagsOutputParser:
             else:
                 reasoning_blocks, _reasoning_open_starts, reasoning_diag = self._extract_tag_blocks(
                     raw,
+                    tag_name=self._config.reasoning_tag,
                     open_re=self._reasoning_open_re,
                     close_re=self._reasoning_close_re,
                 )
@@ -154,10 +161,17 @@ class TagsOutputParser:
         self,
         raw: str,
         *,
+        tag_name: str,
         open_re: re.Pattern[str],
         close_re: re.Pattern[str],
     ) -> tuple[list[str], list[int], _TagParseDiagnostics]:
         """Extract `<tag>...</tag>` blocks using a single-pass state machine.
+
+        Args:
+            raw: The raw model output string.
+            tag_name: The tag name (used for diagnostics).
+            open_re: Compiled regex for opening tags.
+            close_re: Compiled regex for closing tags.
 
         Returns:
             A tuple `(blocks, open_starts, diagnostics)` where:
@@ -205,7 +219,7 @@ class TagsOutputParser:
         if last_close_end is not None:
             stops_after_last_close = raw[last_close_end:].strip() == ""
         diag = _TagParseDiagnostics(
-            tag=self._deduce_tag_name(open_re),
+            tag=tag_name,
             open_count=len(open_matches),
             close_count=len(close_matches),
             block_count=len(blocks),
@@ -222,20 +236,6 @@ class TagsOutputParser:
                 f"unclosed_open={has_unclosed_open}"
             )
         return blocks, open_starts, diag
-
-    @staticmethod
-    def _deduce_tag_name(
-        open_re: re.Pattern[str],
-    ) -> str:
-        """Best-effort extraction of the tag name from the compiled open tag regex."""
-        pattern = open_re.pattern
-        # pattern is of the form `<TAG(?:\s[^>]*)?>` with escaped tag.
-        if pattern.startswith("<") and "(?:" in pattern:
-            inner = pattern[1:].split("(?:", 1)[0]
-            return inner.replace("\\", "")
-        if pattern.startswith("<"):
-            return pattern[1:].split(">", 1)[0].replace("\\", "")
-        return "unknown"
 
     @staticmethod
     def _format_diagnostics(

@@ -12,7 +12,6 @@ Important note:
 
 import enum
 import math
-import typing
 
 import pydantic
 
@@ -20,7 +19,6 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
-import pyine.utils.openai
 
 
 class LengthSource(enum.StrEnum):
@@ -60,43 +58,28 @@ class MissingTextPolicy(enum.StrEnum):
     """Raise an error if text is missing."""
 
 
-# type aliases for Pydantic Literal validation
-type LengthSourceType = typing.Literal[
-    "prompt",
-    "model_output",
-    "parsed_reasoning",
-    "parsed_final_answer",
-    "sample_code",
-]
-"""Available sources for length computation (type alias for Literal validation)."""
-
-type LengthUnitType = typing.Literal["chars", "lines", "openai_tokens"]
-"""Units supported for length computation (type alias for Literal validation)."""
-
-type MissingTextPolicyType = typing.Literal["skip", "empty", "error"]
-"""Policy used when the selected source text is unavailable (type alias for Literal validation)."""
-
-
 class LengthRewardComponentConfig(reward_types.BaseConfig):
     """One length-based reward component.
 
     A component computes a numeric length from a selected source string, then maps it to a reward
     using a simple piecewise-linear function:
-    - for lengths <= `effective_start_length`, reward is `reward_at_start`;
+    - for lengths <= `start_length` (or `flat_until_length` if set), reward is `reward_at_start`;
     - for lengths >= `end_length`, reward is `reward_at_end`;
     - otherwise, reward interpolates linearly between the two.
 
-    If `flat_until_length` is set, it becomes the `effective_start_length` (and `start_length` is
-    ignored), enabling a common "fixed until threshold, then decay" behavior.
+    If `flat_until_length` is set, it overrides `start_length` as the threshold where interpolation
+    begins, enabling a common "fixed until threshold, then decay" behavior.
+
+    Note: Interpolated rewards are clamped to non-negative values (negative results become 0).
     """
 
     name: str = "length"
     """Stable component name used to namespace emitted metrics."""
     enabled: bool = True
     """Whether this component is active."""
-    source: LengthSourceType = "model_output"
+    source: LengthSource = LengthSource.MODEL_OUTPUT
     """Which text source to measure (prompt, output, parsed fields, or sample data fields)."""
-    unit: LengthUnitType = "chars"
+    unit: LengthUnit = LengthUnit.CHARS
     """Length unit (`chars`, `lines`, or `openai_tokens`)."""
     openai_model_id: str | None = None
     """Model id used when `unit=\"openai_tokens\"` (passed to `pyine.utils.openai.estimate_token_count`)."""
@@ -116,7 +99,7 @@ class LengthRewardComponentConfig(reward_types.BaseConfig):
     """Reward value used at or above `end_length`."""
     weight: pydantic.NonNegativeFloat = 1.0
     """Scalar multiplier applied to this component's reward."""
-    missing_text_policy: MissingTextPolicyType = "skip"
+    missing_text_policy: MissingTextPolicy = MissingTextPolicy.SKIP
     """Behavior if the source text is unavailable (e.g., parsed fields not present)."""
     emit_metrics: bool = True
     """Whether to emit per-component diagnostic metrics (length, reward, missing flags)."""
@@ -144,7 +127,7 @@ class LengthRewardComponentConfig(reward_types.BaseConfig):
                 raise ValueError("flat_until_length must be >= start_length")
             if int(self.end_length) < int(self.flat_until_length):
                 raise ValueError("end_length must be >= flat_until_length")
-        if self.unit == "openai_tokens":
+        if self.unit == LengthUnit.OPENAI_TOKENS:
             model_id = "" if self.openai_model_id is None else self.openai_model_id.strip()
             if not model_id:
                 raise ValueError("openai_model_id is required when unit='openai_tokens'")
@@ -189,18 +172,18 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
     def _get_source_text(
         sample_ctx: reward_types.SampleContext,
         *,
-        source: LengthSourceType,
+        source: LengthSource,
     ) -> str | None:
         """Get the source text for length measurement, or None if not available."""
-        if source == "prompt":
+        if source == LengthSource.PROMPT:
             return sample_ctx.prompt
-        if source == "model_output":
+        if source == LengthSource.MODEL_OUTPUT:
             return sample_ctx.model_output
-        if source == "parsed_reasoning":
+        if source == LengthSource.PARSED_REASONING:
             return None if sample_ctx.parsed is None else sample_ctx.parsed.reasoning
-        if source == "parsed_final_answer":
+        if source == LengthSource.PARSED_FINAL_ANSWER:
             return None if sample_ctx.parsed is None else sample_ctx.parsed.final_answer
-        if source == "sample_code":
+        if source == LengthSource.SAMPLE_CODE:
             return sample_ctx.sample_data.code
         raise ValueError(f"unknown length source: {source}")
 
@@ -208,15 +191,17 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
     def _compute_length(
         text: str,
         *,
-        unit: LengthUnitType,
+        unit: LengthUnit,
         openai_model_id: str | None,
     ) -> int:
         """Compute a length for the given text in the requested unit."""
-        if unit == "chars":
+        if unit == LengthUnit.CHARS:
             return len(text)
-        if unit == "lines":
+        if unit == LengthUnit.LINES:
             return len(text.splitlines()) if text else 0
-        if unit == "openai_tokens":
+        if unit == LengthUnit.OPENAI_TOKENS:
+            import pyine.utils.openai  # lazy import to avoid heavyweight deps at module load
+
             assert openai_model_id is not None
             return int(pyine.utils.openai.estimate_token_count(text=text, model_id=openai_model_id))
         raise ValueError(f"unknown length unit: {unit}")
@@ -231,7 +216,12 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
         reward_at_start: float,
         reward_at_end: float,
     ) -> float:
-        """Map a length to a reward using a flat + linear interpolation rule."""
+        """Map a length to a reward using a flat + linear interpolation rule.
+
+        Returns `reward_at_start` for lengths <= threshold (where threshold is `flat_until_length`
+        if set, otherwise `start_length`), `reward_at_end` for lengths >= `end_length`, and linearly
+        interpolates between. The result is clamped to be non-negative (min 0.0).
+        """
         effective_start = start_length if flat_until_length is None else int(flat_until_length)
         if length <= effective_start:
             return float(reward_at_start)
@@ -255,11 +245,11 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
             raw_text = self._get_source_text(sample_ctx, source=component.source)
             is_missing = raw_text is None
             if is_missing:
-                if component.missing_text_policy == "error":
+                if component.missing_text_policy == MissingTextPolicy.ERROR:
                     source_hints = {
-                        "parsed_reasoning": "ensure ParsingConfig.enabled_fields includes reasoning",
-                        "parsed_final_answer": "ensure ParsingConfig.enabled_fields includes final",
-                        "sample_code": "ensure sample_data.code is populated",
+                        LengthSource.PARSED_REASONING: "ensure ParsingConfig.enabled_fields includes reasoning",
+                        LengthSource.PARSED_FINAL_ANSWER: "ensure ParsingConfig.enabled_fields includes final",
+                        LengthSource.SAMPLE_CODE: "ensure sample_data.code is populated",
                     }
                     hint = source_hints.get(component.source, "check that the source is available")
                     raise ValueError(
@@ -268,11 +258,11 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
                         f"missing_text_policy='skip' or 'empty' to handle missing text gracefully, "
                         f"or set RewardTermSpec.require_parsed=True to fail early if parsing is missing"
                     )
-                if component.missing_text_policy == "skip":
+                if component.missing_text_policy == MissingTextPolicy.SKIP:
                     if component.emit_metrics:
                         metrics[f"{component.name}/is_missing"] = True
                     continue
-                if component.missing_text_policy == "empty":
+                if component.missing_text_policy == MissingTextPolicy.EMPTY:
                     raw_text = ""
                 else:
                     raise ValueError(f"unknown missing_text_policy: {component.missing_text_policy}")

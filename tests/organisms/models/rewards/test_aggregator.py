@@ -10,13 +10,13 @@ class TestWeightedSumAggregator:
     def test_basic_weighted_sum(self) -> None:
         config = reward_configs.AggregationConfig()
         aggregator = reward_aggregator.WeightedSumAggregator(config)
-        total, weighted, unweighted = aggregator.aggregate(
+        total, weighted, raw = aggregator.aggregate(
             values={"a": 1.0, "b": 2.0},
             weights={"a": 1.0, "b": 0.5},
         )
         assert total == pytest.approx(2.0)  # 1.0*1.0 + 2.0*0.5
         assert weighted == {"a": 1.0, "b": 1.0}
-        assert unweighted == {"a": 1.0, "b": 2.0}
+        assert raw == {"a": 1.0, "b": 2.0}
 
     def test_missing_weight_defaults_to_one(self) -> None:
         config = reward_configs.AggregationConfig()
@@ -31,13 +31,13 @@ class TestWeightedSumAggregator:
     def test_per_term_clipping(self) -> None:
         config = reward_configs.AggregationConfig(clip_term_min=0.0, clip_term_max=1.0)
         aggregator = reward_aggregator.WeightedSumAggregator(config)
-        total, weighted, unweighted = aggregator.aggregate(
+        total, weighted, raw = aggregator.aggregate(
             values={"a": -0.5, "b": 2.0},
             weights={"a": 1.0, "b": 1.0},
         )
         assert total == pytest.approx(1.0)  # 0.0 + 1.0 (both clipped)
         assert weighted == {"a": 0.0, "b": 1.0}
-        assert unweighted == {"a": -0.5, "b": 2.0}  # unweighted preserves original
+        assert raw == {"a": -0.5, "b": 2.0}  # raw preserves original (pre-clip)
 
     def test_total_clipping(self) -> None:
         config = reward_configs.AggregationConfig(clip_total_min=-1.0, clip_total_max=1.0)
@@ -66,13 +66,13 @@ class TestWeightedSumAggregator:
     def test_empty_values(self) -> None:
         config = reward_configs.AggregationConfig()
         aggregator = reward_aggregator.WeightedSumAggregator(config)
-        total, weighted, unweighted = aggregator.aggregate(
+        total, weighted, raw = aggregator.aggregate(
             values={},
             weights={},
         )
         assert total == pytest.approx(0.0)
         assert weighted == {}
-        assert unweighted == {}
+        assert raw == {}
 
     def test_negative_weights(self) -> None:
         config = reward_configs.AggregationConfig()
@@ -93,13 +93,13 @@ class TestWeightedSumAggregator:
     def test_zero_weights(self) -> None:
         config = reward_configs.AggregationConfig()
         aggregator = reward_aggregator.WeightedSumAggregator(config)
-        total, weighted, unweighted = aggregator.aggregate(
+        total, weighted, raw = aggregator.aggregate(
             values={"a": 5.0, "b": 3.0},
             weights={"a": 0.0, "b": 0.0},
         )
         assert total == pytest.approx(0.0)
         assert weighted == {"a": 0.0, "b": 0.0}
-        assert unweighted == {"a": 5.0, "b": 3.0}
+        assert raw == {"a": 5.0, "b": 3.0}
 
     def test_mixed_zero_and_nonzero_weights(self) -> None:
         config = reward_configs.AggregationConfig()
@@ -147,10 +147,10 @@ class TestWeightedSumAggregator:
     def test_single_term(self) -> None:
         config = reward_configs.AggregationConfig()
         aggregator = reward_aggregator.WeightedSumAggregator(config)
-        total, weighted, unweighted = aggregator.aggregate(
+        total, weighted, raw = aggregator.aggregate(
             values={"only": 7.5},
             weights={"only": 2.0},
         )
         assert total == pytest.approx(15.0)
         assert weighted == {"only": 15.0}
-        assert unweighted == {"only": 7.5}
+        assert raw == {"only": 7.5}

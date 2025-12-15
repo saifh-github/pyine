@@ -34,10 +34,11 @@ config = reward_configs.RewardManagerConfig(
             type="parseable_answer",
             weight=1.0,
             params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+            # Note: final_tag defaults from ParsingConfig when not set in params
         ),
     ],
     parsing=reward_configs.ParsingConfig(
-        final_tag="answer",
+        final_tag="answer",  # parseable_answer term will inherit this tag
         fallback_policy="none",
     ),
 )
@@ -45,11 +46,11 @@ config = reward_configs.RewardManagerConfig(
 # Create manager
 manager = reward_manager.RewardManager(config)
 
-# Compute reward for a sample
+# Compute reward for a sample; note: sample_data required (should come from datamodule)
 ctx = reward_types.SampleContext(
     prompt="What is 2+2?",
     model_output="<answer>4</answer>",
-    sample_data=sample_data,  # from the datamodule
+    sample_data=sample_data,
 )
 reward = manager.compute(ctx)  # returns float
 ```
@@ -58,7 +59,10 @@ reward = manager.compute(ctx)  # returns float
 
 ### `parseable_answer`
 
-Rewards samples whose output contains a parseable final answer tag.
+Rewards samples whose output has a parsed final answer (requires parsing to be enabled).
+
+Note: This term checks `SampleContext.parsed.final_answer`, not raw output tags. If parsing is
+disabled or fails to extract a final answer, the sample receives `reward_if_missing`.
 
 ```python
 params = {
@@ -79,8 +83,13 @@ params = {
     "components": [
         {
             "name": "prompt",
-            "source": "prompt",         # prompt | model_output | parsed_reasoning | ...
+            # available sources: prompt, model_output, parsed_reasoning,
+            #                    parsed_final_answer, sample_code
+            "source": "prompt",
             "unit": "chars",            # chars | lines | openai_tokens
+            # length mapping: reward is flat at reward_at_start until
+            # flat_until_length (or start_length if flat_until_length is unset),
+            # then interpolates linearly to reward_at_end at end_length
             "flat_until_length": 100,
             "end_length": 500,
             "reward_at_start": 1.0,
@@ -201,29 +210,33 @@ reward_registry.register_term_aliases("my_term", ["custom/my_term"])
 Implement the `OutputParser` protocol for custom parsing logic:
 
 ```python
+import json
+import re
+
+import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.types as reward_types
 
 class JsonOutputParser:
-    """Parser that extracts JSON from model output."""
+    """Parser that extracts a JSON object with an 'answer' field from model output.
+
+    Note: This is a simple example. Production parsers should handle edge cases more robustly.
+    """
 
     def parse(
         self,
         prompt: str,
         model_output: str,
     ) -> reward_types.ParsedOutput:
-        import json
-        import re
-
-        # Try to find JSON in the output
-        json_match = re.search(r'\{[^{}]*\}', model_output)
+        del prompt  # unused in this simple parser
         final_answer = None
+        # Look for a JSON object anywhere in the output (simple heuristic)
+        json_match = re.search(r'\{[^{}]*"answer"[^{}]*\}', model_output)
         if json_match:
             try:
                 parsed_json = json.loads(json_match.group())
                 final_answer = parsed_json.get("answer")
             except json.JSONDecodeError:
-                pass
-
+                pass  # fall through to return None as final_answer
         return reward_types.ParsedOutput(
             raw=model_output,
             final_answer=final_answer,
@@ -345,9 +358,17 @@ config = reward_configs.RewardManagerConfig(
 
 ### AggregationConfig
 
+Aggregation produces three outputs:
+
+1. **raw_terms**: Original term values before any processing
+2. **weighted_terms**: After per-term clipping (if configured) and weighting
+3. **total**: Sum of weighted_terms, with total clipping applied (if configured)
+
+Configuration options:
+
 - `strategy`: `"weighted_sum"` (default, only supported strategy)
-- `clip_term_min/max`: Optional per-term clipping (applied before weighting)
-- `clip_total_min/max`: Optional total clipping (applied after summation)
+- `clip_term_min/max`: Optional per-term clipping (applied to raw values before weighting)
+- `clip_total_min/max`: Optional total clipping (applied after weighted sum)
 
 ### LoggingConfig
 
@@ -381,7 +402,7 @@ config = reward_configs.RewardManagerConfig(
 ### OutputConfig
 
 - `return_breakdown_default`: Whether `compute()` returns breakdown by default
-- `return_unweighted_breakdown`: Include unweighted values in breakdown
+- `return_raw_breakdown`: Include raw (pre-clipping, pre-weighting) values in breakdown
 
 ## Module Structure
 

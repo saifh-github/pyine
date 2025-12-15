@@ -8,12 +8,19 @@ this "builtins registration" happens once.
 
 Subpackages (accessible via `pyine.organisms.models.rewards.terms.<subpackage>`):
 - format: Formatting-related reward terms (parseable_answer, text_length)
-- code_exec: Code execution reward terms (placeholder)
 """
+
+import importlib
 
 __all__ = [
     "ensure_builtin_terms_registered",
 ]
+
+_BUILTIN_TERM_MODULES: tuple[str, ...] = (
+    "pyine.organisms.models.rewards.terms.format.parseable_answer",
+    "pyine.organisms.models.rewards.terms.format.text_length",
+)
+"""Module paths for built-in terms (imported for registration side effects)."""
 
 _registered = False
 """Whether built-in terms have been registered into the global registry."""
@@ -27,9 +34,6 @@ def ensure_builtin_terms_registered() -> None:
     global _registered  # noqa: PLW0603 (module-level registry flag)
     if _registered:
         return
-    import pyine.organisms.models.rewards.terms.format.parseable_answer
-    import pyine.organisms.models.rewards.terms.format.text_length
-
-    pyine.organisms.models.rewards.terms.format.parseable_answer  # noqa: B018 (import for side effects)
-    pyine.organisms.models.rewards.terms.format.text_length  # noqa: B018 (import for side effects)
+    for module_path in _BUILTIN_TERM_MODULES:
+        importlib.import_module(module_path)
     _registered = True

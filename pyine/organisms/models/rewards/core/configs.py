@@ -38,8 +38,8 @@ class OutputConfig(reward_types.BaseConfig):
 
     return_breakdown_default: bool = False
     """Whether `compute()` returns a breakdown by default."""
-    return_unweighted_breakdown: bool = False
-    """Whether to also include unweighted values in breakdown output."""
+    return_raw_breakdown: bool = False
+    """Whether to also include raw (pre-clipping, pre-weighting) values in breakdown output."""
 
 
 class ParsingConfig(reward_types.BaseConfig):
