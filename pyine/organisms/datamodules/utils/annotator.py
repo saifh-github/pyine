@@ -26,6 +26,7 @@ import pyine.prompts.result_db
 import pyine.prompts.types
 import pyine.utils.code.execution
 import pyine.utils.code.output_compare
+import pyine.utils.code.validation
 import pyine.utils.concurrency
 import pyine.utils.langchain
 import pyine.utils.llm_providers
@@ -729,8 +730,13 @@ def _default_output_validator(
     """
     is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
     if is_stub_prompting:
-        # special handling for this one: it's impossible to really execute it, so forget tracing it
         assert "augment:stubbed" in tags, "missing augment tag for stubbed code"
+        # special handling for this one: it's impossible to really execute it, so forget tracing it
+        # ...instead, we will just 'validate' the code using heuristics + an ast parser
+        try:
+            pyine.utils.code.validation.validate_code(result_str)
+        except Exception:
+            return False
         return True
     is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
     is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
