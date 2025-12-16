@@ -36,6 +36,10 @@ class TraceFilteringConfig(pydantic.BaseModel):
 
     Filtering can be used to reduce the number of traces used for training, validation, or testing,
     or to target easier traces to work with.
+
+    Note: this config introduces the concept of 'trace families' for filtering. A trace family
+    groups traces that share the same solution code AND test arguments (i.e., same augmentless trace
+    identifier, e.g. `TACO/train/p000001/s0001/t0001`). Family members differ only by augmentation.
     """
 
     model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
@@ -46,16 +50,13 @@ class TraceFilteringConfig(pydantic.BaseModel):
     max_trace_families: int | None = pydantic.Field(default=None, ge=1)
     """Maximum number of trace families to keep; if None, keeps all trace families.
 
-    A 'trace family' groups traces that share the same solution code AND test arguments (i.e., same
-    augmentless trace identifier like `TACO/train/p000001/s0001/t0001`). Family members differ only
-    by augmentation.
+    When set, the selection process for which trace families to keep prioritizes those that belong
+    to different problems.
     """
     max_traces_per_family: int | None = pydantic.Field(default=None, ge=1)
     """Maximum number of traces to keep per trace family; if None, keeps all traces in each family.
 
-    A 'trace family' groups traces that share the same solution code AND test arguments (i.e., same
-    augmentless trace identifier like `TACO/train/p000001/s0001/t0001`). Family members differ only
-    by augmentation. Selection within each family is randomized but deterministic when seeded.
+    When set, the selection process for which traces are kept in a family is uniform sampling.
     """
     max_traces_per_solution: int | None = pydantic.Field(default=None, ge=1)
     """Maximum number of traces to keep per solution; if None, keeps all traces for each solution.
