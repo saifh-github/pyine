@@ -203,6 +203,9 @@ def create_datamodule_config(
         "use_tokenized_dataset_cache": True,
         "cache_lock_timeout_seconds": 1800.0,
         "message_generator_num_workers": 4,
+        # Disable hint-based validation for GRPO training (using original code only)
+        "min_samples_with_hints": 0,
+        "min_samples_without_hints": 0,
     }
 
     # Add max_solutions if specified
