@@ -126,7 +126,7 @@ def create_datamodule_config(
     # Create configuration dictionary
     config = {
         "datamodule_class_path": "pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule",
-        "datamodule_name": dataset_name,
+        "datamodule_name": f"shortcuts_{dataset_name}",  # Add prefix for clarity
         "lmdb_paths": [str(p) for p in lmdb_paths],
         "split_file_path": str(split_file_path),
         "split_seed": seed,

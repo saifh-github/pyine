@@ -63,10 +63,10 @@ Choose based on your computational resources and experiment goals:
 
 | Dataset Variant | Size | Parts | Use Case |
 |----------------|------|-------|----------|
-| `TACO_10s10t_v1_part1` | ~3.8% | 1/26 | Quick prototyping, debugging |
-| `TACO_10s10t_v1_part1to4` | ~15% | 4/26 | Medium experiments, proof of concept |
-| `TACO_10s10t_v1_part1to13` | ~50% | 13/26 | Large experiments, good representation |
-| `TACO_10s10t_v1_full` | 100% | 26/26 | Full experiments, final results |
+| `shortcuts_TACO_10s10t_v1_part1` | ~3.8% | 1/26 | Quick prototyping, debugging |
+| `shortcuts_TACO_10s10t_v1_part1to4` | ~15% | 4/26 | Medium experiments, proof of concept |
+| `shortcuts_TACO_10s10t_v1_part1to13` | ~50% | 13/26 | Large experiments, good representation |
+| `shortcuts_TACO_10s10t_v1_full` | 100% | 26/26 | Full experiments, final results |
 
 **Recommendation for GRPO testing:** Start with `part1` or `part1to4` with `--max-solutions 100` to quickly validate everything works.
 
