@@ -7,7 +7,9 @@ import shutil
 import time
 import typing
 
+import peft
 import pydantic
+import torch
 import transformers
 
 import pyine.configs.schemas  # pyright: ignore[reportUnusedImport]
@@ -19,6 +21,7 @@ import pyine.utils.langchain
 import pyine.utils.portability
 import pyine.utils.reprod
 import pyine.utils.timers
+import pyine.utils.tokenizers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
@@ -553,6 +556,192 @@ def prepare_datamodule(
                 prefix=f"predict/{eval_subset_name}",
             )
     return dm
+
+
+def get_device_map() -> torch.device | str | dict[str, torch.device | str] | None:
+    """Returns the device map to use with models for distributed/single-GPU training.
+
+    This function determines the appropriate device placement strategy based on whether
+    we're running in distributed mode or not:
+    - In distributed mode: Place model on specific GPU per process (allows Accelerate to handle distribution)
+    - Single GPU/CPU mode: Use 'auto' for automatic device placement
+
+    Returns:
+        Device map specification compatible with transformers.from_pretrained()
+    """
+    if pyine.utils.distrib.is_distributed():
+        if torch.cuda.is_available():
+            local_rank = pyine.utils.distrib.get_local_rank(default=0)
+            if local_rank is None:
+                return None
+            return {"": f"cuda:{local_rank}"}
+        return None
+    return {"": "mps"} if torch.backends.mps.is_available() else "auto"
+
+
+def instantiate_tokenizer(
+    base_model: str,
+    checkpoint_path: pathlib.Path | None = None,
+    auto_tokenizer_config: dict[str, typing.Any] | None = None,
+    set_padding_to_eos_if_needed: bool = True,
+    override_padding_to_right_side: bool = True,
+    override_truncation_to_left_side: bool = True,
+) -> transformers.PreTrainedTokenizer:
+    """Shared tokenizer instantiation for SFT and RL trainers.
+
+    Args:
+        base_model: HuggingFace model identifier or local path for the base model.
+        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the tokenizer
+            from the checkpoint. If None, loads the tokenizer for the base model specified in base_model.
+        auto_tokenizer_config: Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.
+        set_padding_to_eos_if_needed: If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.
+        override_padding_to_right_side: Override whichever the tokenizer's default padding side is to 'right'.
+        override_truncation_to_left_side: Override whichever the tokenizer's default truncation side is to 'left'.
+
+    Returns:
+        The instantiated tokenizer.
+    """
+    model_path = checkpoint_path if checkpoint_path is not None else base_model
+    logger.info(f"setting up tokenizer for: {model_path}")
+    if auto_tokenizer_config is None:
+        auto_tokenizer_config = {"use_fast": True}
+    logger.debug(f"auto tokenizer config: {auto_tokenizer_config}")
+    tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
+        pretrained_model_name_or_path=str(model_path),
+        set_padding_to_eos_if_needed=set_padding_to_eos_if_needed,
+        override_padding_to_right_side=override_padding_to_right_side,
+        override_truncation_to_left_side=override_truncation_to_left_side,
+        **auto_tokenizer_config,
+    )
+    logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
+    logger.debug(f"tokenizer is_fast: {getattr(tokenizer, 'is_fast', False)}")
+    logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
+    return tokenizer
+
+
+def instantiate_model(
+    base_model: str,
+    checkpoint_path: pathlib.Path | None = None,
+    target_dtype: torch.dtype = torch.float16,
+    device_map: dict[str, torch.device | str] | str | None = None,
+    auto_model_config: dict[str, typing.Any] | None = None,
+    quantization_mode: typing.Literal["qlora", "none"] = "none",
+    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = None,
+) -> transformers.PreTrainedModel:
+    """Shared model instantiation for SFT and RL trainers.
+
+    Handles:
+    - Loading from HF hub or checkpoint
+    - Quantization (4-bit/8-bit for QLoRA)
+    - PEFT/LoRA adapter application
+    - Device placement
+    - LoRA checkpoint loading (via AutoPeftModelForCausalLM)
+
+    Args:
+        base_model: HuggingFace model identifier or local path for the base model to fine-tune.
+        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the model
+            from the checkpoint (with LoRA adapters if present). If None, loads the base pretrained
+            model specified in base_model.
+        target_dtype: The target dtype to use with the model (e.g., torch.bfloat16, torch.float16).
+        device_map: Device map for distributed/single-GPU training.
+        auto_model_config: Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.
+        quantization_mode: Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.
+        lora_config: LoRA adapter configuration. If None, does not apply LoRA.
+
+    Returns:
+        The instantiated model.
+    """
+    if auto_model_config is None:
+        auto_model_config = {}
+
+    if checkpoint_path is not None:
+        # Load model from checkpoint
+        logger.info(f"setting up model from checkpoint: {checkpoint_path}")
+        dtype, device_map_to_use = target_dtype, device_map
+
+        # Check if checkpoint contains LoRA adapters
+        adapter_config_path = checkpoint_path / "adapter_config.json"
+        if adapter_config_path.exists():
+            # Load PEFT model with LoRA adapters
+            logger.info("  (loading model with LoRA adapters from checkpoint)")
+            model: transformers.PreTrainedModel = typing.cast(
+                "transformers.PreTrainedModel",
+                peft.AutoPeftModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    checkpoint_path,
+                    torch_dtype=dtype,
+                    device_map=device_map_to_use,
+                ),
+            )
+        else:
+            # Load regular model without adapters
+            logger.info("  (loading model without adapters from checkpoint)")
+            model = typing.cast(
+                "transformers.PreTrainedModel",
+                transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    checkpoint_path,
+                    torch_dtype=dtype,
+                    device_map=device_map_to_use,
+                ),
+            )
+    else:
+        # Load base pretrained model
+        logger.info(f"setting up model: {base_model}")
+        dtype, device_map_to_use = target_dtype, device_map
+        model_kwargs: dict[str, typing.Any] = {
+            "torch_dtype": dtype,
+            "device_map": device_map_to_use,
+            **auto_model_config,
+        }
+        if quantization_mode == "qlora":
+            logger.info("  (setting up model using QLoRA 4-bit quantization)")
+            quant_config = transformers.BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            model_kwargs["quantization_config"] = quant_config
+        elif quantization_mode == "none":
+            logger.info("  (setting up model using no quantization)")
+        else:
+            raise ValueError(f"unsupported quantization_mode: {quantization_mode}")
+        logger.debug(f"auto model config: {model_kwargs}")
+        base_model_instance = typing.cast(
+            "transformers.PreTrainedModel",
+            transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
+                base_model,
+                **model_kwargs,
+            ),
+        )
+        model = base_model_instance
+        if lora_config is not None:
+            logger.info("  (setting up LoRA adapters)")
+            logger.debug(f"lora_config: {lora_config}")
+            if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
+                lora_peft_config = lora_config.to_peft_config()
+            else:
+                assert isinstance(lora_config, peft.LoraConfig)
+                lora_peft_config = lora_config
+            model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
+
+    logger.info(f"model successfully created:\n{model}")
+    model_config = getattr(model, "config", None)
+    if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):
+        logger.debug(f"model config: {model_config.to_json_string()}")
+    if hasattr(model, "peft_config"):
+        logger.debug(f"model peft_config: {model.peft_config}")
+    get_trainable_params = getattr(model, "get_nb_trainable_parameters", None)
+    if callable(get_trainable_params):
+        trainable_param_count, total_param_count = typing.cast(
+            "tuple[int, int]",
+            get_trainable_params(),
+        )
+        logger.info(f"trainable param count: {trainable_param_count:,d}")
+        logger.info(f"total param count: {total_param_count:,d}")
+        if total_param_count:
+            trainable_ratio = (100 * trainable_param_count) / total_param_count
+            logger.info(f"trainable param %: {trainable_ratio:.3f}")
+    return model
 
 
 async def evaluate_model(

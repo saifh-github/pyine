@@ -18,7 +18,7 @@ import torch.distributed.elastic.multiprocessing.errors
 import transformers
 import wandb
 
-import pyine.apps.trainers.common
+import pyine.apps.trainers.common as common
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
@@ -28,7 +28,6 @@ import pyine.evals.configs
 import pyine.organisms.datamodules
 import pyine.utils.distrib
 import pyine.utils.reprod
-import pyine.utils.tokenizers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
@@ -136,14 +135,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     @property
     def device_map(self) -> torch.device | str | dict[str, torch.device | str] | None:
         """Returns the device map to use with models."""
-        if pyine.utils.distrib.is_distributed():
-            if torch.cuda.is_available():
-                local_rank = pyine.utils.distrib.get_local_rank(default=0)
-                if local_rank is None:
-                    return None
-                return {"": f"cuda:{local_rank}"}
-            return None
-        return {"": "mps"} if torch.backends.mps.is_available() else "auto"
+        return common.get_device_map()
 
     def get_collator(
         self,
@@ -167,7 +159,14 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         Returns:
             The instantiated tokenizer.
         """
-        return instantiate_tokenizer(self, checkpoint_path=checkpoint_path)
+        return common.instantiate_tokenizer(
+            base_model=self.base_model,
+            checkpoint_path=checkpoint_path,
+            auto_tokenizer_config=self.auto_tokenizer_config,
+            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
+            override_padding_to_right_side=self.tokenizer_override_padding_to_right_side,
+            override_truncation_to_left_side=self.tokenizer_override_truncation_to_left_side,
+        )
 
     def get_model(
         self,
@@ -183,7 +182,15 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         Returns:
             The instantiated model.
         """
-        return instantiate_model(self, checkpoint_path=checkpoint_path)
+        return common.instantiate_model(
+            base_model=self.base_model,
+            checkpoint_path=checkpoint_path,
+            target_dtype=self.target_dtype,
+            device_map=self.device_map,
+            auto_model_config=self.auto_model_config,
+            quantization_mode=self.quantization_mode,
+            lora_config=self.lora_config,
+        )
 
     @typing.override
     def normalize_for_resume_overlap_check(
