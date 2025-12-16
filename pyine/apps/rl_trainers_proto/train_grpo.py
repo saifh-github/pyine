@@ -401,7 +401,7 @@ if __name__ == "__main__":
         ),
         data=DataConfig(
             use_datamodule=True,
-            datamodule_config_path="pyine/apps/rl_trainers_proto/configs/taco_1to4.yaml",
+            datamodule_config_path="pyine/apps/rl_trainers_proto/configs/taco_part1to4_rl.yaml",
             train_subset_name="train",
             eval_subset_name="valid",
             # max_samples=100,  # Use small subset for testing
