@@ -73,11 +73,11 @@ class TestExtractRunMetrics:
     def test_uses_correct_subset_prefix(self) -> None:
         """extract_run_metrics uses subset_name in metric prefix."""
         summary = {
-            "predict/val/accuracy_hard": 0.70,
+            "predict/valid/accuracy_hard": 0.70,
             "predict/test/accuracy_hard": 0.80,
         }
         run = MockWandBRun(summary=summary)
-        val_metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="val")
+        val_metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="valid")
         test_metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
         assert val_metrics.accuracy_hard == 0.70
         assert test_metrics.accuracy_hard == 0.80

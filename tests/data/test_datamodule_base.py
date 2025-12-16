@@ -153,7 +153,7 @@ class TestBaseDataModule:
             def val_dataloader(
                 self,
             ) -> str:
-                return "VAL"
+                return "valid"
 
             def train_dataloader(self) -> typing.NoReturn:
                 raise NotImplementedError
@@ -162,7 +162,7 @@ class TestBaseDataModule:
                 raise NotImplementedError
 
         dm = OnlyVal(build_default_config())
-        assert dm.valid_dataloader() == "VAL"
+        assert dm.valid_dataloader() == "valid"
 
     def test_get_dataloader_success_and_errors(self) -> None:
         class WithTrain(datamodule.BaseDataModule):
