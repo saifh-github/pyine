@@ -450,6 +450,28 @@ async def main(
 
 if __name__ == "__main__":
     import pyine.apps.trainers.hf_trainer_configs
+    import pyine.apps.trainers.rl_trainer_configs
 
-    # TODO: if we ever have more than one eval type, make new entrypoint scripts w/ different eval types
-    pyine.apps.trainers.hf_trainer_configs.hydra_main(pyine.evals.common.EvalType.CODE_EXEC)
+    # Register both SFT and RL configurations in Hydra
+    # The main() function above handles dispatch based on config type
+    eval_type = pyine.evals.common.EvalType.CODE_EXEC
+
+    # Register SFT configs (HFTrainerAppMainConfig)
+    import pyine.configs.base
+
+    pyine.configs.base.register_searchpath_plugin()
+    _ = pyine.apps.trainers.hf_trainer_configs.register_hydra_configs(eval_type=eval_type)
+
+    # Register RL configs (RLTrainerAppMainConfig) - these will coexist with SFT configs
+    # RL experiment configs should explicitly specify _target_ to use RLTrainerAppMainConfig
+    _ = pyine.apps.trainers.rl_trainer_configs.register_hydra_configs(eval_type=eval_type)
+
+    # Launch Hydra with the unified config store
+    # Both config types are now registered; experiment configs specify which to use via _target_
+    import hydra_zen
+
+    hydra_zen.zen(pyine.apps.trainers.hf_trainer_configs._async_main_wrapper).hydra_main(
+        config_path=None,
+        config_name="entrypoint",
+        version_base=pyine.configs.base.target_hydra_version,
+    )

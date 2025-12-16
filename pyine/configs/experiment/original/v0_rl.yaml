@@ -1,0 +1,183 @@
+# @package _global_
+
+# RL training config based on v0.yaml (SFT) but adapted for GRPO
+# Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl
+#
+# Note: This config explicitly specifies _target_ to use RLTrainerAppMainConfig
+# instead of the default HFTrainerAppMainConfig. Both SFT and RL configs are
+# registered in hf_trainer.py, and the main() function dispatches accordingly.
+
+defaults:
+  - override /config: base
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
+  - override /config/grpo_config: train_default
+  - _self_
+
+runtime:
+  exp_name: original/v0_rl
+  run_name: "${runtime.exp_name}"
+  # run_name not specified, will use YMD_HMS timestamp
+  # run_group not specified, can be added online later
+  # notes not specified, can be added online later
+  tags:
+    - "model:${config.base_model}"
+    - "rl-training"
+  seed: 0
+  dry_run: False
+
+config:
+  # Explicitly specify RL config class (overrides the SFT default from /config: base)
+  _target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig
+
+  use_wandb_logging: true
+  base_model: Qwen/Qwen2.5-Coder-7B-Instruct
+
+  # Model settings (same as SFT v0)
+  auto_model_config:
+    use_cache: False  # disable cache during training (auto-re-enabled during evals)
+
+  # Datamodule config (updated to match prototype structure)
+  datamodule_config:
+    datamodule_class_path: pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule
+    datamodule_name: null
+    # Prompt configuration for GRPO (critical for RL training!)
+    prompt_config:
+      prompt_name: code_execution
+      use_chat_template: false  # GRPO needs plain text, not chat format
+      include_examples: false    # Zero-shot by default for efficiency
+      target_examples: null
+      version: grpo_minimal      # Use the GRPO-optimized template
+    # Default parser config with SampleBuilder
+    default_dataparser_config:
+      class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
+      params:
+        filtering_config: {}
+        selection_config:
+          seed: 0
+          allow_db_lookups: true
+          code_type_prob_map:  # Updated from input_type_prob_map
+            original: 1.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: false
+        transform_config:
+          seed: 0
+          transform_strategy: never
+    # Parser overrides for train/valid subsets
+    dataparser_config_overrides:
+      train:
+        filtering_config: {}
+        selection_config:
+          code_type_prob_map:  # Updated from input_type_prob_map
+            original: 1.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+      valid:
+        filtering_config: {}
+        selection_config:
+          code_type_prob_map:  # Updated from input_type_prob_map
+            original: 1.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+    # Dataloader config
+    dataloader_config_overrides:
+      train:
+        shuffle: true
+    # Dataset settings
+    keep_generated_datasets_in_memory: false
+    subset_names: [train, valid, test]
+    train_subset_names: [train]
+    valid_subset_names: [valid]
+    eval_subset_names: [train, valid]
+    instantiate_parsers_at_setup: false
+    use_local_dataset_cache: true
+    use_tokenized_dataset_cache: true
+    cache_lock_timeout_seconds: 1800.0
+    message_generator_num_workers: 4
+    min_samples_with_hints: 0
+    min_samples_without_hints: 0
+
+  # GRPO training arguments (RL equivalent of training_args_config)
+  grpo_config:
+    do_train: True
+    do_eval: True
+    do_predict: False
+    # ------------
+    per_device_train_batch_size: 1  # GRPO typically uses smaller batch sizes
+    per_device_eval_batch_size: 4  # Larger eval batch (from prototype train_grpo.py)
+    gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8 (from prototype)
+    learning_rate: 1e-5  # Lower than SFT (2e-4) for RL stability
+    weight_decay: 0.05
+    lr_scheduler_type: "cosine"
+    warmup_steps: 100
+    gradient_checkpointing: True
+    gradient_checkpointing_kwargs:
+      use_reentrant: False
+    optim: "adamw_torch_fused"
+    max_grad_norm: 1.0
+    # ------------
+    num_train_epochs: 3
+    max_steps: -1  # Use epochs instead
+    logging_steps: 5  # From prototype train_grpo.py
+    eval_on_start: True  # Evaluate before training starts (from prototype)
+    eval_strategy: "steps"
+    eval_steps: 500
+    save_strategy: "steps"
+    save_steps: 500  # From prototype train_grpo.py
+    save_total_limit: 3
+    dataloader_num_workers: 4
+    dataloader_pin_memory: False
+    # ------------
+    # GRPO-specific parameters (from prototype train_grpo.py)
+    num_generations: 8  # Generate 8 samples per prompt for exploration
+    num_generations_eval: 2  # Use fewer generations during eval to save compute
+    max_completion_length: 2048  # Allow longer completions for complex code execution
+    temperature: 0.7
+    top_p: 0.9
+    beta: 0.05  # KL penalty coefficient
+    use_vllm: false  # Prototype uses true, but requires manual vLLM server setup
+    vllm_server_port: 8050  # From prototype (was 8000)
+    vllm_importance_sampling_correction: true
+
+  # Reward configuration (RL-specific)
+  reward_config:
+    reward_type: code_execution
+    hard_match_reward: 1.0
+    soft_match_reward: 0.5
+    fail_reward: 0.0
+    enable_soft_match: false  # Use hard matching only
+    strip_whitespace: true
+    expected_outputs_key: expected_output
+
+  # vLLM server configuration (optional, for faster generation)
+  # vllm_config:
+  #   enabled: true
+  #   server_url: http://localhost:8000
+
+  # Prompt settings (RL-specific)
+  prompt_version: grpo_minimal  # Optimized prompt template
+  include_prompt_examples: false  # Zero-shot recommended for GRPO
+
+  # Dataset caching (RL-specific)
+  cache_config:
+    use_cache: true
+    force_regenerate: false
+
+  # LoRA configuration (same as SFT v0)
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
+
+  # Evaluation settings (same as SFT v0)
+  evals_config:
+    eval_batch_size: 24

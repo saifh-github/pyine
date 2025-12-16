@@ -69,32 +69,21 @@ config:
       train:
         filtering_config: {}
         selection_config:
-          choice_strategy: random
-          input_type_prob_map:
+          code_type_prob_map:  # Updated from input_type_prob_map
             original: 1.0
-            hinted: 0.0
-            stubbed: 0.0
-            obfuscated_hinted: 0.0
-            obfuscated: 0.0
           fallback_to_orig: true
         transform_config:
           transform_strategy: never
       valid:
         filtering_config: {}
         selection_config:
-          choice_strategy: random
-          input_type_prob_map:
+          code_type_prob_map:  # Updated from input_type_prob_map
             original: 1.0
-            hinted: 0.0
-            stubbed: 0.0
-            obfuscated_hinted: 0.0
-            obfuscated: 0.0
           fallback_to_orig: true
         transform_config:
           transform_strategy: never
     # ------------
     keep_generated_datasets_in_memory: False
-    # max_solution_count: 1
     # ------------
   collator_hard_seq_length_cap: 4096
   training_args_config:

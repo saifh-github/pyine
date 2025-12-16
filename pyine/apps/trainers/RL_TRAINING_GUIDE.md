@@ -114,6 +114,8 @@ uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment
 ```
 
+Note: The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches to the correct trainer based on the config type (determined by the `_target_` field in your experiment config).
+
 **With custom overrides:**
 ```bash
 uv run python -m pyine.apps.trainers.hf_trainer \
