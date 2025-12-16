@@ -330,7 +330,7 @@ def test_train_configures_trainer_and_saves_artifacts(
     )
     collator_calls = _install_collator_stub(config)
 
-    trainer = pyine.apps.trainers.hf_trainer.train(
+    trainer = pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=fake_dm,
         config=config,
         runtime=runtime,
@@ -505,7 +505,7 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
         lambda **kwargs: _FakeTrainer(**kwargs),
     )
     datamodule = _FakeDataModule()
-    trainer = pyine.apps.trainers.hf_trainer.train(
+    trainer = pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=datamodule,
         config=config,
         runtime=runtime,
@@ -651,7 +651,7 @@ def test_train_enables_wandb_batch_logging(
 
     collator_calls = _install_collator_stub(config, collator_factory=_collator_factory)
 
-    trainer = pyine.apps.trainers.hf_trainer.train(
+    trainer = pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=_FakeDataModule(),
         config=config,
         runtime=runtime,
@@ -827,7 +827,7 @@ async def test_main_runs_train_and_evaluate(
     )
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer,
-        "train",
+        "sft_train",
         fake_train,
     )
     monkeypatch.setattr(
@@ -1203,7 +1203,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
     stop_after["value"] = 1
     recorded_steps.clear()
     assert hasattr(datamodule, "get_hf_tokenized_examples_dataset")
-    trainer_first = pyine.apps.trainers.hf_trainer.train(
+    trainer_first = pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=datamodule,
         config=config_first,
         runtime=runtime,
@@ -1219,7 +1219,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
     stop_after["value"] = None
     recorded_steps.clear()
     resume_artifacts = types.SimpleNamespace(checkpoint_path=checkpoint_dir)
-    trainer_second = pyine.apps.trainers.hf_trainer.train(
+    trainer_second = pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=datamodule,
         config=config_second,
         runtime=runtime,

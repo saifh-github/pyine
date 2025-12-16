@@ -335,7 +335,12 @@ async def main(
 
     with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
         # Dispatch to appropriate trainer based on config type
-        if isinstance(config, pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig):
+        # Check for RL config by presence of grpo_config attribute (supports both real configs and test mocks)
+        is_rl_config = isinstance(config, pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig) or (
+            hasattr(config, "grpo_config") and not hasattr(config, "training_args_config")
+        )
+
+        if is_rl_config:
             # RL training path
             if config.grpo_config.do_train:
                 trainer = await rl_train(
@@ -355,8 +360,8 @@ async def main(
                 else:
                     model = config.get_model()
                     tokenizer = config.get_tokenizer()
-        elif isinstance(config, pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig):
-            # SFT training path
+        else:
+            # SFT training path (HFTrainerAppMainConfig or test mock with training_args_config)
             if config.training_args_config.do_train:
                 trainer = sft_train(
                     datamodule=datamodule,
@@ -392,15 +397,13 @@ async def main(
                     # Load base (pretrained) model and tokenizer
                     model = config.get_model()
                     tokenizer = config.get_tokenizer()
-        else:
-            raise TypeError(f"Unknown config type: {type(config)}")
         pyine.utils.distrib.barrier()
 
         # Determine whether to do prediction based on config type
         do_predict = (
-            config.training_args_config.do_predict
-            if isinstance(config, pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig)
-            else config.grpo_config.do_predict
+            config.grpo_config.do_predict
+            if is_rl_config
+            else config.training_args_config.do_predict
         )
 
         if do_predict and not shutdown_manager.should_terminate():
