@@ -5,6 +5,7 @@ This guide explains how to run RL (Reinforcement Learning) training with GRPO (G
 ## Overview
 
 The RL training system is integrated into the main trainer framework and supports:
+
 - **GRPO algorithm** via TRL library
 - **Code execution rewards** (hard/soft matching)
 - **vLLM acceleration** for fast rollouts
@@ -109,6 +110,7 @@ config:
 ### Step 2: Run RL Training
 
 **Basic training (single GPU):**
+
 ```bash
 uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment
@@ -117,6 +119,7 @@ uv run python -m pyine.apps.trainers.hf_trainer \
 Note: The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches to the correct trainer based on the config type (determined by the `_target_` field in your experiment config).
 
 **With custom overrides:**
+
 ```bash
 uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment \
@@ -125,6 +128,7 @@ uv run python -m pyine.apps.trainers.hf_trainer \
 ```
 
 **Distributed training with Accelerate:**
+
 ```bash
 uv run accelerate launch pyine/apps/trainers/hf_trainer.py \
     +experiment=my_rl_experiment
@@ -133,6 +137,7 @@ uv run accelerate launch pyine/apps/trainers/hf_trainer.py \
 ### Step 3: Monitor Training
 
 **With WandB (if enabled):**
+
 - Visit your WandB project dashboard
 - Monitor key metrics:
   - `train/reward_mean` - Should increase (indicates learning)
@@ -141,6 +146,7 @@ uv run accelerate launch pyine/apps/trainers/hf_trainer.py \
   - `eval/reward_mean` - Validation reward
 
 **Key metrics to watch:**
+
 - **Reward Mean**: Binary reward (1.0 or 0.0), so mean = accuracy
   - Start: ~0.0-0.1 (mostly incorrect)
   - Target: >0.3-0.5 after training (30-50% accuracy)
@@ -168,6 +174,7 @@ CUDA_VISIBLE_DEVICES=2,3      # Training
 ### Setup with vLLM
 
 **Step 1: Update your config**
+
 ```yaml
 config:
   grpo_config:
@@ -179,6 +186,7 @@ config:
 ```
 
 **Step 2: Start vLLM server (Terminal 1)**
+
 ```bash
 # Use base model (not checkpoint!) - TRL handles weight syncing
 CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
@@ -188,11 +196,13 @@ CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
 ```
 
 Wait for server to start:
+
 ```
 INFO: Uvicorn running on http://0.0.0.0:8000
 ```
 
 **Step 3: Run training (Terminal 2)**
+
 ```bash
 CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
     pyine/apps/trainers/hf_trainer.py \
@@ -331,6 +341,7 @@ Available in `pyine/prompts/configs/code_execution.yaml`:
 - **`unstructured_with_3_output_types`**: More verbose with examples
 
 Configure via:
+
 ```yaml
 config:
   prompt_version: grpo_minimal
@@ -344,6 +355,7 @@ config:
 **Error:** `ModuleNotFoundError: No module named 'trl'`
 
 **Solution:**
+
 ```bash
 uv pip install trl
 ```
@@ -353,6 +365,7 @@ uv pip install trl
 **Error:** `RuntimeError: vLLM server not accessible at http://localhost:8000`
 
 **Solution:**
+
 1. Check server is running: `curl http://localhost:8000/health`
 2. Verify no firewall blocking port 8000
 3. Check server logs for errors
@@ -361,6 +374,7 @@ uv pip install trl
 ### CUDA Out of Memory
 
 **Solutions:**
+
 - Reduce `per_device_train_batch_size` to 1
 - Reduce `num_generations` (fewer samples per prompt)
 - Reduce `max_completion_length`
@@ -371,6 +385,7 @@ uv pip install trl
 ### Low Reward / Not Learning
 
 **Solutions:**
+
 - Check dataset quality (inspect prompts)
 - Increase `num_generations` for more exploration
 - Adjust `temperature` (higher = more diverse)
@@ -380,15 +395,15 @@ uv pip install trl
 
 ## Comparison: SFT vs RL Training
 
-| Aspect | SFT (Supervised) | RL (GRPO) |
-|--------|------------------|-----------|
-| **Config** | `HFTrainerAppMainConfig` | `RLTrainerAppMainConfig` |
-| **Training args** | `training_args_config` | `grpo_config` |
-| **Main parameter** | `do_train` | `do_train` |
-| **Entry point** | Same: `hf_trainer.py` | Same: `hf_trainer.py` |
-| **Data format** | Chat messages | Chat messages + expected outputs |
-| **Reward** | Loss-based | Custom reward function |
-| **vLLM** | For eval only | For training rollouts |
+| Aspect             | SFT (Supervised)         | RL (GRPO)                        |
+| ------------------ | ------------------------ | -------------------------------- |
+| **Config**         | `HFTrainerAppMainConfig` | `RLTrainerAppMainConfig`         |
+| **Training args**  | `training_args_config`   | `grpo_config`                    |
+| **Main parameter** | `do_train`               | `do_train`                       |
+| **Entry point**    | Same: `hf_trainer.py`    | Same: `hf_trainer.py`            |
+| **Data format**    | Chat messages            | Chat messages + expected outputs |
+| **Reward**         | Loss-based               | Custom reward function           |
+| **vLLM**           | For eval only            | For training rollouts            |
 
 ## Next Steps
 
@@ -408,6 +423,7 @@ uv pip install trl
 ## Getting Help
 
 For issues or questions:
+
 - Check this guide's troubleshooting section
 - Review experiment logs in `<PYINE_LOGS_ROOT>/runs/`
 - Check WandB dashboard for metrics

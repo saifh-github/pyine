@@ -236,21 +236,6 @@ async def rl_train(
         expected_outputs_key=config.reward_config.expected_outputs_key,
     )
 
-    # 4. Validate vLLM server (if enabled)
-    if config.vllm_config and config.vllm_config.enabled:
-        logger.info(f"checking vLLM server at {config.vllm_config.server_url}...")
-        import requests
-
-        try:
-            response = requests.get(f"{config.vllm_config.server_url}/health")
-            assert response.status_code == 200
-            logger.info("vLLM server is ready")
-        except Exception as e:
-            raise RuntimeError(
-                f"vLLM server not accessible at {config.vllm_config.server_url}. "
-                f"Please start server with: trl vllm-serve --model {config.base_model}"
-            ) from e
-
     # 5. Create TRL trainer
     logger.info("creating GRPO trainer...")
     trainer = trl.GRPOTrainer(

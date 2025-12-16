@@ -15,7 +15,6 @@ import torch
 import torch.distributed.elastic.multiprocessing.errors
 import transformers
 import trl
-import wandb
 
 import pyine.apps.trainers.common as common
 import pyine.configs.base
@@ -183,9 +182,7 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
             if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
                 return typed_data
             if isinstance(lora_config, peft.LoraConfig):
-                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(
-                    lora_config.__dict__
-                )
+                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(lora_config.__dict__)
                 return typed_data
             if isinstance(lora_config, dict):
                 typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
