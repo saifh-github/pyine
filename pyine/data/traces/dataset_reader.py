@@ -243,6 +243,7 @@ class DatasetReader(torch.utils.data.Dataset[pyine.utils.code.execution.TraceRes
         if not force and self._is_metadata_prepared():
             self._load_prepared_metadata()
             return
+        logger.debug(f"preparing trace metadata for lmdb dataset at: {self.path}")
         self._clear_prepared_metadata()
         problem_indices_result = self.reader.get_indices(
             pattern=pyine.data.traces.dataset_utils.PROBLEM_DATA_PATTERN,
