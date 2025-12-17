@@ -17,8 +17,8 @@ The RL training system is integrated into the main trainer framework and support
 
 - Python environment with all dependencies installed (`trl`, `transformers`, `torch`, etc.)
 - TACO dataset downloaded and processed
-- GPU recommended (CPU works for testing but is slow)
-- For vLLM: 4+ GPUs recommended for optimal setup
+- **vLLM server required**: 3+ GPUs for vLLM server, plus separate GPU(s) for training
+- Minimum 4 GPUs total recommended (3 for vLLM, 1+ for training)
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ runtime:
 
 config:
   use_wandb_logging: true
-  base_model: Qwen/Qwen2.5-Coder-7B-Instruct
+  base_model: Qwen/Qwen3-4B-Instruct-2507
 
   # LoRA settings (recommended for efficient training)
   lora_config:
@@ -91,7 +91,7 @@ config:
     temperature: 0.7
     top_p: 0.9
     beta: 0.05  # KL penalty coefficient
-    use_vllm: false  # Set to true for vLLM acceleration
+    use_vllm: true  # vLLM acceleration required
     vllm_server_port: 8000
     gradient_checkpointing: false
     gradient_checkpointing_kwargs:
@@ -107,12 +107,30 @@ config:
     eval_batch_size: 24
 ```
 
-### Step 2: Run RL Training
+### Step 2: Start vLLM Server
 
-**Basic training (single GPU):**
+**IMPORTANT**: vLLM and training must use different GPUs with no overlap!
 
 ```bash
-uv run python -m pyine.apps.trainers.hf_trainer \
+# Terminal 1: Start vLLM server (use base model, TRL handles weight syncing)
+CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
+    --model Qwen/Qwen3-4B-Instruct-2507 \
+    --data_parallel_size 3 \
+    --port 8000
+```
+
+Wait for server to start and show:
+```
+INFO: Uvicorn running on http://0.0.0.0:8000
+```
+
+### Step 3: Run RL Training
+
+**Terminal 2: Basic training (single GPU for training):**
+
+```bash
+# Use separate GPU(s) from vLLM server
+CUDA_VISIBLE_DEVICES=3 uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment
 ```
 
@@ -121,20 +139,21 @@ Note: The `hf_trainer.py` entry point handles both SFT and RL training. It autom
 **With custom overrides:**
 
 ```bash
-uv run python -m pyine.apps.trainers.hf_trainer \
+CUDA_VISIBLE_DEVICES=3 uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment \
     config.grpo_config.learning_rate=5e-6 \
     config.grpo_config.num_generations=8
 ```
 
-**Distributed training with Accelerate:**
+**Distributed training with Accelerate (multiple training GPUs):**
 
 ```bash
-uv run accelerate launch pyine/apps/trainers/hf_trainer.py \
+CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
+    pyine/apps/trainers/hf_trainer.py \
     +experiment=my_rl_experiment
 ```
 
-### Step 3: Monitor Training
+### Step 4: Monitor Training
 
 **With WandB (if enabled):**
 
@@ -153,11 +172,9 @@ uv run accelerate launch pyine/apps/trainers/hf_trainer.py \
 - **Loss**: Should decrease steadily
 - **Reward Std**: High initially, may stabilize
 
-## Advanced: vLLM Acceleration
+## vLLM Configuration Details
 
-For significantly faster generation during training, use vLLM to serve the model on separate GPUs.
-
-### Important: GPU Separation
+### GPU Separation (Critical!)
 
 vLLM and training **must use different GPUs** - no overlap!
 
@@ -171,50 +188,12 @@ CUDA_VISIBLE_DEVICES=0,1,2    # vLLM server
 CUDA_VISIBLE_DEVICES=2,3      # Training
 ```
 
-### Setup with vLLM
-
-**Step 1: Update your config**
-
-```yaml
-config:
-  grpo_config:
-    use_vllm: true
-    vllm_server_port: 8000
-  vllm_config:
-    enabled: true
-    server_url: http://localhost:8000
-```
-
-**Step 2: Start vLLM server (Terminal 1)**
-
-```bash
-# Use base model (not checkpoint!) - TRL handles weight syncing
-CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
-    --model Qwen/Qwen2.5-Coder-7B-Instruct \
-    --data_parallel_size 3 \
-    --port 8000
-```
-
-Wait for server to start:
-
-```
-INFO: Uvicorn running on http://0.0.0.0:8000
-```
-
-**Step 3: Run training (Terminal 2)**
-
-```bash
-CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
-    pyine/apps/trainers/hf_trainer.py \
-    +experiment=my_rl_experiment
-```
-
 ### Benefits of vLLM
 
 - **3-10x faster generation** during rollouts
 - **2-5x faster overall training**
 - Better GPU utilization
-- Essential for larger models (7B+)
+- Required for efficient GRPO training
 
 ### Known Issues: TRL + vLLM
 
@@ -327,8 +306,8 @@ grpo_config:
   top_p: 0.9               # Nucleus sampling
   beta: 0.05               # KL penalty coefficient
 
-  # vLLM settings
-  use_vllm: false
+  # vLLM settings (required)
+  use_vllm: true
   vllm_server_port: 8000
   vllm_importance_sampling_correction: true
 ```
@@ -403,14 +382,14 @@ uv pip install trl
 | **Entry point**    | Same: `hf_trainer.py`    | Same: `hf_trainer.py`            |
 | **Data format**    | Chat messages            | Chat messages + expected outputs |
 | **Reward**         | Loss-based               | Custom reward function           |
-| **vLLM**           | For eval only            | For training rollouts            |
+| **vLLM**           | For eval only            | Required for training rollouts   |
 
 ## Next Steps
 
 1. **Create your experiment config** based on the template above
-2. **Test on small dataset** (`max_samples: 100`) to verify setup
-3. **Scale up** to full dataset once validated
-4. **Enable vLLM** for production training (4+ GPUs)
+2. **Set up vLLM server** on dedicated GPUs (see Step 2 in Quick Start)
+3. **Test on small dataset** to verify setup (consider adding a max_samples limit for testing)
+4. **Scale up** to full dataset once validated
 5. **Monitor metrics** and iterate on hyperparameters
 
 ## Additional Resources

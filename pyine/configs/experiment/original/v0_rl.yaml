@@ -167,11 +167,6 @@ config:
     strip_whitespace: true
     expected_outputs_key: expected_output
 
-  # vLLM server configuration (optional, for faster generation)
-  # vllm_config:
-  #   enabled: true
-  #   server_url: http://localhost:8000
-
   # Prompt settings (RL-specific)
   prompt_version: grpo_minimal  # Optimized prompt template
   include_prompt_examples: false  # Zero-shot recommended for GRPO

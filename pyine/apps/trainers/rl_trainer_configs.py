@@ -64,19 +64,6 @@ class RewardConfig(pydantic.BaseModel):
     )
 
 
-class VLLMConfig(pydantic.BaseModel):
-    """Configuration for vLLM server integration."""
-
-    enabled: bool = pydantic.Field(
-        default=False,
-        description="Whether to use vLLM for generation during training.",
-    )
-    server_url: str = pydantic.Field(
-        default="http://localhost:8000",
-        description="vLLM server URL. Note: TRL handles weight syncing automatically.",
-    )
-
-
 class CacheConfig(pydantic.BaseModel):
     """Configuration for dataset caching."""
 
@@ -145,11 +132,6 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
     reward_config: RewardConfig = pydantic.Field(
         default_factory=RewardConfig,
         description="Reward function configuration.",
-    )
-
-    vllm_config: VLLMConfig | None = pydantic.Field(
-        default=None,
-        description="vLLM server config for fast rollouts. If None, uses standard generation.",
     )
 
     prompt_version: str = pydantic.Field(
