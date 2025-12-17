@@ -400,11 +400,7 @@ async def main(
         pyine.utils.distrib.barrier()
 
         # Determine whether to do prediction based on config type
-        do_predict = (
-            config.grpo_config.do_predict
-            if is_rl_config
-            else config.training_args_config.do_predict
-        )
+        do_predict = config.grpo_config.do_predict if is_rl_config else config.training_args_config.do_predict
 
         if do_predict and not shutdown_manager.should_terminate():
             if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
