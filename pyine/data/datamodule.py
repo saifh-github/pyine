@@ -575,6 +575,87 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             raise TypeError(f"expected {ConversationDataModule} (or subclass), got {type(dm)}")
         return dm
 
+    def _instantiate_hf_dataset_with_transform(
+        self,
+        subset_name: SubsetNameType,
+        transform_fn: typing.Callable[[typing.Any], typing.Any],
+        cache_subdir: str,
+        hash_params: tuple[typing.Any, ...],
+        parser_kwargs: dict[str, typing.Any] | None = None,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Generic helper to instantiate a HuggingFace dataset with a custom transform and caching.
+
+        This is a private helper method that consolidates the common logic for preparing datasets
+        with different transforms (e.g., for SFT messages, RL training, etc.).
+
+        Args:
+            subset_name: the subset name to prepare the dataset for.
+            transform_fn: the transform function to apply to each sample.
+            cache_subdir: subdirectory name for caching (e.g., "hf_datasets", "hf_rl_datasets").
+            hash_params: tuple of parameters to include in the cache hash.
+            parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
+            force_regenerate: whether to rebuild the dataset cache even if it already exists.
+
+        Returns:
+            A huggingface dataset with the applied transform.
+        """
+        hf_datasets_cache_dir = pyine.utils.filesystem.get_data_cache_path() / cache_subdir
+        params_hash = pyine.utils.reprod.get_params_hash(self.model_dump(), *hash_params)
+        datamodule_name = self.datamodule_name or self._resolved_datamodule_class.__name__
+        dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
+        dataset_path = hf_datasets_cache_dir / dataset_name
+        named_split = hf_datasets.NamedSplit(name=subset_name)
+        parser_config = self._resolved_dataparser_configs[subset_name]
+        assert isinstance(parser_config, ConversationDataParserConfig)
+
+        if not self.use_local_dataset_cache:
+            # if we are not using any caching, generate and return the dataset directly
+            return parser_config.generate_hf_messages_dataset(
+                named_split=named_split,
+                raw_transform_fn=transform_fn,
+                instantiate_kwargs=parser_kwargs,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
+                num_workers=self.message_generator_num_workers,
+            )
+
+        # otherwise, acquire a lock (for potential ddp runs) and check if it needs to be generated
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = dataset_path.parent / f"{dataset_path.name}.lock"
+        lock = filelock.FileLock(str(lock_path), timeout=self.cache_lock_timeout_seconds)
+        with lock:
+            if dataset_path.exists():
+                if force_regenerate:
+                    logger.info(f"force-regenerating dataset cache at: {dataset_path}")
+                    shutil.rmtree(dataset_path)
+                else:
+                    logger.info(f"loading cached dataset from: {dataset_path}")
+                    return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                        dataset_path=dataset_path,
+                        keep_in_memory=self.keep_generated_datasets_in_memory,
+                    )
+            logger.info(f"building dataset cache at: {dataset_path}")
+            dataset = parser_config.generate_hf_messages_dataset(
+                named_split=named_split,
+                raw_transform_fn=transform_fn,
+                instantiate_kwargs=parser_kwargs,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
+                num_workers=self.message_generator_num_workers,
+            )
+            tmp_path = dataset_path.parent / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
+            try:
+                dataset.save_to_disk(tmp_path)  # type: ignore[reportUnknownMemberType]
+                os.replace(tmp_path, dataset_path)
+            finally:
+                shutil.rmtree(tmp_path, ignore_errors=True)
+            logger.info(f"saved dataset cache: {dataset_path}")
+            if self.keep_generated_datasets_in_memory:
+                return dataset
+            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                dataset_path=dataset_path,
+                keep_in_memory=self.keep_generated_datasets_in_memory,
+            )
+
     def instantiate_hf_messages_dataset(
         self,
         subset_name: SubsetNameType,
@@ -602,71 +683,70 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         Returns:
             A huggingface dataset that produces chat-templated 'conversations' (lists of messages).
         """
-        hf_datasets_cache_dir = pyine.utils.filesystem.get_data_cache_path() / "hf_datasets"
-        params_hash = pyine.utils.reprod.get_params_hash(
-            self.model_dump(),
-            append_answer,
-            merge_system_with_user,
-            keep_original_data,
-            parser_kwargs,
-        )
-        datamodule_name = self.datamodule_name or self._resolved_datamodule_class.__name__
-        dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
-        dataset_path = hf_datasets_cache_dir / dataset_name
-        named_split = hf_datasets.NamedSplit(name=subset_name)
-        parser_config = self._resolved_dataparser_configs[subset_name]
-        assert isinstance(parser_config, ConversationDataParserConfig)
         transf_fn = self.instantiate_sample_to_messages_transform(
             append_answer=append_answer,
             use_hf_messages=True,
             merge_system_with_user=merge_system_with_user,
             keep_original_data=keep_original_data,
         )
-        if not self.use_local_dataset_cache:
-            # if we are not using any caching, generate and return the dataset directly
-            return parser_config.generate_hf_messages_dataset(
-                named_split=named_split,
-                raw_transform_fn=transf_fn,
-                instantiate_kwargs=parser_kwargs,
-                keep_in_memory=self.keep_generated_datasets_in_memory,
-                num_workers=self.message_generator_num_workers,
-            )
-        # otherwise, acquire a lock (for potential ddp runs) and check if it needs to be generated
-        dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = dataset_path.parent / f"{dataset_path.name}.lock"
-        lock = filelock.FileLock(str(lock_path), timeout=self.cache_lock_timeout_seconds)
-        with lock:
-            if dataset_path.exists():
-                if force_regenerate:
-                    logger.info(f"force-regenerating huggingface dataset cache at: {dataset_path}")
-                    shutil.rmtree(dataset_path)
-                else:
-                    logger.info(f"loading already-generated dataset from cache: {dataset_path}")
-                    return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
-                        dataset_path=dataset_path,
-                        keep_in_memory=self.keep_generated_datasets_in_memory,
-                    )
-            logger.info(f"building huggingface dataset cache at: {dataset_path}")
-            dataset = parser_config.generate_hf_messages_dataset(
-                named_split=named_split,
-                raw_transform_fn=transf_fn,
-                instantiate_kwargs=parser_kwargs,
-                keep_in_memory=self.keep_generated_datasets_in_memory,
-                num_workers=self.message_generator_num_workers,
-            )
-            tmp_path = dataset_path.parent / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
-            try:
-                dataset.save_to_disk(tmp_path)  # type: ignore[reportUnknownMemberType]
-                os.replace(tmp_path, dataset_path)
-            finally:
-                shutil.rmtree(tmp_path, ignore_errors=True)
-            logger.info(f"saved dataset cache: {dataset_path}")
-            if self.keep_generated_datasets_in_memory:
-                return dataset
-            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
-                dataset_path=dataset_path,
-                keep_in_memory=self.keep_generated_datasets_in_memory,
-            )
+        return self._instantiate_hf_dataset_with_transform(
+            subset_name=subset_name,
+            transform_fn=transf_fn,
+            cache_subdir="hf_datasets",
+            hash_params=(append_answer, merge_system_with_user, keep_original_data, parser_kwargs),
+            parser_kwargs=parser_kwargs,
+            force_regenerate=force_regenerate,
+        )
+
+    def instantiate_hf_rl_dataset(
+        self,
+        subset_name: SubsetNameType,
+        prompt_version: str | None = None,
+        include_examples: bool = False,
+        parser_kwargs: dict[str, typing.Any] | None = None,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Instantiates a HuggingFace dataset for RL training (e.g., GRPO, PPO, RLOO).
+
+        This function prepares datasets for reinforcement learning training by providing raw
+        prompts (not tokenized) along with metadata needed for reward computation. Unlike
+        SFT datasets which are pre-tokenized, RL datasets need raw text because the trainer
+        will generate multiple completions per prompt during training.
+
+        The dataset format includes:
+        - prompt: List of chat messages (format expected by TRL trainers)
+        - expected_output: Ground truth output for reward calculation
+        - predict_type: Type of prediction (program_output, frame_variables, function_return)
+        - identifier: Unique sample identifier
+        - code_type: Type of code (original, obfuscated, etc.)
+        - tags: Sample tags for analysis
+        - Additional metadata fields (first_line, last_line, entrypoint)
+
+        Args:
+            subset_name: the subset name to prepare the dataset for.
+            prompt_version: Version of the prompt template to use. If None, uses the version
+                from self.prompt_config. Common options include "grpo_minimal" for zero-shot
+                training or "unstructured_with_3_output_types" for more detailed prompts.
+            include_examples: Whether to include few-shot examples in prompts. For RL training,
+                False (default) is recommended to save tokens and reduce compute cost.
+            parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
+            force_regenerate: whether to rebuild the dataset cache even if it already exists.
+
+        Returns:
+            A huggingface dataset with raw prompts and metadata for RL training.
+        """
+        rl_transform_fn = self.instantiate_sample_to_rl_transform(
+            prompt_version=prompt_version,
+            include_examples=include_examples,
+        )
+        return self._instantiate_hf_dataset_with_transform(
+            subset_name=subset_name,
+            transform_fn=rl_transform_fn,
+            cache_subdir="hf_rl_datasets",
+            hash_params=(prompt_version, include_examples, parser_kwargs),
+            parser_kwargs=parser_kwargs,
+            force_regenerate=force_regenerate,
+        )
 
     def instantiate_openai_messages_dataset(
         self,
@@ -743,6 +823,31 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         # this transform is application-specific: it depends on the type of samples provided by parsers
         raise NotImplementedError("derived class should implement this function")
 
+    def instantiate_sample_to_rl_transform(
+        self,
+        prompt_version: str | None = None,
+        include_examples: bool = False,
+    ) -> typing.Callable[[typing.Any], typing.Any]:
+        """Returns the sample transform function used to prepare RL training data.
+
+        This function creates a transform for reinforcement learning training that formats
+        samples with raw prompts (not tokenized) and metadata needed for reward computation.
+
+        Note: if the datamodule does not support the conversion of raw data samples into
+        RL training format, this function will raise an exception.
+
+        Args:
+            prompt_version: Version of the prompt template to use. If None, uses the version
+                from self.prompt_config.
+            include_examples: Whether to include few-shot examples in prompts. For RL training,
+                False (default) is recommended to save tokens and reduce compute cost.
+
+        Returns:
+             The sample transform function for RL training.
+        """
+        # this transform is application-specific: it depends on the type of samples provided by parsers
+        raise NotImplementedError("derived class should implement this function")
+
     @pydantic.model_validator(mode="after")
     @typing.override
     def _validate_and_resolve(self) -> ConversationDataModuleConfig:
@@ -806,6 +911,31 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
 
         Returns:
              The HuggingFace dataset object.
+        """
+        raise NotImplementedError("derived class should implement this function")
+
+    def get_hf_rl_dataset(
+        self,
+        subset_name: SubsetNameType,
+        prompt_version: str | None = None,
+        include_examples: bool = False,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Returns a HuggingFace dataset for RL training.
+
+        This function exists for users who want to train models using reinforcement learning
+        algorithms (e.g., GRPO, PPO, RLOO) that require raw prompts and metadata instead of
+        pre-tokenized examples.
+
+        Args:
+            subset_name: the subset name to prepare the dataset for.
+            prompt_version: Version of the prompt template to use. If None, uses the version
+                from the datamodule config.
+            include_examples: Whether to include few-shot examples in prompts.
+            force_regenerate: whether to rebuild caches even if they already exist.
+
+        Returns:
+             The HuggingFace dataset object with raw prompts and metadata for RL training.
         """
         raise NotImplementedError("derived class should implement this function")
 

@@ -14,8 +14,12 @@ import time
 import typing
 
 import transformers
+import trl
 
 import pyine.apps.trainers.common
+import pyine.apps.trainers.hf_trainer_configs
+import pyine.apps.trainers.rl.rewards
+import pyine.apps.trainers.rl_trainer_configs
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
@@ -76,9 +80,13 @@ def sft_train(
         tokenizer=tokenizer,
         model_max_seq_len=model_max_seq_len,
     )
+    evals_config = getattr(config, "evals_config", None)
+    category_extraction_config = (
+        getattr(evals_config, "category_extraction_config", None) if evals_config is not None else None
+    )
     valid_sample_categories = pyine.evals.utils.extract_sample_categories_from_dataset(
         valid_ds,
-        config=config.evals_config.category_extraction_config,
+        config=category_extraction_config,
     )
     assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
         "could not extract sample categories from validation dataset; check that sample data is preserved?"
@@ -112,10 +120,12 @@ def sft_train(
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
+    datamodule_config = getattr(config, "datamodule_config", None)
+    train_subset_names = getattr(datamodule_config, "train_subset_names", []) if datamodule_config is not None else []
     epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
         train_dataset=train_ds,
         datamodule=datamodule,
-        subset_names=getattr(config.datamodule_config, "train_subset_names", []),
+        subset_names=train_subset_names,
     )
     if epoch_callback is not None:
         callbacks.append(epoch_callback)
@@ -185,44 +195,31 @@ async def rl_train(
     Returns:
         The instantiated TRL trainer object.
     """
-    import trl
-
-    import pyine.apps.trainers.rl.data_utils
-    import pyine.apps.trainers.rl.rewards
-
     logger.info("Starting RL training setup...")
 
     # 1. Setup model and tokenizer
     logger.info("instantiating model and tokenizer...")
     checkpoint_path = resume_artifacts.checkpoint_path if resume_artifacts else None
     model = config.get_model(checkpoint_path=checkpoint_path)
-    tokenizer = config.get_tokenizer(checkpoint_path=checkpoint_path)
 
     # 2. Prepare RL dataset from datamodule
+    # Use the datamodule's native RL dataset method which reuses existing infrastructure
     logger.info("preparing train dataset...")
-    train_ds = pyine.apps.trainers.rl.data_utils.prepare_grpo_dataset_from_datamodule(
-        datamodule=datamodule,
+    train_ds = datamodule.get_hf_rl_dataset(
         subset_name="train",
-        tokenizer=tokenizer,
         prompt_version=config.prompt_version,
         include_examples=config.include_prompt_examples,
-        use_cache=config.cache_config.use_cache,
         force_regenerate=config.cache_config.force_regenerate,
-        cache_dir=config.cache_config.cache_dir,
     )
 
     eval_ds = None
     if config.grpo_config.do_eval:
         logger.info("preparing validation dataset...")
-        eval_ds = pyine.apps.trainers.rl.data_utils.prepare_grpo_dataset_from_datamodule(
-            datamodule=datamodule,
+        eval_ds = datamodule.get_hf_rl_dataset(
             subset_name="valid",
-            tokenizer=tokenizer,
             prompt_version=config.prompt_version,
             include_examples=config.include_prompt_examples,
-            use_cache=config.cache_config.use_cache,
             force_regenerate=config.cache_config.force_regenerate,
-            cache_dir=config.cache_config.cache_dir,
         )
 
     # 3. Create reward function
@@ -238,7 +235,7 @@ async def rl_train(
 
     # 5. Create TRL trainer
     logger.info("creating GRPO trainer...")
-    trainer = trl.GRPOTrainer(
+    trainer = trl.GRPOTrainer(  # type: ignore[reportPrivateImportUsage]
         model=model,  # Pass model object (not string!)
         args=config.grpo_config,
         train_dataset=train_ds,
@@ -251,7 +248,7 @@ async def rl_train(
     if shutdown_manager is not None:
 
         def metadata_writer(checkpoint_dir: pathlib.Path, state: transformers.TrainerState) -> None:
-            pyine.utils.transformers.write_checkpoint_metadata(
+            pyine.utils.transformers.checkpoints.write_checkpoint_metadata(
                 checkpoint_dir,
                 config=config,
                 runtime=runtime,
@@ -266,7 +263,7 @@ async def rl_train(
         callbacks.append(shutdown_callback)
 
     for callback in callbacks:
-        trainer.add_callback(callback)
+        trainer.add_callback(callback)  # pyright: ignore[reportUnknownMemberType]
 
     # 7. Train with resume support
     train_kwargs: dict[str, typing.Any] = {}
@@ -301,9 +298,6 @@ async def main(
         config: Configuration for the application (SFT or RL trainer config).
         runtime: Configuration for the runtime; available when launched via hydra.
     """
-    import pyine.apps.trainers.hf_trainer_configs
-    import pyine.apps.trainers.rl_trainer_configs
-
     pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
     # Only validate vLLM compatibility for SFT configs (RL has different vLLM handling)
     if isinstance(config, pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig):
@@ -315,7 +309,7 @@ async def main(
         persist_to_runtime=persist_runtime_artifacts,
     )
     try:
-        use_wandb_logging = config.use_wandb_logging and persist_runtime_artifacts
+        use_wandb_logging = getattr(config, "use_wandb_logging", False) and persist_runtime_artifacts
         wandb_init_kwargs = resume_artifacts.wandb_resume_kwargs if resume_artifacts and use_wandb_logging else None
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,
@@ -342,10 +336,12 @@ async def main(
 
         if is_rl_config:
             # RL training path
-            if config.grpo_config.do_train:
+            grpo_config = getattr(config, "grpo_config", None)
+            do_train_rl = getattr(grpo_config, "do_train", False) if grpo_config is not None else False
+            if do_train_rl:
                 trainer = await rl_train(
                     datamodule=datamodule,
-                    config=config,
+                    config=typing.cast("pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig", config),
                     runtime=runtime,
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
@@ -362,10 +358,14 @@ async def main(
                     tokenizer = config.get_tokenizer()
         else:
             # SFT training path (HFTrainerAppMainConfig or test mock with training_args_config)
-            if config.training_args_config.do_train:
+            training_args_config = getattr(config, "training_args_config", None)
+            do_train_sft = (
+                getattr(training_args_config, "do_train", False) if training_args_config is not None else False
+            )
+            if do_train_sft:
                 trainer = sft_train(
                     datamodule=datamodule,
-                    config=config,
+                    config=typing.cast("pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig", config),
                     runtime=runtime,
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
@@ -400,7 +400,18 @@ async def main(
         pyine.utils.distrib.barrier()
 
         # Determine whether to do prediction based on config type
-        do_predict = config.grpo_config.do_predict if is_rl_config else config.training_args_config.do_predict
+        if is_rl_config:
+            grpo_config_for_predict = getattr(config, "grpo_config", None)
+            do_predict = (
+                getattr(grpo_config_for_predict, "do_predict", False) if grpo_config_for_predict is not None else False
+            )
+        else:
+            training_args_config_for_predict = getattr(config, "training_args_config", None)
+            do_predict = (
+                getattr(training_args_config_for_predict, "do_predict", False)
+                if training_args_config_for_predict is not None
+                else False
+            )
 
         if do_predict and not shutdown_manager.should_terminate():
             if runtime is not None and runtime.wandb_run is not None and pyine.utils.distrib.is_main_process():
@@ -454,7 +465,7 @@ if __name__ == "__main__":
     # Both config types are now registered; experiment configs specify which to use via _target_
     import hydra_zen
 
-    hydra_zen.zen(pyine.apps.trainers.hf_trainer_configs._async_main_wrapper).hydra_main(
+    hydra_zen.zen(pyine.apps.trainers.hf_trainer_configs._async_main_wrapper).hydra_main(  # pyright: ignore[reportPrivateUsage]
         config_path=None,
         config_name="entrypoint",
         version_base=pyine.configs.base.target_hydra_version,

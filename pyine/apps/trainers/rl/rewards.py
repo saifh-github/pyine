@@ -110,7 +110,7 @@ class CodeExecutionRewardCalculator:
 def create_grpo_reward_function(
     reward_calculator: CodeExecutionRewardCalculator,
     expected_outputs_key: str = "expected_output",
-) -> Callable[[list[list[dict[str, Any]]], Any], list[float]]:
+) -> Callable[..., list[float]]:
     """Create a reward function compatible with TRL's GRPO trainer.
 
     Args:
@@ -145,7 +145,7 @@ def create_grpo_reward_function(
                 completion_texts.append("")
 
         # Get expected outputs from kwargs
-        expected_outputs = kwargs.get(expected_outputs_key)
+        expected_outputs: list[str] | str | None = kwargs.get(expected_outputs_key)
         if expected_outputs is None:
             raise ValueError(
                 f"Expected outputs not found in kwargs under key '{expected_outputs_key}'. "
@@ -218,7 +218,7 @@ def create_code_exec_reward_function(
     soft_reward: float = 0.5,
     fail_reward: float = 0.0,
     expected_outputs_key: str = "expected_output",
-) -> Callable[[list[list[dict[str, Any]]], Any], list[float]]:
+) -> Callable[..., list[float]]:
     """Create a reward function for code execution tasks using hard/soft matching.
 
     This function creates a reward function compatible with TRL's GRPO trainer that:
@@ -254,7 +254,7 @@ def create_code_exec_reward_function(
         predicted_answers = [extract_answer_from_completion(comp) for comp in completions]
 
         # Get expected outputs from kwargs
-        expected_outputs = kwargs.get(expected_outputs_key)
+        expected_outputs: list[str] | str | None = kwargs.get(expected_outputs_key)
         if expected_outputs is None:
             raise ValueError(
                 f"Expected outputs not found in kwargs under key '{expected_outputs_key}'. "
@@ -272,7 +272,7 @@ def create_code_exec_reward_function(
             )
 
         # Compute rewards using same logic as OutcomeEvaluator
-        rewards = []
+        rewards: list[float] = []
         for predicted, expected in zip(predicted_answers, expected_outputs, strict=True):
             # Try hard match (same logic as OutcomeEvaluator.add_sample line 247)
             if strip_hard_checks:

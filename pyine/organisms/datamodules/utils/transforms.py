@@ -141,3 +141,92 @@ def create_sample_transform(
         orig_sample_key=orig_sample_key,
         merge_system_with_user=merge_system_with_user,
     )
+
+
+def _apply_rl_prompt_template_to_sample(
+    sample: SampleTransformInputType,
+    prompt_template: langchain_core.prompts.BasePromptTemplate[typing.Any],
+    prompt_version: str | None,
+    include_examples: bool,
+) -> dict[str, typing.Any]:
+    """Applies a prompt template to a sample for RL training format.
+
+    This function formats samples for reinforcement learning training by providing
+    raw prompts (not tokenized) along with metadata needed for reward computation.
+
+    Args:
+        sample: The sample data to transform (SampleData or dict).
+        prompt_template: The prompt template to use for formatting.
+        prompt_version: Version of the prompt to use (for logging/debugging).
+        include_examples: Whether examples are included (for logging/debugging).
+
+    Returns:
+        Dictionary with 'prompt' (chat message format) and metadata fields.
+    """
+    # Handle both dict and SampleData inputs
+    sample_data: pyine.organisms.datamodules.samples.SampleData
+    sample_args: dict[str, typing.Any]
+    if isinstance(sample, collections.abc.Mapping):
+        sample_dict = dict(sample)
+        sample_args = sample_dict
+        sample_data = pyine.organisms.datamodules.samples.SampleData(**sample_dict)
+    else:
+        sample_data = sample
+        sample_args = sample_data._asdict()
+
+    # Format the prompt as plain text
+    formatted_prompt = prompt_template.format(**sample_args)
+    assert isinstance(formatted_prompt, str), "RL training requires plain text prompts"
+
+    # Return dataset entry with all necessary fields for RL training
+    # TRL trainers expect 'prompt' to be a list of chat messages
+    return {
+        "prompt": [{"role": "user", "content": formatted_prompt}],
+        "expected_output": sample_data.expected_output,
+        "predict_type": sample_data.predict_type,
+        "identifier": sample_data.identifier,
+        "code_type": sample_data.code_type,
+        "tags": sample_data.get_tag_list(),
+        "first_line": sample_data.first_line,
+        "last_line": sample_data.last_line,
+        "entrypoint": sample_data.entrypoint,
+    }
+
+
+def create_rl_sample_transform(
+    prompt_version: str | None = None,
+    include_examples: bool = False,
+    **prompt_kwargs: typing.Any,  # forwarded to the prompt manager template getter
+) -> SampleTransformType:
+    """Create a transform function for RL training data preparation.
+
+    This function creates a transform that formats samples for reinforcement learning
+    training (e.g., GRPO, PPO, RLOO) by providing raw prompts with metadata needed
+    for reward computation.
+
+    Args:
+        prompt_version: Version of the prompt template to use. If None, uses the version
+            from prompt_kwargs or the default version.
+        include_examples: Whether to include few-shot examples in prompts. For RL training,
+            False (default) is recommended to save tokens and reduce compute cost.
+        **prompt_kwargs: Additional keyword arguments forwarded to the prompt manager.
+
+    Returns:
+        A transform function that converts a SampleData object to an RL-formatted dict.
+    """
+    # Update prompt_kwargs with RL-specific settings
+    if prompt_version is not None:
+        prompt_kwargs["version"] = prompt_version
+    prompt_kwargs["include_examples"] = include_examples
+    prompt_kwargs["use_chat_template"] = False  # RL needs plain text, not chat format
+
+    # Get the prompt template
+    prompt_template = pyine.prompts.manager.get_prompt_template(**prompt_kwargs)
+    assert hasattr(prompt_template, "format"), "RL training requires a plain text template"
+
+    return functools.partial(
+        _apply_rl_prompt_template_to_sample,
+        prompt_template=prompt_template,
+        prompt_version=prompt_version,
+        include_examples=include_examples,
+    )

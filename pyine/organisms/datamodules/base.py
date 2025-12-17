@@ -136,6 +136,19 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
             **self.prompt_config.model_dump(),
         )
 
+    @typing.override
+    def instantiate_sample_to_rl_transform(
+        self,
+        prompt_version: str | None = None,
+        include_examples: bool = False,
+    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
+        """Returns the sample transform function used to prepare RL training data."""
+        return pyine.organisms.datamodules.utils.transforms.create_rl_sample_transform(
+            prompt_version=prompt_version,
+            include_examples=include_examples,
+            **self.prompt_config.model_dump(),
+        )
+
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(default=None)
@@ -615,6 +628,44 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
                 "source_data": self.config.lmdb_paths,
                 "traces": subset_traces,
             },
+        )
+
+    @typing.override
+    def get_hf_rl_dataset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+        prompt_version: str | None = None,
+        include_examples: bool = False,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Returns a HuggingFace dataset for RL training with raw prompts and metadata.
+
+        This method prepares datasets for reinforcement learning training by providing raw
+        prompts (not tokenized) along with metadata needed for reward computation.
+
+        Args:
+            subset_name: the subset name to prepare the dataset for.
+            prompt_version: Version of the prompt template to use. If None, uses the version
+                from the datamodule config.
+            include_examples: Whether to include few-shot examples in prompts.
+            force_regenerate: whether to rebuild caches even if they already exist.
+
+        Returns:
+            The HuggingFace dataset object with raw prompts and metadata for RL training.
+        """
+        if not self._is_setup_complete():
+            raise RuntimeError("data parsers are not ready yet, call `setup()` first")
+        assert subset_name is not None, "subset name must be specified"
+        subset_traces = self._get_traces_meta_for_subset(subset_name)
+        return self.config.instantiate_hf_rl_dataset(
+            subset_name=subset_name,
+            prompt_version=prompt_version,
+            include_examples=include_examples,
+            parser_kwargs={
+                "source_data": self.config.lmdb_paths,
+                "traces": subset_traces,
+            },
+            force_regenerate=force_regenerate,
         )
 
     def make_dataloader(

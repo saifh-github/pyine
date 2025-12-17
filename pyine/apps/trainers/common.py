@@ -558,7 +558,7 @@ def prepare_datamodule(
     return dm
 
 
-def get_device_map() -> torch.device | str | dict[str, torch.device | str] | None:
+def get_device_map() -> dict[str, torch.device | str] | str | None:
     """Returns the device map to use with models for distributed/single-GPU training.
 
     This function determines the appropriate device placement strategy based on whether

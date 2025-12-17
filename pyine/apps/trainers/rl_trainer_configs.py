@@ -24,7 +24,6 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
 import pyine.organisms.datamodules
-import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.transformers
 
@@ -124,7 +123,7 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
 
     # --------------- GRPO-specific settings ---------------
 
-    grpo_config: pydantic.SerializeAsAny[trl.GRPOConfig] = pydantic.Field(
+    grpo_config: pydantic.SerializeAsAny[trl.GRPOConfig] = pydantic.Field(  # type: ignore[reportPrivateImportUsage]
         ...,  # MISSING! MANDATORY!
         description="GRPO training configuration (TRL GRPOConfig).",
     )
@@ -180,7 +179,7 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
         return torch.float16 if self.grpo_config.fp16 else torch.float32
 
     @property
-    def device_map(self) -> torch.device | str | dict[str, torch.device | str] | None:
+    def device_map(self) -> dict[str, torch.device | str] | str | None:
         """Returns the device map to use with models."""
         return common.get_device_map()
 
@@ -285,7 +284,7 @@ def _get_grpo_configs(
     pin_mem = bool(is_cuda)
 
     base_config = pyine.configs.utils.make_config_description(
-        trl.GRPOConfig,
+        trl.GRPOConfig,  # type: ignore[reportPrivateImportUsage]
         name="base",
         group=group,
         description=(
@@ -311,7 +310,7 @@ def _get_grpo_configs(
     )
 
     train_default_config = pyine.configs.utils.make_config_description(
-        trl.GRPOConfig,
+        trl.GRPOConfig,  # type: ignore[reportPrivateImportUsage]
         name="train_default",
         group=group,
         description=(
@@ -354,7 +353,7 @@ def _get_grpo_configs(
     )
 
     eval_default_config = pyine.configs.utils.make_config_description(
-        trl.GRPOConfig,
+        trl.GRPOConfig,  # type: ignore[reportPrivateImportUsage]
         name="eval_default",
         group=group,
         description=(

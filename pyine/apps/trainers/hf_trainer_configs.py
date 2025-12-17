@@ -26,14 +26,14 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
 import pyine.organisms.datamodules
-import pyine.utils.distrib
 import pyine.utils.reprod
+import pyine.utils.tokenizers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
 
 
-class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
+class HFTrainerAppMainConfig(common.AppMainConfig):
     """Configuration for HuggingFace-Transformers model fine-tuning."""
 
     # --------------- trainer settings ---------------
@@ -133,7 +133,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         return torch.float16 if self.training_args_config.fp16 else torch.float32
 
     @property
-    def device_map(self) -> torch.device | str | dict[str, torch.device | str] | None:
+    def device_map(self) -> dict[str, torch.device | str] | str | None:
         """Returns the device map to use with models."""
         return common.get_device_map()
 
@@ -195,7 +195,7 @@ class HFTrainerAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
     @typing.override
     def normalize_for_resume_overlap_check(
         self,
-        config: pyine.apps.trainers.common.AppMainConfig | dict[str, typing.Any] | None = None,
+        config: common.AppMainConfig | dict[str, typing.Any] | None = None,
     ) -> dict[str, typing.Any]:
         """Normalizes the config by removing fields that might change without effects on experiments."""
         data = super().normalize_for_resume_overlap_check(config)

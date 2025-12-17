@@ -120,6 +120,7 @@ CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
 ```
 
 Wait for server to start and show:
+
 ```
 INFO: Uvicorn running on http://0.0.0.0:8000
 ```
