@@ -223,15 +223,11 @@ This is a temporary workaround until TRL fixes vLLM compatibility.
 
 ## Distributed Training with DeepSpeed
 
-For multi-GPU training with model sharding, use DeepSpeed via Accelerate.
+For multi-GPU training with model sharding, use DeepSpeed ZeRO Stage 3 via Accelerate. DeepSpeed provides excellent memory efficiency and is well-tested with TRL for RL training.
 
-### Step 1: Create Accelerate Config
+### Step 1: Use Pre-configured DeepSpeed Config
 
-```bash
-accelerate config
-```
-
-Or use a pre-configured file:
+The repository includes a pre-configured DeepSpeed ZeRO-3 config file:
 
 ```yaml
 # pyine/configs/accelerate/deepspeed_zero3.yaml
@@ -250,16 +246,19 @@ machine_rank: 0
 main_training_function: main
 mixed_precision: bf16
 num_machines: 1
-num_processes: 4  # Number of GPUs
+num_processes: 3  # Number of training GPUs (adjust based on your setup)
 rdzv_backend: static
 same_network: true
 use_cpu: false
 ```
 
+**Important:** Adjust `num_processes` to match your number of **training GPUs** (excluding vLLM GPUs).
+
 ### Step 2: Launch with DeepSpeed
 
 ```bash
-uv run accelerate launch \
+# Example: 3 GPUs for training (GPUs 3,4,5), separate from vLLM (GPUs 0,1,2)
+CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
     --config_file pyine/configs/accelerate/deepspeed_zero3.yaml \
     pyine/apps/trainers/hf_trainer.py \
     +experiment=my_rl_experiment
@@ -267,10 +266,17 @@ uv run accelerate launch \
 
 ### When to Use DeepSpeed
 
-- **Large models** (7B+) that don't fit in single GPU
-- **Multi-GPU clusters** (4+ GPUs)
+- **Large models** (7B+) that don't fit on single GPU
+- **Multi-GPU clusters** (3+ training GPUs available)
 - **Memory constraints** requiring model sharding
 - **Production training** with full model optimization
+
+### Important Notes
+
+- **GPU Separation**: Remember that vLLM and training must use separate GPUs!
+  - Example: vLLM on GPUs 0,1,2 → Training on GPUs 3,4,5
+- **Config adjustment**: Update `num_processes` in config to match your training GPU count
+- **Batch size**: With distributed training, effective batch size = `per_device_train_batch_size` × `num_processes` × `gradient_accumulation_steps`
 
 ## Configuration Reference
 
