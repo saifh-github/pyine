@@ -9,7 +9,7 @@ The RL training system is integrated into the main trainer framework and support
 - **GRPO algorithm** via TRL library
 - **Code execution rewards** (hard/soft matching)
 - **vLLM acceleration** for fast rollouts
-- **DeepSpeed/FSDP** for distributed training
+- **DeepSpeed** for distributed training
 - **Hydra configuration** management
 - **WandB logging** and experiment tracking
 
@@ -17,8 +17,7 @@ The RL training system is integrated into the main trainer framework and support
 
 - Python environment with all dependencies installed (`trl`, `transformers`, `torch`, etc.)
 - TACO dataset downloaded and processed
-- **vLLM server required**: 3+ GPUs for vLLM server, plus separate GPU(s) for training
-- Minimum 4 GPUs total recommended (3 for vLLM, 1+ for training)
+- **vLLM server required**: Multi GPUs: at least one for the vLLM server, plus separate GPU(s) for training
 
 ## Quick Start
 
@@ -154,25 +153,6 @@ CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
     +experiment=my_rl_experiment
 ```
 
-### Step 4: Monitor Training
-
-**With WandB (if enabled):**
-
-- Visit your WandB project dashboard
-- Monitor key metrics:
-  - `train/reward_mean` - Should increase (indicates learning)
-  - `train/loss` - Policy loss (should decrease)
-  - `train/reward_std` - Sample diversity
-  - `eval/reward_mean` - Validation reward
-
-**Key metrics to watch:**
-
-- **Reward Mean**: Binary reward (1.0 or 0.0), so mean = accuracy
-  - Start: ~0.0-0.1 (mostly incorrect)
-  - Target: >0.3-0.5 after training (30-50% accuracy)
-- **Loss**: Should decrease steadily
-- **Reward Std**: High initially, may stabilize
-
 ## vLLM Configuration Details
 
 ### GPU Separation (Critical!)
@@ -188,38 +168,6 @@ CUDA_VISIBLE_DEVICES=3,4      # Training
 CUDA_VISIBLE_DEVICES=0,1,2    # vLLM server
 CUDA_VISIBLE_DEVICES=2,3      # Training
 ```
-
-### Benefits of vLLM
-
-- **3-10x faster generation** during rollouts
-- **2-5x faster overall training**
-- Better GPU utilization
-- Required for efficient GRPO training
-
-### Known Issues: TRL + vLLM
-
-**Issue:** TRL passes unsupported `tools` parameter to vLLM chat.
-
-**Fix:** Edit your local TRL installation:
-
-```bash
-# Find TRL location
-python -c "import trl; print(trl.__file__)"
-
-# Edit trl/trainer/grpo_trainer.py
-# Add at line ~415 in __init__ method:
-self.tools = None
-
-# OR at line ~1295 in generate_single_turn:
-output = self.vllm_client.chat(
-    messages=ordered_set_of_prompts,
-    **sampling_params,
-    tools=None,  # Add this
-    chat_template=self.chat_template,
-)
-```
-
-This is a temporary workaround until TRL fixes vLLM compatibility.
 
 ## Distributed Training with DeepSpeed
 
@@ -334,84 +282,8 @@ config:
   include_prompt_examples: false  # Zero-shot
 ```
 
-## Troubleshooting
-
-### ImportError for TRL
-
-**Error:** `ModuleNotFoundError: No module named 'trl'`
-
-**Solution:**
-
-```bash
-uv pip install trl
-```
-
-### vLLM Server Not Accessible
-
-**Error:** `RuntimeError: vLLM server not accessible at http://localhost:8000`
-
-**Solution:**
-
-1. Check server is running: `curl http://localhost:8000/health`
-2. Verify no firewall blocking port 8000
-3. Check server logs for errors
-4. Ensure model name matches between server and config
-
-### CUDA Out of Memory
-
-**Solutions:**
-
-- Reduce `per_device_train_batch_size` to 1
-- Reduce `num_generations` (fewer samples per prompt)
-- Reduce `max_completion_length`
-- Enable gradient checkpointing
-- Use DeepSpeed with ZeRO-3
-- Use smaller model or LoRA
-
-### Low Reward / Not Learning
-
-**Solutions:**
-
-- Check dataset quality (inspect prompts)
-- Increase `num_generations` for more exploration
-- Adjust `temperature` (higher = more diverse)
-- Reduce `beta` (lower KL penalty)
-- Check reward function is working (enable debug logging)
-- Verify expected outputs are correct
-
-## Comparison: SFT vs RL Training
-
-| Aspect             | SFT (Supervised)         | RL (GRPO)                        |
-| ------------------ | ------------------------ | -------------------------------- |
-| **Config**         | `HFTrainerAppMainConfig` | `RLTrainerAppMainConfig`         |
-| **Training args**  | `training_args_config`   | `grpo_config`                    |
-| **Main parameter** | `do_train`               | `do_train`                       |
-| **Entry point**    | Same: `hf_trainer.py`    | Same: `hf_trainer.py`            |
-| **Data format**    | Chat messages            | Chat messages + expected outputs |
-| **Reward**         | Loss-based               | Custom reward function           |
-| **vLLM**           | For eval only            | Required for training rollouts   |
-
-## Next Steps
-
-1. **Create your experiment config** based on the template above
-2. **Set up vLLM server** on dedicated GPUs (see Step 2 in Quick Start)
-3. **Test on small dataset** to verify setup (consider adding a max_samples limit for testing)
-4. **Scale up** to full dataset once validated
-5. **Monitor metrics** and iterate on hyperparameters
-
 ## Additional Resources
 
 - TRL Documentation: https://huggingface.co/docs/trl
 - GRPO Paper: https://arxiv.org/abs/2402.03300
-- Integration Proposal: `pyine/apps/rl_trainers_proto/claude_integration_proposal.md`
 - Experimentation Guide: `EXPERIMENTATION_GUIDE.md` (main repo)
-
-## Getting Help
-
-For issues or questions:
-
-- Check this guide's troubleshooting section
-- Review experiment logs in `<PYINE_LOGS_ROOT>/runs/`
-- Check WandB dashboard for metrics
-- Inspect dataset with provided tools
-- Review the integration proposal documentation
