@@ -146,8 +146,6 @@ def create_sample_transform(
 def _apply_rl_prompt_template_to_sample(
     sample: SampleTransformInputType,
     prompt_template: langchain_core.prompts.BasePromptTemplate[typing.Any],
-    prompt_version: str | None,
-    include_examples: bool,
 ) -> dict[str, typing.Any]:
     """Applies a prompt template to a sample for RL training format.
 
@@ -157,8 +155,6 @@ def _apply_rl_prompt_template_to_sample(
     Args:
         sample: The sample data to transform (SampleData or dict).
         prompt_template: The prompt template to use for formatting.
-        prompt_version: Version of the prompt to use (for logging/debugging).
-        include_examples: Whether examples are included (for logging/debugging).
 
     Returns:
         Dictionary with 'prompt' (chat message format) and metadata fields.
@@ -194,8 +190,6 @@ def _apply_rl_prompt_template_to_sample(
 
 
 def create_rl_sample_transform(
-    prompt_version: str | None = None,
-    include_examples: bool = False,
     **prompt_kwargs: typing.Any,  # forwarded to the prompt manager template getter
 ) -> SampleTransformType:
     """Create a transform function for RL training data preparation.
@@ -205,20 +199,18 @@ def create_rl_sample_transform(
     for reward computation.
 
     Args:
-        prompt_version: Version of the prompt template to use. If None, uses the version
-            from prompt_kwargs or the default version.
-        include_examples: Whether to include few-shot examples in prompts. For RL training,
-            False (default) is recommended to save tokens and reduce compute cost.
-        **prompt_kwargs: Additional keyword arguments forwarded to the prompt manager.
+        **prompt_kwargs: Keyword arguments forwarded to the prompt manager, including:
+            - version: Version of the prompt template to use
+            - include_examples: Whether to include few-shot examples (False recommended for RL)
+            - prompt_name: Name of the prompt to use
+            - use_chat_template: Whether to use chat template (should be False for RL)
+            - And other prompt configuration options
 
     Returns:
         A transform function that converts a SampleData object to an RL-formatted dict.
     """
-    # Update prompt_kwargs with RL-specific settings
-    if prompt_version is not None:
-        prompt_kwargs["version"] = prompt_version
-    prompt_kwargs["include_examples"] = include_examples
-    prompt_kwargs["use_chat_template"] = False  # RL needs plain text, not chat format
+    # Ensure RL-specific settings: plain text format, not chat
+    prompt_kwargs["use_chat_template"] = False
 
     # Get the prompt template
     prompt_template = pyine.prompts.manager.get_prompt_template(**prompt_kwargs)
@@ -227,6 +219,4 @@ def create_rl_sample_transform(
     return functools.partial(
         _apply_rl_prompt_template_to_sample,
         prompt_template=prompt_template,
-        prompt_version=prompt_version,
-        include_examples=include_examples,
     )

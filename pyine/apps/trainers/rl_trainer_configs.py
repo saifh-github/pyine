@@ -133,16 +133,6 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
         description="Reward function configuration.",
     )
 
-    prompt_version: str = pydantic.Field(
-        default="grpo_minimal",
-        description="Prompt template version for RL training.",
-    )
-
-    include_prompt_examples: bool = pydantic.Field(
-        default=False,
-        description="Whether to include few-shot examples in prompts (False recommended for GRPO).",
-    )
-
     cache_config: CacheConfig = pydantic.Field(
         default_factory=CacheConfig,
         description="Dataset caching configuration.",

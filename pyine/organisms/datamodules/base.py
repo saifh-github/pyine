@@ -139,13 +139,12 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
     @typing.override
     def instantiate_sample_to_rl_transform(
         self,
-        prompt_version: str | None = None,
-        include_examples: bool = False,
     ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
-        """Returns the sample transform function used to prepare RL training data."""
+        """Returns the sample transform function used to prepare RL training data.
+
+        All prompt configuration (version, include_examples, etc.) comes from self.prompt_config.
+        """
         return pyine.organisms.datamodules.utils.transforms.create_rl_sample_transform(
-            prompt_version=prompt_version,
-            include_examples=include_examples,
             **self.prompt_config.model_dump(),
         )
 
@@ -634,8 +633,6 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
     def get_hf_rl_dataset(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-        prompt_version: str | None = None,
-        include_examples: bool = False,
         force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset for RL training with raw prompts and metadata.
@@ -643,11 +640,11 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         This method prepares datasets for reinforcement learning training by providing raw
         prompts (not tokenized) along with metadata needed for reward computation.
 
+        All prompt configuration (version, include_examples, etc.) is read from the datamodule's
+        prompt_config.
+
         Args:
             subset_name: the subset name to prepare the dataset for.
-            prompt_version: Version of the prompt template to use. If None, uses the version
-                from the datamodule config.
-            include_examples: Whether to include few-shot examples in prompts.
             force_regenerate: whether to rebuild caches even if they already exist.
 
         Returns:
@@ -659,8 +656,6 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         subset_traces = self._get_traces_meta_for_subset(subset_name)
         return self.config.instantiate_hf_rl_dataset(
             subset_name=subset_name,
-            prompt_version=prompt_version,
-            include_examples=include_examples,
             parser_kwargs={
                 "source_data": self.config.lmdb_paths,
                 "traces": subset_traces,

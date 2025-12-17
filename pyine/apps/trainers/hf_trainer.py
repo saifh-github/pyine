@@ -204,11 +204,10 @@ async def rl_train(
 
     # 2. Prepare RL dataset from datamodule
     # Use the datamodule's native RL dataset method which reuses existing infrastructure
+    # Note: prompt configuration (version, include_examples, etc.) comes from datamodule_config.prompt_config
     logger.info("preparing train dataset...")
     train_ds = datamodule.get_hf_rl_dataset(
         subset_name="train",
-        prompt_version=config.prompt_version,
-        include_examples=config.include_prompt_examples,
         force_regenerate=config.cache_config.force_regenerate,
     )
 
@@ -217,8 +216,6 @@ async def rl_train(
         logger.info("preparing validation dataset...")
         eval_ds = datamodule.get_hf_rl_dataset(
             subset_name="valid",
-            prompt_version=config.prompt_version,
-            include_examples=config.include_prompt_examples,
             force_regenerate=config.cache_config.force_regenerate,
         )
 

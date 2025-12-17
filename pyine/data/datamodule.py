@@ -701,8 +701,6 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     def instantiate_hf_rl_dataset(
         self,
         subset_name: SubsetNameType,
-        prompt_version: str | None = None,
-        include_examples: bool = False,
         parser_kwargs: dict[str, typing.Any] | None = None,
         force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
@@ -722,28 +720,22 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         - tags: Sample tags for analysis
         - Additional metadata fields (first_line, last_line, entrypoint)
 
+        All prompt configuration (version, include_examples, etc.) is read from self.prompt_config.
+
         Args:
             subset_name: the subset name to prepare the dataset for.
-            prompt_version: Version of the prompt template to use. If None, uses the version
-                from self.prompt_config. Common options include "grpo_minimal" for zero-shot
-                training or "unstructured_with_3_output_types" for more detailed prompts.
-            include_examples: Whether to include few-shot examples in prompts. For RL training,
-                False (default) is recommended to save tokens and reduce compute cost.
             parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
             force_regenerate: whether to rebuild the dataset cache even if it already exists.
 
         Returns:
             A huggingface dataset with raw prompts and metadata for RL training.
         """
-        rl_transform_fn = self.instantiate_sample_to_rl_transform(
-            prompt_version=prompt_version,
-            include_examples=include_examples,
-        )
+        rl_transform_fn = self.instantiate_sample_to_rl_transform()
         return self._instantiate_hf_dataset_with_transform(
             subset_name=subset_name,
             transform_fn=rl_transform_fn,
             cache_subdir="hf_rl_datasets",
-            hash_params=(prompt_version, include_examples, parser_kwargs),
+            hash_params=(parser_kwargs,),
             parser_kwargs=parser_kwargs,
             force_regenerate=force_regenerate,
         )
@@ -825,22 +817,16 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
 
     def instantiate_sample_to_rl_transform(
         self,
-        prompt_version: str | None = None,
-        include_examples: bool = False,
     ) -> typing.Callable[[typing.Any], typing.Any]:
         """Returns the sample transform function used to prepare RL training data.
 
         This function creates a transform for reinforcement learning training that formats
         samples with raw prompts (not tokenized) and metadata needed for reward computation.
 
+        All prompt configuration (version, include_examples, etc.) is read from self.prompt_config.
+
         Note: if the datamodule does not support the conversion of raw data samples into
         RL training format, this function will raise an exception.
-
-        Args:
-            prompt_version: Version of the prompt template to use. If None, uses the version
-                from self.prompt_config.
-            include_examples: Whether to include few-shot examples in prompts. For RL training,
-                False (default) is recommended to save tokens and reduce compute cost.
 
         Returns:
              The sample transform function for RL training.
@@ -917,8 +903,6 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
     def get_hf_rl_dataset(
         self,
         subset_name: SubsetNameType,
-        prompt_version: str | None = None,
-        include_examples: bool = False,
         force_regenerate: bool = False,
     ) -> hf_datasets.Dataset:
         """Returns a HuggingFace dataset for RL training.
@@ -927,11 +911,11 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         algorithms (e.g., GRPO, PPO, RLOO) that require raw prompts and metadata instead of
         pre-tokenized examples.
 
+        All prompt configuration (version, include_examples, etc.) is read from the datamodule's
+        prompt_config.
+
         Args:
             subset_name: the subset name to prepare the dataset for.
-            prompt_version: Version of the prompt template to use. If None, uses the version
-                from the datamodule config.
-            include_examples: Whether to include few-shot examples in prompts.
             force_regenerate: whether to rebuild caches even if they already exist.
 
         Returns:

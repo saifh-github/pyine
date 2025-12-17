@@ -167,10 +167,6 @@ config:
     strip_whitespace: true
     expected_outputs_key: expected_output
 
-  # Prompt settings (RL-specific)
-  prompt_version: grpo_minimal  # Optimized prompt template
-  include_prompt_examples: false  # Zero-shot recommended for GRPO
-
   # Dataset caching (RL-specific)
   cache_config:
     use_cache: true
