@@ -451,8 +451,8 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
     ) -> MetricsDictType:
         """Consume a batch of predictions coming from the trainer."""
         self._ensure_eval_started()
-        logits_tensor = torch.as_tensor(eval_prediction.predictions)
-        labels_tensor = torch.as_tensor(eval_prediction.label_ids)
+        logits_tensor = torch.as_tensor(eval_prediction.predictions)  # type: ignore[reportUnknownMemberType]
+        labels_tensor = torch.as_tensor(eval_prediction.label_ids)  # type: ignore[reportUnknownMemberType]
         start_idx = self._processed_examples
         batch_size = logits_tensor.shape[0]
         end_idx = start_idx + batch_size

@@ -25,6 +25,7 @@ import pandas as pd
 import pydantic
 import wandb
 import wandb.apis.public
+from numpy.typing import NDArray
 
 import pyine.evals.code_exec.utils
 import pyine.evals.constants
@@ -505,7 +506,7 @@ def _get_or_create_axes(
 
 def _configure_bar_chart(
     ax: matplotlib.axes.Axes,
-    x: np.ndarray,
+    x: NDArray[np.integer],
     labels: list[str],
     title: str,
     ylabel: str = "Accuracy",
@@ -991,7 +992,7 @@ def compute_binned_accuracy(
     complexity_metric: str,
     accuracy_column: str = "hard_match",
     num_bins: int = 10,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
     """Computes binned accuracy statistics for a complexity metric.
 
     Args:

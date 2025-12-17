@@ -139,13 +139,13 @@ def format_object_changes(
     if isinstance(current_obj, np.ndarray) and isinstance(past_obj, np.ndarray):
         past_array: np.ndarray = past_obj  # type: ignore[reportUnknownMemberType]
         current_array: np.ndarray = current_obj  # type: ignore[reportUnknownMemberType]
-        if past_array.shape != current_array.shape:
+        if past_array.shape != current_array.shape:  # type: ignore[reportUnknownMemberType]
             return None  # different shapes, too complex to track
         diff_coords = np.argwhere(past_array != current_array)
         change_count = int(diff_coords.shape[0])
         if change_count > max_count:
             return None  # too many changes
-        metadata = f"shape={current_array.shape},dtype={current_array.dtype}"
+        metadata = f"shape={current_array.shape},dtype={current_array.dtype}"  # type: ignore[reportUnknownMemberType]
         for coord_array in diff_coords:
             coord_tuple = tuple(int(component) for component in coord_array.tolist())
             index_str = ",".join(str(component) for component in coord_tuple)

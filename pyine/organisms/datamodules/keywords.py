@@ -528,7 +528,7 @@ class KeywordBiasDataModule(
                 solution_to_traces[sol_id] = []
             solution_to_traces[sol_id].append(trace)
         for sol_traces in solution_to_traces.values():
-            rng.shuffle(sol_traces)  # shuffle so we can pop from the end randomly
+            rng.shuffle(sol_traces)  # shuffle so we can pop from the end randomly # type: ignore[reportArgumentType]
         # track how many traces to keep per solution (start with all)
         solution_keep_counts = {sol_id: len(sol_traces) for sol_id, sol_traces in solution_to_traces.items()}
         to_remove = len(traces) - target_count
