@@ -242,9 +242,8 @@ def prepare_grpo_dataset_simple(
         HuggingFace Dataset formatted for GRPO training.
     """
     logger.info(f"Loading dataset from {dataset_path}, split={split}")
-    dataset = hf_datasets.load_dataset(dataset_path, split=split)
 
-    return dataset
+    return hf_datasets.load_dataset(dataset_path, split=split)
 
 
 def create_grpo_data_collator(

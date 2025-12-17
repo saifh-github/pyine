@@ -27,6 +27,7 @@ python -m pyine.apps.rl_trainers_proto.create_datamodule_config \
 ```
 
 The script will:
+
 1. Automatically detect your TACO dataset paths
 2. Verify the split file exists
 3. Generate a complete, ready-to-use configuration file with GRPO-optimized settings:
@@ -40,6 +41,7 @@ The script will:
 If you prefer to create the config manually, see `configs/datamodule_grpo_example.yaml` for a template. You'll need to:
 
 1. Find your LMDB paths:
+
    ```python
    import pyine.data.traces.dataset_utils
    paths = pyine.data.traces.dataset_utils.get_matching_dataset_paths(
@@ -49,6 +51,7 @@ If you prefer to create the config manually, see `configs/datamodule_grpo_exampl
    ```
 
 2. Find your split file:
+
    ```python
    import pyine.data.utils.splits
    split_path = pyine.data.utils.splits.get_dataset_split_file_path("TACO")
@@ -61,12 +64,12 @@ If you prefer to create the config manually, see `configs/datamodule_grpo_exampl
 
 Choose based on your computational resources and experiment goals:
 
-| Dataset Variant | Size | Parts | Use Case |
-|----------------|------|-------|----------|
-| `shortcuts_TACO_10s10t_v1_part1` | ~3.8% | 1/26 | Quick prototyping, debugging |
-| `shortcuts_TACO_10s10t_v1_part1to4` | ~15% | 4/26 | Medium experiments, proof of concept |
-| `shortcuts_TACO_10s10t_v1_part1to13` | ~50% | 13/26 | Large experiments, good representation |
-| `shortcuts_TACO_10s10t_v1_full` | 100% | 26/26 | Full experiments, final results |
+| Dataset Variant                      | Size  | Parts | Use Case                               |
+| ------------------------------------ | ----- | ----- | -------------------------------------- |
+| `shortcuts_TACO_10s10t_v1_part1`     | ~3.8% | 1/26  | Quick prototyping, debugging           |
+| `shortcuts_TACO_10s10t_v1_part1to4`  | ~15%  | 4/26  | Medium experiments, proof of concept   |
+| `shortcuts_TACO_10s10t_v1_part1to13` | ~50%  | 13/26 | Large experiments, good representation |
+| `shortcuts_TACO_10s10t_v1_full`      | 100%  | 26/26 | Full experiments, final results        |
 
 **Recommendation for GRPO testing:** Start with `part1` or `part1to4` with `--max-solutions 100` to quickly validate everything works.
 
@@ -82,6 +85,7 @@ cat pyine/apps/rl_trainers_proto/configs/taco_part1to4.yaml
 ```
 
 Verify:
+
 - ✓ All LMDB paths exist and are correct
 - ✓ Split file path exists
 - ✓ `prompt_config` is set correctly
@@ -102,16 +106,19 @@ python -m pyine.apps.rl_trainers_proto.inspect_prompts \
 **Review the output carefully:**
 
 ✓ **Prompt Structure:**
+
 - Should include system role instructions
 - Should include few-shot examples
 - Should have the actual code snippet and inputs
 - Should specify the output type clearly
 
 ✓ **Expected Outputs:**
+
 - Should show the correct expected output for each sample
 - Should match the predict_type (program_output, frame_variables, or function_return)
 
 ✓ **Statistics:**
+
 - Check the distribution of output types
 - Verify the code types match your expectations
 
@@ -156,14 +163,17 @@ config = ExperimentConfig(
 ### Key Fields You Might Want to Modify
 
 #### `max_solution_count`
+
 ```yaml
 max_solution_count: 100  # Limit dataset size for testing
 ```
+
 - Controls how many coding problems to include
 - Good for quick experiments
 - Set to `null` or remove for full dataset
 
 #### `prompt_config.version`
+
 ```yaml
 prompt_config:
   version: "grpo_minimal"  # Default for GRPO (optimized, zero-shot, structured output)
@@ -174,17 +184,20 @@ prompt_config:
 ```
 
 **For GRPO training:** Use `grpo_minimal` (default in generated configs). It's:
+
 - ~50% shorter than evaluation templates
 - Zero-shot by default (saves tokens with N samples)
-- Structured output format (` ```output...``` `) for easy reward parsing
+- Structured output format (```` ```output...``` ````) for easy reward parsing
 
 #### `prompt_config.use_chat_template`
+
 ```yaml
 prompt_config:
   use_chat_template: false  # Required for GRPO (plain text, not chat messages)
 ```
 
 #### `prompt_config.include_examples`
+
 ```yaml
 prompt_config:
   include_examples: false  # Default for GRPO (zero-shot)
@@ -192,6 +205,7 @@ prompt_config:
 ```
 
 #### `input_type_prob_map`
+
 ```yaml
 input_type_prob_map:
   original: 1.0  # Only use original code (no augmentations)
@@ -202,12 +216,14 @@ input_type_prob_map:
 ### What Each File Contains
 
 **Your experiment config** (`configs/experiment/original/v0.yaml`):
+
 - High-level experiment settings
 - Model configuration (LoRA, quantization)
 - Training arguments (batch size, learning rate)
 - References the datamodule config via `override /config/datamodule_config`
 
 **Standalone datamodule config** (`configs/taco_part1to4.yaml`):
+
 - Dataset paths and split file
 - Prompt template configuration
 - Sample selection strategy
@@ -237,6 +253,7 @@ The dataset split file is missing. Check:
 ### "Prompts look weird or incomplete"
 
 Common causes:
+
 - Wrong prompt version: Try changing `prompt_config.version` to `"no_pressure_demo"`
 - Missing examples: Check `prompt_config.include_examples` is `true`
 - Template issue: Verify the `code_execution.yaml` template file exists
@@ -244,6 +261,7 @@ Common causes:
 ### "Datamodule fails to load"
 
 Check:
+
 1. Config file is valid YAML (no syntax errors)
 2. All paths in the config exist
 3. `datamodule_class_path` is correct

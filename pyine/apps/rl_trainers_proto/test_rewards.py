@@ -106,7 +106,7 @@ def test_batch_rewards() -> None:
     rewards = calculator.compute_batch_rewards(predicted_list, expected_list)
 
     logger.info(f"Batch size: {len(predicted_list)}")
-    for i, (pred, exp, reward) in enumerate(zip(predicted_list, expected_list, rewards)):
+    for i, (pred, exp, reward) in enumerate(zip(predicted_list, expected_list, rewards, strict=True)):
         logger.info(f"  [{i}] Predicted: '{pred}' | Expected: '{exp}' | Reward: {reward}")
 
     logger.info(f"Average reward: {sum(rewards) / len(rewards):.3f}")
@@ -145,7 +145,7 @@ def test_grpo_reward_function() -> None:
     rewards = reward_fn(completions, expected_output=expected_outputs)
 
     logger.info(f"Number of completions: {len(completions)}")
-    for i, (comp, exp, reward) in enumerate(zip(completions, expected_outputs, rewards)):
+    for i, (comp, exp, reward) in enumerate(zip(completions, expected_outputs, rewards, strict=True)):
         content = comp[0]["content"]
         logger.info(f"  [{i}] Generated: '{content}' | Expected: '{exp}' | Reward: {reward}")
 

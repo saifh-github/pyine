@@ -5,6 +5,7 @@ This directory contains a self-contained prototype for training language models 
 ## Overview
 
 The prototype demonstrates how to:
+
 - Use TRL's GRPO trainer for reinforcement learning with code execution tasks
 - Implement verifiable reward functions (hard matching and soft matching)
 - Integrate with the existing codebase's data infrastructure
@@ -26,9 +27,11 @@ scripts/rl_training/
 ### Components
 
 #### 1. `rewards.py`
+
 Implements reward functions that compare model predictions to expected outputs:
 
 - **`CodeExecutionRewardCalculator`**: Core class for computing rewards
+
   - Hard matching: Exact string match after normalization
   - Soft matching: Heuristic-based comparison (tolerant to whitespace, float precision, etc.)
   - Configurable reward values for match/no-match scenarios
@@ -36,6 +39,7 @@ Implements reward functions that compare model predictions to expected outputs:
 - **`create_grpo_reward_function`**: Factory function that creates a reward function compatible with TRL's GRPO trainer
 
 #### 2. `data_utils.py`
+
 Utilities for preparing datasets for GRPO training:
 
 - **`prepare_grpo_dataset_from_datamodule`**: Converts `ConversationDataModule` format to GRPO format
@@ -43,6 +47,7 @@ Utilities for preparing datasets for GRPO training:
 - **`format_code_execution_prompt`**: Formats code execution samples into prompts
 
 #### 3. `config.py`
+
 Configuration dataclasses for all training aspects:
 
 - **`ModelConfig`**: Model and tokenizer settings (including LoRA/PEFT)
@@ -52,7 +57,9 @@ Configuration dataclasses for all training aspects:
 - **`ExperimentConfig`**: Top-level config combining all sub-configs
 
 #### 4. `train_grpo.py`
+
 Main training script that:
+
 - Sets up model, tokenizer, and datasets
 - Initializes GRPO trainer with custom reward function
 - Runs training and saves checkpoints
@@ -114,6 +121,7 @@ To use the existing data infrastructure:
 3. Implement the `load_datamodule()` function to properly load your datamodule
 
 Example:
+
 ```python
 def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDataModule:
     # Load your datamodule config
@@ -131,11 +139,13 @@ def load_datamodule(config: DataConfig) -> pyine.data.datamodule.ConversationDat
 The prototype supports two types of rewards:
 
 1. **Hard Match** (Exact Match):
+
    - Compares prediction and expected output after stripping whitespace
    - Returns `hard_match_reward` (default: 1.0) on match
    - Fast and deterministic
 
 2. **Soft Match** (Heuristic):
+
    - Uses `pyine.utils.code.output_compare.compare()`
    - Tolerant to:
      - Whitespace differences
@@ -145,6 +155,7 @@ The prototype supports two types of rewards:
    - More forgiving but still deterministic
 
 3. **LLM Grader** (Not Yet Implemented):
+
    - Would use an LLM to score prediction quality
    - See `pyine.evals.code_exec.utils.OutcomeEvaluator` for reference
 
@@ -173,16 +184,20 @@ If using `ConversationDataModule`, samples should be `SampleData` objects with:
 ### Key Parameters
 
 - **`num_generation_per_prompt`**: Number of completions to sample per prompt (default: 4)
+
   - Higher values provide more samples for policy updates but increase compute
 
 - **`kl_coef`**: KL divergence coefficient (default: 0.05)
+
   - Controls how much the policy can deviate from the reference model
   - Higher values keep policy closer to reference (more conservative)
 
 - **`max_new_tokens`**: Maximum tokens to generate (default: 256)
+
   - Should be large enough to capture full code execution outputs
 
 - **`temperature`**: Sampling temperature (default: 0.7)
+
   - Higher values increase diversity in generations
 
 ### Training Tips
@@ -240,21 +255,25 @@ accelerate launch train_grpo.py
 ### Common Issues
 
 1. **"Expected outputs not found in kwargs"**
+
    - Check that your dataset has `expected_output` field
    - Verify the `expected_outputs_key` parameter in reward function
 
 2. **Out of Memory**
+
    - Enable `model.use_peft=True` for LoRA
    - Reduce `per_device_train_batch_size`
    - Use quantization: `model.load_in_4bit=True`
    - Reduce `training.num_generation_per_prompt`
 
 3. **Low Rewards**
+
    - Check that `expected_output` format matches prediction format
    - Enable `reward.use_soft_match=True` for more lenient matching
    - Verify predictions are actually correct by printing samples
 
 4. **Training Not Converging**
+
    - Increase `training.num_train_epochs`
    - Adjust `training.learning_rate` (try 1e-6 to 1e-4)
    - Increase `training.kl_coef` if policy diverges too much
@@ -279,6 +298,7 @@ Potential improvements to consider:
 ## Questions & Support
 
 For questions about:
+
 - The prototype: Check this README or code comments
 - TRL library: See [TRL documentation](https://huggingface.co/docs/trl)
 - Existing codebase: Refer to `pyine/apps/trainers/` and `pyine/evals/code_exec/`
