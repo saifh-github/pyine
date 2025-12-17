@@ -254,13 +254,15 @@ def main() -> None:
         "--model_name",
         type=str,
         default=None,
-        help="Name to serve the model under (clients use this in API calls). If not specified, automatically derived from model/checkpoint path.",
+        help="Name to serve the model under (clients use this in API calls). "
+        "If not specified, automatically derived from model/checkpoint path.",
     )
     parser.add_argument(
         "--cuda_devices",
         type=str,
         default=None,
-        help="Comma-separated GPU device IDs to use (e.g., '0,1,2,3'). Sets CUDA_VISIBLE_DEVICES. If not specified, uses all available GPUs.",
+        help="Comma-separated GPU device IDs to use (e.g., '0,1,2,3'). Sets CUDA_VISIBLE_DEVICES. "
+        "If not specified, uses all available GPUs.",
     )
     parser.add_argument(
         "--tensor_parallel_size",

@@ -96,9 +96,9 @@ async def test_grader(
 
         evaluator.add_sample(
             identifier=f"test_{i}",
-            predicted=cast(str, test_case["predicted"]),
-            expected=cast(str, test_case["expected"]),
-            execution_type=cast(str, test_case["execution_type"]),
+            predicted=cast("str", test_case["predicted"]),
+            expected=cast("str", test_case["expected"]),
+            execution_type=cast("str", test_case["execution_type"]),
             tags=["test"],
         )
 
@@ -115,7 +115,7 @@ async def test_grader(
 
     # Show individual scores
     print("\nIndividual Grading Results:")
-    for i, (test_case, result) in enumerate(zip(test_cases, evaluator.results), 1):
+    for i, (test_case, result) in enumerate(zip(test_cases, evaluator.results, strict=True), 1):
         print(f"\n  Test {i}: {test_case['name']}")
         print(f"    Expected score: ~{test_case.get('expected_score', 'N/A')}")
         print(f"    Hard match: {result.hard_match}")
