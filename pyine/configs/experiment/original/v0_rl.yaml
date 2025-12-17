@@ -55,8 +55,12 @@ config:
         selection_config:
           seed: 0
           allow_db_lookups: true
-          code_type_prob_map:  # Updated from input_type_prob_map
+          code_type_prob_map:  # Must explicitly set all types to sum to 1.0
             original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
           samples_per_family: 1
           draw_attempts: 5
           fallback_to_orig: false
@@ -68,8 +72,12 @@ config:
       train:
         filtering_config: {}
         selection_config:
-          code_type_prob_map:  # Updated from input_type_prob_map
+          code_type_prob_map:  # Must explicitly set all types to sum to 1.0
             original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
           samples_per_family: 1
           draw_attempts: 5
           fallback_to_orig: true
@@ -78,8 +86,12 @@ config:
       valid:
         filtering_config: {}
         selection_config:
-          code_type_prob_map:  # Updated from input_type_prob_map
+          code_type_prob_map:  # Must explicitly set all types to sum to 1.0
             original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
           samples_per_family: 1
           draw_attempts: 5
           fallback_to_orig: true
