@@ -37,25 +37,143 @@ defaults:
 
 runtime:
   exp_name: my_rl_experiment
-  seed: 42
+  run_name: "${runtime.exp_name}"
+  tags:
+    - "model:${config.base_model}"
+    - "rl-training"
+  seed: 0
   dry_run: False
 
 config:
+  # IMPORTANT: Explicitly specify RL config class (overrides SFT default from /config: base)
+  _target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig
+
   use_wandb_logging: true
   base_model: Qwen/Qwen3-4B-Instruct-2507
 
-  # LoRA settings (recommended for efficient training)
-  lora_config:
-    r: 16
-    lora_alpha: 32
-    lora_dropout: 0.1
-    bias: none
-    task_type: CAUSAL_LM
-    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  # Model settings
+  auto_model_config:
+    use_cache: False  # disable cache during training (auto-re-enabled during evals)
 
-  # RL-specific settings
-  prompt_version: grpo_minimal  # Optimized prompt template
-  include_prompt_examples: false  # Zero-shot by default
+  # Datamodule configuration (detailed structure required for proper dataset loading)
+  datamodule_config:
+    datamodule_class_path: pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule
+    datamodule_name: null
+    # Prompt configuration for GRPO (critical for RL training!)
+    prompt_config:
+      prompt_name: code_execution
+      use_chat_template: false  # GRPO needs plain text, not chat format
+      include_examples: false    # Zero-shot by default for efficiency
+      target_examples: null
+      version: grpo_minimal      # Use the GRPO-optimized template
+    # Default parser config with SampleBuilder
+    default_dataparser_config:
+      class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
+      params:
+        filtering_config: {}
+        selection_config:
+          seed: 0
+          allow_db_lookups: true
+          code_type_prob_map:  # Must explicitly set all types to sum to 1.0
+            original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: false
+        transform_config:
+          seed: 0
+          transform_strategy: never
+    # Parser overrides for train/valid subsets
+    dataparser_config_overrides:
+      train:
+        filtering_config: {}
+        selection_config:
+          code_type_prob_map:
+            original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+      valid:
+        filtering_config: {}
+        selection_config:
+          code_type_prob_map:
+            original: 1.0
+            hinted: 0.0
+            stubbed: 0.0
+            obfuscated_hinted: 0.0
+            obfuscated: 0.0
+          samples_per_family: 1
+          draw_attempts: 5
+          fallback_to_orig: true
+        transform_config:
+          transform_strategy: never
+    # Dataloader config
+    dataloader_config_overrides:
+      train:
+        shuffle: true
+    # Dataset settings
+    keep_generated_datasets_in_memory: false
+    subset_names: [train, valid, test]
+    train_subset_names: [train]
+    valid_subset_names: [valid]
+    eval_subset_names: [train, valid]
+    instantiate_parsers_at_setup: false
+    use_local_dataset_cache: true
+    use_tokenized_dataset_cache: true
+    cache_lock_timeout_seconds: 1800.0
+    message_generator_num_workers: 4
+    min_samples_with_hints: 0
+    min_samples_without_hints: 0
+
+  # GRPO training arguments
+  grpo_config:
+    do_train: True
+    do_eval: True
+    do_predict: False
+    # Training parameters
+    per_device_train_batch_size: 1
+    per_device_eval_batch_size: 4
+    gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8
+    learning_rate: 1e-5  # Lower than SFT for RL stability
+    weight_decay: 0.05
+    lr_scheduler_type: "cosine"
+    warmup_steps: 100
+    gradient_checkpointing: False
+    gradient_checkpointing_kwargs:
+      use_reentrant: False
+    optim: "adamw_torch_fused"
+    max_grad_norm: 1.0
+    # Logging and evaluation
+    num_train_epochs: 3
+    max_steps: -1  # Use epochs instead
+    logging_steps: 5
+    eval_on_start: True  # Evaluate before training starts
+    eval_strategy: "steps"
+    eval_steps: 500
+    save_strategy: "steps"
+    save_steps: 500
+    save_total_limit: 3
+    dataloader_num_workers: 4
+    dataloader_pin_memory: False
+    # GRPO-specific parameters
+    num_generations: 8  # Generate 8 samples per prompt for exploration
+    num_generations_eval: 2  # Use fewer generations during eval
+    max_completion_length: 2048  # Allow longer completions for complex code
+    temperature: 0.7
+    top_p: 0.9
+    beta: 0.00  # KL penalty coefficient (0.00 = no KL penalty)
+    use_vllm: true  # vLLM acceleration required
+    vllm_server_port: 8000  # Must match your vLLM server port
+    vllm_importance_sampling_correction: true
 
   # Reward configuration
   reward_config:
@@ -65,41 +183,21 @@ config:
     fail_reward: 0.0
     enable_soft_match: false  # Use hard matching only
     strip_whitespace: true
-
-  # GRPO training arguments
-  grpo_config:
-    do_train: true
-    do_eval: true
-    do_predict: true
-    per_device_train_batch_size: 1
-    per_device_eval_batch_size: 4
-    gradient_accumulation_steps: 8
-    learning_rate: 1e-5
-    warmup_steps: 100
-    logging_steps: 5
-    save_steps: 500
-    save_total_limit: 3
-    num_train_epochs: 3
-    max_steps: -1  # Use epochs instead
-    eval_strategy: steps
-    eval_steps: 500
-    # GRPO-specific
-    num_generations: 4  # Number of samples per prompt
-    num_generations_eval: 2  # Fewer during eval
-    max_completion_length: 512
-    temperature: 0.7
-    top_p: 0.9
-    beta: 0.05  # KL penalty coefficient
-    use_vllm: true  # vLLM acceleration required
-    vllm_server_port: 8000
-    gradient_checkpointing: false
-    gradient_checkpointing_kwargs:
-      use_reentrant: false
+    expected_outputs_key: expected_output
 
   # Dataset caching
   cache_config:
     use_cache: true
     force_regenerate: false
+
+  # LoRA configuration (recommended for efficient training)
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
   # Evaluation settings
   evals_config:
@@ -112,6 +210,7 @@ config:
 
 ```bash
 # Terminal 1: Start vLLM server (use base model, TRL handles weight syncing)
+# Port must match grpo_config.vllm_server_port in your config (default: 8000)
 CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
     --model Qwen/Qwen3-4B-Instruct-2507 \
     --data_parallel_size 3 \
@@ -123,6 +222,8 @@ Wait for server to start and show:
 ```
 INFO: Uvicorn running on http://0.0.0.0:8000
 ```
+
+**Note:** Make sure the `--port` argument matches `grpo_config.vllm_server_port` in your experiment config.
 
 ### Step 3: Run RL Training
 
@@ -248,24 +349,42 @@ Key parameters from `trl.GRPOConfig`:
 ```yaml
 grpo_config:
   # Standard training args
-  learning_rate: 1e-5
+  learning_rate: 1e-5       # Lower than SFT (typically 2e-4) for RL stability
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
+  weight_decay: 0.05
+  lr_scheduler_type: "cosine"
+  warmup_steps: 100
+  optim: "adamw_torch_fused"
+  max_grad_norm: 1.0
   num_train_epochs: 3
   max_steps: -1  # -1 = use epochs
 
+  # Evaluation settings
+  eval_on_start: True       # Evaluate before training starts
+  eval_strategy: "steps"
+  eval_steps: 500
+
   # GRPO-specific
-  num_generations: 4        # Samples per prompt (higher = better exploration)
-  max_completion_length: 512  # Max tokens to generate
+  num_generations: 8        # Samples per prompt (higher = better exploration)
+  num_generations_eval: 2   # Fewer during eval to save compute
+  max_completion_length: 2048  # Max tokens (higher for complex code)
   temperature: 0.7          # Sampling temperature
   top_p: 0.9               # Nucleus sampling
-  beta: 0.05               # KL penalty coefficient
+  beta: 0.00               # KL penalty coefficient (0.00 = no penalty)
 
   # vLLM settings (required)
   use_vllm: true
   vllm_server_port: 8000
   vllm_importance_sampling_correction: true
 ```
+
+**Important Notes:**
+
+- **`_target_` field**: Your config must include `_target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig` to dispatch to the RL trainer (see example config above)
+- **`beta` parameter**: Controls KL divergence penalty. Set to 0.00 for no penalty (pure reward optimization), or use small values (0.01-0.05) to stay closer to the base model
+- **`num_generations`**: Higher values (8+) provide better exploration but increase compute cost
+- **`max_completion_length`**: Set higher (2048+) for code generation tasks to allow complete solutions
 
 ### Prompt Templates
 
@@ -274,13 +393,19 @@ Available in `pyine/prompts/configs/code_execution.yaml`:
 - **`grpo_minimal`** (recommended): Optimized, zero-shot, ~50% shorter
 - **`unstructured_with_3_output_types`**: More verbose with examples
 
-Configure via:
+Configure via the datamodule's prompt_config:
 
 ```yaml
 config:
-  prompt_version: grpo_minimal
-  include_prompt_examples: false  # Zero-shot
+  datamodule_config:
+    prompt_config:
+      prompt_name: code_execution
+      use_chat_template: false  # CRITICAL: GRPO needs plain text, not chat format
+      include_examples: false    # Zero-shot by default
+      version: grpo_minimal      # Use optimized template
 ```
+
+**Important:** Always set `use_chat_template: false` for GRPO training, as the algorithm expects plain text prompts rather than chat-formatted messages.
 
 ## Additional Resources
 
