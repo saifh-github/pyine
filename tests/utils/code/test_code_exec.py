@@ -495,7 +495,7 @@ def test_trace_event_and_result_helpers() -> None:
     assert repr(event) == "step#000000:call@snippet.py:fn:L0001"
     assert str(trace_result) == "identifier"
     numbered = trace_result.code_string_with_line_numbers
-    assert numbered.startswith("L0001:")
+    assert numbered.startswith("L1:")
     assert trace_result.total_step_count == 2
     assert trace_result.valid_step_count == 1
     formatted = format_traced_code_execution(trace_result)
