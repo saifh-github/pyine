@@ -633,40 +633,6 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             },
         )
 
-    @typing.override
-    def get_hf_rl_dataset(
-        self,
-        subset_name: pyine.data.datamodule.SubsetNameType,
-        force_regenerate: bool = False,
-    ) -> hf_datasets.Dataset:
-        """Returns a HuggingFace dataset for RL training with raw prompts and metadata.
-
-        This method prepares datasets for reinforcement learning training by providing raw
-        prompts (not tokenized) along with metadata needed for reward computation.
-
-        All prompt configuration (version, include_examples, etc.) is read from the datamodule's
-        prompt_config.
-
-        Args:
-            subset_name: the subset name to prepare the dataset for.
-            force_regenerate: whether to rebuild caches even if they already exist.
-
-        Returns:
-            The HuggingFace dataset object with raw prompts and metadata for RL training.
-        """
-        if not self._is_setup_complete():
-            raise RuntimeError("data parsers are not ready yet, call `setup()` first")
-        assert subset_name is not None, "subset name must be specified"
-        subset_traces = self._get_traces_meta_for_subset(subset_name)
-        return self.config.instantiate_hf_rl_dataset(
-            subset_name=subset_name,
-            parser_kwargs={
-                "source_data": self.config.lmdb_paths,
-                "traces": subset_traces,
-            },
-            force_regenerate=force_regenerate,
-        )
-
     def make_dataloader(
         self,
         loader_name: pyine.data.datamodule.LoaderNameType,
