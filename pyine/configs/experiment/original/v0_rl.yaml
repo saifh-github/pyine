@@ -43,10 +43,10 @@ config:
     # Prompt configuration for GRPO (critical for RL training!)
     prompt_config:
       prompt_name: code_execution
-      use_chat_template: false  # GRPO needs plain text, not chat format
+      use_chat_template: true  # GRPO needs plain text, not chat format
       include_examples: false    # Zero-shot by default for efficiency
       target_examples: null
-      version: grpo_minimal      # Use the GRPO-optimized template
+      version: rl_tagged_answer      # Use the RL template
     # Default parser config with SampleBuilder
     default_dataparser_config:
       class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
@@ -166,11 +166,6 @@ config:
     enable_soft_match: false  # Use hard matching only
     strip_whitespace: true
     expected_outputs_key: expected_output
-
-  # Dataset caching (RL-specific)
-  cache_config:
-    use_cache: true
-    force_regenerate: false
 
   # LoRA configuration (same as SFT v0)
   lora_config:

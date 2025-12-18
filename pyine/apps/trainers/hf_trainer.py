@@ -19,7 +19,6 @@ import trl
 import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_trainer_configs
 import pyine.apps.trainers.rl.rewards
-import pyine.apps.trainers.rl_trainer_configs
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
@@ -206,17 +205,21 @@ async def rl_train(
     # Use the datamodule's native RL dataset method which reuses existing infrastructure
     # Note: prompt configuration (version, include_examples, etc.) comes from datamodule_config.prompt_config
     logger.info("preparing train dataset...")
-    train_ds = datamodule.get_hf_rl_dataset(
+    train_ds = datamodule.get_hf_messages_dataset(
         subset_name="train",
-        force_regenerate=config.cache_config.force_regenerate,
+        append_answer=False,  # no answers for RL
+        merge_system_with_user=True,  # to adjust depending on whether we want system messages too
+        keep_original_data=True,  # needed to compute rewards
     )
 
     eval_ds = None
     if config.grpo_config.do_eval:
         logger.info("preparing validation dataset...")
-        eval_ds = datamodule.get_hf_rl_dataset(
+        eval_ds = datamodule.get_hf_messages_dataset(
             subset_name="valid",
-            force_regenerate=config.cache_config.force_regenerate,
+            append_answer=False,  # no answers for RL
+            merge_system_with_user=True,  # to adjust depending on whether we want system messages too
+            keep_original_data=True,  # needed to compute rewards
         )
 
     # 3. Create reward function

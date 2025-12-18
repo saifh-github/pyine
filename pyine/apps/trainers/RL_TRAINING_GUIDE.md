@@ -62,10 +62,10 @@ config:
     # Prompt configuration for GRPO (critical for RL training!)
     prompt_config:
       prompt_name: code_execution
-      use_chat_template: false  # GRPO needs plain text, not chat format
+      use_chat_template: true
       include_examples: false    # Zero-shot by default for efficiency
       target_examples: null
-      version: grpo_minimal      # Use the GRPO-optimized template
+      version: rl_tagged_answer      # Use the GRPO-optimized template
     # Default parser config with SampleBuilder
     default_dataparser_config:
       class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
@@ -390,7 +390,7 @@ grpo_config:
 
 Available in `pyine/prompts/configs/code_execution.yaml`:
 
-- **`grpo_minimal`** (recommended): Optimized, zero-shot, ~50% shorter
+- **`rl_tagged_answer`** (recommended): Optimized, zero-shot, ~50% shorter
 - **`unstructured_with_3_output_types`**: More verbose with examples
 
 Configure via the datamodule's prompt_config:
@@ -402,7 +402,7 @@ config:
       prompt_name: code_execution
       use_chat_template: false  # CRITICAL: GRPO needs plain text, not chat format
       include_examples: false    # Zero-shot by default
-      version: grpo_minimal      # Use optimized template
+      version: rl_tagged_answer      # Use optimized template
 ```
 
 **Important:** Always set `use_chat_template: false` for GRPO training, as the algorithm expects plain text prompts rather than chat-formatted messages.

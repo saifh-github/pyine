@@ -306,7 +306,7 @@ unstructured_with_3_predict_types:
       output: *function_return_example_1_output
 
 
-grpo_minimal:  # @@@@ TODO: this is not GRPO-specific, change name/desc to something more fitting
+rl_tagged_answer:
   metadata:
     <<: *base_metadata
     description: >
