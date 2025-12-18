@@ -47,6 +47,7 @@ config:
       include_examples: false    # Zero-shot by default for efficiency
       target_examples: null
       version: rl_tagged_answer      # Use the RL template
+    hf_messages_key: prompt
     # Default parser config with SampleBuilder
     default_dataparser_config:
       class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
