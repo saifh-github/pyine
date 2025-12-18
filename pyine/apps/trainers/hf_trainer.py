@@ -18,11 +18,12 @@ import trl
 
 import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_trainer_configs
-import pyine.apps.trainers.rl.rewards
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.organisms.models.rewards.core.manager
+import pyine.organisms.models.rewards.trl
 import pyine.utils.distrib
 import pyine.utils.interrupts
 import pyine.utils.reprod
@@ -223,29 +224,26 @@ async def rl_train(
         )
 
     # 3. Create reward function
-    logger.info("creating reward function...")
-    reward_fn = pyine.apps.trainers.rl.rewards.create_code_exec_reward_function(
-        strip_hard_checks=config.reward_config.strip_whitespace,
-        enable_soft_match=config.reward_config.enable_soft_match,
-        hard_reward=config.reward_config.hard_match_reward,
-        soft_reward=config.reward_config.soft_match_reward,
-        fail_reward=config.reward_config.fail_reward,
-        expected_outputs_key=config.reward_config.expected_outputs_key,
+    logger.info("creating reward function with RewardManager...")
+    reward_manager = pyine.organisms.models.rewards.core.manager.RewardManager(config.reward_manager_config)
+    reward_fn = pyine.organisms.models.rewards.trl.make_trl_reward_fn(
+        manager=reward_manager,
+        prompt_key="prompt",
+        sample_data_key="sample_data",
+        skip_on_error=True,
     )
-    # @@@@ TODO: instead of the above, we should use the new rewards module with a proper config
-    # (see the newly added but definitely-not-yet-tested `pyine.organisms.models.rewards.trl` module)
 
-    # 5. Create TRL trainer
+    # 4. Create TRL trainer
     logger.info("creating GRPO trainer...")
     trainer = trl.GRPOTrainer(  # type: ignore[reportPrivateImportUsage]
         model=model,  # Pass model object (not string!)
         args=config.grpo_config,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        reward_funcs=reward_fn,
+        reward_funcs=reward_fn,  # type: ignore[reportArgumentType]  # TRL accepts list[float | None] for skipping
     )
 
-    # 6. Add callbacks (reuse from common.py patterns)
+    # 5. Add callbacks (reuse from common.py patterns)
     callbacks: list[transformers.TrainerCallback] = []
     if shutdown_manager is not None:
 
@@ -267,7 +265,7 @@ async def rl_train(
     for callback in callbacks:
         trainer.add_callback(callback)  # pyright: ignore[reportUnknownMemberType]
 
-    # 7. Train with resume support
+    # 6. Train with resume support
     train_kwargs: dict[str, typing.Any] = {}
     if resume_artifacts is not None:
         assert resume_artifacts.checkpoint_path.is_dir(), f"invalid ckpt path: {resume_artifacts.checkpoint_path}"

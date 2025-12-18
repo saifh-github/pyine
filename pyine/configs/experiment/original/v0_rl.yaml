@@ -158,15 +158,54 @@ config:
     vllm_server_port: 8050  # From prototype (was 8000)
     vllm_importance_sampling_correction: true
 
-  # Reward configuration (RL-specific)
-  reward_config:
-    reward_type: code_execution
-    hard_match_reward: 1.0
-    soft_match_reward: 0.5
-    fail_reward: 0.0
-    enable_soft_match: false  # Use hard matching only
-    strip_whitespace: true
-    expected_outputs_key: expected_output
+  # Reward manager configuration
+  reward_manager_config:
+    # Parsing configuration for extracting final answers from model output
+    parsing:
+      mode: tags
+      final_tag: final  # Extract answers from <final>...</final> tags
+      reasoning_tag: reasoning
+      fallback_policy: none  # No fallback if tags are missing
+      multi_tag_policy: last  # Use last tag if multiple are present
+      strict: false
+      capture_diagnostics: true
+
+    # Reward terms to evaluate
+    terms:
+      - name: hard_match
+        type: hard_match  # or "code_exec/hard_match"
+        weight: 1.0
+        enabled: true
+        require_parsed: true  # Requires parsed output
+        params:
+          reward_if_match: 1.0
+          reward_if_no_match: 0.0
+          strip_whitespace: true
+
+    # Aggregation configuration
+    aggregation:
+      strategy: weighted_sum
+      clip_total_min: 0.0
+      clip_total_max: null
+      clip_term_min: null
+      clip_term_max: null
+
+    # Output configuration
+    output:
+      return_breakdown_default: false
+      return_raw_breakdown: false
+
+    # Logging configuration (disabled by default, can be enabled for debugging)
+    logging:
+      enabled: false
+      log_total: true
+      log_terms: true
+      log_metrics: true
+      log_every_n_examples: 1
+      scope_prefix: "reward/"
+      main_process_only: true
+      gather_distributed_summaries: true
+      barrier_before_finalize: true
 
   # LoRA configuration (same as SFT v0)
   lora_config:

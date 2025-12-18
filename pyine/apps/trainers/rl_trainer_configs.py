@@ -24,43 +24,11 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
 import pyine.organisms.datamodules
+import pyine.organisms.models.rewards.core.configs
 import pyine.utils.reprod
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
-
-
-class RewardConfig(pydantic.BaseModel):
-    """Configuration for reward computation in RL training."""
-
-    reward_type: typing.Literal["code_execution"] = pydantic.Field(
-        default="code_execution",
-        description="Type of reward function to use.",
-    )
-    hard_match_reward: float = pydantic.Field(
-        default=1.0,
-        description="Reward value for exact matches.",
-    )
-    soft_match_reward: float = pydantic.Field(
-        default=0.5,
-        description="Reward value for soft matches (when hard match fails).",
-    )
-    fail_reward: float = pydantic.Field(
-        default=0.0,
-        description="Reward value when no match is found.",
-    )
-    enable_soft_match: bool = pydantic.Field(
-        default=False,
-        description="Whether to use soft (heuristic) matching as fallback if hard match fails.",
-    )
-    strip_whitespace: bool = pydantic.Field(
-        default=True,
-        description="Whether to strip whitespace when doing hard (exact) matching.",
-    )
-    expected_outputs_key: str = pydantic.Field(
-        default="expected_output",
-        description="Key to access expected outputs from dataset.",
-    )
 
 
 class CacheConfig(pydantic.BaseModel):
@@ -128,9 +96,9 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
         description="GRPO training configuration (TRL GRPOConfig).",
     )
 
-    reward_config: RewardConfig = pydantic.Field(
-        default_factory=RewardConfig,
-        description="Reward function configuration.",
+    reward_manager_config: pyine.organisms.models.rewards.core.configs.RewardManagerConfig = pydantic.Field(
+        ...,  # MISSING! MANDATORY!
+        description="Reward manager configuration for RL training.",
     )
 
     cache_config: CacheConfig = pydantic.Field(

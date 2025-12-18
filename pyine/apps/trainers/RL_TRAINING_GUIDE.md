@@ -175,15 +175,27 @@ config:
     vllm_server_port: 8000  # Must match your vLLM server port
     vllm_importance_sampling_correction: true
 
-  # Reward configuration
-  reward_config:
-    reward_type: code_execution
-    hard_match_reward: 1.0
-    soft_match_reward: 0.5
-    fail_reward: 0.0
-    enable_soft_match: false  # Use hard matching only
-    strip_whitespace: true
-    expected_outputs_key: expected_output
+  # Reward manager configuration
+  reward_manager_config:
+    parsing:
+      mode: tags
+      final_tag: final
+      fallback_policy: none
+    terms:
+      - name: hard_match
+        type: hard_match
+        weight: 1.0
+        enabled: true
+        require_parsed: true
+        params:
+          reward_if_match: 1.0
+          reward_if_no_match: 0.0
+          strip_whitespace: true
+    aggregation:
+      strategy: weighted_sum
+      clip_total_min: 0.0
+    logging:
+      enabled: false
 
   # Dataset caching
   cache_config:
@@ -331,16 +343,44 @@ CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
 
 ### Reward Configuration
 
+The reward configuration uses the composable rewards module:
+
 ```yaml
-reward_config:
-  reward_type: code_execution  # Currently only type supported
-  hard_match_reward: 1.0       # Exact match reward
-  soft_match_reward: 0.5       # Heuristic match reward
-  fail_reward: 0.0             # No match reward
-  enable_soft_match: false     # Use soft matching as fallback
-  strip_whitespace: true       # Strip whitespace for hard matching
-  expected_outputs_key: expected_output  # Dataset key for targets
+reward_manager_config:
+  # Parsing configuration for extracting final answers
+  parsing:
+    mode: tags
+    final_tag: final  # Extract from <final>...</final> tags
+    fallback_policy: none
+
+  # Reward terms to evaluate
+  terms:
+    - name: hard_match
+      type: hard_match  # Exact string matching
+      weight: 1.0
+      enabled: true
+      require_parsed: true
+      params:
+        reward_if_match: 1.0
+        reward_if_no_match: 0.0
+        strip_whitespace: true
+
+    # Add more terms for complex reward shaping:
+    # - type: soft_match  # Heuristic matching with tolerance
+    # - type: llm_grader  # LLM-as-a-judge evaluation
+
+  # Aggregation strategy
+  aggregation:
+    strategy: weighted_sum
+    clip_total_min: 0.0  # Optional clipping
+
+  # Logging (optional, for debugging)
+  logging:
+    enabled: false
+    log_every_n_examples: 10
 ```
+
+For details on available reward terms and configuration options, see `pyine/organisms/models/rewards/README.md`.
 
 ### GRPO Training Arguments
 
