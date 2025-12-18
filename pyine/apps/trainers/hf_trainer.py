@@ -229,6 +229,8 @@ async def rl_train(
         fail_reward=config.reward_config.fail_reward,
         expected_outputs_key=config.reward_config.expected_outputs_key,
     )
+    # @@@@ TODO: instead of the above, we should use the new rewards module with a proper config
+    # (see the newly added but definitely-not-yet-tested `pyine.organisms.models.rewards.trl` module)
 
     # 5. Create TRL trainer
     logger.info("creating GRPO trainer...")

@@ -4,6 +4,7 @@ This package provides:
 - `RewardManager`: orchestrates term evaluation, aggregation, and optional logging.
 - `SampleContext` / `RunInitContext`: typed containers for per-sample and per-run data.
 - Built-in reward terms (see `list_available_terms()` for discovery).
+- TRL integration via `make_trl_reward_fn()` for HuggingFace TRL trainers.
 
 For advanced usage (custom terms, parsers, loggers), see the `core` subpackage which provides
 protocols like `RewardTerm`, `OutputParser`, and `RewardLogger`.
@@ -14,6 +15,7 @@ model output + optional metadata). This package does not compute per-token rewar
 Subpackages (accessible via `pyine.organisms.models.rewards.<subpackage>`):
 - core: Core reward interfaces, protocols, and implementations
 - terms: Built-in reward terms (format, code_exec)
+- trl: TRL (HuggingFace Transformers RL) integration
 
 Convenience imports for common use cases:
     ```python
@@ -37,6 +39,10 @@ Convenience imports for common use cases:
     # discover available terms
     for term_info in rewards.list_available_terms():
         print(f"{term_info.canonical_type}: {term_info.aliases}")
+
+    # TRL integration
+    reward_fn = rewards.make_trl_reward_fn(manager, prompt_key="prompt")
+    # use with GRPOTrainer: trainer = GRPOTrainer(..., reward_funcs=[reward_fn])
     ```
 """
 
@@ -54,6 +60,10 @@ if typing.TYPE_CHECKING:
     from pyine.organisms.models.rewards.core.types import RewardOutput as RewardOutput
     from pyine.organisms.models.rewards.core.types import RunInitContext as RunInitContext
     from pyine.organisms.models.rewards.core.types import SampleContext as SampleContext
+    from pyine.organisms.models.rewards.trl import MessageSelectionPolicy as MessageSelectionPolicy
+    from pyine.organisms.models.rewards.trl import TRLRewardAdapter as TRLRewardAdapter
+    from pyine.organisms.models.rewards.trl import TRLRewardResult as TRLRewardResult
+    from pyine.organisms.models.rewards.trl import make_trl_reward_fn as make_trl_reward_fn
 
 __all__ = [
     # convenience re-exports
@@ -67,6 +77,11 @@ __all__ = [
     "TermInfo",
     "list_available_terms",
     "make_simple_manager",
+    # TRL integration
+    "MessageSelectionPolicy",
+    "TRLRewardAdapter",
+    "TRLRewardResult",
+    "make_trl_reward_fn",
 ]
 
 
@@ -112,4 +127,20 @@ def __getattr__(name: str) -> typing.Any:
         from pyine.organisms.models.rewards.core.types import SampleContext
 
         return SampleContext
+    if name == "MessageSelectionPolicy":
+        from pyine.organisms.models.rewards.trl import MessageSelectionPolicy
+
+        return MessageSelectionPolicy
+    if name == "TRLRewardAdapter":
+        from pyine.organisms.models.rewards.trl import TRLRewardAdapter
+
+        return TRLRewardAdapter
+    if name == "TRLRewardResult":
+        from pyine.organisms.models.rewards.trl import TRLRewardResult
+
+        return TRLRewardResult
+    if name == "make_trl_reward_fn":
+        from pyine.organisms.models.rewards.trl import make_trl_reward_fn
+
+        return make_trl_reward_fn
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
