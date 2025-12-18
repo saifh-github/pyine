@@ -190,3 +190,272 @@ def test_create_sample_transform_chat_to_hf_messages(
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi!"},
     ]
+
+
+def test_create_sample_transform_with_line_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return f"Code:\n{kwargs['code']}"
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_line_numbers=True,
+        line_number_prefix_pattern="L{num}|",
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output"])
+    sample = Sample(code="a = 1\nb = 2", expected_output="ignored")
+    result = transform_fn(sample)
+    assert "L1|a = 1" in result
+    assert "L2|b = 2" in result
+
+
+def test_create_sample_transform_with_line_numbers_custom_width_and_padding(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_line_numbers=True,
+        line_number_prefix_pattern="{num}|",
+        line_number_width=3,
+        line_number_zero_pad=False,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output"])
+    sample = Sample(code="x = 1\ny = 2", expected_output="ignored")
+    result = transform_fn(sample)
+    assert "  1|x = 1" in result
+    assert "  2|y = 2" in result
+
+
+def test_create_sample_transform_with_block_markers_partial_exec(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_block_markers=True,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    sample = Sample(
+        code="a = 1\nb = 2\nc = 3",
+        expected_output="ignored",
+        predict_type="frame_variables",  # not program_output, so markers should be added
+        first_line=1,
+        last_line=2,
+    )
+    result = transform_fn(sample)
+    lines = result.splitlines()
+    assert "# <<<< START HERE" in lines[0]
+    assert "# <<<< END HERE" in lines[1]
+    assert "# <<<<" not in lines[2]
+
+
+def test_create_sample_transform_with_block_markers_skipped_for_program_output(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_block_markers=True,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    sample = Sample(
+        code="a = 1\nb = 2\nc = 3",
+        expected_output="ignored",
+        predict_type="program_output",  # markers should NOT be added
+        first_line=1,
+        last_line=2,
+    )
+    result = transform_fn(sample)
+    assert "# <<<<" not in result
+
+
+def test_create_sample_transform_with_block_markers_custom_suffixes(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_block_markers=True,
+        block_start_suffix="  # BEGIN",
+        block_end_suffix="  # END",
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    sample = Sample(
+        code="x = 1\ny = 2",
+        expected_output="ignored",
+        predict_type="frame_variables",
+        first_line=1,
+        last_line=2,
+    )
+    result = transform_fn(sample)
+    lines = result.splitlines()
+    assert lines[0] == "x = 1  # BEGIN"
+    assert lines[1] == "y = 2  # END"
+
+
+def test_create_sample_transform_with_block_markers_single_line(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_block_markers=True,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    sample = Sample(
+        code="a = 1\nb = 2\nc = 3",
+        expected_output="ignored",
+        predict_type="frame_variables",
+        first_line=2,
+        last_line=2,  # single line block
+    )
+    result = transform_fn(sample)
+    lines = result.splitlines()
+    assert "# <<<<" not in lines[0]
+    assert "# <<<< START HERE" in lines[1]
+    assert "# <<<<" not in lines[2]
+
+
+def test_create_sample_transform_with_line_numbers_and_block_markers(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_line_numbers=True,
+        line_number_prefix_pattern="L{num}|",
+        add_block_markers=True,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    sample = Sample(
+        code="a = 1\nb = 2\nc = 3",
+        expected_output="ignored",
+        predict_type="function_return",
+        first_line=1,
+        last_line=2,
+    )
+    result = transform_fn(sample)
+    lines = result.splitlines()
+    # block markers applied first, then line numbers
+    assert lines[0] == "L1|a = 1  # <<<< START HERE"
+    assert lines[1] == "L2|b = 2  # <<<< END HERE"
+    assert lines[2] == "L3|c = 3"
+
+
+def test_create_sample_transform_block_markers_raises_for_invalid_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    transforms_with_fakes: typing.Any,
+) -> None:
+    transforms = transforms_with_fakes
+
+    class DummyTemplate:
+        def format(
+            self,
+            **kwargs: typing.Any,
+        ) -> str:
+            return kwargs["code"]
+
+    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
+    transform_fn = transforms.create_sample_transform(
+        use_chat_template=False,
+        append_answer=False,
+        add_block_markers=True,
+    )
+    Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
+    # first_line=0 is invalid, should raise ValueError
+    sample_invalid_start = Sample(
+        code="a = 1\nb = 2",
+        expected_output="ignored",
+        predict_type="frame_variables",
+        first_line=0,
+        last_line=2,
+    )
+    with pytest.raises(ValueError, match="start_line.*out of bounds"):
+        transform_fn(sample_invalid_start)
+    # start > end should also raise
+    sample_invalid_order = Sample(
+        code="a = 1\nb = 2",
+        expected_output="ignored",
+        predict_type="frame_variables",
+        first_line=2,
+        last_line=1,
+    )
+    with pytest.raises(ValueError, match="start_line.*must be <= end_line"):
+        transform_fn(sample_invalid_order)

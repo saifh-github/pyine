@@ -10,6 +10,7 @@ import langchain_core.prompts.chat
 
 import pyine.organisms.datamodules.samples
 import pyine.prompts.manager
+import pyine.utils.code.line_annotations
 
 SampleTransformInputType = pyine.organisms.datamodules.samples.SampleData | dict[str, typing.Any]
 SampleTransformOutputType = str | list[langchain_core.messages.BaseMessage] | dict[str, typing.Any]
@@ -36,6 +37,13 @@ def _apply_prompt_template_to_sample(
     hf_messages_key: str,
     orig_sample_key: str | None,
     merge_system_with_user: bool,
+    add_line_numbers: bool,
+    line_number_prefix_pattern: str,
+    line_number_width: int | None,
+    line_number_zero_pad: bool,
+    add_block_markers: bool,
+    block_start_suffix: str,
+    block_end_suffix: str,
 ) -> SampleTransformOutputType:
     """Applies a prompt template to a data sample.
 
@@ -52,6 +60,26 @@ def _apply_prompt_template_to_sample(
     else:
         sample_data = sample
         sample_args = sample_data._asdict()
+    if add_line_numbers or add_block_markers:
+        code_string = sample_args["code"]
+        if add_block_markers and (
+            sample_data.predict_type != pyine.organisms.datamodules.samples.SamplePredictType.program_output
+        ):
+            code_string = pyine.utils.code.line_annotations.get_code_with_block_markers(
+                code_string,
+                start_line=sample_data.first_line,
+                end_line=sample_data.last_line,
+                start_suffix=block_start_suffix,
+                end_suffix=block_end_suffix,
+            )
+        if add_line_numbers:
+            code_string = pyine.utils.code.line_annotations.get_code_with_numbered_lines(
+                code_string,
+                prefix_pattern=line_number_prefix_pattern,
+                num_width=line_number_width,
+                zero_pad=line_number_zero_pad,
+            )
+        sample_args["code"] = code_string
     if use_chat_template:
         assert isinstance(prompt_template, langchain_core.prompts.chat.ChatPromptTemplate)
         messages = prompt_template.format_messages(**sample_args)
@@ -106,6 +134,13 @@ def create_sample_transform(
     hf_messages_key: str = "messages",
     orig_sample_key: str | None = None,
     merge_system_with_user: bool = False,
+    add_line_numbers: bool = False,
+    line_number_prefix_pattern: str = pyine.utils.code.line_annotations.DEFAULT_LINE_PREFIX_PATTERN,
+    line_number_width: int | None = None,
+    line_number_zero_pad: bool = True,
+    add_block_markers: bool = False,
+    block_start_suffix: str = pyine.utils.code.line_annotations.DEFAULT_BLOCK_START_SUFFIX,
+    block_end_suffix: str = pyine.utils.code.line_annotations.DEFAULT_BLOCK_END_SUFFIX,
     **prompt_kwargs: typing.Any,  # forwarded to the prompt manager template getter
 ) -> SampleTransformType:
     """Create a transform function applying a prompt template to a code execution data sample.
@@ -119,6 +154,14 @@ def create_sample_transform(
         merge_system_with_user: whether to merge the system message with the user message (used
             when working with e.g. o1/o3/o4, which do not support custom system prompts). Has no
             effect when `use_chat_template` is False.
+        add_line_numbers: whether to add line number prefixes to the code string before formatting.
+        line_number_prefix_pattern: pattern for line number prefixes (e.g., ``"L{num}|"``).
+        line_number_width: width for line number padding (None for auto-detection).
+        line_number_zero_pad: whether to zero-pad line numbers (True) or space-pad (False).
+        add_block_markers: whether to add block-of-interest suffix comments. Only applied when
+            the sample's predict_type is not ``program_output`` and first_line/last_line are valid.
+        block_start_suffix: suffix to mark the start of the block of interest.
+        block_end_suffix: suffix to mark the end of the block of interest.
 
     Returns:
         A transform function that converts a SampleData object to a string or list of messages.
@@ -140,6 +183,13 @@ def create_sample_transform(
         hf_messages_key=hf_messages_key,
         orig_sample_key=orig_sample_key,
         merge_system_with_user=merge_system_with_user,
+        add_line_numbers=add_line_numbers,
+        line_number_prefix_pattern=line_number_prefix_pattern,
+        line_number_width=line_number_width,
+        line_number_zero_pad=line_number_zero_pad,
+        add_block_markers=add_block_markers,
+        block_start_suffix=block_start_suffix,
+        block_end_suffix=block_end_suffix,
     )
 
 

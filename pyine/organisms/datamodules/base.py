@@ -102,6 +102,17 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
     )
     """Configuration for the prompt used when transforming raw sample data to chat model requests."""
 
+    # --------------- CODE FORMATTING OPTIONS ---------------
+
+    add_line_numbers: bool = False
+    """Whether to add line number prefixes to code strings before formatting."""
+    add_block_markers: bool = False
+    """Whether to add block-of-interest suffix comments to code strings.
+
+    Only applied when the sample's predict_type is not ``program_output`` and the
+    first_line/last_line attributes are valid.
+    """
+
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
     subset_names: typing.Annotated[tuple[pyine.data.datamodule.SubsetNameType, ...], pydantic.Field(min_length=1)] = (
@@ -136,6 +147,8 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
             merge_system_with_user=merge_system_with_user,
             hf_messages_key=self.hf_messages_key,
             orig_sample_key=orig_data_key if keep_original_data else None,
+            add_line_numbers=self.add_line_numbers,
+            add_block_markers=self.add_block_markers,
             **self.prompt_config.model_dump(),
         )
 
