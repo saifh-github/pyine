@@ -52,7 +52,7 @@ class TestTagsOutputParser:
             multi_tag_policy="error",
         )
         parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
-        with pytest.raises(ValueError, match="multiple blocks"):
+        with pytest.raises(ValueError, match="expected exactly one"):
             parser.parse("prompt", "<final>a</final><final>b</final>")
 
     def test_strict_mode_rejects_stray_close(self) -> None:

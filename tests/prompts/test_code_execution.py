@@ -1,5 +1,10 @@
-import langchain_core.prompts
+import enum
 
+import langchain_core.prompts
+import pydantic
+import pytest
+
+import pyine.prompts.configs.code_execution as code_exec
 import pyine.prompts.manager
 import pyine.prompts.utils
 
@@ -84,3 +89,190 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
 
 
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
+
+
+class TestCodeExecutionValidator:
+    def test_default_config(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig()
+        assert config.parsing_mode == code_exec.OutputParsingMode.answer_only
+        assert config.strict_frame_variables is True
+        assert config.repair_markdown_fences is True
+
+    def test_frozen_config(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig()
+        with pytest.raises(pydantic.ValidationError):
+            config.parsing_mode = code_exec.OutputParsingMode.reasoning_and_answer  # type: ignore[misc]
+
+    @pytest.fixture
+    def validator(self) -> code_exec.CodeExecutionValidator:
+        return code_exec.get_code_execution_validator()
+
+    def test_program_output_accepts_anything(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate("Hello, World!", "program_output")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.answer_text == "Hello, World!"
+        assert result.parsed_answer == "Hello, World!"
+
+    def test_program_output_preserves_whitespace(self) -> None:
+        validator = code_exec.get_code_execution_validator(
+            code_exec.CodeExecutionValidatorConfig(strip_answer_for_program_output=False)
+        )
+        result = validator.validate("  output with spaces  \n", "program_output")
+        assert result.status == code_exec.ValidationStatus.success
+        assert "  output with spaces  " in result.answer_text
+
+    def test_frame_variables_requires_dict(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate('{"x": 1, "y": 2}', "frame_variables")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.parsed_answer == {"x": 1, "y": 2}
+
+    def test_frame_variables_rejects_non_dict(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate("[1, 2, 3]", "frame_variables")
+        assert result.status == code_exec.ValidationStatus.failed
+        assert "must be dict" in (result.error_details or "")
+
+    def test_frame_variables_rejects_invalid_json(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate("not valid json", "frame_variables")
+        assert result.status == code_exec.ValidationStatus.failed
+        assert result.error_details is not None
+
+    def test_function_return_accepts_structured(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate("42", "function_return")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.parsed_answer == 42
+
+    def test_function_return_accepts_exception_pattern(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate("ValueError: invalid input", "function_return")
+        assert result.status == code_exec.ValidationStatus.success
+        assert "ValueError" in (result.answer_text or "")
+
+    def test_function_return_accepts_raw_repr(self, validator: code_exec.CodeExecutionValidator) -> None:
+        # non-strict by default, accepts raw repr strings (downstream users might want to strip addresses...)
+        result = validator.validate("<object at 0x1234>", "function_return")
+        assert result.status == code_exec.ValidationStatus.success
+
+    def test_enum_predict_type_handling(self, validator: code_exec.CodeExecutionValidator) -> None:
+        class PredictType(enum.StrEnum):
+            program_output = enum.auto()
+
+        result = validator.validate("test", PredictType.program_output)
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.predict_type == "program_output"
+
+    def test_repair_markdown_fences(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate('```json\n{"key": "value"}\n```', "frame_variables")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.parsed_answer == {"key": "value"}
+        assert result.diagnostics.get("repair/markdown_fences") is True
+
+    def test_repair_output_prefix(self, validator: code_exec.CodeExecutionValidator) -> None:
+        result = validator.validate('Output:\n{"x": 1}', "frame_variables")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.parsed_answer == {"x": 1}
+        assert result.diagnostics.get("repair/output_prefix") is True
+
+    def test_strip_tags_in_answer_only_mode_enabled_by_default(
+        self,
+        validator: code_exec.CodeExecutionValidator,
+    ) -> None:
+        # model includes tags even though parsing_mode=answer_only; should be stripped
+        result = validator.validate("<final>Hello, World!</final>", "program_output")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.answer_text == "Hello, World!"
+
+    def test_strip_tags_in_answer_only_mode_disabled(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig(strip_tags_in_answer_only_mode=False)
+        validator = code_exec.CodeExecutionValidator(config)
+        result = validator.validate("<final>Hello, World!</final>", "program_output")
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.answer_text == "<final>Hello, World!</final>"
+
+    def test_strip_tags_in_answer_only_mode_ignores_multiple_blocks(
+        self,
+        validator: code_exec.CodeExecutionValidator,
+    ) -> None:
+        # multiple blocks: don't strip, return original (ambiguous which to pick)
+        result = validator.validate("<final>a</final><final>b</final>", "program_output")
+        assert result.answer_text == "<final>a</final><final>b</final>"
+
+    def test_strip_tags_in_answer_only_mode_ignores_malformed(
+        self,
+        validator: code_exec.CodeExecutionValidator,
+    ) -> None:
+        # malformed tags: don't strip, return original
+        result = validator.validate("<final>unclosed", "program_output")
+        assert result.answer_text == "<final>unclosed"
+
+
+class TestCodeExecutionValidatorReasoningModes:
+    def test_reasoning_and_answer_extracts_tag(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig(
+            parsing_mode=code_exec.OutputParsingMode.reasoning_and_answer,
+            answer_tag="answer",
+        )
+        validator = code_exec.CodeExecutionValidator(config)
+        result = validator.validate(
+            "Let me think about this...\n<answer>42</answer>",
+            "function_return",
+        )
+        assert result.status == code_exec.ValidationStatus.success
+        assert result.answer_text == "42"
+        assert result.parsed_answer == 42
+        assert result.reasoning_text == "Let me think about this..."
+
+    def test_reasoning_and_answer_fails_without_tag(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig(
+            parsing_mode=code_exec.OutputParsingMode.reasoning_and_answer,
+        )
+        validator = code_exec.CodeExecutionValidator(config)
+        result = validator.validate("Just a raw answer without tags", "function_return")
+        assert result.status == code_exec.ValidationStatus.failed
+        assert "no answer tag found" in (result.error_details or "")
+
+    def test_multi_tag_policy_last(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig(
+            parsing_mode=code_exec.OutputParsingMode.reasoning_and_answer,
+            answer_tag="final",
+            multi_tag_policy="last",
+        )
+        validator = code_exec.CodeExecutionValidator(config)
+        result = validator.validate(
+            "<final>first</final> more reasoning <final>second</final>",
+            "program_output",
+        )
+        assert result.answer_text == "second"
+
+    def test_strict_tag_structure_rejects_malformed(self) -> None:
+        config = code_exec.CodeExecutionValidatorConfig(
+            parsing_mode=code_exec.OutputParsingMode.reasoning_and_answer,
+            strict_tag_structure=True,
+        )
+        validator = code_exec.CodeExecutionValidator(config)
+        result = validator.validate("<final>unclosed", "program_output")
+        assert result.status == code_exec.ValidationStatus.failed
+        assert "malformed" in (result.error_details or "")
+
+
+class TestValidationStatus:
+    def test_status_enum_values(self) -> None:
+        assert code_exec.ValidationStatus.success.value == "success"
+        assert code_exec.ValidationStatus.partial.value == "partial"
+        assert code_exec.ValidationStatus.failed.value == "failed"
+
+
+class TestCodeExecutionOutput:
+    def test_output_properties(self) -> None:
+        validation_result = code_exec.CodeExecutionValidationResult(
+            raw_output="test output",
+            status=code_exec.ValidationStatus.success,
+            answer_text="42",
+            parsed_answer=42,
+            predict_type="function_return",
+        )
+        output = code_exec.CodeExecutionOutput(
+            raw_output="test output",
+            validation_result=validation_result,
+        )
+        assert output.is_valid is True
+        assert output.parsed_answer == 42
+        assert output.answer_text == "42"

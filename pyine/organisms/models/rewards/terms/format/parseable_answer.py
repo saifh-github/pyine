@@ -6,7 +6,7 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
-import pyine.utils.strings
+import pyine.utils.parsing
 
 
 class ParseableAnswerTermConfig(reward_types.BaseConfig):
@@ -62,8 +62,8 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
     ) -> None:
         """Create the term from validated configuration."""
         self._config = config
-        self._final_open_re = pyine.utils.strings.compile_open_tag_regex(config.final_tag)
-        self._final_close_re = pyine.utils.strings.compile_close_tag_regex(config.final_tag)
+        self._final_open_re = pyine.utils.parsing.compile_open_tag_regex(config.final_tag)
+        self._final_close_re = pyine.utils.parsing.compile_close_tag_regex(config.final_tag)
 
     def _get_final_tag_stats(
         self,

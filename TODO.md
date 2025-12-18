@@ -6,6 +6,9 @@ Last review date: 2025-12-04
 
 - Eval metrics definitions (for wandb) skip the category metrics; we might be able to predetermine
   those, create a sort of registry for all metrics, and query that registry for wandb definitions?
+- We might want code exec examples based on coding problems with clear entrypoints to always be
+  prepared as 'function_return' predict_type samples (when allowed)?
+- Add utils to prepend code line numbers to code strings (according to published papers)
 
 **Medium priority:**
 

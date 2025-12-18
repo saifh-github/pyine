@@ -10,7 +10,7 @@ import typing
 
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
-import pyine.utils.strings as strings_utils
+import pyine.utils.parsing as parsing_utils
 
 
 class InMemoryRewardLogger:
@@ -94,8 +94,8 @@ class WandBRewardLogger:
             table_max_rows: Maximum number of buffered rows before forcing a flush.
         """
         self._wandb_run = wandb_run
-        self._key_prefix = strings_utils.normalize_path_prefix(key_prefix)
-        prefix_norm = strings_utils.normalize_path_prefix(scope_prefix)
+        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
+        prefix_norm = parsing_utils.normalize_path_prefix(scope_prefix)
         self._total_key = f"{prefix_norm}total" if prefix_norm else "total"
         self._step = step
         self._log_tables = log_tables

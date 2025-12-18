@@ -12,8 +12,8 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
-import pyine.utils.strings as strings_utils
 
 
 def make_simple_manager(
@@ -614,7 +614,7 @@ class RewardManager:
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
     ) -> tuple[dict[str, float], dict[str, reward_types.MetricValue]]:
         """Apply the configured scope prefix to per-sample term/metric keys."""
-        prefix_norm = strings_utils.normalize_path_prefix(self._config.logging.scope_prefix)
+        prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
             return dict(terms), dict(metrics)
         return (
@@ -628,7 +628,7 @@ class RewardManager:
         term_summaries: collections.abc.Mapping[str, float],
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Apply the configured scope prefix to run-level summary keys."""
-        prefix_norm = strings_utils.normalize_path_prefix(self._config.logging.scope_prefix)
+        prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
             return dict(totals), dict(term_summaries)
         return (
