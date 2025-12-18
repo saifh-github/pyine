@@ -30,6 +30,7 @@ import pyine.utils.code.validation
 import pyine.utils.concurrency
 import pyine.utils.langchain
 import pyine.utils.llm_providers
+import pyine.utils.parsing
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -722,22 +723,23 @@ def _default_output_validator(
     config: AnnotationOptions,
     input_vars: dict[str, typing.Any],
     tags: list[str],
-) -> bool:
-    """Validates the output of the prompt invocation.
+) -> str | None:
+    """Validates the output of the prompt invocation, returning the validated string if successful.
 
     Implements known rules for some prompts, but if an unsupported prompt is used, the result will
-    always be accepted as-is (i.e., no validation is performed).
+    always be accepted as-is (i.e., no validation is performed). If validation fails, returns `None`.
     """
     is_stub_prompting = config.prompt_config.prompt_name == _PromptNames.CODE_STUBBING
     if is_stub_prompting:
         assert "augment:stubbed" in tags, "missing augment tag for stubbed code"
         # special handling for this one: it's impossible to really execute it, so forget tracing it
-        # ...instead, we will just 'validate' the code using heuristics + an ast parser
+        # ...instead, we will just 'validate' the code using cleanups, heuristics, and an ast parser
         try:
-            pyine.utils.code.validation.validate_code(result_str)
+            processed_str = pyine.utils.parsing.strip_markdown_fences(result_str)
+            pyine.utils.code.validation.validate_code(processed_str)
         except Exception:
-            return False
-        return True
+            return None
+        return processed_str
     is_mislead_prompting = config.prompt_config.prompt_name == _PromptNames.ISSUES_DOCS
     is_hint_prompting = config.prompt_config.prompt_name.startswith(_PromptNames.HINTS_PREFIX)
     is_bug_prompting = (
@@ -748,9 +750,10 @@ def _default_output_validator(
         # => for all bug types, we expect the execution output to NOT be the expected one;
         # => in contrast, hints (good or misleading) should NOT influence the execution outcome.
         if result_str == trace.code_string:
-            return False  # if code has not changed, this is not a good sample, no matter what
+            return None  # if code has not changed, this is not a good sample, no matter what
+        processed_str = pyine.utils.parsing.strip_markdown_fences(result_str)
         trace_request = pyine.data.traces.common.TraceRequest(
-            code_string=result_str,
+            code_string=processed_str,
             # the trace id we use won't really matter, we won't be writing these results anywhere
             trace_id=pyine.data.traces.dataset_utils.TraceIdentifier.from_string(str(trace.identifier)),
             entrypoint_name=trace.entrypoint_name,
@@ -775,10 +778,13 @@ def _default_output_validator(
             output_compare_config=pyine.utils.code.output_compare.get_default_comparison_config(),
         )
         if is_bug_prompting or _INTERNAL_BUGGED_HINTED_TOKEN in input_vars:
-            return not bool(compare_result)  # we want any different output for bugged code
-        return bool(compare_result)  # we want the original output for hinted code
+            if not bool(compare_result):  # we want any different output for bugged code
+                return processed_str
+        elif bool(compare_result):  # we want the original (expected) output for hinted code
+            return processed_str
+        return None  # otherwise, the output is invalid/unexpected
     # ultimate fallback: accept everything (we don't know how to validate it)
-    return True
+    return result_str
 
 
 @dataclasses.dataclass

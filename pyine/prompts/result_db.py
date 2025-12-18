@@ -865,9 +865,13 @@ class ValidationFailedError(ValueError):
 
 
 class ValidatorCallableType(typing.Protocol):
-    """Protocol used to represent a callable prompt result validator."""
+    """Protocol used to represent a callable prompt result validator.
 
-    def __call__(self, result_str: str, output: typing.Any) -> bool: ...
+    If validation succeeds, the potentially cleaned up / modified / validated prompt result is
+    returned; if validation fails, `None` is returned instead.
+    """
+
+    def __call__(self, result_str: str, output: typing.Any) -> str | None: ...
 
 
 def fetch_or_generate_prompt_results(
@@ -994,7 +998,10 @@ def fetch_or_generate_prompt_results(
                 if output_validator is not None:
                     # validate the produced output if a validator is provided
                     try:
-                        is_ok = bool(output_validator(result_str, output))
+                        validated_str = output_validator(result_str, output)
+                        is_ok = validated_str is not None
+                        if is_ok:
+                            result_str = validated_str
                     except Exception as e:
                         # if validator itself errors, treat as failure and raise immediately
                         raise ValidationFailedError(f"validation callable raised an exception: {e}") from e

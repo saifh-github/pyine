@@ -342,12 +342,12 @@ def test_validator_with_retries(
         result: str,
         *args: typing.Any,
         **kwargs: typing.Any,
-    ) -> bool:
+    ) -> str | None:
         nonlocal validator_attempts
         if validator_attempts < 5:
             validator_attempts += 1
-            return False
-        return True
+            return None
+        return result
 
     with pytest.raises(ValidationFailedError):
         _ = fetch_or_generate_prompt_results(
