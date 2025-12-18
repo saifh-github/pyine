@@ -238,6 +238,7 @@ class TRLRewardAdapter:
                     raise
                 error_msg = f"{type(exc).__name__}: {exc}"
                 errors[sample_idx] = error_msg
+
                 logger.warning("TRL reward computation failed for sample %d: %s", sample_idx, error_msg)
                 rewards.append(None if self._return_none_on_skip else 0.0)
                 if outputs is not None:
@@ -262,6 +263,18 @@ class TRLRewardAdapter:
             if not isinstance(p, str):
                 raise TypeError(f"expected str for prompt at index {idx}, got {type(p)}")
         return list(prompts)
+
+    @staticmethod
+    def _fix_sample_data_dict(data: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        """Fix enum fields in SampleData dict that were serialized to strings by HF datasets.
+
+        HuggingFace datasets serialize enums to strings, so we need to convert them back.
+        """
+        fixed = dict(data)
+        # Convert predict_type from string back to enum if needed
+        if "predict_type" in fixed and isinstance(fixed["predict_type"], str):
+            fixed["predict_type"] = samples_common.SamplePredictType(fixed["predict_type"])
+        return fixed
 
     def _get_sample_data_list(
         self,
@@ -292,12 +305,13 @@ class TRLRewardAdapter:
                     result.append(sd)
                 elif isinstance(sd, dict):
                     # Dictionary from HuggingFace dataset - reconstruct SampleData (NamedTuple)
+                    # Need to convert enum fields back from strings
                     try:
-                        result.append(samples_common.SampleData(**sd))
+                        sd_dict = typing.cast("dict[str, typing.Any]", sd)
+                        sd_fixed = self._fix_sample_data_dict(sd_dict)
+                        result.append(samples_common.SampleData(**sd_fixed))
                     except Exception as exc:
-                        raise ValueError(
-                            f"failed to reconstruct SampleData from dict at index {idx}: {exc}"
-                        ) from exc
+                        raise ValueError(f"failed to reconstruct SampleData from dict at index {idx}: {exc}") from exc
                 else:
                     raise TypeError(f"expected SampleData or dict for sample at index {idx}, got {type(sd)}")
             return result
@@ -332,7 +346,9 @@ class TRLRewardAdapter:
                         field_values[field] = field_data
 
             try:
-                result.append(samples_common.SampleData(**field_values))
+                # Fix enum fields before constructing SampleData
+                field_values_fixed = self._fix_sample_data_dict(typing.cast("dict[str, typing.Any]", field_values))
+                result.append(samples_common.SampleData(**field_values_fixed))
             except Exception as exc:
                 raise ValueError(
                     f"failed to reconstruct SampleData from individual fields at index {idx}: {exc}"
