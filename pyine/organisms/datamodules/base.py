@@ -152,18 +152,6 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
             **self.prompt_config.model_dump(),
         )
 
-    @typing.override
-    def instantiate_sample_to_rl_transform(
-        self,
-    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
-        """Returns the sample transform function used to prepare RL training data.
-
-        All prompt configuration (version, include_examples, etc.) comes from self.prompt_config.
-        """
-        return pyine.organisms.datamodules.utils.transforms.create_rl_sample_transform(
-            **self.prompt_config.model_dump(),
-        )
-
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
 
     _resolved_base_filter: pyine.data.utils.filter_rules.FilterType | None = pydantic.PrivateAttr(default=None)

@@ -698,48 +698,6 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             force_regenerate=force_regenerate,
         )
 
-    def instantiate_hf_rl_dataset(
-        self,
-        subset_name: SubsetNameType,
-        parser_kwargs: dict[str, typing.Any] | None = None,
-        force_regenerate: bool = False,
-    ) -> hf_datasets.Dataset:
-        """Instantiates a HuggingFace dataset for RL training (e.g., GRPO, PPO, RLOO).
-
-        This function prepares datasets for reinforcement learning training by providing raw
-        prompts (not tokenized) along with metadata needed for reward computation. Unlike
-        SFT datasets which are pre-tokenized, RL datasets need raw text because the trainer
-        will generate multiple completions per prompt during training.
-
-        The dataset format includes:
-        - prompt: List of chat messages (format expected by TRL trainers)
-        - expected_output: Ground truth output for reward calculation
-        - predict_type: Type of prediction (program_output, frame_variables, function_return)
-        - identifier: Unique sample identifier
-        - code_type: Type of code (original, obfuscated, etc.)
-        - tags: Sample tags for analysis
-        - Additional metadata fields (first_line, last_line, entrypoint)
-
-        All prompt configuration (version, include_examples, etc.) is read from self.prompt_config.
-
-        Args:
-            subset_name: the subset name to prepare the dataset for.
-            parser_kwargs: keyword arguments to pass to the parser's constructor (if any).
-            force_regenerate: whether to rebuild the dataset cache even if it already exists.
-
-        Returns:
-            A huggingface dataset with raw prompts and metadata for RL training.
-        """
-        rl_transform_fn = self.instantiate_sample_to_rl_transform()
-        return self._instantiate_hf_dataset_with_transform(
-            subset_name=subset_name,
-            transform_fn=rl_transform_fn,
-            cache_subdir="hf_rl_datasets",
-            hash_params=(parser_kwargs,),
-            parser_kwargs=parser_kwargs,
-            force_regenerate=force_regenerate,
-        )
-
     def instantiate_openai_messages_dataset(
         self,
         subset_name: SubsetNameType,
@@ -815,25 +773,6 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
         # this transform is application-specific: it depends on the type of samples provided by parsers
         raise NotImplementedError("derived class should implement this function")
 
-    def instantiate_sample_to_rl_transform(
-        self,
-    ) -> typing.Callable[[typing.Any], typing.Any]:
-        """Returns the sample transform function used to prepare RL training data.
-
-        This function creates a transform for reinforcement learning training that formats
-        samples with raw prompts (not tokenized) and metadata needed for reward computation.
-
-        All prompt configuration (version, include_examples, etc.) is read from self.prompt_config.
-
-        Note: if the datamodule does not support the conversion of raw data samples into
-        RL training format, this function will raise an exception.
-
-        Returns:
-             The sample transform function for RL training.
-        """
-        # this transform is application-specific: it depends on the type of samples provided by parsers
-        raise NotImplementedError("derived class should implement this function")
-
     @pydantic.model_validator(mode="after")
     @typing.override
     def _validate_and_resolve(self) -> ConversationDataModuleConfig:
@@ -897,29 +836,6 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
 
         Returns:
              The HuggingFace dataset object.
-        """
-        raise NotImplementedError("derived class should implement this function")
-
-    def get_hf_rl_dataset(
-        self,
-        subset_name: SubsetNameType,
-        force_regenerate: bool = False,
-    ) -> hf_datasets.Dataset:
-        """Returns a HuggingFace dataset for RL training.
-
-        This function exists for users who want to train models using reinforcement learning
-        algorithms (e.g., GRPO, PPO, RLOO) that require raw prompts and metadata instead of
-        pre-tokenized examples.
-
-        All prompt configuration (version, include_examples, etc.) is read from the datamodule's
-        prompt_config.
-
-        Args:
-            subset_name: the subset name to prepare the dataset for.
-            force_regenerate: whether to rebuild caches even if they already exist.
-
-        Returns:
-             The HuggingFace dataset object with raw prompts and metadata for RL training.
         """
         raise NotImplementedError("derived class should implement this function")
 
