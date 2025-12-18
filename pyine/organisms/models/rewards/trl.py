@@ -340,6 +340,7 @@ def make_trl_reward_fn(
 
     Returns:
         A callable with signature `(completions, **kwargs) -> list[float | None]`.
+        The returned function has a `__name__` attribute for TRL compatibility.
 
     Example:
         ```python
@@ -355,7 +356,8 @@ def make_trl_reward_fn(
         trainer = GRPOTrainer(..., reward_funcs=[reward_fn])
         ```
     """
-    return TRLRewardAdapter(
+    # Create the adapter instance
+    adapter = TRLRewardAdapter(
         manager=manager,
         prompt_key=prompt_key,
         sample_data_key=sample_data_key,
@@ -364,3 +366,14 @@ def make_trl_reward_fn(
         message_selection_policy=message_selection_policy,
         skip_on_error=skip_on_error,
     )
+
+    # Return a proper function (not a class instance) for cleaner TRL integration
+    # Functions naturally have __name__ attribute, so TRL's reward tracking works seamlessly
+    def trl_reward_function(
+        completions: TRLCompletions,
+        **kwargs: typing.Any,
+    ) -> list[float | None]:
+        """TRL-compatible reward function that wraps a RewardManager."""
+        return adapter(completions, **kwargs)
+
+    return trl_reward_function
