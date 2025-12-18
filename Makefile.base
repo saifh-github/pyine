@@ -42,7 +42,7 @@ install: ## Installs development environment and dependencies
 		fi; \
 	fi
 	@if [ ! -d .venv ]; then uv venv; fi
-	uv sync --extra dev
+	uv sync --all-extras
 	@if [ -f .pre-commit-config.yaml ]; then \
 		echo "Installing pre-commit hooks..."; \
 		uv run pre-commit install; \
