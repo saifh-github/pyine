@@ -20,6 +20,7 @@ import pyine.utils.code.args_mapper
 import pyine.utils.code.blocks
 import pyine.utils.code.complexity_metrics
 import pyine.utils.code.input_mock
+import pyine.utils.code.line_annotations
 import pyine.utils.code.output_capture
 import pyine.utils.filesystem
 import pyine.utils.portability
@@ -307,7 +308,7 @@ class TraceResult(pydantic.BaseModel):
     @property
     def code_string_with_line_numbers(self) -> str:
         """Returns the code string with line numbers for each line of code."""
-        return pyine.utils.portability.get_code_with_numbered_lines(self.code_string)
+        return pyine.utils.code.line_annotations.get_code_with_numbered_lines(self.code_string)
 
     @property
     def total_step_count(self) -> int:

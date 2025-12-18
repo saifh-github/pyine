@@ -14,6 +14,52 @@ import rich.console
 import pyine.utils.portability as portability
 
 
+class TestPrintCodeWithNumberedLines:
+    def test_with_logger(self) -> None:
+        code = "a = 1\nprint(a)"
+        captured: list[str] = []
+
+        class Logger:
+            def info(
+                self,
+                m: str,
+            ) -> None:
+                captured.append(m)
+
+        portability.print_code_with_numbered_lines(code, prefixed_tabs=1, logger=Logger())
+        assert len(captured) == 2
+        assert captured[0] == "\tL1|a = 1"
+        assert captured[1] == "\tL2|print(a)"
+
+    def test_with_stdout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        code = "a = 1\nprint(a)"
+        printed: list[str] = []
+        monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
+        portability.print_code_with_numbered_lines(code, prefixed_tabs=0, logger=None)
+        assert len(printed) == 2
+        assert printed[0] == "L1|a = 1"
+        assert printed[1] == "L2|print(a)"
+
+    def test_passes_format_params(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        code = "x = 1\ny = 2"
+        printed: list[str] = []
+        monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
+        portability.print_code_with_numbered_lines(
+            code,
+            prefix_pattern="{num}|",
+            num_width=3,
+            zero_pad=False,
+        )
+        assert printed[0] == "  1|x = 1"
+        assert printed[1] == "  2|y = 2"
+
+
 class TestEstimateTolerance:
     def test_integer_values(self) -> None:
         rtol, atol = portability.estimate_tolerance("123")
@@ -276,34 +322,6 @@ def test_portable_function_name() -> None:
         portability.get_portable_function_name(SomeDummyClass(1).some_instance_method)
         == expected_cls_name + ".some_instance_method"
     )
-
-
-def test_numbered_lines_helpers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    code = "a = 1\nprint(a)"
-    formatted = portability.get_code_with_numbered_lines(code, prefixed_tabs=2)
-    lines = formatted.splitlines()
-    assert lines[0].startswith("\t\tL0001:   a = 1")
-    assert lines[1].startswith("\t\tL0002:   print(a)")
-
-    captured = []
-
-    class Logger:
-        def info(
-            self,
-            m: str,
-        ) -> None:
-            captured.append(m)
-
-    portability.print_code_with_numbered_lines(code, prefixed_tabs=1, logger=Logger())
-    assert len(captured) == 2 and captured[0].startswith("\tL0001:   ")
-
-    # default print path
-    printed = []
-    monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
-    portability.print_code_with_numbered_lines(code, prefixed_tabs=0, logger=None)
-    assert len(printed) == 2 and printed[0].startswith("L0001:   ")
 
 
 class TestGetFullyQualifiedName:

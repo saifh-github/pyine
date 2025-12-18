@@ -722,7 +722,7 @@ def test_trace_tag_type_size_buckets_cover_ranges() -> None:
 
 def test_trace_result_properties(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        pyine.utils.code.execution.pyine.utils.portability,
+        pyine.utils.code.execution.pyine.utils.code.line_annotations,
         "get_code_with_numbered_lines",
         lambda code: f"numbered:{code}",
     )

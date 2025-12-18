@@ -27,6 +27,8 @@ import rich.table
 import rich.text
 import yaml
 
+import pyine.utils.code.line_annotations
+
 ConfigDisplayType = (
     hydra_zen.typing.Builds[typing.Any]
     | type[typing.Any]
@@ -319,39 +321,28 @@ def get_portable_function_name(callabl: typing.Callable[..., typing.Any]) -> str
     return base
 
 
-def get_code_with_numbered_lines(
-    code_string: str,
-    prefixed_tabs: int = 0,
-) -> str:
-    """Generates a string containing code with line numbers and tabs.
-
-    Args:
-        code_string (str): the Python code string to be formatted.
-        prefixed_tabs (int): the number of tabs to prefix each line with. Defaults to 0.
-
-    Returns:
-        str: The formatted code string with line numbers and tabs
-    """
-    tab_prefix = "\t" * prefixed_tabs
-    formatted_lines: list[str] = []
-    for line_idx, line_content in enumerate(code_string.splitlines(), start=1):
-        formatted_lines.append(f"{tab_prefix}L{line_idx:04d}:   {line_content}")
-    return "\n".join(formatted_lines)
-
-
 def print_code_with_numbered_lines(
     code_string: str,
     prefixed_tabs: int = 0,
     logger: typing.Any | None = None,
+    prefix_pattern: str = pyine.utils.code.line_annotations.DEFAULT_LINE_PREFIX_PATTERN,
+    num_width: int | None = None,
+    zero_pad: bool = True,
 ) -> None:
     """Prints each line of the given code string, prefixed with tabs and a fixed-width line number.
 
-    Can output to either a logger or stdout (by default, if no logger is provided)..
+    Can output to either a logger or stdout (by default, if no logger is provided).
 
     Args:
-        code_string (str): the Python code string to be printed.
-        prefixed_tabs (int): the number of tabs to prefix each line with. Defaults to 0.
-        logger: optional logger object with a info/debug method. If None, output goes to stdout.
+        code_string: The Python code string to be printed.
+        prefixed_tabs: The number of tabs to prefix each line with. Defaults to 0.
+        logger: Optional logger object with a info/debug method. If None, output goes to stdout.
+        prefix_pattern: Pattern for the line prefix where ``{num}`` is replaced with the
+            formatted line number. Defaults to ``"L{num}|"``.
+        num_width: Width for the line number padding. If None, auto-detected based on the
+            total number of lines.
+        zero_pad: If True (default), pad line numbers with zeros. If False, right-align
+            with spaces.
     """
     # pragma: no cover
     if logger is not None:
@@ -365,7 +356,13 @@ def print_code_with_numbered_lines(
             raise ValueError("could not identify how to use logger object")
     else:
         logging_func = print
-    formatted_code = get_code_with_numbered_lines(code_string, prefixed_tabs)
+    formatted_code = pyine.utils.code.line_annotations.get_code_with_numbered_lines(
+        code_string,
+        prefixed_tabs=prefixed_tabs,
+        prefix_pattern=prefix_pattern,
+        num_width=num_width,
+        zero_pad=zero_pad,
+    )
     for line in formatted_code.splitlines():
         logging_func(line)
 
