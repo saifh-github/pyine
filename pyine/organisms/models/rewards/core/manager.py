@@ -261,7 +261,7 @@ class RewardManager:
     ) -> None:
         """Set a default logging step for subsequent `compute*` calls."""
         self._step = step
-        if hasattr(self._logger, "set_step"):
+        if self._logger and hasattr(self._logger, "set_step"):
             self._logger.set_step(step)  # type: ignore[reportUnknownMemberType]
 
     def compute(
