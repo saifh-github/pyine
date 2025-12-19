@@ -173,22 +173,18 @@ class TRLRewardAdapter:
 
     def __call__(
         self,
-        completions: TRLCompletions | None = None,
+        completions: TRLCompletions,
         **kwargs: typing.Any,
     ) -> list[float | None]:
         """Compute rewards for a batch of TRL completions.
 
         Args:
             completions: List of completions, each is a list of message dicts.
-                Can be passed as positional or keyword argument (TRL uses keyword).
             **kwargs: Additional data passed by TRL (prompts, completions, etc.).
 
         Returns:
             List of reward values. None indicates a skipped sample.
         """
-        # Handle both calling conventions: positional and keyword argument
-        if completions is None:
-            completions = typing.cast("TRLCompletions", kwargs.pop("completions"))
         result = self.compute(completions, **kwargs)
         return result.rewards
 
