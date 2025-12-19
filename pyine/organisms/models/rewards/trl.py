@@ -282,74 +282,25 @@ class TRLRewardAdapter:
         Handles three cases:
         1. "sample_data" key with SampleData objects
         2. "sample_data" key with dicts (HF datasets serialize NamedTuples to dicts)
-        3. Individual SampleData fields scattered across kwargs (reconstruct from fields)
         """
         sample_data: typing.Any = kwargs.get(self._sample_data_key)
 
-        # Case 1 & 2: "sample_data" key exists
-        if sample_data is not None:
-            if not isinstance(sample_data, (list, tuple)):
-                raise TypeError(f"expected list for '{self._sample_data_key}', got {type(sample_data)}")
-            sample_data = typing.cast("collections.abc.Sequence[typing.Any]", sample_data)
-            if len(sample_data) != batch_size:
-                raise ValueError(f"sample_data length ({len(sample_data)}) != batch size ({batch_size})")
+        if not isinstance(sample_data, (list, tuple)):
+            raise TypeError(f"expected list for '{self._sample_data_key}', got {type(sample_data)}")
+        sample_data = typing.cast("collections.abc.Sequence[typing.Any]", sample_data)
+        if len(sample_data) != batch_size:
+            raise ValueError(f"sample_data length ({len(sample_data)}) != batch size ({batch_size})")
 
-            result: list[samples_common.SampleData] = []
-            for idx, sd in enumerate(sample_data):
-                if isinstance(sd, samples_common.SampleData):
-                    # Already a SampleData object
-                    result.append(sd)
-                elif isinstance(sd, dict):
-                    # Dictionary from HuggingFace dataset - reconstruct SampleData (NamedTuple)
-                    # Need to convert enum fields back from strings
-                    try:
-                        sd_dict = typing.cast("dict[str, typing.Any]", sd)
-                        sd_fixed = self._fix_sample_data_dict(sd_dict)
-                        result.append(samples_common.SampleData(**sd_fixed))
-                    except Exception as exc:
-                        raise ValueError(f"failed to reconstruct SampleData from dict at index {idx}: {exc}") from exc
-                else:
-                    raise TypeError(f"expected SampleData or dict for sample at index {idx}, got {type(sd)}")
-            return result
-
-        # Case 3: Individual SampleData fields in kwargs - reconstruct from fields
-        # This happens when HuggingFace datasets flatten the NamedTuple into separate columns
-        sample_data_fields = set(samples_common.SampleData._fields)
-        available_fields = sample_data_fields.intersection(kwargs.keys())
-
-        if not available_fields:
-            raise ValueError(
-                f"'{self._sample_data_key}' not found in kwargs and no individual SampleData fields found; "
-                f"available keys: {list(kwargs.keys())}"
-            )
-
-        # Reconstruct SampleData from individual fields
-        result = []
-        for idx in range(batch_size):
-            field_values = {}
-            for field in sample_data_fields:
-                if field in kwargs:
-                    field_data = kwargs[field]
-                    if isinstance(field_data, (list, tuple)):
-                        field_data_seq = typing.cast("collections.abc.Sequence[typing.Any]", field_data)
-                        if len(field_data_seq) != batch_size:
-                            raise ValueError(
-                                f"field '{field}' length ({len(field_data_seq)}) != batch size ({batch_size})"
-                            )
-                        field_values[field] = field_data_seq[idx]
-                    else:
-                        # Scalar value - same for all samples
-                        field_values[field] = field_data
-
+        result: list[samples_common.SampleData] = []
+        for idx, sd in enumerate(sample_data):
+            # Dictionary from HuggingFace dataset - reconstruct SampleData (NamedTuple)
+            # Need to convert enum fields back from strings
             try:
-                # Fix enum fields before constructing SampleData
-                field_values_fixed = self._fix_sample_data_dict(typing.cast("dict[str, typing.Any]", field_values))
-                result.append(samples_common.SampleData(**field_values_fixed))
+                sd_dict = typing.cast("dict[str, typing.Any]", sd)
+                sd_fixed = self._fix_sample_data_dict(sd_dict)
+                result.append(samples_common.SampleData(**sd_fixed))
             except Exception as exc:
-                raise ValueError(
-                    f"failed to reconstruct SampleData from individual fields at index {idx}: {exc}"
-                ) from exc
-
+                raise ValueError(f"failed to reconstruct SampleData from dict at index {idx}: {exc}") from exc
         return result
 
     def _build_context(
