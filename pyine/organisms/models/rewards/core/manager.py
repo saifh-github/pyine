@@ -1,7 +1,6 @@
 """Reward manager implementation."""
 
 import collections.abc
-import dataclasses
 import inspect
 import math
 import typing
@@ -319,13 +318,11 @@ class RewardManager:
         if not active_specs:
             raise ValueError("no enabled reward terms configured")
 
-        ctx_for_terms = self._maybe_parse(sample_ctx)
-
         values: dict[str, float] = {}
         metrics: dict[str, reward_types.MetricValue] = {}
         for spec in active_specs:
             term = self._terms_by_name[spec.name]
-            result = term(ctx_for_terms)
+            result = term(sample_ctx)
             self._validate_term_result(spec.name, result)
             values[spec.name] = float(result.value)
             for metric_name, metric_value in result.metrics.items():
@@ -436,17 +433,15 @@ class RewardManager:
                 f"invalid term factory signature for name={spec.name} type={spec.type}: {signature}"
             ) from exc
 
-    def _maybe_parse(
+    def maybe_parse(
         self,
-        sample_ctx: reward_types.SampleContext,
-    ) -> reward_types.SampleContext:
+        prompt: str,
+        model_output: str,
+    ) -> reward_types.ParsedOutput | None:
         """Parse sample output once (if configured) and return a context with `parsed` set."""
         if self._parser is None:
-            return sample_ctx
-        if sample_ctx.parsed is not None:
-            return sample_ctx
-        parsed = self._parser.parse(sample_ctx.prompt, sample_ctx.model_output)
-        return dataclasses.replace(sample_ctx, parsed=parsed)
+            return None
+        return self._parser.parse(prompt, model_output)
 
     def _get_run_summaries(self) -> tuple[dict[str, float], dict[str, float]]:
         """Compute local run-level summaries (mean/min/max/std) for total and per-term values."""

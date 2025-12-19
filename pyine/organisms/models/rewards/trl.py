@@ -317,6 +317,9 @@ class TRLRewardAdapter:
             role=self._assistant_role,
             policy=self._message_selection_policy,
         )
+
+        parsed_output = self._manager.maybe_parse(prompt, model_output)
+
         if self._context_builder is not None:
             return self._context_builder(prompt, model_output, sample_idx, kwargs)
         assert sample_data is not None  # guaranteed by _get_sample_data_list when no custom builder
@@ -324,13 +327,16 @@ class TRLRewardAdapter:
         if sample_data.expected_output:
             code_exec_eval = reward_types.CodeExecEvalData(
                 expected=sample_data.expected_output,
-                predicted=model_output,
+                predicted=parsed_output.final_answer
+                if parsed_output and parsed_output.final_answer is not None
+                else model_output,
                 predict_type=str(sample_data.predict_type.value),
                 should_flip_reward=sample_data.should_flip_reward(),
             )
         return reward_types.SampleContext(
             prompt=prompt,
             model_output=model_output,
+            parsed=parsed_output,
             sample_data=sample_data,
             code_exec_eval=code_exec_eval,
         )
