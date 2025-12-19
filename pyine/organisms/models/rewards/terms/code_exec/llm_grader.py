@@ -117,7 +117,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         flip = code_exec_utils.get_flip_decision(sample_ctx)
         metrics: dict[str, reward_types.MetricValue] = {
             "expected_length": len(eval_data.expected),
-            "predicted_length": len(eval_data.predicted),
+            "predicted_length": len(code_exec_utils.get_predicted_output(sample_ctx)),
             "reward_flipped": flip,
         }
         llm_score = eval_data.llm_grader_score
@@ -133,7 +133,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
             if llm_score_float < 0.0 or llm_score_float > 1.0:
                 raise ValueError(f"LLMGraderTerm requires llm_grader_score in [0, 1], got: {llm_score_float}")
             return self._compute_from_llm_score(llm_score_float, metrics, flip)
-        return self._compute_fallback(eval_data, metrics, flip)
+        return self._compute_fallback(sample_ctx, metrics, flip)
 
     def _compute_from_llm_score(
         self,
@@ -171,7 +171,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
 
     def _compute_fallback(
         self,
-        eval_data: reward_types.CodeExecEvalData,
+        sample_ctx: reward_types.SampleContext,
         metrics: dict[str, reward_types.MetricValue],
         flip: bool,
     ) -> reward_types.TermResult:
@@ -190,6 +190,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         """
         metrics["llm_grader_available"] = False
         metrics["used_fallback"] = True
+        eval_data = code_exec_utils.require_code_exec_eval_data(sample_ctx, "LLMGraderTerm (Compute Fallback)")
         if self._config.fallback_to_soft_match:
             # use pre-computed result if available
             if eval_data.soft_match_result is not None:
@@ -203,7 +204,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
             else:
                 compare_result = code_exec_utils.compute_soft_match(
                     expected=eval_data.expected,
-                    predicted=eval_data.predicted,
+                    predicted=code_exec_utils.get_predicted_output(sample_ctx),
                     options=self._config.fallback_soft_match_options,
                 )
                 is_match = compare_result.equal
@@ -225,7 +226,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
             else:
                 is_match = code_exec_utils.compute_hard_match(
                     expected=eval_data.expected,
-                    predicted=eval_data.predicted,
+                    predicted=code_exec_utils.get_predicted_output(sample_ctx),
                     strip_whitespace=self._config.strip_whitespace,
                 )
                 metrics["used_precomputed"] = False

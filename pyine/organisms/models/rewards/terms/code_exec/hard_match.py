@@ -85,13 +85,15 @@ class HardMatchTerm(reward_term.BaseRewardTerm):
                     f"got: {type(eval_data.hard_match_result)}"
                 )
             is_match = eval_data.hard_match_result
+            predicted_length = len(eval_data.predicted)
             used_precomputed = True
         else:
             is_match = code_exec_utils.compute_hard_match(
                 expected=eval_data.expected,
-                predicted=eval_data.predicted,
+                predicted=code_exec_utils.get_predicted_output(sample_ctx),
                 strip_whitespace=self._config.strip_whitespace,
             )
+            predicted_length = len(code_exec_utils.get_predicted_output(sample_ctx))
             used_precomputed = False
         flip = code_exec_utils.get_flip_decision(sample_ctx)
         value = code_exec_utils.compute_flipped_reward(
@@ -105,7 +107,7 @@ class HardMatchTerm(reward_term.BaseRewardTerm):
             "used_precomputed": used_precomputed,
             "reward_flipped": flip,
             "expected_length": len(eval_data.expected),
-            "predicted_length": len(eval_data.predicted),
+            "predicted_length": predicted_length,
         }
         return reward_types.TermResult(value=value, metrics=metrics)
 
