@@ -25,6 +25,23 @@ class _NeedsParsedTerm:
         return pyine.organisms.models.rewards.core.types.TermResult(value=1.0)
 
 
+class _SampleIdSuffixAsFloatTerm:
+    """Test helper term that returns the last digit of the sample id as a float."""
+
+    def reset(
+        self,
+        run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+    ) -> None:
+        del run_init_ctx
+
+    def __call__(
+        self,
+        sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+    ) -> pyine.organisms.models.rewards.core.types.TermResult:
+        suffix = sample_ctx.sample_id[-1]
+        return pyine.organisms.models.rewards.core.types.TermResult(value=float(int(suffix)))
+
+
 class TestRewardManager:
     def test_weighting_and_breakdown(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -338,6 +355,355 @@ class TestRewardManager:
         assert len(recorded) == 1
         assert "final_tag='answer'" in str(recorded[0].message)
         assert "parser uses final_tag='final'" in str(recorded[0].message)
+
+    def test_compute_batch_preserves_input_order(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _SampleIdSuffixAsFloatTerm()
+
+        registry.register_term("test_sample_id_suffix", factory)
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="id",
+                    type="test_sample_id_suffix",
+                )
+            ],
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
+        sample1 = rewards_conftest.make_sample_context(identifier="s1")
+        sample2 = rewards_conftest.make_sample_context(identifier="s2")
+        outputs = manager.compute_batch([sample2, sample1], log=False)
+        assert [out.total for out in outputs] == [2.0, 1.0]
+
+    def test_logging_toggles_control_logged_payload(self) -> None:
+        class _MetricsTerm:
+            def reset(
+                self,
+                run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+            ) -> None:
+                del run_init_ctx
+
+            def __call__(
+                self,
+                sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+            ) -> pyine.organisms.models.rewards.core.types.TermResult:
+                del sample_ctx
+                return pyine.organisms.models.rewards.core.types.TermResult(
+                    value=1.0,
+                    metrics={"flag": True, "count": 3},
+                )
+
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _MetricsTerm()
+
+        registry.register_term("test_metrics", factory)
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="test_metrics")],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_examples=1,
+                scope_prefix="",
+                log_total=False,
+                log_terms=False,
+                log_metrics=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            config, logger=logger_obj, registry=registry
+        )
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        manager.compute_output(ctx)
+        assert len(logger_obj.samples) == 1
+        entry = logger_obj.samples[0]
+        assert "total" not in entry
+        assert entry["terms"] == {}
+        assert entry["metrics"] == {}
+
+    def test_finalize_run_scopes_run_summaries(self) -> None:
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="parseable", type="parseable_answer")
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_examples=9999,
+                scope_prefix="reward",
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute_output(ctx, log=False)
+        manager.finalize_run()
+        assert len(logger_obj.runs) == 1
+        run_entry = logger_obj.runs[0]
+        totals = run_entry["totals"]
+        term_summaries = run_entry["term_summaries"]
+        assert isinstance(totals, dict)
+        assert isinstance(term_summaries, dict)
+        assert "reward/run/mean_total" in totals
+        assert "reward/run/terms/mean/parseable" in term_summaries
+
+    def test_term_config_returns_configured_spec(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    weight=2.0,
+                    enabled=True,
+                )
+            ]
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        spec = manager.term_config("parseable")
+        assert spec.type == "parseable_answer"
+        assert spec.weight == 2.0
+        with pytest.raises(KeyError, match="unknown term"):
+            manager.term_config("does_not_exist")
+
+    def test_invalid_term_factory_signature_raises(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            return _NeedsParsedTerm()
+
+        registry.register_term("bad_signature", factory)  # type: ignore[arg-type]
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_signature")]
+        )
+        with pytest.raises(TypeError, match="invalid term factory signature"):
+            pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
+
+    def test_term_result_validation_rejects_invalid_outputs(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        class _BadValueTerm:
+            def reset(
+                self,
+                run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+            ) -> None:
+                del run_init_ctx
+
+            def __call__(
+                self,
+                sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+            ) -> pyine.organisms.models.rewards.core.types.TermResult:
+                del sample_ctx
+                return pyine.organisms.models.rewards.core.types.TermResult(value=True)
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _BadValueTerm()
+
+        registry.register_term("bad_value", factory)
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_value")]
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        with pytest.raises(TypeError, match="non-numeric"):
+            manager.compute_output(ctx, log=False)
+
+    def test_term_result_validation_rejects_non_finite_values_and_metrics(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        class _NonFiniteTerm:
+            def __init__(self, *, emit_bad_metric: bool) -> None:
+                self._emit_bad_metric = emit_bad_metric
+
+            def reset(
+                self,
+                run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+            ) -> None:
+                del run_init_ctx
+
+            def __call__(
+                self,
+                sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+            ) -> pyine.organisms.models.rewards.core.types.TermResult:
+                del sample_ctx
+                if self._emit_bad_metric:
+                    return pyine.organisms.models.rewards.core.types.TermResult(
+                        value=1.0,
+                        metrics={"m": float("nan")},
+                    )
+                return pyine.organisms.models.rewards.core.types.TermResult(value=float("nan"))
+
+        def factory_value(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _NonFiniteTerm(emit_bad_metric=False)
+
+        def factory_metric(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _NonFiniteTerm(emit_bad_metric=True)
+
+        registry.register_term("nan_value", factory_value)
+        registry.register_term("nan_metric", factory_metric)
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        manager_value = pyine.organisms.models.rewards.core.manager.RewardManager(
+            pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_value")]
+            ),
+            registry=registry,
+        )
+        with pytest.raises(ValueError, match="non-finite value"):
+            manager_value.compute_output(ctx, log=False)
+
+        manager_metric = pyine.organisms.models.rewards.core.manager.RewardManager(
+            pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_metric")]
+            ),
+            registry=registry,
+        )
+        with pytest.raises(ValueError, match="non-finite"):
+            manager_metric.compute_output(ctx, log=False)
+
+    def test_term_result_validation_rejects_invalid_metric_keys_and_types(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        class _BadMetricTerm:
+            def __init__(
+                self,
+                metrics: dict[object, object],
+            ) -> None:
+                self._metrics = metrics
+
+            def reset(
+                self,
+                run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+            ) -> None:
+                del run_init_ctx
+
+            def __call__(
+                self,
+                sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+            ) -> pyine.organisms.models.rewards.core.types.TermResult:
+                del sample_ctx
+                return pyine.organisms.models.rewards.core.types.TermResult(
+                    value=1.0,
+                    metrics=self._metrics,  # type: ignore[arg-type]
+                )
+
+        def factory(
+            metrics: dict[object, object],
+        ) -> pyine.organisms.models.rewards.core.types.RewardTermFactory:
+            def inner(
+                spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+                *,
+                parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+                del spec
+                del parser
+                return _BadMetricTerm(metrics)
+
+            return inner
+
+        registry.register_term("bad_key", factory({"": 1}))
+        registry.register_term("bad_type", factory({"ok": []}))
+
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        manager_key = pyine.organisms.models.rewards.core.manager.RewardManager(
+            pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_key")]
+            ),
+            registry=registry,
+        )
+        with pytest.raises(ValueError, match="invalid metric key"):
+            manager_key.compute_output(ctx, log=False)
+
+        manager_type = pyine.organisms.models.rewards.core.manager.RewardManager(
+            pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_type")]
+            ),
+            registry=registry,
+        )
+        with pytest.raises(TypeError, match="invalid type"):
+            manager_type.compute_output(ctx, log=False)
+
+    def test_long_string_metric_emits_warning_but_is_accepted(self) -> None:
+        import warnings
+
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        class _LongStringMetricTerm:
+            def reset(
+                self,
+                run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+            ) -> None:
+                del run_init_ctx
+
+            def __call__(
+                self,
+                sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+            ) -> pyine.organisms.models.rewards.core.types.TermResult:
+                del sample_ctx
+                return pyine.organisms.models.rewards.core.types.TermResult(
+                    value=1.0,
+                    metrics={"reason": "x" * 501},
+                )
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _LongStringMetricTerm()
+
+        registry.register_term("long_string_metric", factory)
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="long_string_metric")]
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            output = manager.compute_output(ctx, log=False)
+        assert output.total == 1.0
+        assert len(recorded) == 1
+        assert "exceeds" in str(recorded[0].message)
 
 
 class TestMakeSimpleManager:

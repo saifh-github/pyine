@@ -31,6 +31,28 @@ class TestTagsOutputParser:
         parsed = parser.parse("prompt", "hello\nworld\n")
         assert parsed.final_answer == "world"
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("  hello world  ", "hello world"),
+            ("   \n\n  ", None),
+        ],
+    )
+    def test_fallback_entire_output(
+        self,
+        raw: str,
+        expected: str | None,
+    ) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            mode="tags",
+            final_tag="final",
+            reasoning_tag="reasoning",
+            fallback_policy="entire_output",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", raw)
+        assert parsed.final_answer == expected
+
     def test_multi_tag_policy_first(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
             mode="tags",
