@@ -1,6 +1,8 @@
 import os
 import socket
 
+import torch
+
 import pyine.data.taco.dataset_utils
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
@@ -93,6 +95,31 @@ def has_network_access() -> bool:
         return False
 
 
+LARGE_GPU_MEMORY_THRESHOLD_GB = 40
+
+
+def has_large_gpu() -> bool:
+    """Returns True if at least one GPU with 40+ GB of memory is available.
+
+    This can be used to determine whether we're on a compute cluster with high-end GPUs suitable
+    for memory-intensive tests.
+
+    Override via:
+      - PYINE_LARGE_GPU_AVAILABLE=true/false
+    """
+    override = _read_bool_env("PYINE_LARGE_GPU_AVAILABLE")
+    if override is not None:
+        return bool(override)
+    if not torch.cuda.is_available():
+        return False
+    for device_idx in range(torch.cuda.device_count()):
+        total_memory_bytes = torch.cuda.get_device_properties(device_idx).total_memory
+        total_memory_gb = total_memory_bytes / (1024**3)
+        if total_memory_gb >= LARGE_GPU_MEMORY_THRESHOLD_GB:
+            return True
+    return False
+
+
 TACO_DATASET_MISSING = not has_taco_dataset()
 TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
 TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
@@ -100,3 +127,4 @@ HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
 OPENAI_API_KEY_MISSING = not has_openai_api_key()
 WANDB_API_KEY_MISSING = not has_wandb_api_key()
 NETWORK_UNAVAILABLE = not has_network_access()
+LARGE_GPU_UNAVAILABLE = not has_large_gpu()
