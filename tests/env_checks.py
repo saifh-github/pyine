@@ -120,6 +120,15 @@ def has_large_gpu() -> bool:
     return False
 
 
+def has_any_accelerator() -> bool:
+    """Returns True if any accelerator is available.
+
+    This can be used to determine whether we're on a platform with ANY device that PyTorch can
+    leverage (whether tiny, e.g. mps, or large, e.g. cluster GPU).
+    """
+    return torch.cuda.is_available() or torch.backends.mps.is_available()
+
+
 TACO_DATASET_MISSING = not has_taco_dataset()
 TACO_TRACES_DATASET_MISSING = not has_taco_traces_dataset()
 TACO_TRACES_DATASET_SPLIT_MISSING = not has_taco_traces_dataset_split()
@@ -127,4 +136,5 @@ HF_ACCESS_TOKEN_MISSING = not has_hf_access_token()
 OPENAI_API_KEY_MISSING = not has_openai_api_key()
 WANDB_API_KEY_MISSING = not has_wandb_api_key()
 NETWORK_UNAVAILABLE = not has_network_access()
+NO_ACCELERATOR_AVAILABLE = not has_any_accelerator()
 LARGE_GPU_UNAVAILABLE = not has_large_gpu()

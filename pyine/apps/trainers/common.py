@@ -248,7 +248,7 @@ class AppMainConfig(pydantic.BaseModel):
     evals_config: pydantic.SerializeAsAny[pyine.evals.common.BaseEvalsConfig]
     """Configuration for the task evaluation strategy to use."""
     use_wandb_logging: bool = False
-    """Whether to use W&B logging for the fine-tuning job (via the post-hoc sync approach)."""
+    """Whether to use W&B logging."""
 
     # --------------- resume settings ---------------
 
