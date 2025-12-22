@@ -101,6 +101,10 @@ filterwarnings = [
     'ignore:The `__fields__` attribute is deprecated, use the `model_fields` class property instead\.:pydantic.warnings.PydanticDeprecatedSince20:hydra_zen\.structured_configs\._implementations',
     'ignore:.*hydra-zen.*pydantic v1.*:UserWarning',
     'ignore:.*:pydantic.warnings.UnsupportedFieldAttributeWarning',
+    # pytorch 2.9+ deprecation warnings triggered by internal/dependency code
+    'ignore:.*allow_tf32.*will be deprecated after Pytorch 2\.9.*:UserWarning',
+    'ignore:.*pin_memory.*is deprecated.*:DeprecationWarning',
+    'ignore:.*is_pinned.*is deprecated.*:DeprecationWarning',
 ]
 
 [tool.coverage.run]
