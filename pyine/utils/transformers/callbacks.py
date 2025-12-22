@@ -343,12 +343,12 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     """Callback that manages RewardManager prefix switching and stats flushing.
 
     This callback integrates with TRL's training loop to:
-    - Switch the RewardManager's key prefix between train/valid phases
-    - Flush accumulated reward statistics after evaluation completes
+    - Switch the RewardManager's key prefix between train/eval phases
+    - Flush accumulated reward statistics at phase transitions and train end
 
     The prefix switching enables differentiation of reward logs during training vs evaluation:
-    - Training steps: logs to "{train_prefix}/reward/..."
-    - Evaluation steps: logs to "{eval_prefix}/reward/..."
+    - Training steps: logs to "{base_prefix}{train_prefix}/reward/..."
+    - Evaluation steps: logs to "{base_prefix}{eval_prefix}/reward/..."
 
     Example usage:
         ```python
@@ -362,6 +362,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self,
         reward_manager: typing.Any,
         *,
+        base_prefix: str = "",
         train_prefix: str = "train",
         eval_prefix: str = "eval",
     ) -> None:
@@ -370,17 +371,27 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         Args:
             reward_manager: The RewardManager instance to manage. Should have `set_key_prefix`
                 and `flush_stats` methods.
+            base_prefix: Static prefix prepended to phase prefixes (e.g., from wandb_key_prefix).
             train_prefix: Prefix to use for training phase logs (default: "train").
-            eval_prefix: Prefix to use for evaluation phase logs (default: "valid").
+            eval_prefix: Prefix to use for evaluation phase logs (default: "eval").
         """
         assert hasattr(reward_manager, "set_key_prefix"), "reward manager missing 'set_key_prefix'"
         assert callable(reward_manager.set_key_prefix)
         assert hasattr(reward_manager, "flush_stats"), "reward manager missing 'flush_stats'"
         assert callable(reward_manager.flush_stats)
         self.reward_manager = reward_manager
+        self.base_prefix = base_prefix
         self.train_prefix = train_prefix
         self.eval_prefix = eval_prefix
         self._in_eval: bool | None = None
+
+    def _make_prefix(self, phase: str) -> str:
+        """Combine base_prefix with phase prefix."""
+        if not self.base_prefix:
+            return phase
+        # ensure base_prefix ends with / for clean joining
+        base = self.base_prefix if self.base_prefix.endswith("/") else f"{self.base_prefix}/"
+        return f"{base}{phase}"
 
     @typing.override
     def on_step_begin(
@@ -392,7 +403,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Set train prefix at the start of each training step."""
         if self._in_eval is not False:
-            self.reward_manager.set_key_prefix(self.train_prefix)
+            self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
             self._in_eval = False
 
     @typing.override
@@ -403,9 +414,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Set eval prefix during evaluation/prediction steps."""
+        """Flush train stats, then switch to eval prefix when entering evaluation phase."""
         if self._in_eval is not True:
-            self.reward_manager.set_key_prefix(self.eval_prefix)
+            # flush train stats before switching to eval (flush_stats resets accumulators)
+            self.reward_manager.flush_stats(step=state.global_step)
+            self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
             self._in_eval = True
 
     @typing.override
@@ -418,5 +431,16 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Flush accumulated stats and reset to train prefix after evaluation completes."""
         self.reward_manager.flush_stats(step=state.global_step)
-        self.reward_manager.set_key_prefix(self.train_prefix)
+        self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
         self._in_eval = False  # evaluation done, switch back right away
+
+    @typing.override
+    def on_train_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Flush any remaining stats at the end of training."""
+        self.reward_manager.flush_stats(step=state.global_step)

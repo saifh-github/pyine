@@ -465,9 +465,9 @@ class TestRewardManager:
         assert isinstance(totals, dict)
         assert isinstance(term_summaries, dict)
         # scoped totals: {scope_prefix}/run/{metric_key}
-        assert "reward/run/reward/mean" in totals
+        assert "reward/run/mean" in totals
         # scoped terms: {scope_prefix}/run/terms/{metric_key}
-        assert "reward/run/terms/reward/parseable/mean" in term_summaries
+        assert "reward/run/terms/parseable/mean" in term_summaries
 
     def test_term_config_returns_configured_spec(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -752,17 +752,18 @@ class TestCategoryWiseRewardTracking:
         manager.compute_output(ctx3, log=False)
         metrics = manager.get_category_metrics()
         # original: mean=(1.0 + 0.0) / 2 = 0.5, std=0.5, min=0.0, max=1.0
-        assert "reward/code_type/original/mean" in metrics
-        assert metrics["reward/code_type/original/mean"] == pytest.approx(0.5)
-        assert metrics["reward/code_type/original/std"] == pytest.approx(0.5)
-        assert metrics["reward/code_type/original/min"] == pytest.approx(0.0)
-        assert metrics["reward/code_type/original/max"] == pytest.approx(1.0)
-        assert metrics["reward/code_type/original/sample_count"] == 2.0
+        # note: getters return bare keys (callers add prefixes)
+        assert "code_type/original/mean" in metrics
+        assert metrics["code_type/original/mean"] == pytest.approx(0.5)
+        assert metrics["code_type/original/std"] == pytest.approx(0.5)
+        assert metrics["code_type/original/min"] == pytest.approx(0.0)
+        assert metrics["code_type/original/max"] == pytest.approx(1.0)
+        assert metrics["code_type/original/sample_count"] == 2.0
         # bugfix: mean=1.0, std=0.0, min=max=1.0
-        assert "reward/code_type/bugfix/mean" in metrics
-        assert metrics["reward/code_type/bugfix/mean"] == pytest.approx(1.0)
-        assert metrics["reward/code_type/bugfix/std"] == pytest.approx(0.0)
-        assert metrics["reward/code_type/bugfix/sample_count"] == 1.0
+        assert "code_type/bugfix/mean" in metrics
+        assert metrics["code_type/bugfix/mean"] == pytest.approx(1.0)
+        assert metrics["code_type/bugfix/std"] == pytest.approx(0.0)
+        assert metrics["code_type/bugfix/sample_count"] == 1.0
 
     def test_reset_accumulators_clears_all_stats(self) -> None:
         category_config = pyine.evals.utils.SampleCategoryExtractionConfig(

@@ -197,9 +197,9 @@ def rl_train(
     logger.info("creating reward function with RewardManager...")
     reward_logger: reward_logging.WandBRewardLogger | None = None
     if runtime is not None and runtime.wandb_run is not None and config.reward_manager_config.logging.enabled:
-        reward_logger = reward_logging.WandBRewardLogger(
-            wandb_run=runtime.wandb_run,
-            key_prefix="train",  # default to train prefix; callback switches to eval during evaluation
+        reward_logger = reward_logging.make_wandb_reward_logger(
+            runtime.wandb_run,
+            config.reward_manager_config.logging,
         )
     reward_manager = pyine.organisms.models.rewards.core.manager.RewardManager(
         config.reward_manager_config,
@@ -234,6 +234,7 @@ def rl_train(
     # 6. Add reward logging callback for train/eval prefix switching and log flushing
     reward_logging_callback = pyine.utils.transformers.RewardLoggingCallback(
         reward_manager=reward_manager,
+        base_prefix=config.reward_manager_config.logging.wandb_key_prefix,
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)
 

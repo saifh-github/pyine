@@ -1,6 +1,5 @@
 """Reward manager implementation."""
 
-import collections
 import collections.abc
 import inspect
 import math
@@ -300,44 +299,53 @@ class RewardManager:
             self._logger.set_key_prefix(key_prefix)  # type: ignore[reportUnknownMemberType]
 
     def get_total_metrics(self) -> dict[str, float]:
-        """Returns aggregated total reward metrics."""
+        """Returns aggregated total reward metrics.
+
+        Keys are bare (e.g., `mean`, `std`) - callers should add appropriate prefixes.
+        """
         if self._total_stats.count == 0:
             return {}
         assert self._total_stats.min is not None and self._total_stats.max is not None
         return {
-            "reward/mean": self._total_stats.mean(),
-            "reward/std": self._total_stats.std(),
-            "reward/min": float(self._total_stats.min),
-            "reward/max": float(self._total_stats.max),
-            "reward/sample_count": float(self._total_stats.count),
+            "mean": self._total_stats.mean(),
+            "std": self._total_stats.std(),
+            "min": float(self._total_stats.min),
+            "max": float(self._total_stats.max),
+            "sample_count": float(self._total_stats.count),
         }
 
     def get_term_metrics(self) -> dict[str, float]:
-        """Returns aggregated term-wise reward metrics."""
+        """Returns aggregated term-wise reward metrics.
+
+        Keys are `{term}/mean`, `{term}/std`, etc. - callers should add appropriate prefixes.
+        """
         metrics: dict[str, float] = {}
         for term, stats in sorted(self._term_stats.items()):
             if stats.count == 0:
                 continue
             assert stats.min is not None and stats.max is not None
-            metrics[f"reward/{term}/mean"] = stats.mean()
-            metrics[f"reward/{term}/std"] = stats.std()
-            metrics[f"reward/{term}/min"] = float(stats.min)
-            metrics[f"reward/{term}/max"] = float(stats.max)
-            metrics[f"reward/{term}/sample_count"] = float(stats.count)
+            metrics[f"{term}/mean"] = stats.mean()
+            metrics[f"{term}/std"] = stats.std()
+            metrics[f"{term}/min"] = float(stats.min)
+            metrics[f"{term}/max"] = float(stats.max)
+            metrics[f"{term}/sample_count"] = float(stats.count)
         return metrics
 
     def get_category_metrics(self) -> dict[str, float]:
-        """Returns aggregated category-wise reward metrics."""
+        """Returns aggregated category-wise reward metrics.
+
+        Keys are `{category}/mean`, etc. - callers should add appropriate prefixes.
+        """
         metrics: dict[str, float] = {}
         for category, stats in sorted(self._category_stats.items()):
             if stats.count == 0:
                 continue
             assert stats.min is not None and stats.max is not None
-            metrics[f"reward/{category}/mean"] = stats.mean()
-            metrics[f"reward/{category}/std"] = stats.std()
-            metrics[f"reward/{category}/min"] = stats.min
-            metrics[f"reward/{category}/max"] = stats.max
-            metrics[f"reward/{category}/sample_count"] = float(stats.count)
+            metrics[f"{category}/mean"] = stats.mean()
+            metrics[f"{category}/std"] = stats.std()
+            metrics[f"{category}/min"] = stats.min
+            metrics[f"{category}/max"] = stats.max
+            metrics[f"{category}/sample_count"] = float(stats.count)
         return metrics
 
     def reset_accumulators(
@@ -362,20 +370,46 @@ class RewardManager:
         This logs total, per-term, and category-wise metrics, then resets all accumulators.
         Typically called by a callback after an evaluation phase completes.
 
+        Respects distributed settings from LoggingConfig:
+        - barrier_before_finalize: sync before logging
+        - gather_distributed_summaries: merge stats across ranks
+        - main_process_only: only log on rank 0
+
         Args:
             step: Optional logging step override (defaults to manager step).
         """
-        if self._logger is None:
+        if self._logger is None or not self._config.logging.enabled:
+            self.reset_accumulators()
             return
         log_step = step if step is not None else self._step
-        total_summaries, term_summaries, category_summaries = self._get_run_summaries()
-        if not total_summaries:
+        if self._total_stats.count == 0:
+            self.reset_accumulators()
             return
+
+        if self._config.logging.barrier_before_finalize and self._is_distributed():
+            pyine.utils.distrib.barrier()
+
+        totals, term_summaries, category_summaries = self._get_run_summaries()
+        if self._config.logging.gather_distributed_summaries and self._is_distributed():
+            totals, term_summaries, category_summaries = self._gather_run_summaries(
+                totals, term_summaries, category_summaries
+            )
+
+        if self._config.logging.main_process_only and not self._is_main_process():
+            self.reset_accumulators()
+            return
+
+        # add scope_prefix to all keys before logging (e.g., "reward/" -> "reward/mean")
+        scope_prefix = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
+        prefixed_totals = {f"{scope_prefix}{k}": v for k, v in totals.items()}
+        prefixed_terms = {f"{scope_prefix}{k}": v for k, v in term_summaries.items()}
+        prefixed_categories = {f"{scope_prefix}{k}": v for k, v in category_summaries.items()}
+
         if hasattr(self._logger, "log_run"):
             self._logger.log_run(
-                totals=total_summaries,
-                term_summaries=term_summaries,
-                category_summaries=category_summaries,
+                totals=prefixed_totals,
+                term_summaries=prefixed_terms,
+                category_summaries=prefixed_categories,
                 step=log_step,
             )
         self.reset_accumulators()

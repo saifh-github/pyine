@@ -384,12 +384,15 @@ reward_manager_config:
 
 **Train/Eval Prefix Switching:**
 
-The RL trainer automatically adds a `RewardLoggingCallback` that switches the logging prefix between training and evaluation phases:
+The RL trainer automatically adds a `RewardLoggingCallback` that switches the logging prefix between training and evaluation phases. After each evaluation phase, aggregate statistics are logged:
 
-- Training steps log to: `train/reward/...`, `train/reward/term_xxx/...`, ...
-- Evaluation steps log to: `eval/reward/...`, `valid/reward/term_xxx/...`, ...
+- `{prefix}/reward/mean`, `{prefix}/reward/std`, `{prefix}/reward/min`, `{prefix}/reward/max` - Total reward stats
+- `{prefix}/reward/{term}/mean`, etc. - Per-term reward stats
+- `{prefix}/reward/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
 
-This enables easy comparison of reward distributions during training vs. evaluation in W&B dashboards.
+Where `{prefix}` is `train` during training and `eval` during evaluation.
+
+Note: Per-sample logging is disabled in RL training for performance. Only aggregate metrics at evaluation boundaries are logged.
 
 **Category-Wise Reward Tracking:**
 
