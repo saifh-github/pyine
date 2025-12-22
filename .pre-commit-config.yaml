@@ -71,10 +71,16 @@ repos:
           # - mdformat-black
 
   # jupyter notebook cell output clearing
+  # NOTE: nbstripout is configured as a git filter instead of a pre-commit hook
+  # so that outputs are stripped from commits but preserved locally.
+  # Run `make setup-nbstripout` to install the filter (done automatically by `make install`).
+  # The check below verifies notebooks don't have outputs (catches filter misconfiguration).
   - repo: https://github.com/kynan/nbstripout
     rev: 0.8.1
     hooks:
       - id: nbstripout
+        args: ["--verify"]
+        name: nbstripout (verify no outputs)
 
   # jupyter notebook linting with ruff
   - repo: https://github.com/nbQA-dev/nbQA

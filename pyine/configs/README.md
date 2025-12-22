@@ -18,7 +18,9 @@ associated with the trainer you are interested in, for example:
 ```bash
 python -m pyine.apps.trainers.openai_finetune_configs
 # or
-python -m pyine.apps.trainers.hf_trainer_configs
+python -m pyine.apps.trainers.hf_sft_trainer_configs
+# or
+python -m pyine.apps.trainers.hf_rl_trainer_configs
 ```
 
 The above should provide an exhaustive description of all experiment configurations that can be

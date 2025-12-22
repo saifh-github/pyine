@@ -1,0 +1,6 @@
+# nbstripout filter: strips outputs from notebooks on commit, keeps them locally
+# Run `make setup-nbstripout` to install the git filter (done automatically by `make install`)
+*.ipynb filter=nbstripout
+
+*.zpln filter=nbstripout
+*.ipynb diff=ipynb

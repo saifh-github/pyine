@@ -28,11 +28,11 @@ Convenience imports for common use cases:
         ]
     )
 
-    # compute rewards (sample_data required from datamodule)
-    ctx = rewards.SampleContext(
+    # build context with automatic parsing, then compute rewards
+    ctx = manager.build_sample_context(
         prompt="...",
         model_output="<final>answer</final>",
-        sample_data=sample_data,
+        sample_data=sample_data,  # from datamodule
     )
     total = manager.compute(ctx)
 

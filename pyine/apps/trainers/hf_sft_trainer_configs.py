@@ -3,18 +3,12 @@
 If you execute this script directly, it will print all available experiment configs for this app.
 """
 
-import asyncio
-import dataclasses
 import itertools
 import logging
-import pathlib
 import typing
 
-import hydra_zen
-import peft
 import pydantic
 import torch
-import torch.distributed.elastic.multiprocessing.errors
 import transformers
 import wandb
 
@@ -27,14 +21,16 @@ import pyine.evals.common
 import pyine.evals.configs
 import pyine.organisms.datamodules
 import pyine.utils.reprod
-import pyine.utils.tokenizers
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
 
 
-class HFTrainerAppMainConfig(common.AppMainConfig):
-    """Configuration for HuggingFace-Transformers model fine-tuning."""
+class SFTTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBase):
+    """Configuration for HuggingFace-Transformers model fine-tuning.
+
+    Inherits model/tokenizer configuration from ModelTokenizerConfigBase.
+    """
 
     # --------------- trainer settings ---------------
 
@@ -43,7 +39,7 @@ class HFTrainerAppMainConfig(common.AppMainConfig):
         description="Training arguments wrapper for the `transformers.TrainingArguments` class.",
     )
 
-    # --------------- collator settings ---------------
+    # --------------- collator settings (SFT-specific) ---------------
 
     collator_always_pad_to_max_length: bool = pydantic.Field(
         default=False,
@@ -62,80 +58,15 @@ class HFTrainerAppMainConfig(common.AppMainConfig):
         description="Log per-batch collator stats (batch size / padded length) to wandb when enabled.",
     )
 
-    # --------------- model settings ---------------
-
-    base_model: str = pydantic.Field(
-        ...,  # MISSING! MANDATORY!
-        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
-    )
-    auto_model_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
-        description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
-    )
-    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
-        default="none",
-        description='Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.',
-    )
-    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = pydantic.Field(
-        default=None,
-        description="LoRA adapter configuration. If None, does not apply LoRA.",
-    )
-
-    # --------------- tokenizer settings ---------------
-
-    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: {"use_fast": True},
-        description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
-    )
-    tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
-        default=True,
-        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
-    )
-    tokenizer_override_padding_to_right_side: bool = pydantic.Field(
-        default=True,  # useful default for most collate functions during training (may be overridden in eval config)
-        description="Override whichever the tokenizer's default padding side is to 'right'.",
-    )
-    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
-        default=True,  # useful default for datasets with long system prompts that end with specific instructions
-        description="Override whichever the tokenizer's default truncation side is to 'left'.",
-    )
-
-    # --------------- utility/helper method ---------------
-
-    @pydantic.model_validator(mode="before")
-    @classmethod
-    def _coerce_lora_config(
-        cls,
-        data: typing.Any,
-    ) -> typing.Any:
-        """Ensures the lora field is a LoraConfig instance when provided as a dict."""
-        if isinstance(data, dict):
-            typed_data = typing.cast("dict[str, typing.Any]", data)
-            lora_config = typed_data.get("lora_config")
-            if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
-                return typed_data
-            if isinstance(lora_config, peft.LoraConfig):
-                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(
-                    dataclasses.asdict(lora_config)
-                )
-                return typed_data
-            if isinstance(lora_config, dict):
-                typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
-                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(typed_lora_config)
-                return typed_data
-        return typing.cast("typing.Any", data)
+    # --------------- SFT-specific methods ---------------
 
     @property
+    @typing.override
     def target_dtype(self) -> torch.dtype:
-        """Returns the target dtype to use with models."""
+        """Returns the target dtype to use with models based on training args."""
         if self.training_args_config.bf16:
             return torch.bfloat16
         return torch.float16 if self.training_args_config.fp16 else torch.float32
-
-    @property
-    def device_map(self) -> dict[str, torch.device | str] | str | None:
-        """Returns the device map to use with models."""
-        return common.get_device_map()
 
     def get_collator(
         self,
@@ -145,52 +76,6 @@ class HFTrainerAppMainConfig(common.AppMainConfig):
     ) -> transformers.DataCollator:
         """Returns the data collator to use for training/evaluations."""
         return instantiate_collator(self, tokenizer=tokenizer, max_seq_len=max_seq_len, wandb_run=wandb_run)
-
-    def get_tokenizer(
-        self,
-        checkpoint_path: pathlib.Path | None = None,
-    ) -> transformers.PreTrainedTokenizer:
-        """Returns the tokenizer to use for the targeted model.
-
-        Args:
-            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
-                tokenizer from the checkpoint. If None, loads the tokenizer for the base model.
-
-        Returns:
-            The instantiated tokenizer.
-        """
-        return common.instantiate_tokenizer(
-            base_model=self.base_model,
-            checkpoint_path=checkpoint_path,
-            auto_tokenizer_config=self.auto_tokenizer_config,
-            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
-            override_padding_to_right_side=self.tokenizer_override_padding_to_right_side,
-            override_truncation_to_left_side=self.tokenizer_override_truncation_to_left_side,
-        )
-
-    def get_model(
-        self,
-        checkpoint_path: pathlib.Path | None = None,
-    ) -> transformers.PreTrainedModel:
-        """Returns a model to use for experiments.
-
-        Args:
-            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
-                model from the checkpoint (with LoRA adapters if present). If None, loads the base
-                pretrained model.
-
-        Returns:
-            The instantiated model.
-        """
-        return common.instantiate_model(
-            base_model=self.base_model,
-            checkpoint_path=checkpoint_path,
-            target_dtype=self.target_dtype,
-            device_map=self.device_map,
-            auto_model_config=self.auto_model_config,
-            quantization_mode=self.quantization_mode,
-            lora_config=self.lora_config,
-        )
 
     @typing.override
     def normalize_for_resume_overlap_check(
@@ -214,7 +99,7 @@ class HFTrainerAppMainConfig(common.AppMainConfig):
 
 
 def instantiate_collator(
-    config: HFTrainerAppMainConfig,
+    config: SFTTrainerAppMainConfig,
     tokenizer: transformers.PreTrainedTokenizer,
     max_seq_len: int,
     wandb_run: wandb.Run | None = None,
@@ -247,164 +132,6 @@ def instantiate_collator(
     return typing.cast("transformers.DataCollator", collator)
 
 
-def instantiate_tokenizer(
-    config: HFTrainerAppMainConfig,
-    checkpoint_path: pathlib.Path | None = None,
-) -> transformers.PreTrainedTokenizer:
-    """Instantiates and returns the tokenizer tied to the config's targeted model.
-
-    Args:
-        config: The configuration object containing tokenizer settings.
-        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the tokenizer
-            from the checkpoint. If None, loads the tokenizer for the base model specified in
-            config.base_model.
-
-    Returns:
-        The instantiated tokenizer.
-    """
-    model_path = checkpoint_path if checkpoint_path is not None else config.base_model
-    logger.info(f"setting up tokenizer for: {model_path}")
-    logger.debug(f"auto tokenizer config: {config.auto_tokenizer_config}")
-    tokenizer = pyine.utils.tokenizers.get_hf_tokenizer(
-        pretrained_model_name_or_path=str(model_path),
-        set_padding_to_eos_if_needed=config.tokenizer_set_padding_to_eos_if_needed,
-        override_padding_to_right_side=config.tokenizer_override_padding_to_right_side,
-        override_truncation_to_left_side=config.tokenizer_override_truncation_to_left_side,
-        **config.auto_tokenizer_config,
-    )
-    logger.info(f"tokenizer successfully created ({type(tokenizer).__name__})")
-    logger.debug(f"tokenizer is_fast: {getattr(tokenizer, "is_fast", False)}")
-    logger.debug(f"tokenizer vocab size: {len(tokenizer)}")
-    return tokenizer
-
-
-def instantiate_model(
-    config: HFTrainerAppMainConfig,
-    checkpoint_path: pathlib.Path | None = None,
-) -> transformers.PreTrainedModel:
-    """Instantiates and returns the model specified in the config.
-
-    Args:
-        config: The configuration object containing model settings.
-        checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the model
-            from the checkpoint (with LoRA adapters if present). If None, loads the base pretrained
-            model specified in config.base_model.
-
-    Returns:
-        The instantiated model.
-    """
-    if checkpoint_path is not None:
-        # Load model from checkpoint
-        logger.info(f"setting up model from checkpoint: {checkpoint_path}")
-        dtype, device_map = config.target_dtype, config.device_map
-
-        # Check if checkpoint contains LoRA adapters
-        adapter_config_path = checkpoint_path / "adapter_config.json"
-        if adapter_config_path.exists():
-            # Load PEFT model with LoRA adapters
-            logger.info("  (loading model with LoRA adapters from checkpoint)")
-            model: transformers.PreTrainedModel = typing.cast(
-                "transformers.PreTrainedModel",
-                peft.AutoPeftModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
-                    checkpoint_path,
-                    torch_dtype=dtype,
-                    device_map=device_map,
-                ),
-            )
-        else:
-            # Load regular model without adapters
-            logger.info("  (loading model without adapters from checkpoint)")
-            model = typing.cast(
-                "transformers.PreTrainedModel",
-                transformers.AutoModelForCausalLM.from_pretrained(  # type: ignore[reportUnknownMemberType]
-                    checkpoint_path,
-                    torch_dtype=dtype,
-                    device_map=device_map,
-                ),
-            )
-    else:
-        # Load base pretrained model
-        logger.info(f"setting up model: {config.base_model}")
-        dtype, device_map = config.target_dtype, config.device_map
-        model_kwargs: dict[str, typing.Any] = {
-            "dtype": dtype,
-            "device_map": device_map,
-            **config.auto_model_config,
-        }
-        if config.quantization_mode == "qlora":
-            logger.info("  (setting up model using QLoRA 4-bit quantization)")
-            quant_config = transformers.BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=dtype,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-            )
-            model_kwargs["quantization_config"] = quant_config
-        elif config.quantization_mode == "none":
-            logger.info("  (setting up model using no quantization)")
-        else:
-            raise ValueError(f"unsupported quantization_mode: {config.quantization_mode}")
-        logger.debug(f"auto model config: {model_kwargs}")
-        base_model = typing.cast(
-            "transformers.PreTrainedModel",
-            transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
-                config.base_model,
-                **model_kwargs,
-            ),
-        )
-        model = base_model
-        if config.lora_config is not None:
-            logger.info("  (setting up LoRA adapters)")
-            logger.debug(f"lora_config: {config.lora_config}")
-            if isinstance(config.lora_config, pyine.utils.transformers.LoraConfig):
-                lora_peft_config = config.lora_config.to_peft_config()
-            else:
-                assert isinstance(config.lora_config, peft.LoraConfig)
-                lora_peft_config = config.lora_config
-            model = typing.cast("transformers.PreTrainedModel", peft.get_peft_model(model, lora_peft_config))
-
-    logger.info(f"model successfully created:\n{model}")
-    model_config = getattr(model, "config", None)
-    if hasattr(model_config, "to_json_string") and callable(model_config.to_json_string):
-        logger.debug(f"model config: {model_config.to_json_string()}")
-    if hasattr(model, "peft_config"):
-        logger.debug(f"model peft_config: {model.peft_config}")
-    get_trainable_params = getattr(model, "get_nb_trainable_parameters", None)
-    if callable(get_trainable_params):
-        trainable_param_count, total_param_count = typing.cast(
-            "tuple[int, int]",
-            get_trainable_params(),
-        )
-        logger.info(f"trainable param count: {trainable_param_count:,d}")
-        logger.info(f"total param count: {total_param_count:,d}")
-        if total_param_count:
-            trainable_ratio = (100 * trainable_param_count) / total_param_count
-            logger.info(f"trainable param %: {trainable_ratio:.3f}")
-    return model
-
-
-def _async_main_wrapper(
-    config: HFTrainerAppMainConfig,
-    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
-) -> None:
-    """Wrapper for async main function."""
-    import pyine.apps.trainers.hf_trainer as hf_trainer_app
-
-    asyncio.run(hf_trainer_app.main(config=config, runtime=runtime))
-
-
-@torch.distributed.elastic.multiprocessing.errors.record
-def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
-    """Hydra main entrypoint for the HuggingFace trainer app."""
-    pyine.configs.base.register_searchpath_plugin()
-    _ = register_hydra_configs(eval_type=eval_type)
-    hydra_zen.zen(_async_main_wrapper).hydra_main(
-        config_path=None,
-        config_name="entrypoint",
-        version_base=pyine.configs.base.target_hydra_version,
-    )
-
-
 def _get_trainer_args_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -413,12 +140,7 @@ def _get_trainer_args_configs(
     Note: this function assumes that the current environment exposes relevant device/hardware
     variables that we can use to determine the best training args.
     """
-    is_cuda = torch.cuda.is_available()
-    is_mps = torch.backends.mps.is_available()
-    use_cpu = not (is_cuda or is_mps)
-    use_bf16 = bool(is_cuda and torch.cuda.is_bf16_supported())
-    use_fp16 = bool(is_cuda and not use_bf16)
-    pin_mem = bool(is_cuda)
+    hw_flags = common.get_hardware_training_flags()
     base_config = pyine.configs.utils.make_config_description(
         pyine.utils.transformers.TrainingArgsConfig,
         name="base",
@@ -428,12 +150,7 @@ def _get_trainer_args_configs(
             "based on available hardware, and fills other arguments based on runtime config."
         ),
         config={
-            # some args are auto-deduced from hardware
-            "use_cpu": use_cpu,
-            "fp16": use_fp16,
-            "bf16": use_bf16,
-            "tf32": is_cuda,
-            "dataloader_pin_memory": pin_mem,
+            **hw_flags,  # hardware-specific flags (use_cpu, fp16, bf16, tf32, dataloader_pin_memory)
             # extra generic args set based on runtime config
             "run_name": "${runtime.exp_name}-${runtime.run_name}",
             "output_dir": "${hydra:runtime.output_dir}",
@@ -519,27 +236,6 @@ def _get_trainer_args_configs(
     return [base_config, train_default_config, eval_default_config]
 
 
-def _get_lora_configs(
-    group: str,
-) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns LoRA adaptor configs for hydra zen storage."""
-    default_lora_config = pyine.configs.utils.make_config_description(
-        peft.LoraConfig,
-        name="default",
-        group=group,
-        description=(
-            "Default LoRA settings for all trainer configs; applies to all models, and provides "
-            "a reasonable default for LoRA adaptation. See `peft.LoraConfig` for more details."
-        ),
-        config={
-            # -------------
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    return [default_lora_config]
-
-
 def _get_app_configs(
     eval_type: pyine.evals.common.EvalType,
     group: str,
@@ -547,7 +243,7 @@ def _get_app_configs(
     """Generates and returns application configs for hydra zen storage."""
     assert isinstance(group, str) and group
     app_main_config = pyine.configs.utils.make_config_description(
-        HFTrainerAppMainConfig,
+        SFTTrainerAppMainConfig,
         name="base",
         group=group,
         description="Base settings for the HF trainer app.",
@@ -570,7 +266,7 @@ def _get_app_configs(
         group=f"{group}/datamodule_config",
     )
     trainer_args_configs = _get_trainer_args_configs(group=f"{group}/training_args_config")
-    lora_configs = _get_lora_configs(group=f"{group}/lora_config")
+    lora_configs = common.get_lora_configs(group=f"{group}/lora_config", app_description="trainer")
     evals_configs = pyine.evals.configs.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
     # ... add more trainer configs here if needed
     return [
@@ -610,7 +306,7 @@ def _get_experiment_configs(
     # (note: we don't do anything eval_type-specific here, at least not for these base exp configs)
     outputs: list[pyine.configs.schemas.ConfigDescription] = []
     for dm_config, trainer_config in itertools.product(dm_configs, trainer_configs):
-        exp_name = f"{dm_config.name}_{trainer_config.name}"
+        exp_name = f"hf_sft_{dm_config.name}_{trainer_config.name}"
         outputs.append(
             pyine.configs.utils.make_config_description(
                 name=exp_name,
@@ -653,7 +349,7 @@ def register_hydra_configs(
     """
     pyine.utils.reprod.load_dotenv()
     entrypoint_config = pyine.configs.utils.make_config_description(
-        _async_main_wrapper,
+        common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
         description="Entrypoint settings for the HuggingFace trainer app.",

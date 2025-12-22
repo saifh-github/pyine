@@ -7,7 +7,8 @@ import math
 import typing
 
 if typing.TYPE_CHECKING:
-    import pyine.apps.trainers.hf_trainer_configs
+    import pyine.apps.trainers.common
+    import pyine.apps.trainers.hf_sft_trainer_configs
     import pyine.data.datamodule
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def infer_precache_epoch_count(
     *,
-    config: pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+    config: pyine.apps.trainers.hf_sft_trainer_configs.SFTTrainerAppMainConfig,
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
     epochs_override: int | None,
 ) -> int:
@@ -86,7 +87,7 @@ def infer_precache_epoch_count(
 
 def get_total_train_example_count(
     *,
-    config: pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+    config: pyine.apps.trainers.common.AppMainConfig,
     datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
 ) -> int | None:
     """Return the total number of train examples across all configured subsets.

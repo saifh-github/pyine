@@ -736,6 +736,10 @@ async def test_main_loads_checkpoint_when_resume_artifacts_only(
         use_wandb_logging=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
+        evals_config=types.SimpleNamespace(
+            category_extraction_config=None,
+            vllm_provider_config=None,
+        ),
     )
     runtime = types.SimpleNamespace(
         wandb_run=None,
@@ -817,6 +821,10 @@ async def test_main_runs_train_and_evaluate(
         use_wandb_logging=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
+        evals_config=types.SimpleNamespace(
+            category_extraction_config=None,
+            vllm_provider_config=None,
+        ),
     )
     runtime = types.SimpleNamespace(wandb_run=None, finalize=lambda: None)
 
@@ -869,6 +877,10 @@ async def test_main_exits_on_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
         use_wandb_logging=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
+        evals_config=types.SimpleNamespace(
+            category_extraction_config=None,
+            vllm_provider_config=None,
+        ),
     )
 
     monkeypatch.setattr(
@@ -1228,3 +1240,6 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
     assert trainer_second.state.global_step == 2
     assert recorded_steps and recorded_steps[0] == 2
     assert (output_dir / "checkpoint-2").is_dir()
+
+
+# @@@@ TODO: add more tests to check the core RL training workflow?

@@ -191,4 +191,8 @@ if __name__ == "__main__":
     import pyine.apps.trainers.openai_finetune_configs
 
     # TODO: if we ever have more than one eval type, make new entrypoint scripts w/ different eval types
-    pyine.apps.trainers.openai_finetune_configs.hydra_main(pyine.evals.common.EvalType.CODE_EXEC)
+    pyine.apps.trainers.common.hydra_main(
+        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        hydra_config_registration_fn=pyine.apps.trainers.openai_finetune_configs.register_hydra_configs,
+        async_main_wrapper=pyine.apps.trainers.openai_finetune_configs.async_main_wrapper,
+    )

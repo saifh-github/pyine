@@ -30,7 +30,7 @@ Create a new experiment config file in `pyine/configs/experiment/`:
 # @package _global_
 
 defaults:
-  - override /config: base  # Use RL config base (from rl_trainer_configs.py)
+  - override /config: base  # Use RL config base (from hf_rl_trainer_configs.py)
   - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
   - override /config/grpo_config: train_default
   - _self_
@@ -46,7 +46,7 @@ runtime:
 
 config:
   # IMPORTANT: Explicitly specify RL config class (overrides SFT default from /config: base)
-  _target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig
+  _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
   base_model: Qwen/Qwen3-4B-Instruct-2507
@@ -421,7 +421,7 @@ grpo_config:
 
 **Important Notes:**
 
-- **`_target_` field**: Your config must include `_target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig` to dispatch to the RL trainer (see example config above)
+- **`_target_` field**: Your config must include `_target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig` to dispatch to the RL trainer (see example config above)
 - **`beta` parameter**: Controls KL divergence penalty. Set to 0.00 for no penalty (pure reward optimization), or use small values (0.01-0.05) to stay closer to the base model
 - **`num_generations`**: Higher values (8+) provide better exploration but increase compute cost
 - **`max_completion_length`**: Set higher (2048+) for code generation tasks to allow complete solutions

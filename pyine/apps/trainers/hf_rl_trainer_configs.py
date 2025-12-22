@@ -3,17 +3,12 @@
 If you execute this script directly, it will print all available experiment configs for this app.
 """
 
-import asyncio
 import logging
 import pathlib
 import typing
 
-import hydra_zen
-import peft
 import pydantic
 import torch
-import torch.distributed.elastic.multiprocessing.errors
-import transformers
 import trl
 
 import pyine.apps.trainers.common as common
@@ -26,7 +21,6 @@ import pyine.evals.configs
 import pyine.organisms.datamodules
 import pyine.organisms.models.rewards.core.configs
 import pyine.utils.reprod
-import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
 
@@ -48,46 +42,11 @@ class CacheConfig(pydantic.BaseModel):
     )
 
 
-class RLTrainerAppMainConfig(common.AppMainConfig):
-    """Configuration for RL training with GRPO."""
+class RLTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBase):
+    """Configuration for RL training with GRPO.
 
-    # --------------- Model settings (shared with SFT) ---------------
-
-    base_model: str = pydantic.Field(
-        ...,  # MISSING! MANDATORY!
-        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
-    )
-    auto_model_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
-        description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
-    )
-    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
-        default="none",
-        description='Quantization mode. "qlora" loads the model in 4-bit for QLoRA; "none" disables quantization.',
-    )
-    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = pydantic.Field(
-        default=None,
-        description="LoRA adapter configuration. If None, does not apply LoRA.",
-    )
-
-    # --------------- Tokenizer settings ---------------
-
-    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: {"use_fast": True},
-        description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
-    )
-    tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
-        default=True,
-        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
-    )
-    tokenizer_override_padding_to_right_side: bool = pydantic.Field(
-        default=True,
-        description="Override whichever the tokenizer's default padding side is to 'right'.",
-    )
-    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
-        default=True,
-        description="Override whichever the tokenizer's default truncation side is to 'left'.",
-    )
+    Inherits model/tokenizer configuration from ModelTokenizerConfigBase.
+    """
 
     # --------------- GRPO-specific settings ---------------
 
@@ -106,86 +65,15 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
         description="Dataset caching configuration.",
     )
 
-    # --------------- Utility methods ---------------
-
-    @pydantic.model_validator(mode="before")
-    @classmethod
-    def _coerce_lora_config(
-        cls,
-        data: typing.Any,
-    ) -> typing.Any:
-        """Ensures the lora field is a LoraConfig instance when provided as a dict."""
-        if isinstance(data, dict):
-            typed_data = typing.cast("dict[str, typing.Any]", data)
-            lora_config = typed_data.get("lora_config")
-            if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
-                return typed_data
-            if isinstance(lora_config, peft.LoraConfig):
-                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(lora_config.__dict__)
-                return typed_data
-            if isinstance(lora_config, dict):
-                typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
-                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(typed_lora_config)
-                return typed_data
-        return typing.cast("typing.Any", data)
+    # --------------- RL-specific methods ---------------
 
     @property
+    @typing.override
     def target_dtype(self) -> torch.dtype:
-        """Returns the target dtype to use with models."""
+        """Returns the target dtype to use with models based on GRPO config."""
         if self.grpo_config.bf16:
             return torch.bfloat16
         return torch.float16 if self.grpo_config.fp16 else torch.float32
-
-    @property
-    def device_map(self) -> dict[str, torch.device | str] | str | None:
-        """Returns the device map to use with models."""
-        return common.get_device_map()
-
-    def get_tokenizer(
-        self,
-        checkpoint_path: pathlib.Path | None = None,
-    ) -> transformers.PreTrainedTokenizer:
-        """Returns the tokenizer to use for the targeted model.
-
-        Args:
-            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
-                tokenizer from the checkpoint. If None, loads the tokenizer for the base model.
-
-        Returns:
-            The instantiated tokenizer.
-        """
-        return common.instantiate_tokenizer(
-            base_model=self.base_model,
-            checkpoint_path=checkpoint_path,
-            auto_tokenizer_config=self.auto_tokenizer_config,
-            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
-            override_padding_to_right_side=self.tokenizer_override_padding_to_right_side,
-            override_truncation_to_left_side=self.tokenizer_override_truncation_to_left_side,
-        )
-
-    def get_model(
-        self,
-        checkpoint_path: pathlib.Path | None = None,
-    ) -> transformers.PreTrainedModel:
-        """Returns a model to use for experiments.
-
-        Args:
-            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
-                model from the checkpoint (with LoRA adapters if present). If None, loads the base
-                pretrained model.
-
-        Returns:
-            The instantiated model.
-        """
-        return common.instantiate_model(
-            base_model=self.base_model,
-            checkpoint_path=checkpoint_path,
-            target_dtype=self.target_dtype,
-            device_map=self.device_map,
-            auto_model_config=self.auto_model_config,
-            quantization_mode=self.quantization_mode,
-            lora_config=self.lora_config,
-        )
 
     @typing.override
     def normalize_for_resume_overlap_check(
@@ -208,39 +96,11 @@ class RLTrainerAppMainConfig(common.AppMainConfig):
         return data
 
 
-def _async_main_wrapper(
-    config: RLTrainerAppMainConfig,
-    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
-) -> None:
-    """Wrapper for async main function."""
-    import pyine.apps.trainers.hf_trainer as hf_trainer_app
-
-    asyncio.run(hf_trainer_app.main(config=config, runtime=runtime))
-
-
-@torch.distributed.elastic.multiprocessing.errors.record
-def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
-    """Hydra main entrypoint for the RL trainer app."""
-    pyine.configs.base.register_searchpath_plugin()
-    _ = register_hydra_configs(eval_type=eval_type)
-    hydra_zen.zen(_async_main_wrapper).hydra_main(
-        config_path=None,
-        config_name="entrypoint",
-        version_base=pyine.configs.base.target_hydra_version,
-    )
-
-
 def _get_grpo_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns GRPO training configs for hydra zen storage."""
-    is_cuda = torch.cuda.is_available()
-    is_mps = torch.backends.mps.is_available()
-    use_cpu = not (is_cuda or is_mps)
-    use_bf16 = bool(is_cuda and torch.cuda.is_bf16_supported())
-    use_fp16 = bool(is_cuda and not use_bf16)
-    pin_mem = bool(is_cuda)
-
+    hw_flags = common.get_hardware_training_flags()
     base_config = pyine.configs.utils.make_config_description(
         trl.GRPOConfig,  # type: ignore[reportPrivateImportUsage]
         name="base",
@@ -250,12 +110,7 @@ def _get_grpo_configs(
             "based on available hardware, and fills other arguments based on runtime config."
         ),
         config={
-            # Hardware-based args
-            "use_cpu": use_cpu,
-            "fp16": use_fp16,
-            "bf16": use_bf16,
-            "tf32": is_cuda,
-            "dataloader_pin_memory": pin_mem,
+            **hw_flags,  # hardware-specific flags (use_cpu, fp16, bf16, tf32, dataloader_pin_memory)
             # Runtime-based args
             "run_name": "${runtime.exp_name}-${runtime.run_name}",
             "output_dir": "${hydra:runtime.output_dir}",
@@ -280,7 +135,7 @@ def _get_grpo_configs(
             "do_eval": True,
             "do_predict": True,
             "per_device_train_batch_size": 1,
-            "per_device_eval_batch_size": 1,
+            "per_device_eval_batch_size": 2,
             "gradient_accumulation_steps": 4,
             "learning_rate": 1e-5,
             "warmup_steps": 100,
@@ -335,25 +190,47 @@ def _get_grpo_configs(
     return [base_config, train_default_config, eval_default_config]
 
 
-def _get_lora_configs(
+def _get_default_code_exec_reward_manager_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns LoRA adaptor configs for hydra zen storage."""
-    default_lora_config = pyine.configs.utils.make_config_description(
-        peft.LoraConfig,
-        name="default",
+    """Generates and returns reward manager code execution configs for hydra zen storage."""
+    hard_match_config = pyine.configs.utils.make_config_description(
+        pyine.organisms.models.rewards.core.configs.RewardManagerConfig,
+        name="hard_matching",
         group=group,
         description=(
-            "Default LoRA settings for all RL trainer configs; applies to all models, and provides "
-            "a reasonable default for LoRA adaptation. See `peft.LoraConfig` for more details."
+            "Base configuration for the reward manager for code exec outcome hard-matching. "
+            "Only defines the hard-match term as the source of reward, and sets up basic parsing."
         ),
         config={
-            # -------------
-            "populate_full_signature": True,
-            "hydra_convert": "object",
+            "terms": [
+                {
+                    "name": "hard_match",
+                    "type": "code_exec/hard_match",
+                    "weight": 1.0,
+                    "enabled": True,
+                    "require_parsed": True,
+                    "params": {
+                        "reward_if_match": 1.0,
+                        "reward_if_no_match": 1.0,
+                        "strip_whitespace": True,
+                    },
+                },
+            ],
+            "parsing": {
+                "mode": "tags",
+                "enabled_fields": "final_only",
+                "final_tag": "final",
+                "reasoning_from_final_prefix": True,
+                "fallback_policy": "none",
+                "multi_tag_policy": "last",
+                "strict": False,
+                "capture_diagnostics": True,
+            },
         },
     )
-    return [default_lora_config]
+    # todo: add defaults for soft-matching, llm-grader, ...
+    return [hard_match_config]
 
 
 def _get_app_configs(
@@ -386,12 +263,17 @@ def _get_app_configs(
         group=f"{group}/datamodule_config",
     )
     grpo_configs = _get_grpo_configs(group=f"{group}/grpo_config")
-    lora_configs = _get_lora_configs(group=f"{group}/lora_config")
+    if eval_type == pyine.evals.common.EvalType.CODE_EXEC:
+        reward_manager_configs = _get_default_code_exec_reward_manager_configs(group=f"{group}/reward_manager_config")
+    else:
+        raise NotImplementedError(f"RL trainer does not yet support eval type {eval_type}")
+    lora_configs = common.get_lora_configs(group=f"{group}/lora_config", app_description="RL trainer")
     evals_configs = pyine.evals.configs.get_evals_configs(eval_type=eval_type, group=f"{group}/evals_config")
     return [
         app_main_config,
         *datamodule_configs,
         *grpo_configs,
+        *reward_manager_configs,
         *lora_configs,
         *evals_configs,
     ]
@@ -411,27 +293,32 @@ def _get_experiment_configs(
         for config in app_configs
         if config.group == "config/datamodule_config" and not config.name.endswith("base")
     ]
+    rwm_configs = [config for config in app_configs if config.group == "config/reward_manager_config"]
     trainer_configs = [config for config in app_configs if config.group == "config"]
-    # For each datamodule config and trainer config combination, create an experiment config
+    # For each datamodule, trainer, and reward manager combination, create an experiment config
     outputs: list[pyine.configs.schemas.ConfigDescription] = []
-    for dm_config, trainer_config in [(dm, tc) for dm in dm_configs for tc in trainer_configs]:
-        exp_name = f"{dm_config.name}_{trainer_config.name}_rl"
+    for dm_config, trainer_config, rwm_config in [
+        (dm, tc, rwmc) for dm in dm_configs for tc in trainer_configs for rwmc in rwm_configs
+    ]:
+        exp_name = f"hf_rl_{dm_config.name}_{trainer_config.name}_{rwm_config.name}"
         outputs.append(
             pyine.configs.utils.make_config_description(
                 name=exp_name,
                 group=group,
                 package=package,
                 description=(
-                    f"RL experiment config that combines the '{dm_config.name}' datamodule settings with "
-                    f"the '{trainer_config.name}' RL trainer settings for the app's entrypoint.\n\n"
+                    f"RL experiment config that combines the '{dm_config.name}' datamodule settings with the "
+                    f"'{trainer_config.name}' trainer and '{rwm_config.name}' settings for the app's entrypoint.\n\n"
                     f"Description for 'config={trainer_config.name}': {trainer_config.description}\n\n"
                     f"Description for 'config/datamodule_config={dm_config.name}': {dm_config.description}\n\n"
+                    f"Description for 'config/reward_manager_config={rwm_config.name}': {rwm_config.description}\n\n"
                 ),
                 config={
                     "runtime": {"exp_name": exp_name},
                     # -------------
                     "hydra_defaults": [
                         "_self_",
+                        {"/config/reward_manager_config": rwm_config.name},
                         {"override /config": trainer_config.name},
                         {"override /config/grpo_config": "train_default"},
                         {"override /config/datamodule_config": dm_config.name},
@@ -453,7 +340,7 @@ def register_hydra_configs(
     """
     pyine.utils.reprod.load_dotenv()
     entrypoint_config = pyine.configs.utils.make_config_description(
-        _async_main_wrapper,
+        common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
         description="Entrypoint settings for the RL trainer app.",
@@ -495,7 +382,8 @@ def register_hydra_configs(
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
+    # TODO: if we ever have more than one eval type, add a selector based on launch args here
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
-        app_name="rl_trainer",
+        app_name="hf_trainer",
     )

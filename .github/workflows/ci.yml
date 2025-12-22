@@ -9,6 +9,10 @@ on:
 jobs:
   quality-checks:
     runs-on: ubuntu-latest
+
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096  # increase default to 4GB for all steps in this job
+
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +45,9 @@ jobs:
 
     - name: Install dependencies
       run: make install
+
+    - name: Check notebooks have no outputs
+      run: uv run make check-notebooks
 
     - name: Run linting
       run: uv run make lint

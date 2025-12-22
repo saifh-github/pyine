@@ -1,7 +1,7 @@
-"""CLI app to pre-generate datamodule caches (metadata, HF message datasets, tokenized examples).
+"""CLI app to pre-generate SFT datamodule caches (metadata, HF message datasets, tokenized examples).
 
-This app should be run before training using the `hf_trainer.py` app to ensure that the datamodule
-caches are available for faster, non-blocking startups.
+This app should be run before SFT training using the `hf_trainer.py` app to ensure that the datamodule
+caches are available for faster, non-blocking startups. Does not support RL data precaching.
 """
 
 from __future__ import annotations
@@ -10,13 +10,12 @@ import asyncio
 import logging
 import typing
 
-import hydra_zen
 import pydantic
 import transformers
 
 import pyine.apps.data.utils
 import pyine.apps.trainers.common
-import pyine.apps.trainers.hf_trainer_configs
+import pyine.apps.trainers.hf_sft_trainer_configs as hf_sft_trainer_configs
 import pyine.configs.base
 import pyine.configs.schemas
 import pyine.configs.searchpath
@@ -57,7 +56,7 @@ class PrecacherConfig(pydantic.BaseModel):
 
 
 async def main(
-    config: pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+    config: hf_sft_trainer_configs.SFTTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
     precache_config: PrecacherConfig | None = None,
 ) -> None:
@@ -138,14 +137,6 @@ async def main(
         logger.info("precaching run completed")
 
 
-def _async_main_wrapper(
-    config: pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
-    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
-    precache_config: PrecacherConfig | None = None,
-) -> None:
-    asyncio.run(main(config=config, runtime=runtime, precache_config=precache_config))
-
-
 def register_hydra_configs(
     eval_type: pyine.evals.common.EvalType,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -182,19 +173,19 @@ def register_hydra_configs(
         },
     )
     store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_precacher")
-    app_configs = pyine.apps.trainers.hf_trainer_configs._get_app_configs(  # type: ignore[reportPrivateUsage]
+    app_configs = hf_sft_trainer_configs._get_app_configs(  # type: ignore[reportPrivateUsage]
         eval_type=eval_type,
         group="config",
     )
     configs_to_register = [entrypoint_config, *app_configs, precache_config_builder]
-    experiment_configs = pyine.apps.trainers.hf_trainer_configs._get_experiment_configs(  # type: ignore[reportPrivateUsage]
+    sft_experiment_configs = hf_sft_trainer_configs._get_experiment_configs(  # type: ignore[reportPrivateUsage]
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
         app_configs=[*base_configs, *configs_to_register],
         group="experiment",
         package="_global_",
     )
-    configs_to_register.extend(experiment_configs)
+    configs_to_register.extend(sft_experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
         app_name="hf_precacher",
         eval_type=eval_type,
@@ -209,17 +200,19 @@ def register_hydra_configs(
     return [*base_configs, *configs_to_register]
 
 
-def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
-    """Hydra main entrypoint for the HuggingFace data precaching app."""
-    pyine.configs.base.register_searchpath_plugin()
-    _ = register_hydra_configs(eval_type=eval_type)
-    hydra_zen.zen(_async_main_wrapper).hydra_main(
-        config_path=None,
-        config_name="entrypoint",
-        version_base=pyine.configs.base.target_hydra_version,
-    )
+def _async_main_wrapper(
+    config: hf_sft_trainer_configs.SFTTrainerAppMainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    precache_config: PrecacherConfig | None = None,
+) -> None:
+    """Wrapper for async main function."""
+    asyncio.run(main(config=config, runtime=runtime, precache_config=precache_config))
 
 
 if __name__ == "__main__":
     # TODO: if we ever have more than one eval type, add a selector based on launch args here
-    hydra_main(pyine.evals.common.EvalType.CODE_EXEC)
+    pyine.apps.trainers.common.hydra_main(
+        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        hydra_config_registration_fn=register_hydra_configs,
+        async_main_wrapper=_async_main_wrapper,
+    )

@@ -8,7 +8,6 @@ import itertools
 import logging
 import typing
 
-import hydra_zen
 import pydantic
 
 import pyine.apps.trainers.common
@@ -64,7 +63,7 @@ class OpenAIFineTuneAppMainConfig(pyine.apps.trainers.common.AppMainConfig):
         )
 
 
-def _async_main_wrapper(
+def async_main_wrapper(
     config: OpenAIFineTuneAppMainConfig,
     runtime: (pyine.configs.schemas.RuntimeConfig | None) = None,
     skip_fine_tuning: bool = False,
@@ -73,17 +72,6 @@ def _async_main_wrapper(
     import pyine.apps.trainers.openai_finetune as openai_finetune_app
 
     asyncio.run(openai_finetune_app.main(config=config, runtime=runtime, skip_fine_tuning=skip_fine_tuning))
-
-
-def hydra_main(eval_type: pyine.evals.common.EvalType) -> None:
-    """Hydra main entrypoint for the OpenAI fine-tuner app."""
-    pyine.configs.base.register_searchpath_plugin()
-    _ = register_hydra_configs(eval_type=eval_type)
-    hydra_zen.zen(_async_main_wrapper).hydra_main(
-        config_path=None,
-        config_name="entrypoint",
-        version_base=pyine.configs.base.target_hydra_version,
-    )
 
 
 def _openai_finetuner_method_config_getter(
@@ -298,7 +286,7 @@ def register_hydra_configs(
     """
     pyine.utils.reprod.load_dotenv()
     entrypoint_config = pyine.configs.utils.make_config_description(
-        _async_main_wrapper,
+        async_main_wrapper,
         name="entrypoint",
         group=None,
         description="Entrypoint settings for the OpenAI fine-tuner app.",

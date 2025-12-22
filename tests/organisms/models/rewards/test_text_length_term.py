@@ -123,10 +123,12 @@ class TestLengthTerm:
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        model_output = "<reasoning>r</reasoning><final>a</final>"
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
             prompt="x" * 5,
-            model_output="<reasoning>r</reasoning><final>a</final>",
+            model_output=model_output,
             sample_data=rewards_conftest.make_sample_data("s1"),
+            parsed=rewards_conftest.make_parsed_output(model_output, final_answer="a", reasoning="r"),
         )
         out = manager.compute_output(ctx, log=False)
         assert out.total == pytest.approx(1.0 + 0.1)

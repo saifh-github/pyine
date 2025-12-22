@@ -41,7 +41,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
     assert entrypoint_config is not None
     _ = hydra_zen.launch(
         entrypoint_config.config,
-        hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs._async_main_wrapper),
+        hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs.async_main_wrapper),
         overrides={
             "+experiment": "shortcuts_TACO_latest_20s_eval_only",
             "runtime": "dry_run",
@@ -80,7 +80,7 @@ def test_code_exec_experiment_config_taco_latest(
     assert entrypoint_config is not None
     _ = hydra_zen.launch(
         entrypoint_config.config,
-        hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs._async_main_wrapper),
+        hydra_zen.zen(pyine.apps.trainers.openai_finetune_configs.async_main_wrapper),
         overrides={
             "+experiment": "shortcuts_TACO_latest",
             "runtime": "dry_run",

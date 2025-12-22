@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import logging
 import pathlib
@@ -7,16 +9,21 @@ import shutil
 import time
 import typing
 
+import hydra_zen
 import peft
 import pydantic
 import torch
+import torch.distributed.elastic.multiprocessing.errors
 import transformers
 
-import pyine.configs.schemas  # pyright: ignore[reportUnusedImport]
+import pyine.configs.base
+import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.distrib
+import pyine.utils.interrupts
 import pyine.utils.langchain
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -73,19 +80,15 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
 
     Args:
         config: The application configuration to validate.
-
-    Raises:
-        ValueError: If do_train=True AND do_predict=True AND vllm_provider_config is not None.
     """
-    training_args_config = getattr(config, "training_args_config", None)
-    do_train = getattr(training_args_config, "do_train", False) if training_args_config else False
-    do_predict = getattr(training_args_config, "do_predict", False) if training_args_config else False
-    evals_config = getattr(config, "evals_config", None)
-    vllm_provider_config = getattr(evals_config, "vllm_provider_config", None) if evals_config is not None else None
-
-    if do_train and do_predict and vllm_provider_config is not None:
+    if is_rl_config(config):
+        return  # nothing more to check, can run with/without vllm config
+    # if we're doing SFT, make sure everything is compatible
+    do_train, _do_eval, do_predict = get_training_flags(config)
+    has_vllm_evals_config = config.evals_config.vllm_provider_config is not None
+    if do_train and do_predict and has_vllm_evals_config:
         raise ValueError(
-            "Invalid configuration: cannot run training and vLLM-based prediction in the same run. "
+            "Invalid configuration: cannot run SFT training and vLLM-based prediction in the same run. "
             "When using vLLM provider, you must manually start the vLLM server with the trained "
             "checkpoint between training and prediction. Please choose one of these options:\n"
             "  Option A: Train only (do_train=True, do_predict=False), then manually start vLLM "
@@ -94,6 +97,141 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
             "  Option B: Train and predict in one run without vLLM (do_train=True, do_predict=True, "
             "vllm_provider_config=null)",
         )
+
+
+class ModelTokenizerConfigBase(pydantic.BaseModel):
+    """Base configuration providing model and tokenizer fields shared by SFT and RL trainers.
+
+    This base class should be inherited by trainer configs that need to instantiate HuggingFace
+    models and tokenizers. Note that subclasses must implement the `target_dtype` property since it
+    depends on trainer-specific config fields.
+
+    @@@@ TODO: should we try to make this not specific to causal language models? (e.g. for probing/classifs?)
+    """
+
+    # --------------- model settings ---------------
+
+    base_model: str = pydantic.Field(
+        ...,  # MISSING! MANDATORY!
+        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
+    )
+    auto_model_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
+        description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
+    )
+    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
+        default="none",
+        description="'Quantization mode; 'qlora' loads the model in 4-bit, and 'none' disables quantization.'",
+    )
+    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = pydantic.Field(
+        default=None,
+        description="LoRA adapter configuration; if None, does not apply LoRA.",
+    )
+
+    # --------------- tokenizer settings ---------------
+
+    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
+        default_factory=lambda: {"use_fast": True},
+        description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
+    )
+    tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
+        default=True,
+        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
+    )
+    tokenizer_override_padding_to_right_side: bool = pydantic.Field(
+        default=True,
+        description="Override whichever the tokenizer's default padding side is to 'right'.",
+    )
+    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
+        default=True,
+        description="Override whichever the tokenizer's default truncation side is to 'left'.",
+    )
+
+    # --------------- helpers/getters ---------------
+
+    @property
+    def target_dtype(self) -> torch.dtype:
+        """Returns the target dtype to use with models.
+
+        Subclasses must override this property based on their training args config
+        (e.g., training_args_config.bf16 for SFT, grpo_config.bf16 for RL/GRPO).
+        """
+        raise NotImplementedError("Subclasses must implement target_dtype property")
+
+    @property
+    def device_map(self) -> dict[str, torch.device | str] | str | None:
+        """Returns the device map to use with models."""
+        return get_device_map()
+
+    def get_tokenizer(
+        self,
+        checkpoint_path: pathlib.Path | None = None,
+    ) -> transformers.PreTrainedTokenizer:
+        """Returns the tokenizer to use for the targeted model.
+
+        Args:
+            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
+                tokenizer from the checkpoint. If None, loads the tokenizer for the base model.
+
+        Returns:
+            The instantiated tokenizer.
+        """
+        return instantiate_tokenizer(
+            base_model=self.base_model,
+            checkpoint_path=checkpoint_path,
+            auto_tokenizer_config=self.auto_tokenizer_config,
+            set_padding_to_eos_if_needed=self.tokenizer_set_padding_to_eos_if_needed,
+            override_padding_to_right_side=self.tokenizer_override_padding_to_right_side,
+            override_truncation_to_left_side=self.tokenizer_override_truncation_to_left_side,
+        )
+
+    def get_model(
+        self,
+        checkpoint_path: pathlib.Path | None = None,
+    ) -> transformers.PreTrainedModel:
+        """Returns a model to use for experiments.
+
+        Args:
+            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
+                model from the checkpoint (with LoRA adapters if present). If None, loads the base
+                pretrained model.
+
+        Returns:
+            The instantiated model.
+        """
+        return instantiate_model(
+            base_model=self.base_model,
+            checkpoint_path=checkpoint_path,
+            target_dtype=self.target_dtype,
+            device_map=self.device_map,
+            auto_model_config=self.auto_model_config,
+            quantization_mode=self.quantization_mode,
+            lora_config=self.lora_config,
+        )
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _coerce_lora_config(
+        cls,
+        data: typing.Any,
+    ) -> typing.Any:
+        """Ensures the lora field is a LoraConfig instance when provided as a dict."""
+        if isinstance(data, dict):
+            typed_data = typing.cast("dict[str, typing.Any]", data)
+            lora_config = typed_data.get("lora_config")
+            if isinstance(lora_config, pyine.utils.transformers.LoraConfig):
+                return typed_data
+            if isinstance(lora_config, peft.LoraConfig):
+                # use dataclasses.asdict to avoid private attributes like _custom_modules
+                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(
+                    dataclasses.asdict(lora_config)
+                )
+                return typed_data
+            if isinstance(lora_config, dict):
+                typed_lora_config = typing.cast("dict[str, typing.Any]", lora_config)
+                typed_data["lora_config"] = pyine.utils.transformers.LoraConfig.model_validate(typed_lora_config)
+                return typed_data
+        return typing.cast("typing.Any", data)
 
 
 class AppMainConfig(pydantic.BaseModel):
@@ -856,3 +994,258 @@ async def evaluate_model(
     time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
     logger.info(f"evaluations finished in {time_delta_str}")
     return evaluation_results
+
+
+def get_training_flags(
+    config: AppMainConfig,
+) -> tuple[bool, bool, bool]:
+    """Extracts training flags (do_train, do_eval, do_predict) from config.
+
+    Handles both SFT configs (with training_args_config) and RL configs (with grpo_config).
+
+    Args:
+        config: The trainer app config.
+
+    Returns:
+        Tuple of (do_train, do_eval, do_predict) booleans.
+    """
+    # check for RL config (grpo_config)
+    grpo_config = getattr(config, "grpo_config", None)
+    if grpo_config is not None:
+        return (
+            getattr(grpo_config, "do_train", False),
+            getattr(grpo_config, "do_eval", False),
+            getattr(grpo_config, "do_predict", False),
+        )
+    # check for SFT config (training_args_config)
+    training_args_config = getattr(config, "training_args_config", None)
+    if training_args_config is not None:
+        return (
+            getattr(training_args_config, "do_train", False),
+            getattr(training_args_config, "do_eval", False),
+            getattr(training_args_config, "do_predict", False),
+        )
+    raise NotImplementedError("cannot deduce training flag from given trainer app config")
+
+
+def is_rl_config(config: AppMainConfig) -> bool:
+    """Determines if the config is for RL training.
+
+    Args:
+        config: The trainer app config.
+
+    Returns:
+        True if this is an RL config, False otherwise.
+    """
+    import pyine.apps.trainers.hf_rl_trainer_configs  # import here to avoid circular imports
+
+    if isinstance(config, pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig):
+        return True
+    # fallback for test mocks: check for grpo_config without training_args_config
+    return hasattr(config, "grpo_config") and not hasattr(config, "training_args_config")
+
+
+def get_vllm_provider_model_name(
+    config: AppMainConfig,
+) -> str | None:
+    """Extracts vLLM provider model name from evals config if present.
+
+    Args:
+        config: The trainer app config.
+
+    Returns:
+        The vLLM provider model name or None.
+    """
+    if config.evals_config.vllm_provider_config is None:
+        return None
+    return config.evals_config.vllm_provider_config.model_kwargs.get("model", "default")
+
+
+def prepare_resume_train_kwargs(
+    resume_artifacts: ResumeArtifacts | None,
+) -> dict[str, typing.Any]:
+    """Prepares train_kwargs with resume checkpoint if available.
+
+    Args:
+        resume_artifacts: Resume artifacts from a previous run.
+
+    Returns:
+        Dictionary with resume_from_checkpoint if applicable.
+    """
+    train_kwargs: dict[str, typing.Any] = {}
+    if resume_artifacts is not None:
+        assert resume_artifacts.checkpoint_path.is_dir(), f"invalid checkpoint path: {resume_artifacts.checkpoint_path}"
+        logger.info(f"resuming from checkpoint: {resume_artifacts.checkpoint_path}")
+        train_kwargs["resume_from_checkpoint"] = str(resume_artifacts.checkpoint_path)
+    return train_kwargs
+
+
+def create_shutdown_callback(
+    config: AppMainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+    shutdown_manager: pyine.utils.interrupts.GracefulShutdownManager | None,
+) -> pyine.utils.interrupts.GracefulShutdownCallback | None:
+    """Creates a shutdown callback for graceful training interruption.
+
+    Args:
+        config: The trainer app config.
+        runtime: Runtime configuration.
+        shutdown_manager: The shutdown manager instance.
+
+    Returns:
+        A GracefulShutdownCallback instance or None if shutdown_manager is None.
+    """
+    if shutdown_manager is None:
+        return None
+
+    def _metadata_writer(checkpoint_dir: pathlib.Path, state: transformers.TrainerState) -> None:
+        pyine.utils.transformers.write_checkpoint_metadata(
+            checkpoint_dir,
+            config=config,
+            runtime=runtime,
+            state=state,
+            shutdown_manager=shutdown_manager,
+        )
+
+    return pyine.utils.interrupts.GracefulShutdownCallback(
+        shutdown_manager=shutdown_manager,
+        metadata_writer=_metadata_writer,
+    )
+
+
+def add_callback_to_trainer(
+    trainer: typing.Any,
+    callback: typing.Any,
+) -> None:
+    """Adds a callback to a trainer, handling different trainer types.
+
+    Args:
+        trainer: The trainer instance (transformers.Trainer or trl.GRPOTrainer).
+        callback: The callback to add.
+    """
+    if hasattr(trainer, "add_callback"):
+        trainer.add_callback(callback)  # type: ignore[reportUnknownMemberType]
+    else:
+        trainer.callbacks.append(callback)  # type: ignore[reportUnknownMemberType]
+
+
+def run_training_with_timing(
+    trainer: typing.Any,
+    train_kwargs: dict[str, typing.Any],
+    training_type: str = "training",
+) -> None:
+    """Runs trainer.train() with timing and logging.
+
+    Args:
+        trainer: The trainer instance.
+        train_kwargs: Keyword arguments to pass to trainer.train().
+        training_type: Label for log messages (e.g., "training", "RL training").
+    """
+    pyine.utils.distrib.barrier()
+    logger.info(f"starting {training_type}")
+    start_time = time.time()
+    trainer.train(**train_kwargs)  # type: ignore[reportUnknownMemberType]
+    end_time = time.time()
+    time_delta_seconds = end_time - start_time
+    time_delta_str = pyine.utils.timers.get_human_readable_time(time_delta_seconds)
+    logger.info(f"{training_type} finished after {time_delta_str}")
+
+
+def log_shutdown_status(
+    shutdown_manager: pyine.utils.interrupts.GracefulShutdownManager | None,
+    training_type: str = "training",
+) -> None:
+    """Logs if training exited early due to shutdown request.
+
+    Args:
+        shutdown_manager: The shutdown manager instance.
+        training_type: Label for log messages.
+    """
+    if shutdown_manager is not None and shutdown_manager.should_terminate():
+        logger.info(f"{training_type} run exited early after honoring shutdown request")
+
+
+def get_hardware_training_flags() -> dict[str, typing.Any]:
+    """Returns hardware-specific training flags based on available devices.
+
+    Detects CUDA/MPS availability and returns appropriate flags for training configuration.
+    This is used to configure hardware-specific settings in both SFT and RL trainer configs.
+
+    Returns:
+        Dictionary with keys: use_cpu, fp16, bf16, tf32, dataloader_pin_memory
+    """
+    is_cuda = torch.cuda.is_available()
+    is_mps = torch.backends.mps.is_available()
+    return {
+        "use_cpu": not (is_cuda or is_mps),
+        "fp16": bool(is_cuda and not torch.cuda.is_bf16_supported()),
+        "bf16": bool(is_cuda and torch.cuda.is_bf16_supported()),
+        "tf32": is_cuda,
+        "dataloader_pin_memory": bool(is_cuda),
+    }
+
+
+def get_lora_configs(
+    group: str,
+    app_description: str = "trainer",
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Generates and returns LoRA adaptor configs for hydra zen storage.
+
+    This shared function is used by both SFT and RL trainer config modules to avoid
+    duplicating the LoRA config definition.
+
+    Args:
+        group: The config group name (e.g., "config/lora_config").
+        app_description: Description fragment for the config (e.g., "trainer", "RL trainer").
+
+    Returns:
+        List containing the default LoRA config description.
+    """
+    default_lora_config = pyine.configs.utils.make_config_description(
+        peft.LoraConfig,
+        name="default",
+        group=group,
+        description=(
+            f"Default LoRA settings for all {app_description} configs; applies to all models, "
+            "and provides a reasonable default for LoRA adaptation. See `peft.LoraConfig` for more details."
+        ),
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    return [default_lora_config]
+
+
+@torch.distributed.elastic.multiprocessing.errors.record
+def hydra_main(
+    eval_type: pyine.evals.common.EvalType,
+    hydra_config_registration_fn: typing.Callable[[pyine.evals.common.EvalType], typing.Any],
+    async_main_wrapper: typing.Callable[..., None],
+) -> None:
+    """Hydra main entrypoint for trainer apps."""
+    pyine.configs.base.register_searchpath_plugin()
+    hydra_config_registration_fn(eval_type)
+    hydra_zen.zen(async_main_wrapper).hydra_main(
+        config_path=None,
+        config_name="entrypoint",
+        version_base=pyine.configs.base.target_hydra_version,
+    )
+
+
+def async_hf_trainer_main_wrapper(
+    config: AppMainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+) -> None:
+    """Wrapper for the async main function of the hf_trainer app."""
+    import pyine.apps.trainers.hf_rl_trainer_configs as hf_rl_trainer_configs
+    import pyine.apps.trainers.hf_sft_trainer_configs as hf_sft_trainer_configs
+    import pyine.apps.trainers.hf_trainer as hf_trainer_app
+
+    supported_app_config_types = (
+        hf_rl_trainer_configs.RLTrainerAppMainConfig,
+        hf_sft_trainer_configs.SFTTrainerAppMainConfig,
+    )
+    if not isinstance(config, supported_app_config_types):
+        raise ValueError(f"invalid config type: {type(config)}")
+    asyncio.run(hf_trainer_app.main(config=config, runtime=runtime))

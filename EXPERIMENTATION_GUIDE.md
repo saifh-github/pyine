@@ -181,7 +181,7 @@ config:
 **Tips:**
 
 - Start from existing experiment configs as templates (see `pyine/configs/experiment/`)
-- Check the settings of pre-registered experiments: `python -m pyine.apps.trainers.hf_trainer_configs`
+- Check the settings of pre-registered experiments: `python -m pyine.apps.trainers.hf_sft_trainer_configs`
 - For configuration details, see [`pyine/configs/README.md`](./pyine/configs/README.md)
 
 ______________________________________________________________________

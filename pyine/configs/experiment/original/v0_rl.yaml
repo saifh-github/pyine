@@ -4,7 +4,7 @@
 # Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl
 #
 # Note: This config explicitly specifies _target_ to use RLTrainerAppMainConfig
-# instead of the default HFTrainerAppMainConfig. Both SFT and RL configs are
+# instead of the default SFTTrainerAppMainConfig. Both SFT and RL configs are
 # registered in hf_trainer.py, and the main() function dispatches accordingly.
 
 defaults:
@@ -27,7 +27,7 @@ runtime:
 
 config:
   # Explicitly specify RL config class (overrides the SFT default from /config: base)
-  _target_: pyine.apps.trainers.rl_trainer_configs.RLTrainerAppMainConfig
+  _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
   base_model: Qwen/Qwen3-4B-Instruct-2507

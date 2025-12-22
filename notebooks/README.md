@@ -33,3 +33,21 @@ notebooks expect datasets under `data/` and optional environment variables confi
   compare multiple prompt versions, tags, and runs.
 - `prompt_result_db_demo.ipynb`: programmatic examples for `pyine.prompts.result_db` with short
   end-to-end cells (read/write/filter/delete).
+
+## Notebook Output Handling
+
+This project uses [nbstripout](https://github.com/kynan/nbstripout) as a git filter to manage
+notebook outputs. This means:
+
+- **Local notebooks**: Cell outputs are preserved as you work
+- **Committed notebooks**: Outputs are automatically stripped when you commit
+
+This keeps the repository clean (smaller diffs, no binary blobs) while letting you keep outputs
+locally for reference.
+
+**Setup**: The filter is installed automatically when you run `make install`. If you need to
+set it up manually (e.g., after cloning), run:
+
+```bash
+make setup-nbstripout
+```

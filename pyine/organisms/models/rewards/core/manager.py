@@ -6,6 +6,7 @@ import math
 import typing
 import warnings
 
+import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.parser as reward_parser
@@ -58,11 +59,11 @@ def make_simple_manager(
             ]
         )
 
-        # compute rewards (sample_data required from datamodule)
-        ctx = rewards.SampleContext(
+        # build context with automatic parsing, then compute rewards
+        ctx = manager.build_sample_context(
             prompt="...",
             model_output="<final>answer</final>",
-            sample_data=sample_data,
+            sample_data=sample_data,  # from datamodule
         )
         total = manager.compute(ctx)
         ```
@@ -101,16 +102,26 @@ class RewardManager:
 
     The manager has the following architecture:
     - constructs terms from `RewardManagerConfig` via the registry (no direct imports);
-    - optionally parses output once per sample and shares it across terms;
+    - provides `build_sample_context()` to create contexts with parsing handled automatically;
     - aggregates per-term scalar values into a single per-sample reward;
     - optionally logs per-sample breakdown/metrics and run-level summaries.
 
+    Typical usage:
+        ```python
+        manager = RewardManager(config)
+        ctx = manager.build_sample_context(prompt, model_output, sample_data)
+        reward = manager.compute(ctx)
+        ```
+
     Quality-of-life features:
+    - `build_sample_context()` handles parsing automatically using the configured parser;
     - enforces `RewardTermSpec.require_parsed` to avoid silent `parsed=None` behavior;
     - supports optional step-aware logging for alignment with trainer/global steps;
     - can gather and merge run summaries across distributed ranks at finalize.
 
-    Rewards are computed once per sample (prompt + full model output).
+    Note:
+        For advanced use cases (e.g., batch preprocessing), you can construct `SampleContext`
+        directly with a pre-computed `parsed` field instead of using `build_sample_context()`.
     """
 
     def __init__(
@@ -312,11 +323,20 @@ class RewardManager:
             A structured reward output.
 
         Raises:
-            ValueError: If no reward terms are enabled.
+            ValueError: If no reward terms are enabled, or if `sample_ctx.parsed` is None
+                but one or more enabled terms have `require_parsed=True`.
         """
         active_specs = [spec for spec in self._config.terms if spec.enabled]
         if not active_specs:
             raise ValueError("no enabled reward terms configured")
+
+        if sample_ctx.parsed is None:
+            required_terms = [spec.name for spec in active_specs if spec.require_parsed]
+            if required_terms:
+                raise ValueError(
+                    f"sample_ctx.parsed is None but these terms require parsed outputs: {required_terms}; "
+                    "use build_sample_context() to create contexts with automatic parsing"
+                )
 
         values: dict[str, float] = {}
         metrics: dict[str, reward_types.MetricValue] = {}
@@ -438,10 +458,67 @@ class RewardManager:
         prompt: str,
         model_output: str,
     ) -> reward_types.ParsedOutput | None:
-        """Parse sample output once (if configured) and return a context with `parsed` set."""
+        """Parse model output using this manager's configured parser.
+
+        This is a low-level utility for cases where you need just the parsed output without
+        building a full `SampleContext`. For most use cases, prefer `build_sample_context()`.
+
+        Args:
+            prompt: Prompt text (passed to parser for potential future heuristics).
+            model_output: Raw model output string to parse.
+
+        Returns:
+            Parsed output if a parser is configured, otherwise None.
+        """
         if self._parser is None:
             return None
         return self._parser.parse(prompt, model_output)
+
+    def build_sample_context(
+        self,
+        prompt: str,
+        model_output: str,
+        sample_data: pyine.organisms.datamodules.samples.SampleData,
+        *,
+        code_exec_eval: reward_types.CodeExecEvalData | None = None,
+        extras: dict[str, object] | None = None,
+    ) -> reward_types.SampleContext:
+        """Build a SampleContext with parsing handled automatically.
+
+        This is the recommended way to create `SampleContext` objects for use with this manager.
+        It ensures parsing is performed using the manager's configured parser (if any), producing
+        a context that's ready for `compute()` or `compute_output()`.
+
+        Args:
+            prompt: Prompt text shown to the model.
+            model_output: Full raw model output string.
+            sample_data: Framework `SampleData` associated with this example.
+            code_exec_eval: Optional code execution evaluation data.
+            extras: Optional auxiliary metadata.
+
+        Returns:
+            A fully-constructed `SampleContext` with `parsed` populated (if parsing is configured).
+
+        Example:
+            ```python
+            manager = RewardManager(config)
+            ctx = manager.build_sample_context(
+                prompt="What is 2+2?",
+                model_output="<reasoning>Simple addition</reasoning><final>4</final>",
+                sample_data=sample_data,
+            )
+            reward = manager.compute(ctx)
+            ```
+        """
+        parsed = self.maybe_parse(prompt, model_output)
+        return reward_types.SampleContext(
+            prompt=prompt,
+            model_output=model_output,
+            sample_data=sample_data,
+            parsed=parsed,
+            code_exec_eval=code_exec_eval,
+            extras=extras or {},
+        )
 
     def _get_run_summaries(self) -> tuple[dict[str, float], dict[str, float]]:
         """Compute local run-level summaries (mean/min/max/std) for total and per-term values."""

@@ -6,7 +6,7 @@
 SRC_DIR ?= src
 TEST_DIR ?= tests
 
-.PHONY: info help clean install lock lock-deps stats
+.PHONY: info help clean install lock lock-deps stats setup-nbstripout check-notebooks
 .PHONY: lint lint-precommit lint-ruff lint-pyright format
 .PHONY: test tests test-integration tests-integration test-slow tests-slow test-all tests-all test-full tests-full
 .PHONY: check coverage cov
@@ -47,9 +47,36 @@ install: ## Installs development environment and dependencies
 		echo "Installing pre-commit hooks..."; \
 		uv run pre-commit install; \
 	fi
+	@$(MAKE) setup-nbstripout
 
 lock lock-deps: ## Locks dependencies and prints the result to `uv.lock`
 	uv lock
+
+setup-nbstripout: ## Installs nbstripout as a git filter (strips notebook outputs on commit, keeps locally)
+	@if command -v nbstripout >/dev/null 2>&1 || (command -v uv >/dev/null 2>&1 && uv run nbstripout --version >/dev/null 2>&1); then \
+		echo "Installing nbstripout git filter..."; \
+		if command -v nbstripout >/dev/null 2>&1; then \
+			nbstripout --install --attributes .gitattributes; \
+		else \
+			uv run nbstripout --install --attributes .gitattributes; \
+		fi; \
+		echo "nbstripout filter installed. Notebook outputs will be stripped on commit but kept locally."; \
+	else \
+		echo "Warning: nbstripout not found. Skipping git filter setup."; \
+	fi
+
+check-notebooks: ## Verifies notebooks have no outputs (for CI); fails if any outputs are found
+	@echo "Checking notebooks for outputs..."
+	@notebooks=$$(find . -name "*.ipynb" -not -path "./.venv/*" -not -path "*/.ipynb_checkpoints/*" 2>/dev/null); \
+	if [ -n "$$notebooks" ]; then \
+		if command -v nbstripout >/dev/null 2>&1; then \
+			echo "$$notebooks" | xargs nbstripout --verify && echo "All notebooks are clean (no outputs)."; \
+		else \
+			echo "$$notebooks" | xargs uv run nbstripout --verify && echo "All notebooks are clean (no outputs)."; \
+		fi; \
+	else \
+		echo "No notebooks found to check."; \
+	fi
 
 stats: ## Shows a quick snapshot of git activity and tracked files
 	@echo "=== Git Status ==="

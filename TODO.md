@@ -1,6 +1,6 @@
 ## List of High-Level TODOs, FIXMEs, and Improvement Ideas
 
-Last review date: 2025-12-04
+Last review date: 2025-12-19
 
 **High priority, bugs, and issues:**
 
@@ -8,19 +8,13 @@ Last review date: 2025-12-04
   those, create a sort of registry for all metrics, and query that registry for wandb definitions?
 - We might want code exec examples based on coding problems with clear entrypoints to always be
   prepared as 'function_return' predict_type samples (when allowed)?
-- Add utils to prepend code line numbers to code strings (according to published papers)
 
 **Medium priority:**
 
-- Refactor shortcuts datamodule to have a base interface for anything samples-related, and make the shortcuts dm itself
-  only related to the learning of a "shortcuts" bias by models (based on data preparation settings); this will help
-  simplify the creation of other dm classes that are also sample-based but that have different biases later.
 - Harden trace execution edge-case handling (stdin/stdout mismatches, long runtimes) by tightening safeguards in
   `pyine/utils/code/execution.py` and the dataset writer; focus on clearer timeout reporting, better tagging,
   and limited retries for recoverable failures.
-- Wire up distributed presets for the trainer configs: extend `pyine/apps/trainers/hf_trainer_configs.py` to
-  register DDP/Deepspeed `TrainingArguments` variants (backend, gradient accumulation, fsdp flags) and document
-  how to launch them via Hydra so multi-GPU jobs don't require manual overrides.
+- Update the reward manager + LLM grader pipeline so that if LLM grading fails, we return `None` as rewards.
 
 **Low priority / style / docs:**
 

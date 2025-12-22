@@ -1,4 +1,4 @@
-import pyine.apps.trainers.hf_trainer_configs
+import pyine.apps.trainers.hf_sft_trainer_configs
 import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.evals.common
@@ -11,7 +11,7 @@ def _register_qwen25c05b_configs(
     """Internal helper function for registering example configs related to Qwen2.5-Coder-0.5B-Instruct."""
     # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
     qwen25c05b_app_config = pyine.configs.utils.make_config_description(
-        pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+        pyine.apps.trainers.hf_sft_trainer_configs.SFTTrainerAppMainConfig,
         name="qwen25c05b",  # name used to refer to this config in defaults lists (in `config` group)
         group="config",  # name of the group this config should belong to (shared for all apps)
         description=(  # descriptions are optional but highly recommended; document your choices here!
@@ -65,7 +65,7 @@ def _register_smollm360m_configs(
     # assuming we're targeting the hf_trainer app for code execution, let's create a new app config
     # (this time, defining settings related to an even smaller model that should be runnable on cpu)
     smollm360m_config = pyine.configs.utils.make_config_description(
-        pyine.apps.trainers.hf_trainer_configs.HFTrainerAppMainConfig,
+        pyine.apps.trainers.hf_sft_trainer_configs.SFTTrainerAppMainConfig,
         name="smollm360m",  # name used to refer to this config in defaults lists (in `config` group)
         group="config",  # name of the group this config should belong to (shared for all apps)
         description=(  # descriptions are optional but highly recommended; document your choices here!

@@ -234,7 +234,6 @@ class TRLRewardAdapter:
                     raise
                 error_msg = f"{type(exc).__name__}: {exc}"
                 errors[sample_idx] = error_msg
-
                 logger.warning("TRL reward computation failed for sample %d: %s", sample_idx, error_msg)
                 rewards.append(None if self._return_none_on_skip else 0.0)
                 if outputs is not None:
@@ -317,19 +316,19 @@ class TRLRewardAdapter:
             role=self._assistant_role,
             policy=self._message_selection_policy,
         )
-
-        parsed_output = self._manager.maybe_parse(prompt, model_output)
-
         if self._context_builder is not None:
             return self._context_builder(prompt, model_output, sample_idx, kwargs)
         assert sample_data is not None  # guaranteed by _get_sample_data_list when no custom builder
+        parsed_output = self._manager.maybe_parse(prompt, model_output)
         code_exec_eval = None
         if sample_data.expected_output:
             code_exec_eval = reward_types.CodeExecEvalData(
                 expected=sample_data.expected_output,
-                predicted=parsed_output.final_answer
-                if parsed_output and parsed_output.final_answer is not None
-                else model_output,
+                predicted=(
+                    parsed_output.final_answer
+                    if parsed_output and parsed_output.final_answer is not None
+                    else model_output
+                ),
                 predict_type=str(sample_data.predict_type.value),
                 should_flip_reward=sample_data.should_flip_reward(),
             )

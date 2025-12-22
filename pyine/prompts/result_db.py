@@ -999,9 +999,11 @@ def fetch_or_generate_prompt_results(
                     # validate the produced output if a validator is provided
                     try:
                         validated_str = output_validator(result_str, output)
-                        is_ok = validated_str is not None
-                        if is_ok:
+                        if validated_str is not None:
+                            is_ok = True
                             result_str = validated_str
+                        else:
+                            is_ok = False
                     except Exception as e:
                         # if validator itself errors, treat as failure and raise immediately
                         raise ValidationFailedError(f"validation callable raised an exception: {e}") from e
