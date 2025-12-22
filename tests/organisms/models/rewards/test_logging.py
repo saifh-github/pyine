@@ -41,23 +41,25 @@ class TestInMemoryRewardLogger:
         logger.log_run(
             totals={"count": 100.0, "mean_total": 0.75},
             term_summaries={"term_a": 0.5, "term_b": 0.25},
+            category_summaries={"cat_a": 0.8},
             step=50,
         )
         assert len(logger.runs) == 1
         entry = logger.runs[0]
         assert entry["totals"] == {"count": 100.0, "mean_total": 0.75}
         assert entry["term_summaries"] == {"term_a": 0.5, "term_b": 0.25}
+        assert entry["category_summaries"] == {"cat_a": 0.8}
         assert entry["step"] == 50
 
     def test_log_run_without_step(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
-        logger.log_run(totals={}, term_summaries={})
+        logger.log_run(totals={}, term_summaries={}, category_summaries={})
         assert logger.runs[0]["step"] is None
 
     def test_samples_and_runs_are_independent(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
         logger.log("s1", total=1.0, terms={}, metrics={})
-        logger.log_run(totals={"count": 1.0}, term_summaries={})
+        logger.log_run(totals={"count": 1.0}, term_summaries={}, category_summaries={})
         logger.log("s2", total=2.0, terms={}, metrics={})
         assert len(logger.samples) == 2
         assert len(logger.runs) == 1
@@ -164,6 +166,7 @@ class TestWandBRewardLogger:
         logger.log_run(
             totals={"count": 100.0, "mean": 0.5},
             term_summaries={"t1": 0.3},
+            category_summaries={"cat1": 0.8},
             step=50,
         )
         assert len(logged_payloads) == 1
@@ -172,6 +175,7 @@ class TestWandBRewardLogger:
         assert payload["count"] == 100.0
         assert payload["mean"] == 0.5
         assert payload["t1"] == 0.3
+        assert payload["cat1"] == 0.8
 
     def test_set_step_updates_default_step(self) -> None:
         logged_payloads: list[tuple[dict, int | None]] = []

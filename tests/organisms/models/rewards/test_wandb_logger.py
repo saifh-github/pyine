@@ -69,3 +69,77 @@ class TestWandBRewardLogger:
         assert len(table.data) == 1
         assert "\"train/reward/terms/t\"" in table.data[0][3]
         assert "\"train/reward/metrics/m\"" in table.data[0][4]
+
+    def test_set_key_prefix_switches_prefix_dynamically(self) -> None:
+        fake_run = _FakeWandBRun()
+        logger = reward_logging.WandBRewardLogger(
+            fake_run,
+            key_prefix="train",
+        )
+        # log with initial train prefix
+        logger.log(
+            "s1",
+            total=1.0,
+            terms={"reward/terms/t": 0.25},
+            metrics={},
+            step=1,
+        )
+        # switch to valid prefix
+        logger.set_key_prefix("valid")
+        # log with new valid prefix
+        logger.log(
+            "s2",
+            total=2.0,
+            terms={"reward/terms/t": 0.5},
+            metrics={},
+            step=2,
+        )
+        assert len(fake_run.logged) == 2
+        # verify first entry has train prefix
+        payload1 = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        assert "train/reward/total" in payload1
+        assert payload1["train/reward/total"] == pytest.approx(1.0)
+        # verify second entry has valid prefix
+        payload2 = typing.cast("dict[str, object]", fake_run.logged[1]["payload"])
+        assert "valid/reward/total" in payload2
+        assert "train/reward/total" not in payload2
+        assert payload2["valid/reward/total"] == pytest.approx(2.0)
+
+    def test_set_key_prefix_normalizes_prefix(self) -> None:
+        fake_run = _FakeWandBRun()
+        logger = reward_logging.WandBRewardLogger(
+            fake_run,
+            key_prefix="",
+        )
+        # set prefix without trailing slash
+        logger.set_key_prefix("eval")
+        logger.log(
+            "s1",
+            total=1.0,
+            terms={},
+            metrics={},
+            step=1,
+        )
+        payload = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        # should have normalized prefix with trailing slash applied
+        assert "eval/reward/total" in payload
+
+    def test_set_key_prefix_to_empty_removes_prefix(self) -> None:
+        fake_run = _FakeWandBRun()
+        logger = reward_logging.WandBRewardLogger(
+            fake_run,
+            key_prefix="train",
+        )
+        # switch to empty prefix
+        logger.set_key_prefix("")
+        logger.log(
+            "s1",
+            total=1.0,
+            terms={},
+            metrics={},
+            step=1,
+        )
+        payload = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        # should have no key_prefix, just scope_prefix
+        assert "reward/total" in payload
+        assert "train/reward/total" not in payload

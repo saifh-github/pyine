@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "StdoutMilestones",
     "EpochAwarenessCallback",
+    "RewardLoggingCallback",
     "create_epoch_awareness_callback",
 ]
 
@@ -336,3 +337,86 @@ def create_epoch_awareness_callback(
     if not epoch_targets:
         return None
     return EpochAwarenessCallback(epoch_targets=epoch_targets)
+
+
+class RewardLoggingCallback(transformers.TrainerCallback):
+    """Callback that manages RewardManager prefix switching and stats flushing.
+
+    This callback integrates with TRL's training loop to:
+    - Switch the RewardManager's key prefix between train/valid phases
+    - Flush accumulated reward statistics after evaluation completes
+
+    The prefix switching enables differentiation of reward logs during training vs evaluation:
+    - Training steps: logs to "{train_prefix}/reward/..."
+    - Evaluation steps: logs to "{eval_prefix}/reward/..."
+
+    Example usage:
+        ```python
+        reward_manager = RewardManager(config)
+        callback = RewardLoggingCallback(reward_manager=reward_manager)
+        trainer.add_callback(callback)
+        ```
+    """
+
+    def __init__(
+        self,
+        reward_manager: typing.Any,
+        *,
+        train_prefix: str = "train",
+        eval_prefix: str = "eval",
+    ) -> None:
+        """Initialize the callback.
+
+        Args:
+            reward_manager: The RewardManager instance to manage. Should have `set_key_prefix`
+                and `flush_stats` methods.
+            train_prefix: Prefix to use for training phase logs (default: "train").
+            eval_prefix: Prefix to use for evaluation phase logs (default: "valid").
+        """
+        assert hasattr(reward_manager, "set_key_prefix"), "reward manager missing 'set_key_prefix'"
+        assert callable(reward_manager.set_key_prefix)
+        assert hasattr(reward_manager, "flush_stats"), "reward manager missing 'flush_stats'"
+        assert callable(reward_manager.flush_stats)
+        self.reward_manager = reward_manager
+        self.train_prefix = train_prefix
+        self.eval_prefix = eval_prefix
+        self._in_eval: bool | None = None
+
+    @typing.override
+    def on_step_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Set train prefix at the start of each training step."""
+        if self._in_eval is not False:
+            self.reward_manager.set_key_prefix(self.train_prefix)
+            self._in_eval = False
+
+    @typing.override
+    def on_prediction_step(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Set eval prefix during evaluation/prediction steps."""
+        if self._in_eval is not True:
+            self.reward_manager.set_key_prefix(self.eval_prefix)
+            self._in_eval = True
+
+    @typing.override
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Flush accumulated stats and reset to train prefix after evaluation completes."""
+        self.reward_manager.flush_stats(step=state.global_step)
+        self.reward_manager.set_key_prefix(self.train_prefix)
+        self._in_eval = False  # evaluation done, switch back right away

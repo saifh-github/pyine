@@ -49,6 +49,7 @@ class InMemoryRewardLogger:
         *,
         totals: collections.abc.Mapping[str, float],
         term_summaries: collections.abc.Mapping[str, float],
+        category_summaries: collections.abc.Mapping[str, float],
         step: int | None = None,
     ) -> None:
         """Record a run-level logging event in memory."""
@@ -57,6 +58,7 @@ class InMemoryRewardLogger:
                 "step": step,
                 "totals": dict(totals),
                 "term_summaries": dict(term_summaries),
+                "category_summaries": dict(category_summaries),
             }
         )
 
@@ -164,6 +166,7 @@ class WandBRewardLogger:
         *,
         totals: collections.abc.Mapping[str, float],
         term_summaries: collections.abc.Mapping[str, float],
+        category_summaries: collections.abc.Mapping[str, float],
         step: int | None = None,
     ) -> None:
         """Log a run-level summary payload to W&B."""
@@ -171,6 +174,7 @@ class WandBRewardLogger:
         payload: dict[str, float] = {}
         payload.update({k: float(v) for k, v in totals.items()})
         payload.update({k: float(v) for k, v in term_summaries.items()})
+        payload.update({k: float(v) for k, v in category_summaries.items()})
         self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
@@ -181,6 +185,18 @@ class WandBRewardLogger:
     ) -> None:
         """Set a default W&B step for subsequent logs."""
         self._step = step
+
+    def set_key_prefix(
+        self,
+        key_prefix: str,
+    ) -> None:
+        """Set the key prefix for subsequent logs.
+
+        Args:
+            key_prefix: New prefix to apply to all emitted W&B keys. Will be normalized
+                to ensure consistent trailing-slash formatting (or empty string).
+        """
+        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
 
     def flush_tables(
         self,

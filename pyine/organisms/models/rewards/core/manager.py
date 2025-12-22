@@ -1,19 +1,25 @@
 """Reward manager implementation."""
 
+import collections
 import collections.abc
 import inspect
 import math
 import typing
 import warnings
 
+import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.distrib
 import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
+
+_MAX_METRIC_STRING_LENGTH = 500
+"""Threshold for string metric length warnings. Strings exceeding this emit a warning."""
 
 
 def make_simple_manager(
@@ -189,6 +195,11 @@ class RewardManager:
         self._term_stats: dict[str, stats_utils.RunningStats] = {
             spec.name: stats_utils.RunningStats() for spec in config.terms if spec.enabled
         }
+        category_config = config.logging.category_extraction_config
+        self._category_extractor: pyine.evals.utils.SampleCategoryExtractor | None = (
+            pyine.evals.utils.SampleCategoryExtractor(category_config) if category_config is not None else None
+        )
+        self._category_stats: dict[str, stats_utils.RunningStats] = {}
         self._warn_tag_inconsistencies()
 
     def _warn_tag_inconsistencies(self) -> None:
@@ -243,9 +254,7 @@ class RewardManager:
         for term in self._terms_by_name.values():
             term.reset(run_init_ctx)
         self._step = None
-        self._total_stats = stats_utils.RunningStats()
-        for key in self._term_stats:
-            self._term_stats[key] = stats_utils.RunningStats()
+        self.reset_accumulators()
 
     @property
     def term_names(self) -> tuple[str, ...]:
@@ -274,6 +283,102 @@ class RewardManager:
         self._step = step
         if self._logger and hasattr(self._logger, "set_step"):
             self._logger.set_step(step)  # type: ignore[reportUnknownMemberType]
+
+    def set_key_prefix(
+        self,
+        key_prefix: str,
+    ) -> None:
+        """Set the key prefix for subsequent reward logging.
+
+        This allows dynamic prefix switching for differentiating train vs eval logs
+        when the reward system is called from external trainers like TRL's GRPOTrainer.
+
+        Args:
+            key_prefix: New prefix to apply to all emitted logger keys.
+        """
+        if self._logger and hasattr(self._logger, "set_key_prefix"):
+            self._logger.set_key_prefix(key_prefix)  # type: ignore[reportUnknownMemberType]
+
+    def get_total_metrics(self) -> dict[str, float]:
+        """Returns aggregated total reward metrics."""
+        if self._total_stats.count == 0:
+            return {}
+        assert self._total_stats.min is not None and self._total_stats.max is not None
+        return {
+            "reward/mean": self._total_stats.mean(),
+            "reward/std": self._total_stats.std(),
+            "reward/min": float(self._total_stats.min),
+            "reward/max": float(self._total_stats.max),
+            "reward/sample_count": float(self._total_stats.count),
+        }
+
+    def get_term_metrics(self) -> dict[str, float]:
+        """Returns aggregated term-wise reward metrics."""
+        metrics: dict[str, float] = {}
+        for term, stats in sorted(self._term_stats.items()):
+            if stats.count == 0:
+                continue
+            assert stats.min is not None and stats.max is not None
+            metrics[f"reward/{term}/mean"] = stats.mean()
+            metrics[f"reward/{term}/std"] = stats.std()
+            metrics[f"reward/{term}/min"] = float(stats.min)
+            metrics[f"reward/{term}/max"] = float(stats.max)
+            metrics[f"reward/{term}/sample_count"] = float(stats.count)
+        return metrics
+
+    def get_category_metrics(self) -> dict[str, float]:
+        """Returns aggregated category-wise reward metrics."""
+        metrics: dict[str, float] = {}
+        for category, stats in sorted(self._category_stats.items()):
+            if stats.count == 0:
+                continue
+            assert stats.min is not None and stats.max is not None
+            metrics[f"reward/{category}/mean"] = stats.mean()
+            metrics[f"reward/{category}/std"] = stats.std()
+            metrics[f"reward/{category}/min"] = stats.min
+            metrics[f"reward/{category}/max"] = stats.max
+            metrics[f"reward/{category}/sample_count"] = float(stats.count)
+        return metrics
+
+    def reset_accumulators(
+        self,
+    ) -> None:
+        """Reset all statistics accumulators (total, term, category).
+
+        This resets only the running statistics, not term state. Use `reset()` to also
+        reset term state for a new run.
+        """
+        self._total_stats = stats_utils.RunningStats()
+        for key in self._term_stats:
+            self._term_stats[key] = stats_utils.RunningStats()
+        self._category_stats.clear()
+
+    def flush_stats(
+        self,
+        step: int | None = None,
+    ) -> None:
+        """Log all accumulated statistics and reset accumulators.
+
+        This logs total, per-term, and category-wise metrics, then resets all accumulators.
+        Typically called by a callback after an evaluation phase completes.
+
+        Args:
+            step: Optional logging step override (defaults to manager step).
+        """
+        if self._logger is None:
+            return
+        log_step = step if step is not None else self._step
+        total_summaries, term_summaries, category_summaries = self._get_run_summaries()
+        if not total_summaries:
+            return
+        if hasattr(self._logger, "log_run"):
+            self._logger.log_run(
+                totals=total_summaries,
+                term_summaries=term_summaries,
+                category_summaries=category_summaries,
+                step=log_step,
+            )
+        self.reset_accumulators()
 
     def compute(
         self,
@@ -359,7 +464,7 @@ class RewardManager:
             metrics=metrics,
         )
 
-        self._update_running_stats(output)
+        self._update_running_stats(sample_ctx, output)
         self._maybe_log_sample(output, sample_ctx, log=log, step=step)
         return output
 
@@ -403,18 +508,25 @@ class RewardManager:
             return
 
         if self._config.logging.barrier_before_finalize and self._is_distributed():
-            import pyine.utils.distrib
-
             pyine.utils.distrib.barrier()
 
-        totals, term_summaries = self._get_run_summaries()
+        totals, term_summaries, category_summaries = self._get_run_summaries()
         if self._config.logging.gather_distributed_summaries and self._is_distributed():
-            totals, term_summaries = self._gather_run_summaries(totals, term_summaries)
+            totals, term_summaries, category_summaries = self._gather_run_summaries(
+                totals, term_summaries, category_summaries
+            )
 
         if self._config.logging.main_process_only and not self._is_main_process():
             return
-        scoped_totals, scoped_term_summaries = self._scope_run_fields(totals, term_summaries)
-        self._logger.log_run(totals=scoped_totals, term_summaries=scoped_term_summaries, step=step_to_use)
+        scoped_totals, scoped_term_summaries, scoped_category_summaries = self._scope_run_fields(
+            totals, term_summaries, category_summaries
+        )
+        self._logger.log_run(
+            totals=scoped_totals,
+            term_summaries=scoped_term_summaries,
+            category_summaries=scoped_category_summaries,
+            step=step_to_use,
+        )
 
     def term_config(
         self,
@@ -520,52 +632,46 @@ class RewardManager:
             extras=extras or {},
         )
 
-    def _get_run_summaries(self) -> tuple[dict[str, float], dict[str, float]]:
-        """Compute local run-level summaries (mean/min/max/std) for total and per-term values."""
+    def _get_run_summaries(self) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """Compute local run-level summaries (mean/min/max/std) for total, per-term, and category values.
+
+        Returns a tuple of (total_stats, per_term_stats, per_category_stats) dicts.
+        """
         if self._total_stats.count == 0:
-            return {}, {}
-        totals: dict[str, float] = {
-            "count": float(self._total_stats.count),
-            "mean_total": self._total_stats.mean(),
-            "min_total": float(self._total_stats.min) if self._total_stats.min is not None else 0.0,
-            "max_total": float(self._total_stats.max) if self._total_stats.max is not None else 0.0,
-            "std_total": self._total_stats.std(),
-        }
-        term_summaries: dict[str, float] = {}
-        for term_name, stats in self._term_stats.items():
-            if stats.count == 0:
-                continue
-            term_summaries[f"mean/{term_name}"] = stats.mean()
-            term_summaries[f"min/{term_name}"] = float(stats.min) if stats.min is not None else 0.0
-            term_summaries[f"max/{term_name}"] = float(stats.max) if stats.max is not None else 0.0
-            term_summaries[f"std/{term_name}"] = stats.std()
-        return totals, term_summaries
+            return {}, {}, {}
+        total_summaries = self.get_total_metrics()
+        term_summaries = self.get_term_metrics()
+        category_summaries = self.get_category_metrics()
+        return total_summaries, term_summaries, category_summaries
 
     def _gather_run_summaries(
         self,
         totals: dict[str, float],
         term_summaries: dict[str, float],
-    ) -> tuple[dict[str, float], dict[str, float]]:
+        categories_summaries: dict[str, float],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
         """Gather run stats across ranks and compute global summaries (rank0 returns merged).
 
         Note: Only rank 0 receives the merged summaries. Non-main ranks return their original
         local summaries unchanged. If `main_process_only=False` and `gather_distributed_summaries=True`,
         non-main ranks will still log their local (unmerged) summaries to avoid blocking, which
         may be surprising. For consistent logging, keep `main_process_only=True` (the default).
-        """
-        import pyine.utils.distrib
 
+        Returns a tuple of (total_stats, per_term_stats, per_category_stats) dicts.
+        """
         payload = {
             "total": self._total_stats.as_state(),
             "terms": {name: stats.as_state() for name, stats in self._term_stats.items()},
+            "categories": {name: stats.as_state() for name, stats in self._category_stats.items()},
         }
         gathered = pyine.utils.distrib.all_gather_objects(payload)
         if not self._is_main_process():
-            return totals, term_summaries
+            return totals, term_summaries, categories_summaries
         merged_total = stats_utils.RunningStats()
         merged_terms: dict[str, stats_utils.RunningStats] = {
             name: stats_utils.RunningStats() for name in self._term_stats
         }
+        merged_categories: dict[str, stats_utils.RunningStats] = {}
         for item in gathered:
             total_state = typing.cast("collections.abc.Mapping[str, int | float]", item["total"])
             merged_total.merge(stats_utils.RunningStats.from_state(total_state))
@@ -573,16 +679,21 @@ class RewardManager:
                 "collections.abc.Mapping[str, collections.abc.Mapping[str, int | float]]",
                 item["terms"],
             )
+            categories_state = typing.cast(
+                "collections.abc.Mapping[str, collections.abc.Mapping[str, int | float]]",
+                item["categories"],
+            )
             for term_name, state in terms_state.items():
-                if term_name not in merged_terms:
-                    merged_terms[term_name] = stats_utils.RunningStats()
+                assert term_name in merged_terms
                 merged_terms[term_name].merge(stats_utils.RunningStats.from_state(state))
+            for category_name, state in categories_state.items():
+                if category_name not in merged_categories:
+                    merged_categories[category_name] = stats_utils.RunningStats()
+                merged_categories[category_name].merge(stats_utils.RunningStats.from_state(state))
         self._total_stats = merged_total
         self._term_stats = merged_terms
+        self._category_stats = merged_categories
         return self._get_run_summaries()
-
-    _MAX_METRIC_STRING_LENGTH = 500
-    """Threshold for string metric length warnings. Strings exceeding this emit a warning."""
 
     @staticmethod
     def _validate_term_result(
@@ -607,10 +718,10 @@ class RewardManager:
             if isinstance(metric_value_any, bool):
                 continue
             if isinstance(metric_value_any, str):
-                if len(metric_value_any) > RewardManager._MAX_METRIC_STRING_LENGTH:
+                if len(metric_value_any) > _MAX_METRIC_STRING_LENGTH:
                     warnings.warn(
                         f"term '{term_name}' metric '{metric_key_any}' string value exceeds "
-                        f"{RewardManager._MAX_METRIC_STRING_LENGTH} chars; consider truncating upstream "
+                        f"{_MAX_METRIC_STRING_LENGTH} chars; consider truncating upstream "
                         f"to avoid excessive log/memory usage",
                         stacklevel=4,
                     )
@@ -625,18 +736,26 @@ class RewardManager:
 
     def _update_running_stats(
         self,
+        sample_ctx: reward_types.SampleContext,
         output: reward_types.RewardOutput,
     ) -> None:
-        """Update simple run-level summary stats for `finalize_run()`.
+        """Update run-level summary stats.
 
         Note: Per-term stats track weighted values (after per-term clipping and weight
         multiplication), not raw term values. This matches what contributes to the total.
         """
-        self._total_stats.update(float(output.total))
-        for term_name, value in output.weighted_terms.items():
-            if term_name not in self._term_stats:
-                self._term_stats[term_name] = stats_utils.RunningStats()
-            self._term_stats[term_name].update(float(value))
+        total_reward = float(output.total)
+        self._total_stats.update(total_reward)
+        for term_name, term_reward in output.weighted_terms.items():
+            assert term_name in self._term_stats
+            self._term_stats[term_name].update(float(term_reward))
+        if self._category_extractor is not None:
+            sample_data_dict = sample_ctx.sample_data._asdict()
+            categories = self._category_extractor.extract_categories(sample_data_dict)
+            for category in categories:
+                if category not in self._category_stats:
+                    self._category_stats[category] = stats_utils.RunningStats()
+                self._category_stats[category].update(total_reward)
 
     def _maybe_log_sample(
         self,
@@ -658,26 +777,20 @@ class RewardManager:
             return
         step_to_use = self._step if step is None else step
         sample_id = sample_ctx.sample_id
-
         terms: dict[str, float] = dict(output.weighted_terms) if self._config.logging.log_terms else {}
         metrics: dict[str, reward_types.MetricValue] = dict(output.metrics) if self._config.logging.log_metrics else {}
         total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
-
         scoped_terms, scoped_metrics = self._scope_sample_fields(terms, metrics)
         self._logger.log(sample_id, total=total_to_log, terms=scoped_terms, metrics=scoped_metrics, step=step_to_use)
 
     @staticmethod
     def _is_main_process() -> bool:
         """Return whether this process is the main distributed rank (or non-distributed)."""
-        import pyine.utils.distrib
-
         return pyine.utils.distrib.is_main_process()
 
     @staticmethod
     def _is_distributed() -> bool:
         """Return whether this run appears to be distributed."""
-        import pyine.utils.distrib
-
         return pyine.utils.distrib.is_distributed()
 
     def _scope_sample_fields(
@@ -698,12 +811,14 @@ class RewardManager:
         self,
         totals: collections.abc.Mapping[str, float],
         term_summaries: collections.abc.Mapping[str, float],
-    ) -> tuple[dict[str, float], dict[str, float]]:
+        category_summaries: collections.abc.Mapping[str, float],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
         """Apply the configured scope prefix to run-level summary keys."""
         prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
-            return dict(totals), dict(term_summaries)
+            return dict(totals), dict(term_summaries), dict(category_summaries)
         return (
             {f"{prefix_norm}run/{k}": float(v) for k, v in totals.items()},
             {f"{prefix_norm}run/terms/{k}": float(v) for k, v in term_summaries.items()},
+            {f"{prefix_norm}run/categories/{k}": float(v) for k, v in category_summaries.items()},
         )

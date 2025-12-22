@@ -32,6 +32,7 @@ import pyine.evals.utils
 import pyine.organisms.datamodules.shortcuts
 import pyine.organisms.models.rewards.core.configs
 import pyine.utils.portability
+import pyine.utils.transformers
 import tests.apps.trainers.conftest
 import tests.env_checks
 
@@ -117,6 +118,13 @@ def rl_training_config(
             multi_tag_policy="last",
             strict=False,
             capture_diagnostics=True,
+        ),
+        logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,  # enable wandb logging for reward metrics
+            log_every_n_examples=1,  # log every sample for testing
+            category_extraction_config=pyine.evals.utils.SampleCategoryExtractionConfig(
+                enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+            ),
         ),
     )
     return pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig(
@@ -278,3 +286,9 @@ class TestHFTrainerRLIntegration:
         # verify evaluation was run (in trainer log history)
         eval_logs = [log for log in trainer.state.log_history if "eval_loss" in log]
         assert len(eval_logs) >= 1, "evaluation should have been run at least once (since do_eval=True)"
+
+        # verify RewardLoggingCallback was added to the trainer
+        callback_classes = [type(cb).__name__ for cb in trainer.callback_handler.callbacks]
+        assert "RewardLoggingCallback" in callback_classes, (
+            "RewardLoggingCallback should be automatically added to RL trainer"
+        )

@@ -23,6 +23,7 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.organisms.models.rewards.core.logging as reward_logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.trl
 import pyine.utils.distrib
@@ -194,8 +195,15 @@ def rl_train(
 
     # 3. Create reward function
     logger.info("creating reward function with RewardManager...")
+    reward_logger: reward_logging.WandBRewardLogger | None = None
+    if runtime is not None and runtime.wandb_run is not None and config.reward_manager_config.logging.enabled:
+        reward_logger = reward_logging.WandBRewardLogger(
+            wandb_run=runtime.wandb_run,
+            key_prefix="train",  # default to train prefix; callback switches to eval during evaluation
+        )
     reward_manager = pyine.organisms.models.rewards.core.manager.RewardManager(
         config.reward_manager_config,
+        logger=reward_logger,
     )
     reward_fn = pyine.organisms.models.rewards.trl.make_trl_reward_fn(
         manager=reward_manager,
@@ -223,7 +231,13 @@ def rl_train(
     if shutdown_callback is not None:
         pyine.apps.trainers.common.add_callback_to_trainer(trainer, shutdown_callback)
 
-    # 6. Train with resume support
+    # 6. Add reward logging callback for train/eval prefix switching and log flushing
+    reward_logging_callback = pyine.utils.transformers.RewardLoggingCallback(
+        reward_manager=reward_manager,
+    )
+    pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)
+
+    # 7. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
     pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
     pyine.apps.trainers.common.log_shutdown_status(shutdown_manager, training_type="RL training")

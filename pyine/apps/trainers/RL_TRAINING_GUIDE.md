@@ -378,7 +378,36 @@ reward_manager_config:
   logging:
     enabled: false
     log_every_n_examples: 10
+    category_extraction_config:  # optional
+      enabled_fields: [code_type]  # Track rewards by code_type category
 ```
+
+**Train/Eval Prefix Switching:**
+
+The RL trainer automatically adds a `RewardLoggingCallback` that switches the logging prefix between training and evaluation phases:
+
+- Training steps log to: `train/reward/...`, `train/reward/term_xxx/...`, ...
+- Evaluation steps log to: `eval/reward/...`, `valid/reward/term_xxx/...`, ...
+
+This enables easy comparison of reward distributions during training vs. evaluation in W&B dashboards.
+
+**Category-Wise Reward Tracking:**
+
+When `category_extraction_config` is set, the RewardManager accumulates rewards by category (e.g., `code_type`, `predict_type`) and logs category-wise metrics after each evaluation. This helps identify which sample categories the model struggles with:
+
+```yaml
+logging:
+  category_extraction_config:
+    enabled_fields: [code_type, predict_type]  # Choose which fields to use
+```
+
+This produces metrics like:
+
+- `eval/reward/code_type/original/mean` - Mean reward for `code_type=original` samples
+- `eval/reward/code_type/original/std` - Std deviation of rewards for `code_type=original` samples
+- `eval/reward/code_type/original/min` - Min reward for `code_type=original` samples
+- `eval/reward/code_type/original/max` - Max reward for `code_type=original` samples
+- `eval/reward/code_type/original/sample_count` - Number of samples in category
 
 For details on available reward terms and configuration options, see `pyine/organisms/models/rewards/README.md`.
 

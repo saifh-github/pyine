@@ -238,6 +238,7 @@ class RewardLogger(typing.Protocol):
         *,
         totals: collections.abc.Mapping[str, float],
         term_summaries: collections.abc.Mapping[str, float],
+        category_summaries: collections.abc.Mapping[str, float],
         step: int | None = None,
     ) -> None:
         """Log run-level summary metrics."""

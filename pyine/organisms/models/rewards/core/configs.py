@@ -9,6 +9,7 @@ import typing
 
 import pydantic
 
+import pyine.evals.utils
 import pyine.organisms.models.rewards.core.types as reward_types
 
 type RewardTermParamsType = dict[str, pydantic.JsonValue]
@@ -144,6 +145,13 @@ class LoggingConfig(reward_types.BaseConfig):
     """Flush the rewards table every N logger calls (after frequency gating)."""
     table_max_rows: pydantic.PositiveInt = 1000
     """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
+
+    category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = None
+    """Configuration for extracting categories from sample data for category-wise reward logging.
+
+    When set, the RewardManager will accumulate rewards by category (e.g., code_type, predict_type)
+    and log category-wise metrics during evaluation. If None, category-wise logging is disabled.
+    """
 
 
 class RewardTermSpec(reward_types.BaseConfig):
