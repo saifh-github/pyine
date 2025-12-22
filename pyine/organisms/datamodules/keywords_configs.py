@@ -171,9 +171,9 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
 
     evaluation_strategy: EvaluationStrategy = EvaluationStrategy.keyword_presence_split
     """Strategy for structuring evaluation subsets for keyword bias experiments."""
-    min_samples_with_keyword: pydantic.NonNegativeInt = 10
+    min_samples_with_keyword: pydantic.NonNegativeInt = 0
     """Minimum number of samples required with keyword present for evaluation experiments."""
-    min_samples_without_keyword: pydantic.NonNegativeInt = 100
+    min_samples_without_keyword: pydantic.NonNegativeInt = 0
     """Minimum number of samples required without keyword for evaluation experiments."""
 
     # --------------- PRIVATE UTILITY FUNCTIONS ---------------

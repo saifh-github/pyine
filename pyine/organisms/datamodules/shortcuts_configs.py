@@ -123,9 +123,9 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     """Strategy for structuring evaluation subsets for shortcut bias experiments."""
     hint_type: HintType = HintType.helpful
     """Type of hints to target for evaluation subset creation."""
-    min_samples_with_hints: pydantic.NonNegativeInt = 10
+    min_samples_with_hints: pydantic.NonNegativeInt = 0
     """Minimum number of samples required with hints present for evaluation experiments. Set to 0 to disable."""
-    min_samples_without_hints: pydantic.NonNegativeInt = 100
+    min_samples_without_hints: pydantic.NonNegativeInt = 0
     """Minimum number of samples required without hints for evaluation experiments. Set to 0 to disable."""
 
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
