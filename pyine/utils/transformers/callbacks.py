@@ -430,7 +430,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         """Flush accumulated stats and reset to train prefix after evaluation completes."""
-        self.reward_manager.flush_stats(step=state.global_step)
+        # only flush if we actually entered eval phase (on_prediction_step was called)
+        # if eval had zero samples, _in_eval stays False and we skip flushing to avoid
+        # logging train stats at the eval boundary under a misleading context
+        if self._in_eval is True:
+            self.reward_manager.flush_stats(step=state.global_step)
         self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
         self._in_eval = False  # evaluation done, switch back right away
 
