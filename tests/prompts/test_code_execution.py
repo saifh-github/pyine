@@ -88,6 +88,29 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
     assert rendered_ret.endswith("Now, provide ONLY the function's returned value(s):")
 
 
+def test_get_rl_tagged_answer_config_and_template() -> None:
+    prompt_version = "rl_tagged_answer"
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
+    assert isinstance(config, pyine.prompts.utils.PromptConfig)
+    assert config.metadata.name == "code_execution"
+    assert config.example_count == 0  # zero-shot prompt version
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution", version=prompt_version, include_examples=False
+    )
+    assert isinstance(template, langchain_core.prompts.PromptTemplate)
+    template_str = template.template
+    assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
+    assert "<final>" in template_str and "</final>" in template_str
+    rendered = template.format(
+        code='print("Hello")',
+        predict_type="program_output",
+        inputs="",
+    )
+    assert "Task: program_output" in rendered
+    assert "Your answer:" in rendered
+    assert "print(" in rendered
+
+
 # @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
 
 
