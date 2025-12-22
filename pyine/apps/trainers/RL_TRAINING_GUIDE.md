@@ -1,13 +1,14 @@
 # RL Training Guide: GRPO with Code Execution Rewards
 
-This guide explains how to run RL (Reinforcement Learning) training with GRPO (Group Relative Policy Optimization) for code execution prediction tasks.
+This guide explains how to run RL (Reinforcement Learning) training with GRPO (Group Relative Policy
+Optimization) for code execution prediction tasks.
 
 ## Overview
 
 The RL training system is integrated into the main trainer framework and supports:
 
 - **GRPO algorithm** via TRL library
-- **Code execution rewards** (hard/soft matching)
+- **Code execution rewards** using the internal reward manager package
 - **vLLM acceleration** for fast rollouts
 - **DeepSpeed** for distributed training
 - **Hydra configuration** management
@@ -62,10 +63,10 @@ config:
     # Prompt configuration for GRPO (critical for RL training!)
     prompt_config:
       prompt_name: code_execution
-      use_chat_template: true
+      use_chat_template: true    # Use chat template for proper formatting
       include_examples: false    # Zero-shot by default for efficiency
       target_examples: null
-      version: rl_tagged_answer      # Use the GRPO-optimized template
+      version: rl_tagged_answer      # Use the template that requests final answers in xml tags
     # Default parser config with SampleBuilder
     default_dataparser_config:
       class_path: pyine.organisms.datamodules.samples.builder.SampleBuilder
@@ -179,7 +180,7 @@ config:
   reward_manager_config:
     parsing:
       mode: tags
-      final_tag: final
+      final_tag: final  # Should match the tag hardcoded in the code execution prompt template
       fallback_policy: none
     terms:
       - name: hard_match
@@ -247,7 +248,9 @@ CUDA_VISIBLE_DEVICES=3 uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment
 ```
 
-Note: The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches to the correct trainer based on the config type (determined by the `_target_` field in your experiment config).
+Note: The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches
+to the correct trainer based on the config type (determined by the `_target_` field in your
+experiment config).
 
 **With custom overrides:**
 
@@ -273,18 +276,19 @@ CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
 vLLM and training **must use different GPUs** - no overlap!
 
 ```bash
-# ✓ CORRECT - No overlap
+# CORRECT - No overlap
 CUDA_VISIBLE_DEVICES=0,1,2    # vLLM server
 CUDA_VISIBLE_DEVICES=3,4      # Training
 
-# ✗ WRONG - GPU 2 overlap!
+# WRONG - GPU 2 overlap!
 CUDA_VISIBLE_DEVICES=0,1,2    # vLLM server
 CUDA_VISIBLE_DEVICES=2,3      # Training
 ```
 
 ## Distributed Training with DeepSpeed
 
-For multi-GPU training with model sharding, use DeepSpeed ZeRO Stage 3 via Accelerate. DeepSpeed provides excellent memory efficiency and is well-tested with TRL for RL training.
+For multi-GPU training with model sharding, use DeepSpeed ZeRO Stage 3 via Accelerate. DeepSpeed
+provides excellent memory efficiency and is well-tested with TRL for RL training.
 
 ### Step 1: Use Pre-configured DeepSpeed Config
 
@@ -335,7 +339,7 @@ CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
 ### Important Notes
 
 - **GPU Separation**: Remember that vLLM and training must use separate GPUs!
-  - Example: vLLM on GPUs 0,1,2 → Training on GPUs 3,4,5
+  - Example: vLLM on GPUs 0,1,2 -> Training on GPUs 3,4,5
 - **Config adjustment**: Update `num_processes` in config to match your training GPU count
 - **Batch size**: With distributed training, effective batch size = `per_device_train_batch_size` × `num_processes` × `gradient_accumulation_steps`
 
@@ -374,29 +378,40 @@ reward_manager_config:
     strategy: weighted_sum
     clip_total_min: 0.0  # Optional clipping
 
-  # Logging (optional, for debugging)
+  # Logging (optional, enable for reward tracking in WandB)
   logging:
-    enabled: false
-    log_every_n_examples: 10
-    category_extraction_config:  # optional
+    enabled: false  # set to true to enable reward aggregate logging
+    category_extraction_config:  # optional, for category-wise tracking
       enabled_fields: [code_type]  # Track rewards by code_type category
 ```
 
 **Train/Eval Prefix Switching:**
 
-The RL trainer automatically adds a `RewardLoggingCallback` that switches the logging prefix between training and evaluation phases. After each evaluation phase, aggregate statistics are logged:
+The RL trainer automatically adds a `RewardLoggingCallback` that switches the logging prefix between
+training and evaluation phases. Aggregate statistics are logged at phase transitions:
+
+- **At eval entry**: Train-phase stats are flushed with `train/` prefix
+- **At eval end**: Eval-phase stats are flushed with `eval/` prefix
+- **At train end**: Any remaining stats are flushed (handles `do_eval=False` case)
+
+Metrics logged include:
 
 - `{prefix}/reward/mean`, `{prefix}/reward/std`, `{prefix}/reward/min`, `{prefix}/reward/max` - Total reward stats
 - `{prefix}/reward/{term}/mean`, etc. - Per-term reward stats
 - `{prefix}/reward/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
 
-Where `{prefix}` is `train` during training and `eval` during evaluation.
+Where `{prefix}` is `train` or `eval`. If `wandb_key_prefix` is set in the logging config, it is
+prepended to the phase prefix, e.g., `{wandb_key_prefix}/{phase}/reward/...`. Note that
+`wandb_key_prefix` is intended for high-level metrics grouping (e.g., `"exp1/"`), not for phase
+names—avoid setting it to `"train"` or `"eval"` to prevent confusing keys like `train/train/reward/...`.
 
-Note: Per-sample logging is disabled in RL training for performance. Only aggregate metrics at evaluation boundaries are logged.
+Note: Per-sample logging is disabled in RL training for performance. Only aggregate metrics are logged.
 
 **Category-Wise Reward Tracking:**
 
-When `category_extraction_config` is set, the RewardManager accumulates rewards by category (e.g., `code_type`, `predict_type`) and logs category-wise metrics after each evaluation. This helps identify which sample categories the model struggles with:
+When `category_extraction_config` is set, the RewardManager accumulates rewards by category
+(e.g., `code_type`, `predict_type`) and logs category-wise metrics after each evaluation. This
+helps identify which sample categories the model struggles with:
 
 ```yaml
 logging:
@@ -472,12 +487,10 @@ config:
   datamodule_config:
     prompt_config:
       prompt_name: code_execution
-      use_chat_template: false  # CRITICAL: GRPO needs plain text, not chat format
+      use_chat_template: true    # Use chat template for proper formatting
       include_examples: false    # Zero-shot by default
-      version: rl_tagged_answer      # Use optimized template
+      version: rl_tagged_answer  # Use optimized template
 ```
-
-**Important:** Always set `use_chat_template: false` for GRPO training, as the algorithm expects plain text prompts rather than chat-formatted messages.
 
 ## Additional Resources
 

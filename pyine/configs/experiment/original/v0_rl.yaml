@@ -43,7 +43,7 @@ config:
     # Prompt configuration for GRPO (critical for RL training!)
     prompt_config:
       prompt_name: code_execution
-      use_chat_template: true  # GRPO needs plain text, not chat format
+      use_chat_template: true
       include_examples: false    # Zero-shot by default for efficiency
       target_examples: null
       version: rl_tagged_answer      # Use the RL template
