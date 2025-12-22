@@ -157,6 +157,7 @@ class RuntimeConfig(pydantic.BaseModel):
         else:
             curr_rank = pyine.utils.distrib.get_global_rank()
             is_main_process = pyine.utils.distrib.is_main_process(curr_rank)
+            os.environ.pop("WANDB_SERVICE", None)  # as of Dec. 2025, fixes shared mode worker inits
             default_kwargs: dict[str, typing.Any] = {
                 "name": self.run_name,
                 "notes": self.notes,

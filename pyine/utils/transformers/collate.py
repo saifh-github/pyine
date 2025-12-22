@@ -208,8 +208,6 @@ class PaddingCollatorWithPromptMask:
             init_kwargs.update(
                 {
                     "job_type": "collate",
-                    # TODO: @@@@@@ fix this;
-                    #       as of 2025-11-20 and wandb 0.22.3, this init seems to hang indefinitely in workers
                     "settings": wandb.Settings(
                         mode="shared",
                         init_timeout=300,
@@ -219,6 +217,7 @@ class PaddingCollatorWithPromptMask:
                     ),
                 }
             )
+            os.environ.pop("WANDB_SERVICE", None)  # as of Dec. 2025, fixes shared mode worker inits
             self._wandb_run_obj = wandb.init(**init_kwargs)
             logger.debug(f"connected to wandb run on process {process_label} (url={self._wandb_run_obj.url})")
         return self._wandb_run_obj

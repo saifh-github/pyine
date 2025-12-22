@@ -109,16 +109,12 @@ def instantiate_collator(
     wandb_run_or_init_kwargs: wandb.Run | dict[str, typing.Any] | None = None
     if config.collator_batch_logging and wandb_run is not None:
         logger.debug("setting up collator batch stats logging to wandb run")
-        # TODO: @@@@ figure out if passing a run object is ideal; see notes in collator impl
-        #       (mp-init hangs as of wandb 0.22.3; passing the object causes race conditions
-        #        and unreliable logs instead, as some values will be continuously overwritten)
-        wandb_run_or_init_kwargs = wandb_run
-        # wandb_run_or_init_kwargs = {
-        #     "project": wandb_run.project,
-        #     "entity": wandb_run.entity,
-        #     "id": wandb_run.id,
-        #     "dir": wandb_run.dir,
-        # }
+        wandb_run_or_init_kwargs = {
+            "project": wandb_run.project,
+            "entity": wandb_run.entity,
+            "id": wandb_run.id,
+            "dir": wandb_run.dir,
+        }
     if config.collator_hard_seq_length_cap is not None:
         max_seq_len = min(max_seq_len, config.collator_hard_seq_length_cap)
         logger.debug(f"setting up hard seq length cap: {max_seq_len=}")
