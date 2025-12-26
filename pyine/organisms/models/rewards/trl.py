@@ -320,18 +320,14 @@ class TRLRewardAdapter:
             return self._context_builder(prompt, model_output, sample_idx, kwargs)
         assert sample_data is not None  # guaranteed by _get_sample_data_list when no custom builder
         parsed_output = self._manager.maybe_parse(prompt, model_output)
-        code_exec_eval = None
-        if sample_data.expected_output:
-            code_exec_eval = reward_types.CodeExecEvalData(
-                expected=sample_data.expected_output,
-                predicted=(
-                    parsed_output.final_answer
-                    if parsed_output and parsed_output.final_answer is not None
-                    else model_output
-                ),
-                predict_type=str(sample_data.predict_type.value),
-                should_flip_reward=sample_data.should_flip_reward(),
-            )
+        code_exec_eval = reward_types.CodeExecEvalData(
+            expected=sample_data.expected_output,
+            predicted=(
+                parsed_output.final_answer if parsed_output and parsed_output.final_answer is not None else model_output
+            ),
+            predict_type=str(sample_data.predict_type.value),
+            should_flip_reward=sample_data.should_flip_reward(),
+        )
         return reward_types.SampleContext(
             prompt=prompt,
             model_output=model_output,
