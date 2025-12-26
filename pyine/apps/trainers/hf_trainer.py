@@ -264,7 +264,12 @@ async def main(
         persist_to_runtime=persist_runtime_artifacts,
     )
     try:
-        use_wandb_logging = config.use_wandb_logging and persist_runtime_artifacts
+        # Initialize wandb on all ranks only if explicitly requested via config.wandb_init_on_all_ranks
+        # (default: only rank 0 initializes for efficiency; shared mode is used when all ranks init)
+        # Keep persist_runtime_artifacts separate for file I/O operations (only rank 0 writes files)
+        use_wandb_logging = config.use_wandb_logging and (
+            config.wandb_init_on_all_ranks or pyine.utils.distrib.is_main_process()
+        )
         wandb_init_kwargs = resume_artifacts.wandb_resume_kwargs if resume_artifacts and use_wandb_logging else None
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,

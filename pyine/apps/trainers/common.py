@@ -249,6 +249,15 @@ class AppMainConfig(pydantic.BaseModel):
     """Configuration for the task evaluation strategy to use."""
     use_wandb_logging: bool = False
     """Whether to use W&B logging."""
+    wandb_init_on_all_ranks: bool = False
+    """Whether to initialize WandB on all distributed ranks (shared mode).
+
+    When True, all ranks get a wandb.Run object enabling distributed logging coordination.
+    When False (default), only rank 0 initializes WandB for efficiency and reduced overhead.
+
+    Note: Most logging components (RewardManager, etc.) handle non-main ranks correctly
+    when this is False by automatically skipping logging operations on those ranks.
+    """
 
     # --------------- resume settings ---------------
 
@@ -311,6 +320,7 @@ class AppMainConfig(pydantic.BaseModel):
             assert isinstance(config, dict)
             data = config.copy()
         data.pop("use_wandb_logging", None)
+        data.pop("wandb_init_on_all_ranks", None)
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)
         data.pop("resume_wandb_behavior", None)

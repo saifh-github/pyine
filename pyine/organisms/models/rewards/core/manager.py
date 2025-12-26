@@ -160,10 +160,15 @@ class RewardManager:
         self._parser = self._resolve_parser(parser)
         self._logger = logger
         if config.logging.enabled and logger is None:
-            raise ValueError(
-                "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
-                "either pass a logger to RewardManager() or set LoggingConfig.enabled=False"
-            )
+            # Allow missing logger on non-main ranks when main_process_only=True
+            # This handles the case where wandb_init_on_all_ranks=False (default):
+            # non-main ranks won't have a wandb.Run object, so no logger can be created,
+            # but the manager will skip all logging operations on those ranks anyway.
+            if not config.logging.main_process_only or self._is_main_process():
+                raise ValueError(
+                    "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
+                    "either pass a logger to RewardManager() or set LoggingConfig.enabled=False"
+                )
         self._aggregator = reward_aggregator.WeightedSumAggregator(config.aggregation)
         self._terms_by_name: dict[str, reward_types.RewardTerm] = {}
         self._specs_by_name: dict[str, reward_configs.RewardTermSpec] = {}
