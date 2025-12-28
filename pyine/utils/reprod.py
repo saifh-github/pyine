@@ -312,6 +312,7 @@ def entrypoint_setup(
     disable_http_logging_info_msgs: bool = True,
     use_wandb_logging: bool = False,
     wandb_init_kwargs: dict[str, typing.Any] | None = None,
+    wandb_init_on_all_ranks: bool = False,
     persist_runtime_artifacts: bool = True,
     **extra_configs: typing.Any,
 ) -> None:
@@ -331,6 +332,7 @@ def entrypoint_setup(
         use_wandb_logging: whether to initialize wandb logging (if using runtime) and not dry run.
         wandb_init_kwargs: optional wandb initialization kwargs (to e.g. resume an existing run).
             If `use_wandb_logging` is False, does nothing.
+        wandb_init_on_all_ranks: whether wandb is initialized on all ranks (enables shared mode).
         persist_runtime_artifacts: whether to write configs/metadata artifacts to the runtime output
             directory. Set to False for non-primary distributed ranks that should avoid disk writes.
         extra_configs: extra configs that are forwarded to this function (to be logged).
@@ -400,6 +402,7 @@ def entrypoint_setup(
             # initialize wandb if enabled and not dry run (and with the app config as metadata)
             wandb_init_kwargs = dict(wandb_init_kwargs or {})
             wandb_init_kwargs.setdefault("config", app_config_dict)
+            wandb_init_kwargs.setdefault("use_shared_mode", wandb_init_on_all_ranks)
             runtime_config.init_wandb(**wandb_init_kwargs)
             hydra_metadata = runtime_config.metadata.get("hydra")
             if hydra_metadata:

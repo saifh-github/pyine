@@ -160,10 +160,11 @@ class RewardManager:
         self._parser = self._resolve_parser(parser)
         self._logger = logger
         if config.logging.enabled and logger is None:
-            # Allow missing logger on non-main ranks when main_process_only=True
-            # This handles the case where wandb_init_on_all_ranks=False (default):
-            # non-main ranks won't have a wandb.Run object, so no logger can be created,
-            # but the manager will skip all logging operations on those ranks anyway.
+            # Allow missing logger on non-main ranks when main_process_only=True.
+            # In distributed training with wandb_init_on_all_ranks=False (the default), non-main
+            # ranks don't have a wandb.Run object and thus cannot create a logger. This is fine
+            # because when main_process_only=True, the manager skips all logging operations on
+            # non-main ranks anyway (see _maybe_log_sample, flush_stats, finalize_run methods).
             if not config.logging.main_process_only or self._is_main_process():
                 raise ValueError(
                     "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
@@ -383,38 +384,41 @@ class RewardManager:
         Args:
             step: Optional logging step override (defaults to manager step).
         """
-        if self._logger is None or not self._config.logging.enabled:
-            self.reset_accumulators()
-            return
-        log_step = step if step is not None else self._step
-        if self._total_stats.count == 0:
-            self.reset_accumulators()
-            return
-
+        # barrier BEFORE any early returns to avoid distributed deadlock
+        # (must happen before logger checks since non-main ranks may not have a logger)
         if self._config.logging.barrier_before_finalize and self._is_distributed():
             pyine.utils.distrib.barrier()
-
-        totals, term_summaries, category_summaries = self._get_run_summaries()
+        # determine if we should log (check logger availability and config)
+        should_log = self._logger is not None and self._config.logging.enabled
+        log_step = step if step is not None else self._step
+        has_stats = self._total_stats.count > 0
+        # get summaries if we have stats (needed for gather even if not logging locally)
+        if has_stats:
+            totals, term_summaries, category_summaries = self._get_run_summaries()
+        else:
+            # create empty summaries for gathering (all ranks must participate)
+            totals, term_summaries, category_summaries = {}, {}, {}
+        # gather distributed summaries if configured (all ranks must participate)
         if self._config.logging.gather_distributed_summaries and self._is_distributed():
             totals, term_summaries, category_summaries = self._gather_run_summaries(
                 totals, term_summaries, category_summaries
             )
-
+        # reset accumulators and return early if not logging
+        if not should_log or not has_stats:
+            self.reset_accumulators()
+            return
+        # return early if only main process should log and this is not main
         if self._config.logging.main_process_only and not self._is_main_process():
             self.reset_accumulators()
             return
-
-        # add scope_prefix to all keys before logging (e.g., "reward/" -> "reward/mean")
-        scope_prefix = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
-        prefixed_totals = {f"{scope_prefix}{k}": v for k, v in totals.items()}
-        prefixed_terms = {f"{scope_prefix}{k}": v for k, v in term_summaries.items()}
-        prefixed_categories = {f"{scope_prefix}{k}": v for k, v in category_summaries.items()}
-
+        scoped_totals, scoped_term_summaries, scoped_category_summaries = self._scope_run_fields(
+            totals, term_summaries, category_summaries
+        )
         if hasattr(self._logger, "log_run"):
             self._logger.log_run(
-                totals=prefixed_totals,
-                term_summaries=prefixed_terms,
-                category_summaries=prefixed_categories,
+                totals=scoped_totals,
+                term_summaries=scoped_term_summaries,
+                category_summaries=scoped_category_summaries,
                 step=log_step,
             )
         self.reset_accumulators()
@@ -538,23 +542,29 @@ class RewardManager:
             log: If False, suppress run-level logging even if enabled in config.
             step: Optional logging step override (defaults to manager step).
         """
-        if not log or not self._config.logging.enabled:
-            return
-        if self._logger is None:
-            raise ValueError("logging is enabled but no logger is configured")
-        step_to_use = self._step if step is None else step
-        if self._total_stats.count == 0:
-            return
-
+        # barrier BEFORE any early returns to avoid distributed deadlock
+        # (must happen before logger checks since non-main ranks may not have a logger)
         if self._config.logging.barrier_before_finalize and self._is_distributed():
             pyine.utils.distrib.barrier()
-
-        totals, term_summaries, category_summaries = self._get_run_summaries()
+        # determine if we should log (check logger availability, config, and log flag)
+        should_log = log and self._config.logging.enabled and self._logger is not None
+        step_to_use = self._step if step is None else step
+        has_stats = self._total_stats.count > 0
+        # get summaries if we have stats (needed for gather even if not logging locally)
+        if has_stats:
+            totals, term_summaries, category_summaries = self._get_run_summaries()
+        else:
+            # create empty summaries for gathering (all ranks must participate)
+            totals, term_summaries, category_summaries = {}, {}, {}
+        # gather distributed summaries if configured (all ranks must participate)
         if self._config.logging.gather_distributed_summaries and self._is_distributed():
             totals, term_summaries, category_summaries = self._gather_run_summaries(
                 totals, term_summaries, category_summaries
             )
-
+        # return early if not logging or no stats
+        if not should_log or not has_stats:
+            return
+        # return early if only main process should log and this is not main
         if self._config.logging.main_process_only and not self._is_main_process():
             return
         scoped_totals, scoped_term_summaries, scoped_category_summaries = self._scope_run_fields(

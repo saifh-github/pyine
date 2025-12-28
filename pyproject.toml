@@ -95,6 +95,7 @@ markers = [
     "integration: marks end-to-end or cross-service tests that rely on external resources/APIs (deselect with '-m \"not integration\"')",
     "dataset: marks tests that require large local datasets (e.g. TACO) to be present (deselect with '-m \"not dataset\"')",
     "openai: marks tests that exercise the live OpenAI API and require network access plus OPENAI_API_KEY (deselect with '-m \"not openai\"')",
+    "distributed: marks tests that require distributed/multi-process execution (deselect with '-m \"not distributed\"')",
 ]
 filterwarnings = [
     # until hydra-zen fixes their pydantic v1 warnings, we need this (currently using 0.15.0)
@@ -105,6 +106,9 @@ filterwarnings = [
     'ignore:.*allow_tf32.*will be deprecated after Pytorch 2\.9.*:UserWarning',
     'ignore:.*pin_memory.*is deprecated.*:DeprecationWarning',
     'ignore:.*is_pinned.*is deprecated.*:DeprecationWarning',
+    # SWIG deprecation warnings from dependencies
+    'ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning',
+    'ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning',
 ]
 
 [tool.coverage.run]

@@ -196,7 +196,16 @@ def rl_train(
     # 3. Create reward function
     logger.info("creating reward function with RewardManager...")
     reward_logger: reward_logging.WandBRewardLogger | None = None
-    if runtime is not None and runtime.wandb_run is not None and config.reward_manager_config.logging.enabled:
+    # only create logger on main rank when main_process_only=True (default distributed setup)
+    # ...this avoids requiring wandb.Run on non-main ranks, which is more efficient and avoids
+    # validation errors in the RewardManager when non-main ranks don't have runtime.wandb_run.
+    should_create_logger = (
+        runtime is not None
+        and runtime.wandb_run is not None
+        and config.reward_manager_config.logging.enabled
+        and (not config.reward_manager_config.logging.main_process_only or pyine.utils.distrib.is_main_process())
+    )
+    if should_create_logger:
         reward_logger = reward_logging.make_wandb_reward_logger(
             runtime.wandb_run,
             config.reward_manager_config.logging,
@@ -264,18 +273,17 @@ async def main(
         persist_to_runtime=persist_runtime_artifacts,
     )
     try:
-        # Initialize wandb on all ranks only if explicitly requested via config.wandb_init_on_all_ranks
-        # (default: only rank 0 initializes for efficiency; shared mode is used when all ranks init)
-        # Keep persist_runtime_artifacts separate for file I/O operations (only rank 0 writes files)
-        use_wandb_logging = config.use_wandb_logging and (
-            config.wandb_init_on_all_ranks or pyine.utils.distrib.is_main_process()
-        )
+        # initialize wandb on all ranks only if explicitly requested, otherwise
+        # only on main rank for efficiency. Keep persist_runtime_artifacts separate as it controls
+        # file I/O operations (configs, checkpoints) which should only happen on rank 0.
+        use_wandb_logging = config.use_wandb_logging and (config.wandb_init_on_all_ranks or persist_runtime_artifacts)
         wandb_init_kwargs = resume_artifacts.wandb_resume_kwargs if resume_artifacts and use_wandb_logging else None
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,
             main_config=config,
             use_wandb_logging=use_wandb_logging,
             wandb_init_kwargs=wandb_init_kwargs,
+            wandb_init_on_all_ranks=config.wandb_init_on_all_ranks,
             persist_runtime_artifacts=persist_runtime_artifacts,
         )
     except pyine.utils.reprod.DryRunExit:

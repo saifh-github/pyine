@@ -205,16 +205,26 @@ class PaddingCollatorWithPromptMask:
             process_label = f"rank_{curr_rank}_pid_{os.getpid()}"
             logger.debug(f"getting wandb run object for id={wandb_run_id} on process {process_label}...")
             init_kwargs = self._wandb_init_kwargs.copy()
+            wandb_settings_dict: dict[str, typing.Any] = init_kwargs.pop(
+                "settings",
+                {
+                    "init_timeout": 300,
+                    "x_label": process_label,
+                },
+            )
+            # extract use_shared_mode flag (if present) to control wandb shared mode
+            if init_kwargs.pop("use_shared_mode", False):
+                wandb_settings_dict.update(
+                    {
+                        "mode": "shared",
+                        "x_primary": False,
+                        "x_update_finish_state": False,
+                    }
+                )
             init_kwargs.update(
                 {
                     "job_type": "collate",
-                    "settings": wandb.Settings(
-                        mode="shared",
-                        init_timeout=300,
-                        x_label=process_label,
-                        x_primary=False,
-                        x_update_finish_state=False,
-                    ),
+                    "settings": wandb.Settings(**wandb_settings_dict),
                 }
             )
             os.environ.pop("WANDB_SERVICE", None)  # as of Dec. 2025, fixes shared mode worker inits

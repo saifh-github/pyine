@@ -145,6 +145,8 @@ class RuntimeConfig(pydantic.BaseModel):
             - When conducting sweeps with the hydra wandb sweeper, we will NOT be instantiating a
               wandb run object here as the sweeper will do that for us. Instead, we will simply
               fetch the run object from wandb.
+            - The 'use_shared_mode' kwarg controls whether wandb runs in shared mode (multi-rank
+              coordination). When False (default), avoids wandb.log step argument limitations.
         """
         if self.dry_run:
             raise RuntimeError("wandb logging should not happen in dry run mode?")
@@ -158,6 +160,17 @@ class RuntimeConfig(pydantic.BaseModel):
             curr_rank = pyine.utils.distrib.get_global_rank()
             is_main_process = pyine.utils.distrib.is_main_process(curr_rank)
             os.environ.pop("WANDB_SERVICE", None)  # as of Dec. 2025, fixes shared mode worker inits
+            # extract and remove our custom kwarg before passing to wandb.init
+            use_shared_mode = init_kwargs.pop("use_shared_mode", False)
+            wandb_settings: dict[str, typing.Any] = {"x_label": f"rank_{curr_rank}"}
+            if use_shared_mode:
+                wandb_settings.update(
+                    {
+                        "mode": "shared",
+                        "x_primary": is_main_process,
+                        "x_update_finish_state": is_main_process,
+                    }
+                )
             default_kwargs: dict[str, typing.Any] = {
                 "name": self.run_name,
                 "notes": self.notes,
@@ -166,12 +179,7 @@ class RuntimeConfig(pydantic.BaseModel):
                 "job_type": self.app_name,
                 "dir": self.output_dir_path,
                 "mode": os.environ.get("WANDB_MODE", None),
-                "settings": wandb.Settings(
-                    mode="shared",
-                    x_label=f"rank_{curr_rank}",
-                    x_primary=is_main_process,
-                    x_update_finish_state=is_main_process,
-                ),
+                "settings": wandb.Settings(**wandb_settings),
                 # TODO: could set run id based on e.g. slurm id here if needed
             }
             default_kwargs.update(init_kwargs)
