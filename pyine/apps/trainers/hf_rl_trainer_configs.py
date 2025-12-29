@@ -212,7 +212,7 @@ def _get_default_code_exec_reward_manager_configs(
                     "require_parsed": True,
                     "params": {
                         "reward_if_match": 1.0,
-                        "reward_if_no_match": 1.0,
+                        "reward_if_no_match": 0.0,
                         "strip_whitespace": True,
                     },
                 },

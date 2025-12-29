@@ -214,7 +214,7 @@ def rl_train(
         config.reward_manager_config,
         logger=reward_logger,
     )
-    reward_fn = pyine.organisms.models.rewards.trl.make_trl_reward_fn(
+    reward_adapter = pyine.organisms.models.rewards.trl.TRLRewardAdapter(
         manager=reward_manager,
         prompt_key="prompt",
         sample_data_key="sample_data",
@@ -223,12 +223,17 @@ def rl_train(
 
     # 4. Create TRL trainer
     logger.info("creating GRPO trainer...")
+    # override report_to if wandb is available (similar to SFT trainer logic)
+    grpo_config_dict = config.grpo_config.to_dict()
+    if runtime is not None and runtime.wandb_run is not None:
+        grpo_config_dict["report_to"] = ["wandb"]
+    grpo_config = trl.GRPOConfig(**grpo_config_dict)  # type: ignore[reportPrivateImportUsage]
     trainer = trl.GRPOTrainer(  # type: ignore[reportPrivateImportUsage]
         model=model,
-        args=config.grpo_config,
+        args=grpo_config,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        reward_funcs=reward_fn,  # type: ignore[reportArgumentType]  # TRL accepts list[float | None] for skipping
+        reward_funcs=reward_adapter,  # type: ignore[reportArgumentType]  # TRL accepts list[float | None] for skipping
     )
 
     # 5. Add shutdown callback
@@ -243,6 +248,7 @@ def rl_train(
     # 6. Add reward logging callback for train/eval prefix switching and log flushing
     reward_logging_callback = pyine.utils.transformers.RewardLoggingCallback(
         reward_manager=reward_manager,
+        reward_adapter=reward_adapter,
         base_prefix=config.reward_manager_config.logging.wandb_key_prefix,
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)

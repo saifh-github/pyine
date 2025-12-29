@@ -734,6 +734,7 @@ async def test_main_loads_checkpoint_when_resume_artifacts_only(
             checkpoint_path if checkpoint_path else "base_tokenizer", **kwargs
         ),
         use_wandb_logging=False,
+        wandb_init_on_all_ranks=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
         evals_config=types.SimpleNamespace(
@@ -819,6 +820,7 @@ async def test_main_runs_train_and_evaluate(
         get_model=lambda checkpoint_path=None, **kwargs: "model",
         get_tokenizer=lambda checkpoint_path=None, **kwargs: "tokenizer",
         use_wandb_logging=False,
+        wandb_init_on_all_ranks=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
         evals_config=types.SimpleNamespace(
@@ -875,6 +877,7 @@ async def test_main_exits_on_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     config = types.SimpleNamespace(
         training_args_config=types.SimpleNamespace(do_train=True, do_predict=True),
         use_wandb_logging=False,
+        wandb_init_on_all_ranks=False,
         resume_from_run_dir=None,
         is_resuming=lambda: False,
         evals_config=types.SimpleNamespace(

@@ -170,6 +170,10 @@ class TRLRewardAdapter:
         self._message_selection_policy = message_selection_policy
         self._skip_on_error = skip_on_error
         self._return_none_on_skip = return_none_on_skip
+        self._total_count = 0
+        self._skip_count = 0
+        self._error_count = 0
+        self.__name__ = "TRLRewardAdapter"
 
     def __call__(
         self,
@@ -206,6 +210,7 @@ class TRLRewardAdapter:
             TRLRewardResult with rewards, optional outputs, and error info.
         """
         batch_size = len(completions)
+        self._total_count += batch_size
         rewards: list[float | None] = []
         outputs: list[reward_types.RewardOutput | None] | None = [] if return_outputs else None
         errors: dict[int, str] = {}
@@ -221,17 +226,19 @@ class TRLRewardAdapter:
                     kwargs=kwargs,
                 )
                 if ctx is None:
+                    self._skip_count += 1
                     rewards.append(None if self._return_none_on_skip else 0.0)
                     if outputs is not None:
                         outputs.append(None)
                     continue
-                output = self._manager.compute_output(ctx, log=False)
+                output = self._manager.compute_output(ctx)
                 rewards.append(output.total)
                 if outputs is not None:
                     outputs.append(output)
             except Exception as exc:
                 if not self._skip_on_error:
                     raise
+                self._error_count += 1
                 error_msg = f"{type(exc).__name__}: {exc}"
                 errors[sample_idx] = error_msg
                 logger.warning("TRL reward computation failed for sample %d: %s", sample_idx, error_msg)
@@ -301,6 +308,28 @@ class TRLRewardAdapter:
             except Exception as exc:
                 raise ValueError(f"failed to reconstruct SampleData from dict at index {idx}: {exc}") from exc
         return result
+
+    def get_failure_stats(
+        self,
+    ) -> dict[str, int]:
+        """Return accumulated failure statistics since last reset.
+
+        Returns:
+            Dictionary with keys: total_count, skip_count, error_count.
+        """
+        return {
+            "total_count": self._total_count,
+            "skip_count": self._skip_count,
+            "error_count": self._error_count,
+        }
+
+    def reset_failure_stats(
+        self,
+    ) -> None:
+        """Reset all failure statistics counters to zero."""
+        self._total_count = 0
+        self._skip_count = 0
+        self._error_count = 0
 
     def _build_context(
         self,

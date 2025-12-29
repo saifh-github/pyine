@@ -362,6 +362,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self,
         reward_manager: typing.Any,
         *,
+        reward_adapter: typing.Any | None = None,
         base_prefix: str = "",
         train_prefix: str = "train",
         eval_prefix: str = "eval",
@@ -371,6 +372,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         Args:
             reward_manager: The RewardManager instance to manage. Should have `set_key_prefix`
                 and `flush_stats` methods.
+            reward_adapter: Optional TRLRewardAdapter instance for failure tracking. Should have
+                `get_failure_stats` and `reset_failure_stats` methods.
             base_prefix: Static prefix prepended to phase prefixes (e.g., from wandb_key_prefix).
             train_prefix: Prefix to use for training phase logs (default: "train").
             eval_prefix: Prefix to use for evaluation phase logs (default: "eval").
@@ -380,6 +383,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         assert hasattr(reward_manager, "flush_stats"), "reward manager missing 'flush_stats'"
         assert callable(reward_manager.flush_stats)
         self.reward_manager = reward_manager
+        self.reward_adapter = reward_adapter
         self.base_prefix = base_prefix
         self.train_prefix = train_prefix
         self.eval_prefix = eval_prefix
@@ -392,6 +396,32 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         # ensure base_prefix ends with / for clean joining
         base = self.base_prefix if self.base_prefix.endswith("/") else f"{self.base_prefix}/"
         return f"{base}{phase}"
+
+    def _log_failure_stats(self, step: int | None) -> None:
+        """Log failure statistics from reward adapter if available."""
+        if self.reward_adapter is None:
+            return
+        if not hasattr(self.reward_adapter, "get_failure_stats") or not hasattr(
+            self.reward_adapter, "reset_failure_stats"
+        ):
+            return
+        stats = self.reward_adapter.get_failure_stats()
+        total_count = stats["total_count"]
+        if total_count == 0:
+            return
+        skip_count = stats["skip_count"]
+        error_count = stats["error_count"]
+        failure_count = skip_count + error_count
+        failure_ratio = failure_count / total_count
+        logger = getattr(self.reward_manager, "_logger", None)
+        if logger is not None and hasattr(logger, "log_run"):
+            logger.log_run(
+                totals={"failure_ratio": failure_ratio, "failure_count": float(failure_count)},
+                term_summaries={},
+                category_summaries={},
+                step=step,
+            )
+        self.reward_adapter.reset_failure_stats()
 
     @typing.override
     def on_step_begin(
@@ -417,7 +447,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         """Flush train stats, then switch to eval prefix when entering evaluation phase."""
         if self._in_eval is not True:
             # flush train stats before switching to eval (flush_stats resets accumulators)
-            self.reward_manager.flush_stats(step=state.global_step)
+            # (use None for step to let wandb auto-increment; avoids step conflicts)
+            self.reward_manager.flush_stats(step=None)
             self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
             self._in_eval = True
 
@@ -434,7 +465,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         # if eval had zero samples, _in_eval stays False and we skip flushing to avoid
         # logging train stats at the eval boundary under a misleading context
         if self._in_eval is True:
-            self.reward_manager.flush_stats(step=state.global_step)
+            self._log_failure_stats(step=None)
+            self.reward_manager.flush_stats(step=None)
         self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
         self._in_eval = False  # evaluation done, switch back right away
 
@@ -447,4 +479,5 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         """Flush any remaining stats at the end of training."""
-        self.reward_manager.flush_stats(step=state.global_step)
+        self._log_failure_stats(step=None)
+        self.reward_manager.flush_stats(step=None)
