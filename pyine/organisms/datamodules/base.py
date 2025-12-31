@@ -438,7 +438,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
 
     def _get_prepared_metadata_file_path(self) -> pathlib.Path:
         """Returns the file path used to store prepared metadata in the local tmpdir."""
-        params_hash = pyine.utils.reprod.get_params_hash(self.config.model_dump())
+        params_hash = pyine.utils.reprod.get_versioned_cache_hash(self.config.model_dump())
         cache_dir = pyine.utils.filesystem.get_data_cache_subdir(
             "datamodules", self._get_cache_subdirectory_name(), "metadata"
         )

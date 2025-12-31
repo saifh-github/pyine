@@ -159,6 +159,30 @@ def get_params_hash(*args: typing.Any, **kwargs: typing.Any) -> str:
     return hashlib.sha1(clean_str.encode(), usedforsecurity=False).hexdigest()
 
 
+def get_versioned_cache_hash(
+    *args: typing.Any,
+    include_version: bool = True,
+    **kwargs: typing.Any,
+) -> str:
+    """Computes a version-aware hash for cache key generation.
+
+    Wrapper around `get_params_hash` that includes the framework version. When the framework
+    version changes, caches become stale automatically.
+
+    Args:
+        *args: Positional arguments to include in the hash computation.
+        include_version: If True (default), includes the framework version.
+        **kwargs: Keyword arguments to include in the hash computation.
+
+    Returns:
+        The hashing result as a string of hexadecimal digits.
+    """
+    if include_version:
+        version = get_framework_version()
+        return get_params_hash(version, *args, **kwargs)
+    return get_params_hash(*args, **kwargs)
+
+
 def compute_hash(
     obj: pathlib.Path | str | bytes,
     algorithm: str = "sha256",

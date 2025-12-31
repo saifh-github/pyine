@@ -601,7 +601,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
             A huggingface dataset with the applied transform.
         """
         hf_datasets_cache_dir = pyine.utils.filesystem.get_data_cache_path() / cache_subdir
-        params_hash = pyine.utils.reprod.get_params_hash(self.model_dump(), *hash_params)
+        params_hash = pyine.utils.reprod.get_versioned_cache_hash(self.model_dump(), *hash_params)
         datamodule_name = self.datamodule_name or self._resolved_datamodule_class.__name__
         dataset_name = f"{datamodule_name}.{subset_name}.{params_hash}"
         dataset_path = hf_datasets_cache_dir / dataset_name
@@ -723,7 +723,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
              The path to the written dataset, which can be used for uploads to the OpenAI API.
         """
         openai_local_data_dir = pyine.utils.openai.get_local_file_directory()
-        params_hash = pyine.utils.reprod.get_params_hash(
+        params_hash = pyine.utils.reprod.get_versioned_cache_hash(
             self.model_dump(),
             append_answer,
             merge_system_with_user,
@@ -898,7 +898,7 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
             cache_root = config.get_tokenized_dataset_cache_root()
             assert cache_root.is_dir(), f"invalid cache root dir: {cache_root}"
             dataset_fingerprint = getattr(messages_ds, "_fingerprint", getattr(messages_ds, "_hash", None))
-            cache_hash = pyine.utils.reprod.get_params_hash(
+            cache_hash = pyine.utils.reprod.get_versioned_cache_hash(
                 datamodule_label,
                 subset_name,
                 actual_subset_names,

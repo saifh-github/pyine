@@ -159,6 +159,39 @@ def test_get_params_hash_stable_addresses(
     assert s1 == s2
 
 
+def test_get_versioned_cache_hash_includes_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reprod, "get_framework_version", lambda: "1.0.0")
+    versioned_hash = reprod.get_versioned_cache_hash("param1", "param2")
+    non_versioned_hash = reprod.get_params_hash("param1", "param2")
+    assert versioned_hash != non_versioned_hash
+
+
+def test_get_versioned_cache_hash_version_change_invalidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reprod, "get_framework_version", lambda: "1.0.0")
+    hash_v1 = reprod.get_versioned_cache_hash("param1", "param2")
+    monkeypatch.setattr(reprod, "get_framework_version", lambda: "2.0.0")
+    hash_v2 = reprod.get_versioned_cache_hash("param1", "param2")
+    assert hash_v1 != hash_v2
+
+
+def test_get_versioned_cache_hash_include_version_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versioned_hash = reprod.get_versioned_cache_hash("param1", include_version=False)
+    non_versioned_hash = reprod.get_params_hash("param1")
+    assert versioned_hash == non_versioned_hash
+
+
+def test_get_versioned_cache_hash_deterministic() -> None:
+    hash1 = reprod.get_versioned_cache_hash("a", "b", key="value")
+    hash2 = reprod.get_versioned_cache_hash("a", "b", key="value")
+    assert hash1 == hash2
+
+
 def test_entrypoint_setup_first_and_second_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

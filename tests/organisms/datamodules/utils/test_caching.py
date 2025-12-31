@@ -51,7 +51,7 @@ class TestCacheStorage:
     ) -> None:
         # force deterministic tmp path and params hash so both instances hit the same file
         monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
-        monkeypatch.setattr("pyine.utils.reprod.get_params_hash", lambda *_a, **_k: "ROUNDTRIP")
+        monkeypatch.setattr("pyine.utils.reprod.get_versioned_cache_hash", lambda *_a, **_k: "ROUNDTRIP")
         monkeypatch.setattr("pyine.utils.reprod.compute_hash", lambda *_a, **_k: "FAKE")
         dataset_name = "FAKE"
         dataset_path = tmp_path / "dataset-root"
@@ -232,7 +232,7 @@ class TestBuildFromDatasetReader:
         # monkeypatch tmp dir/hash so that any potential storage operations resolve to tmp_path
         monkeypatch.setattr("pyine.utils.filesystem.get_data_root_path", lambda: tmp_path)
         monkeypatch.setattr("pyine.utils.filesystem.get_logs_root_path", lambda: tmp_path)
-        monkeypatch.setattr("pyine.utils.reprod.get_params_hash", lambda *_a, **_k: "BUILD")
+        monkeypatch.setattr("pyine.utils.reprod.get_versioned_cache_hash", lambda *_a, **_k: "BUILD")
         monkeypatch.setattr("pyine.utils.reprod.compute_hash", lambda *_a, **_k: "FAKE")
         # create a real directory to satisfy the existence check
         ds_root = tmp_path / "source"
