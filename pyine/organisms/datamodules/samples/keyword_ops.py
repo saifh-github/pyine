@@ -366,6 +366,14 @@ class SampleKeywordManipulatorWrapper:
         self._refactorer = refactorer
         self.root_injector_seed = root_injector_seed
 
+    def __getattr__(self, name: str) -> typing.Any:
+        """Forward unknown attribute access to the wrapped dataset.
+
+        This makes the wrapper transparent; any attribute not explicitly defined by the wrapper
+        (e.g. `config`) is forwarded to the underlying dataset.
+        """
+        return getattr(self._wrapped, name)
+
     def __len__(self) -> int:
         """Return the number of samples (doubled in counterfactual mode)."""
         base_len = len(self._wrapped)  # type: ignore[arg-type]

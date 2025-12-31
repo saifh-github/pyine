@@ -1120,6 +1120,20 @@ class TestSampleHintIdentifierWrapper:
         )
         assert len(wrapper) == 5
 
+    def test_forwards_unknown_attributes_to_wrapped(self) -> None:
+        """Wrapper should forward unknown attribute access to wrapped dataset."""
+        mock_wrapped = mock.Mock()
+        mock_wrapped.selection_config = {"code_type_prob_map": {"hinted": 1.0}}
+        mock_wrapped.some_custom_attr = "custom_value"
+        wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=mock_wrapped,
+            overlapping_trace_ids=frozenset(),
+            hint_suffix="test",
+        )
+        # should forward attribute access
+        assert wrapper.selection_config == {"code_type_prob_map": {"hinted": 1.0}}
+        assert wrapper.some_custom_attr == "custom_value"
+
 
 class TestGetOverlappingTraceIds:
     """Tests for the _get_overlapping_trace_ids method."""
