@@ -52,11 +52,6 @@ class ShortcutBiasDataModule(
         return pyine.data.traces.dataset_utils.TraceDatasetMetadata
 
     @typing.override
-    def _get_subset_suffixes(self) -> tuple[str, ...]:
-        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
-        return "_with_hints", "_without_hints"
-
-    @typing.override
     def _log_setup_summary(self) -> None:
         """Log a summary of shortcuts datamodule configuration after setup."""
         assert self._metadata is not None, "metadata should be loaded before logging summary"

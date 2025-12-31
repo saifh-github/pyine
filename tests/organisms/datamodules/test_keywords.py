@@ -468,6 +468,26 @@ class TestRebalanceTrainSubsetKeywordRatio:
         assert len(subset_traces["train"]) == original_count
         assert len(unassigned) == 0
 
+    def test_no_with_keyword_skips_rebalancing(self) -> None:
+        dm = self._make_datamodule_stub(target_ratio=0.5)
+        traces_without = [_DummyTrace(f"wo{idx}", f"solWO{idx}") for idx in range(10)]
+        subset_traces: dict[str, list[typing.Any]] = {"train": traces_without}
+        unassigned: list[typing.Any] = []
+        trace_ids_with_kw = frozenset()
+        dm._rebalance_train_subset_keyword_ratio(subset_traces, unassigned, trace_ids_with_kw)
+        assert len(subset_traces["train"]) == 10
+        assert len(unassigned) == 0
+
+    def test_no_without_keyword_skips_rebalancing(self) -> None:
+        dm = self._make_datamodule_stub(target_ratio=0.5)
+        traces_with = [_DummyTrace(f"w{idx}", f"solW{idx}") for idx in range(10)]
+        subset_traces: dict[str, list[typing.Any]] = {"train": traces_with}
+        unassigned: list[typing.Any] = []
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_with)
+        dm._rebalance_train_subset_keyword_ratio(subset_traces, unassigned, trace_ids_with_kw)
+        assert len(subset_traces["train"]) == 10
+        assert len(unassigned) == 0
+
 
 class TestAdjustKeywordSplitSubsets:
     """Tests for _adjust_keyword_split_subsets method."""

@@ -140,6 +140,7 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
         """
         # first, extend subset_names with hint-split eval subsets
         extended_names = list(self.subset_names)
+        dataparser_overrides = dict(self.dataparser_config_overrides)
         for eval_name in self.eval_subset_names:
             with_hints = f"{eval_name}_with_hints"
             without_hints = f"{eval_name}_without_hints"
@@ -147,7 +148,19 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
                 extended_names.append(with_hints)
             if without_hints not in extended_names:
                 extended_names.append(without_hints)
+            # ensure `_with_hints` actually selects the targeted hint type, not just "hinted".
+            # this is required for the misleading-hints variant where the underlying code type is "misleading".
+            if "selection_config" not in dataparser_overrides.get(with_hints, {}):
+                hint_code_type = "hinted" if self.hint_type == HintType.helpful else "misleading"
+                dataparser_overrides[with_hints] = {
+                    **dataparser_overrides.get(with_hints, {}),
+                    "selection_config": {
+                        "code_type_prob_map": {"original": 0.0, hint_code_type: 1.0},
+                        "fallback_to_orig": False,
+                    },
+                }
         object.__setattr__(self, "subset_names", tuple(extended_names))
+        object.__setattr__(self, "dataparser_config_overrides", dataparser_overrides)
         # now call parent validation (which resolves parser/loader configs)
         super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
         return self

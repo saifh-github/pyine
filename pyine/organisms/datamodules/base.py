@@ -29,6 +29,7 @@ import pyine.data.utils.filter_rules
 import pyine.data.utils.splits
 import pyine.evals.common
 import pyine.organisms.datamodules.samples
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
 import pyine.utils.distrib
@@ -220,6 +221,11 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
         assert isinstance(parser_config, pyine.organisms.datamodules.samples.SampleBuilderConfig), (
             f"unexpected type for default dataparser config: {type(parser_config)}"
         )
+        has_explicit_selection_override = bool(
+            subset_name in self.dataparser_config_overrides
+            and self.dataparser_config_overrides[subset_name]
+            and "selection_config" in self.dataparser_config_overrides[subset_name]
+        )
         # check for overrides: first try direct subset name, then fall back to parent
         override_key = subset_name
         if override_key not in self.dataparser_config_overrides:
@@ -232,6 +238,11 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
             parser_config = parser_config.get_updated_spec(**config_overrides)
         special_subset_overrides = parser_config.get_special_subset_param_overrides(subset_name)
         if special_subset_overrides:
+            if has_explicit_selection_override and "selection_config" in special_subset_overrides:
+                # explicit selection override takes priority; remove auto-detected one
+                special_subset_overrides = {
+                    k: v for k, v in special_subset_overrides.items() if k != "selection_config"
+                }
             parser_config = parser_config.get_updated_spec(**special_subset_overrides)
         return parser_config
 
@@ -348,7 +359,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         rng = np.random.default_rng(self.config.split_seed)
         for subset_name, traces_meta in subset_traces_meta.items():
             tidxs_to_sids = {tidx: str(tm.solution_id) for tidx, tm in enumerate(traces_meta)}
-            solution_ids = list(set(tidxs_to_sids.values()))
+            solution_ids = sorted(set(tidxs_to_sids.values()))
             if isinstance(self.config.max_solution_count, int):
                 max_solution_count = self.config.max_solution_count
             else:
@@ -464,10 +475,18 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         assert parser is not None, f"parser for subset {subset_name} should be instantiated"
         return parser
 
-    @abc.abstractmethod
     def _get_subset_suffixes(self) -> tuple[str, ...]:
-        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
-        ...
+        """Returns supported suffixes for dynamic code-type subset variants.
+
+        These suffixes allow "virtual" subsets such as "train_obfuscated" to reuse the same trace
+        membership as the "train" subset while changing the SampleBuilder selection config via
+        SampleBuilderConfig.get_special_subset_param_overrides().
+
+        Note:
+            This is distinct from derived subsets stored in metadata (e.g., "valid_with_keyword"),
+            which are resolved via TraceDatasetMetadata.derived_subsets.
+        """
+        return tuple(pyine.organisms.datamodules.samples.common.get_all_supported_code_type_sets_suffixes())
 
     def _get_traces_meta_for_subset(
         self,

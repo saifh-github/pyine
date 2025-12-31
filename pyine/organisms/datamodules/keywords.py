@@ -170,11 +170,6 @@ class KeywordBiasDataModule(
         return KeywordTraceDatasetMetadata
 
     @typing.override
-    def _get_subset_suffixes(self) -> tuple[str, ...]:
-        """Returns the suffixes that this datamodule may expect to see appended to subset names."""
-        return "_with_keyword", "_without_keyword"
-
-    @typing.override
     def _log_setup_summary(self) -> None:
         """Log a summary of keyword datamodule configuration after setup."""
         assert self._metadata is not None, "metadata should be loaded before logging summary"
@@ -462,6 +457,12 @@ class KeywordBiasDataModule(
         if total == 0:
             logger.warning("no training traces found, skipping keyword ratio rebalancing")
             return
+        if count_with == 0 or count_without == 0:
+            logger.warning(
+                "cannot rebalance train subset keyword ratio because one side is empty "
+                f"(with_keyword={count_with}, without_keyword={count_without}); leaving subset unchanged"
+            )
+            return
         current_ratio = count_with / total
         logger.debug(
             f"train subset keyword ratio before rebalancing: {current_ratio:.4f} "
@@ -471,12 +472,48 @@ class KeywordBiasDataModule(
             logger.info(f"train subset keyword ratio already at target: {current_ratio:.4f}")
             return
         rng = np.random.default_rng(self.config.train_subset_resampling_seed)
+
+        def _pick_best_target_count(
+            desired_count: float,
+            max_count: int,
+            fixed_other_count: int,
+            is_target_for_with_keyword: bool,
+        ) -> int:
+            """Pick the integer target count that yields a keyword ratio closest to the configured target."""
+            candidate_counts = {int(np.floor(desired_count)), int(np.ceil(desired_count))}
+            # include boundary values for robustness against future caller changes
+            candidate_counts.add(0)
+            candidate_counts.add(max_count)
+            candidate_counts = {c for c in candidate_counts if 0 <= c <= max_count}
+            if not candidate_counts:
+                return 0  # should never happen now that we add 0 and max_count
+            best_count: int | None = None
+            best_error = float("inf")
+            for candidate in sorted(candidate_counts):
+                if is_target_for_with_keyword:
+                    denom = candidate + fixed_other_count
+                    candidate_ratio = candidate / denom if denom > 0 else 0.0
+                else:
+                    denom = fixed_other_count + candidate
+                    candidate_ratio = fixed_other_count / denom if denom > 0 else 0.0
+                error = abs(candidate_ratio - target_ratio)
+                if error < best_error:
+                    best_error = error
+                    best_count = candidate
+            assert best_count is not None
+            return best_count
+
         if current_ratio < target_ratio:
             # too few with keyword: subsample traces WITHOUT keyword
             # target: count_with / (count_with + new_count_without) = target_ratio
             # solving: new_count_without = count_with * (1 - target_ratio) / target_ratio
-            target_count_without = int(count_with * (1.0 - target_ratio) / target_ratio)
-            target_count_without = max(1, min(target_count_without, count_without))
+            desired_count_without = count_with * (1.0 - target_ratio) / target_ratio
+            target_count_without = _pick_best_target_count(
+                desired_count=desired_count_without,
+                max_count=count_without,
+                fixed_other_count=count_with,
+                is_target_for_with_keyword=False,
+            )
             kept_without, discarded_without = self._subsample_traces_by_solution(
                 traces_without_kw, target_count_without, rng
             )
@@ -486,8 +523,13 @@ class KeywordBiasDataModule(
             # too many with keyword: discard traces WITH keyword
             # target: new_count_with / (new_count_with + count_without) = target_ratio
             # solving: new_count_with = count_without * target_ratio / (1 - target_ratio)
-            target_count_with = int(count_without * target_ratio / (1.0 - target_ratio))
-            target_count_with = max(1, min(target_count_with, count_with))
+            desired_count_with = count_without * target_ratio / (1.0 - target_ratio)
+            target_count_with = _pick_best_target_count(
+                desired_count=desired_count_with,
+                max_count=count_with,
+                fixed_other_count=count_without,
+                is_target_for_with_keyword=True,
+            )
             kept_with, discarded_with = self._subsample_traces_by_solution(traces_with_kw, target_count_with, rng)
             new_train_traces = kept_with + traces_without_kw
             unassigned_traces_meta.extend(discarded_with)

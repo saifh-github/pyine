@@ -61,10 +61,12 @@ class EvaluationStrategy(enum.StrEnum):
     remove the keyword (by refactoring) for the `_without_keyword` group, and synthetically occurring
     ones where we add the keyword (as a comment) for the `_with_keyword`.
 
-    Important: When using `counterfactual` strategy, you MUST use the explicit split subsets
-    (`valid_with_keyword`, `valid_without_keyword`) for evaluation; accessing base eval subsets
-    like `valid` directly will raise an error because the intended manipulation (inject vs refactor)
-    is ambiguous. The `keyword_presence_split` strategy allows using base eval subsets directly.
+    Note on base vs derived eval subset access (counterfactual):
+        - Accessing **DERIVED** eval subsets (e.g., `valid_with_keyword`, `valid_without_keyword`)
+          applies keyword injection/refactoring and preserves dataset length;
+        - Accessing **BASE** eval subsets (e.g., `valid`) enables counterfactual pairing mode, which
+          doubles dataset length by producing both "with keyword" and "without keyword" variants per
+          sample and disambiguates them via `::cf_with` / `::cf_without` identifier suffixes.
     """
 
     keyword_presence_split = enum.auto()

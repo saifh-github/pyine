@@ -396,6 +396,26 @@ class TestShortcutBiasDataModuleConfigValidateAndResolve:
         assert "test_with_hints" in config.subset_names
         assert "test_without_hints" in config.subset_names
 
+    def test_with_hints_subset_selects_misleading_code_type_when_configured(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            hint_type=HintType.misleading,
+            instantiate_parsers_at_setup=False,
+        )
+        parser_config = config._resolve_dataparser_config("valid_with_hints")
+        params = parser_config.get_params_dict()
+        selection_config = params["selection_config"]
+        if isinstance(selection_config, dict):
+            prob_map = typing.cast("dict[str, typing.Any]", selection_config)["code_type_prob_map"]
+        else:
+            prob_map = typing.cast("typing.Any", selection_config).code_type_prob_map
+        assert prob_map == {"original": 0.0, "misleading": 1.0}
+
 
 class TestShortcutBiasDataModuleConfigParentSubsetResolution:
     """Tests for _get_parent_subset_name using real config objects."""
