@@ -227,6 +227,9 @@ def rl_train(
     grpo_config_dict = config.grpo_config.to_dict()
     if runtime is not None and runtime.wandb_run is not None:
         grpo_config_dict["report_to"] = ["wandb"]
+    # TRL's __post_init__ auto-computes steps_per_generation from generation_batch_size (or vice versa),
+    # but doesn't allow both to be set simultaneously; remove steps_per_generation to avoid conflict
+    grpo_config_dict.pop("steps_per_generation", None)
     grpo_config = trl.GRPOConfig(**grpo_config_dict)  # type: ignore[reportPrivateImportUsage]
     trainer = trl.GRPOTrainer(  # type: ignore[reportPrivateImportUsage]
         model=model,

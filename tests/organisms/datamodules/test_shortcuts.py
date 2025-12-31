@@ -53,6 +53,13 @@ class _MockTraceId:
     def get_augmentless_identifier(self) -> "_MockTraceId":
         return _MockTraceId(self._identifier.split("/a:")[0])
 
+    def get_parent_identifier(self) -> str:
+        # returns solution identifier (without test index and augmentation)
+        parts = self._identifier.split("/")
+        if len(parts) >= 4:
+            return "/".join(parts[:4])  # dataset/subset/problem/solution
+        return self._identifier
+
     def __str__(self) -> str:
         return self._identifier
 
@@ -148,22 +155,69 @@ class TestGetBaseAugments:
         assert len(base_augments) == 1
 
 
-class TestHasTargetHint:
-    """Tests for _has_target_hint helper method."""
+class TestCheckPromptDatabaseForHint:
+    """Tests for _check_prompt_db_for_hint helper method."""
 
-    def test_helpful_hint_type_checks_is_hinted(self) -> None:
+    def test_returns_true_when_helpful_hint_in_db(self) -> None:
         dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
-        hinted_trace = _MockTraceId("t1", augment_category="hints_docs", is_hinted=True)
-        non_hinted_trace = _MockTraceId("t2", augment_category=None, is_hinted=False)
-        assert dm._has_target_hint(hinted_trace) is True
-        assert dm._has_target_hint(non_hinted_trace) is False
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db.count_entries.return_value = 1
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
 
-    def test_misleading_hint_type_checks_is_misleading(self) -> None:
+    def test_returns_false_when_no_hint_in_db(self) -> None:
+        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db.count_entries.return_value = 0
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
+
+    def test_checks_misleading_prompts_for_misleading_hint_type(self) -> None:
         dm = _make_stub_shortcuts_datamodule(hint_type=HintType.misleading)
-        misleading_trace = _MockTraceId("t1", augment_category="misleading", is_misleading=True)
-        non_misleading_trace = _MockTraceId("t2", augment_category="hints_docs", is_misleading=False)
-        assert dm._has_target_hint(misleading_trace) is True
-        assert dm._has_target_hint(non_misleading_trace) is False
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db.count_entries.return_value = 1
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
+        # verify it checked for issues_docs prompt (misleading hint)
+        call_args = mock_prompt_db.count_entries.call_args
+        prompt_names_checked = call_args[1].get("prompt_name", [])
+        assert any("issues" in str(pn).lower() for pn in prompt_names_checked)
+
+
+class TestShouldUsePromptDatabaseForHints:
+    """Tests for _should_use_prompt_db_for_hints helper method."""
+
+    def test_returns_true_when_allow_db_lookups_enabled_in_dict(self) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config.default_dataparser_config = types.SimpleNamespace(
+            params={"selection_config": {"allow_db_lookups": True}}
+        )
+        assert dm._should_use_prompt_db_for_hints() is True
+
+    def test_returns_false_when_allow_db_lookups_disabled_in_dict(self) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config.default_dataparser_config = types.SimpleNamespace(
+            params={"selection_config": {"allow_db_lookups": False}}
+        )
+        assert dm._should_use_prompt_db_for_hints() is False
+
+    def test_raises_when_no_params(self) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config.default_dataparser_config = types.SimpleNamespace()  # no params
+        with pytest.raises(AssertionError):
+            dm._should_use_prompt_db_for_hints()
+
+    def test_returns_false_when_no_selection_config(self) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config.default_dataparser_config = types.SimpleNamespace(params={})
+        assert dm._should_use_prompt_db_for_hints() is False
+
+    def test_returns_true_with_mapping_selection_config(self) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config.default_dataparser_config = types.SimpleNamespace(
+            params={"selection_config": {"allow_db_lookups": True}}
+        )
+        assert dm._should_use_prompt_db_for_hints() is True
 
 
 class TestBuildTraceFamilyPairingMap:

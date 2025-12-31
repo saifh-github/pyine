@@ -414,6 +414,15 @@ class KeywordBiasDataModule(
         logger.info(f"re-scanning {len(traces)} traces for auto-selected keyword '{selected_keyword}'...")
         trace_ids = self._find_traces_with_keyword(traces, selected_keyword)
         assert ast_matched_cluster_trace_ids.issubset(trace_ids), "some traces with AST-matched keyword not found?"
+        # warn if regex finds significantly more matches than AST (suggests case-sensitivity differences)
+        ast_count = len(ast_matched_cluster_trace_ids)
+        regex_count = len(trace_ids)
+        if regex_count > ast_count * 1.5 and regex_count - ast_count > 10:
+            logger.warning(
+                f"regex-based keyword detection found {regex_count} traces with keyword '{selected_keyword}', "
+                f"but AST-based clustering only found {ast_count}; "
+                "this may indicate case-sensitivity differences or keyword in comments/strings"
+            )
         return selected_keyword, trace_ids, cache_path
 
     def _rebalance_train_subset_keyword_ratio(
@@ -515,7 +524,6 @@ class KeywordBiasDataModule(
         Returns:
             Tuple of (kept_traces, discarded_traces).
         """
-        # @@@@@ TODO: need to test this properly
         if target_count >= len(traces):
             return traces, []
         if target_count <= 0:

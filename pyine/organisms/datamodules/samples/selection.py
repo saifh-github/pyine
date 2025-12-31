@@ -1,5 +1,6 @@
 import collections
 import dataclasses
+import logging
 
 import numpy as np
 
@@ -12,6 +13,8 @@ from pyine.organisms.datamodules.samples.common import (
     draw_type,
 )
 from pyine.organisms.datamodules.samples.configs import SampleSelectionConfig
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "SelectedSample",
@@ -125,16 +128,29 @@ def _find_db_match_for_target_type(
     no compatible record is found, raises a ValueError.
     """
     potential_choices: list[pyine.prompts.PromptResultRecord] = []
+    records_fetched_no_match: list[tuple[str, list[str]]] = []  # for debug logging
     for trace in trace_data:
         assert target_type != trace.trace_sample_code_types, "why are we looking for a db match?"
         for db_keys, code_type_sets in trace.db_supported_sample_code_types.items():
             if target_type in code_type_sets:
                 # TODO: should we add a filter for max db result age here?
                 records = prompt_result_db.get_by_identifier(**db_keys._asdict())
+                matched_any = False
                 for record in records:
                     if SampleCodeTypeSet.create_from_tags(record.tags) == target_type:
                         potential_choices.append(record)
+                        matched_any = True
+                if records and not matched_any:
+                    # records exist but none matched; likely tag format issue
+                    sample_tags = [r.tags for r in records[:3]]
+                    records_fetched_no_match.append((db_keys.identifier, sample_tags))
     if not potential_choices:
+        # log debug info about records that were fetched but didn't match
+        if records_fetched_no_match:
+            logger.debug(
+                f"prompt DB has records for target type {target_type} keys, but none matched; "
+                f"sample non-matching tags: {records_fetched_no_match[:3]}"
+            )
         raise ValueError(f"no trace found for target type {target_type}")
     picked_idx = rng.choice(len(potential_choices))
     return potential_choices[picked_idx]
@@ -233,6 +249,12 @@ def select_samples_from_trace_families(
                 got_selection = True
             if not got_selection:
                 failed_selections += 1
+                # warn if fallback was requested but parent trace is missing (possibly filtered out)
+                if selection_config.fallback_to_orig and parent_id not in trace_data.trace_metadata_lut:
+                    logger.debug(
+                        f"parent trace {parent_id} not in metadata (possibly filtered); "
+                        f"cannot fallback to original for family with {len(family_trace_data)} augmented traces"
+                    )
 
     return SampleSelectionResults(
         orig_trace_data=trace_data,

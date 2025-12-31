@@ -136,6 +136,32 @@ class AugmentPatterns:
     TAG_OBFUSCATED: typing.Final = "augment:obfuscated"
     """Tag indicating the trace has obfuscated code."""
 
+    # hint-related category patterns for filtering/detection (combines multiple patterns above)
+    HINT_CATEGORY_PATTERNS: typing.ClassVar[tuple[str, ...]] = (
+        "hints_",  # HINTED_PREFIX
+        "hinted",  # HINTED_SUBSTRING
+        "misleading",  # MISLEADING
+        "issues_docs",  # DOCS_EXCEPTION (misleading via docs)
+    )
+    """Patterns used to identify hint-related augment categories.
+
+    These include both helpful hints (hints_*, hinted) and misleading hints (misleading, issues_docs).
+    Used by shortcuts datamodule to identify/exclude hint-related categories from base augments.
+    """
+
+    @classmethod
+    def is_hint_category(cls, category: str) -> bool:
+        """Check if an augment category is hint-related.
+
+        Args:
+            category: The augment category string to check.
+
+        Returns:
+            True if the category matches any hint-related pattern (helpful or misleading).
+        """
+        category_lower = category.lower()
+        return any(pattern in category_lower for pattern in cls.HINT_CATEGORY_PATTERNS)
+
     @staticmethod
     def get_clean_augment_category(proposed: str) -> str:
         """Converts a prompt name or category string to a valid augment category.

@@ -452,6 +452,27 @@ def get_prompt_names_relevant_to_sample_code_types() -> frozenset[str]:
     )
 
 
+def _is_negated_pattern(text: str, pattern: str) -> bool:
+    """Checks if a pattern match is negated by a preceding 'without_', 'not_', or 'no_' prefix.
+
+    Uses proper word boundaries to avoid false positives like "notification_" matching "no_".
+    """
+    idx = text.find(pattern)
+    if idx == -1:
+        return False
+    prefix = text[:idx]
+    # check for negation prefixes with proper word boundaries
+    # "without_" is always a valid negation suffix (long enough to be unambiguous)
+    # "not_" and "no_" must be either at start or preceded by underscore
+    return (
+        prefix.endswith("without_")
+        or prefix == "not_"
+        or prefix.endswith("_not_")
+        or prefix == "no_"
+        or prefix.endswith("_no_")
+    )
+
+
 def get_code_type_set_from_str(augm_type: str | None) -> frozenset[SampleCodeType]:
     """Creates a sample code type set from the given augment category/type/array string.
 
@@ -470,16 +491,17 @@ def get_code_type_set_from_str(augm_type: str | None) -> frozenset[SampleCodeTyp
     # compatibility mode: dissect potentially combined augment types, and handle prompt names
     found_types: set[SampleCodeType] = set()
     patterns = pyine.data.traces.dataset_utils.AugmentPatterns
-    # first, check the code types directly
-    if patterns.OBFUSCATED in augm_type:
+    # first, check the code types directly (skip if negated by prefix)
+    if patterns.OBFUSCATED in augm_type and not _is_negated_pattern(augm_type, patterns.OBFUSCATED):
         found_types.add(SampleCodeType.obfuscated)
-    if patterns.BUGGED_SUBSTRING in augm_type:
+    if patterns.BUGGED_SUBSTRING in augm_type and not _is_negated_pattern(augm_type, patterns.BUGGED_SUBSTRING):
         found_types.add(SampleCodeType.bugged)
-    if patterns.HINTED_SUBSTRING in augm_type:
+    hint_patterns = (patterns.HINTED_SUBSTRING, "hints")  # "hinted" + common subset name pattern ("hints")
+    if any(p in augm_type and not _is_negated_pattern(augm_type, p) for p in hint_patterns):
         found_types.add(SampleCodeType.hinted)
-    if patterns.MISLEADING in augm_type:
+    if patterns.MISLEADING in augm_type and not _is_negated_pattern(augm_type, patterns.MISLEADING):
         found_types.add(SampleCodeType.misleading)
-    if patterns.STUBBED in augm_type:
+    if patterns.STUBBED in augm_type and not _is_negated_pattern(augm_type, patterns.STUBBED):
         found_types.add(SampleCodeType.stubbed)
     # now, for backward compatibility and compatibility with trace datasets, check prompt names
     prompt_name = pyine.data.traces.dataset_utils.AugmentPatterns.get_clean_augment_category(augm_type)

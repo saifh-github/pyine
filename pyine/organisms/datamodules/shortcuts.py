@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import collections
+import collections.abc
 import logging
 import typing
+
+import pydantic
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.base
+import pyine.prompts
+import pyine.prompts.names
 import pyine.utils.reprod
 from pyine.organisms.datamodules.shortcuts_configs import (
     EvaluationStrategy,
@@ -18,9 +23,6 @@ from pyine.organisms.datamodules.shortcuts_configs import (
 )
 
 logger = logging.getLogger(__name__)
-
-# hint-related augment category patterns (see pyine.data.traces.dataset_utils.AugmentPatterns)
-_HINT_CATEGORY_PATTERNS = ("hints_", "hinted", "misleading", "issues_docs")
 
 
 class ShortcutBiasDataModule(
@@ -92,10 +94,15 @@ class ShortcutBiasDataModule(
             else:
                 unassigned_traces_meta.append(trace_meta)
         self._apply_max_solution_count_cap(subset_traces_meta, unassigned_traces_meta)
+        # get prompt DB for hint detection if enabled by config
+        prompt_db: pyine.prompts.PromptResultDB | None = None
+        if self._should_use_prompt_db_for_hints():
+            prompt_db = pyine.prompts.get_framework_db()
+            logger.debug("using prompt result DB for hint detection in derived subsets")
         # build trace family pairing map for hint-based evaluation
-        family_pairing_map = self._build_trace_family_pairing_map(base_traces_meta)
+        family_pairing_map = self._build_trace_family_pairing_map(base_traces_meta, prompt_db)
         # create derived subsets for hint-based evaluation
-        derived_subsets = self._create_hint_split_derived_subsets(subset_traces_meta, family_pairing_map)
+        derived_subsets = self._create_hint_split_derived_subsets(subset_traces_meta, family_pairing_map, prompt_db)
         self._validate_sample_counts(subset_traces_meta, derived_subsets)
         return pyine.data.traces.dataset_utils.TraceDatasetMetadata(
             base_traces=base_traces_meta,
@@ -109,14 +116,15 @@ class ShortcutBiasDataModule(
     def _is_hint_category(self, category: str) -> bool:
         """Check if an augment category is hint-related.
 
+        Delegates to the centralized AugmentPatterns.is_hint_category() for pattern matching.
+
         Args:
             category: The augment category string to check.
 
         Returns:
             True if the category is related to hints (helpful or misleading).
         """
-        category_lower = category.lower()
-        return any(pattern in category_lower for pattern in _HINT_CATEGORY_PATTERNS)
+        return pyine.data.traces.dataset_utils.AugmentPatterns.is_hint_category(category)
 
     def _get_base_augments(
         self,
@@ -141,25 +149,53 @@ class ShortcutBiasDataModule(
         categories = {cat for cat in categories if not self._is_hint_category(cat)}
         return frozenset(categories)
 
-    def _has_target_hint(
+    def _check_prompt_db_for_hint(
         self,
         trace_id: pyine.data.traces.dataset_utils.TraceIdentifier,
+        prompt_db: pyine.prompts.PromptResultDB,
     ) -> bool:
-        """Check if trace has the target hint type based on config.
-
-        Args:
-            trace_id: The trace identifier to check.
-
-        Returns:
-            True if the trace has the configured target hint type.
-        """
+        """Checks if the prompt result DB has hinted code for this trace."""
+        # determine which prompt names to check based on hint type
         if self.config.hint_type == HintType.helpful:
-            return trace_id.is_hinted
-        return trace_id.is_misleading
+            hint_prompt_names: list[pyine.prompts.PromptNameType] = [
+                pyine.prompts.names.PromptNames.HINTS_DOCS,
+                pyine.prompts.names.PromptNames.HINTS_TESTS,
+            ]
+        else:  # misleading hints
+            hint_prompt_names = [
+                pyine.prompts.names.PromptNames.ISSUES_DOCS,
+            ]
+        # use count_entries for fast existence check (avoids fetching full records)
+        # query with exact trace ID since hints are stored for specific test cases
+        count = prompt_db.count_entries(
+            identifier=str(trace_id),
+            prompt_name=hint_prompt_names,
+        )
+        return count > 0
+
+    def _should_use_prompt_db_for_hints(self) -> bool:
+        """Checks if prompt DB should be used based on the default dataparser config."""
+        parser_config = self.config.default_dataparser_config
+        assert hasattr(parser_config, "params")
+        params = parser_config.params
+        assert params is not None
+        if isinstance(params, pydantic.BaseModel):
+            selection_config = getattr(params, "selection_config", None)
+            if selection_config is not None:
+                return bool(getattr(selection_config, "allow_db_lookups", False))
+        else:
+            assert isinstance(params, dict)
+            params = typing.cast("collections.abc.Mapping[str, typing.Any]", params)
+            selection_config = params.get("selection_config", {})
+            assert isinstance(selection_config, dict)
+            selection_config = typing.cast("collections.abc.Mapping[str, typing.Any]", selection_config)
+            return bool(selection_config.get("allow_db_lookups", False))
+        raise TypeError("invalid default dataparser config params type")
 
     def _build_trace_family_pairing_map(
         self,
         traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        prompt_db: pyine.prompts.PromptResultDB | None = None,
     ) -> dict[str, dict[frozenset[str], dict[str, pyine.data.traces.dataset_utils.TraceMetadata]]]:
         """Map trace families to their augment-based pairs.
 
@@ -168,8 +204,15 @@ class ShortcutBiasDataModule(
         2. Their base augments (all augments except hints); and
         3. Whether they have the target hint type or not.
 
+        For traces with hints in the prompt DB (but no LMDB trace with hint augmentation), we
+        register them under BOTH "with_hint" and "without_hint" keys since the same trace can be
+        rendered either way at sample generation time. This creates "virtual pairs" for
+        counterfactual evaluation.
+
         Args:
             traces: List of trace metadata to analyze.
+            prompt_db: Optional prompt result database to check for hint availability.
+                Used as fallback when the LMDB augmented trace is not present.
 
         Returns:
             Nested dict: {family_id: {base_augments: {"with_hint": trace, "without_hint": trace}}}
@@ -180,12 +223,36 @@ class ShortcutBiasDataModule(
         for trace in traces:
             family_id = str(trace.trace_id.get_augmentless_identifier())
             base_augments = self._get_base_augments(trace.trace_id)
-            has_target_hint = self._has_target_hint(trace.trace_id)
-            key = "with_hint" if has_target_hint else "without_hint"
-            # note: if multiple traces have same family/base_augments/hint_status, last one wins
-            # this is acceptable since they should be functionally equivalent for evaluation
-            family_map[family_id][base_augments][key] = trace
+            # check LMDB hint first
+            has_lmdb_hint = self._has_lmdb_hint(trace.trace_id)
+            if has_lmdb_hint:
+                # trace has hint augmentation in LMDB - register under single key
+                family_map[family_id][base_augments]["with_hint"] = trace
+            elif prompt_db is not None and self._check_prompt_db_for_hint(trace.trace_id, prompt_db):
+                # trace has hints in prompt DB but no LMDB hint - register under BOTH keys
+                # since the same trace can be rendered with or without hints at sample time
+                family_map[family_id][base_augments]["with_hint"] = trace
+                family_map[family_id][base_augments]["without_hint"] = trace
+            else:
+                # trace has no hints anywhere - register as without_hint only
+                family_map[family_id][base_augments]["without_hint"] = trace
         return dict(family_map)
+
+    def _has_lmdb_hint(
+        self,
+        trace_id: pyine.data.traces.dataset_utils.TraceIdentifier,
+    ) -> bool:
+        """Check if trace has the target hint type based on LMDB augmentation only.
+
+        Args:
+            trace_id: The trace identifier to check.
+
+        Returns:
+            True if the trace has the configured target hint type in LMDB augmentation.
+        """
+        if self.config.hint_type == HintType.helpful:
+            return trace_id.is_hinted
+        return trace_id.is_misleading
 
     def _create_hint_split_derived_subsets(
         self,
@@ -194,12 +261,15 @@ class ShortcutBiasDataModule(
             list[pyine.data.traces.dataset_utils.TraceMetadata],
         ],
         family_pairing_map: dict[str, dict[frozenset[str], dict[str, pyine.data.traces.dataset_utils.TraceMetadata]]],
+        prompt_db: pyine.prompts.PromptResultDB | None = None,
     ) -> dict[str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]]:
         """Create derived subsets for hint-based evaluation splits.
 
         Args:
             subset_traces_meta: Dict mapping primary subset names to their trace metadata lists.
             family_pairing_map: The trace family pairing map from `_build_trace_family_pairing_map`.
+            prompt_db: Optional prompt result database to check for hint availability.
+                Used as fallback when LMDB trace augmentation is not present.
 
         Returns:
             Dictionary of derived subset names to DerivedSubsetInfo objects.
@@ -212,7 +282,7 @@ class ShortcutBiasDataModule(
             if eval_subset_name not in subset_traces_meta:
                 continue
             traces = subset_traces_meta[eval_subset_name]
-            with_hints, without_hints = self._partition_traces_by_hint_strategy(traces, family_pairing_map)
+            with_hints, without_hints = self._partition_traces_by_hint_strategy(traces, family_pairing_map, prompt_db)
             derived_subsets[f"{eval_subset_name}_with_hints"] = pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset=eval_subset_name,
                 traces=with_hints,
@@ -233,6 +303,7 @@ class ShortcutBiasDataModule(
         self,
         traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
         family_pairing_map: dict[str, dict[frozenset[str], dict[str, pyine.data.traces.dataset_utils.TraceMetadata]]],
+        prompt_db: pyine.prompts.PromptResultDB | None = None,
     ) -> tuple[
         list[pyine.data.traces.dataset_utils.TraceMetadata],
         list[pyine.data.traces.dataset_utils.TraceMetadata],
@@ -247,9 +318,26 @@ class ShortcutBiasDataModule(
         - `hint_presence_split`: all traces are included (simple partition by hint presence);
         - `counterfactual`: only traces with a matching pair (same base augments +/- hint).
 
+        For traces with hints in the prompt DB (but no LMDB hint), the same trace can appear
+        in BOTH subsets since it can be rendered with or without hints at sample time.
+
+        Note on subset overlap semantics:
+            When using prompt DB hints, the SAME trace object may appear in BOTH derived subsets.
+            This is intentional; at sample generation time, the trace will be rendered with hints
+            in `_with_hints` (via code_type_prob_map={"hinted": 1.0}) and without hints in
+            `_without_hints` (via default code selection). This enables true counterfactual
+            evaluation where the only difference is hint presence.
+
+            For evaluation metrics, be aware that:
+            - The underlying trace is identical in both subsets (same problem, solution, test)
+            - Only the code rendering differs (hinted vs original code from prompt DB)
+            - This is NOT double-counting in the traditional sense; it's paired evaluation
+
         Args:
             traces: List of traces to partition.
             family_pairing_map: The trace family pairing map.
+            prompt_db: Optional prompt result database to check for hint availability.
+                Used as fallback when LMDB trace augmentation is not present.
 
         Returns:
             Tuple of (with_hints, without_hints) trace lists.
@@ -257,7 +345,6 @@ class ShortcutBiasDataModule(
         with_hints: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         without_hints: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         for trace in traces:
-            trace_has_hint = self._has_target_hint(trace.trace_id)
             if self.config.evaluation_strategy == EvaluationStrategy.counterfactual:
                 # counterfactual: only include traces that have a complete pair (same base augments)
                 family_id = str(trace.trace_id.get_augmentless_identifier())
@@ -266,15 +353,37 @@ class ShortcutBiasDataModule(
                 pair_info = family_info.get(base_augments, {})
                 has_complete_pair = "with_hint" in pair_info and "without_hint" in pair_info
                 if has_complete_pair:
-                    if trace_has_hint:
+                    has_lmdb_hint = self._has_lmdb_hint(trace.trace_id)
+                    has_prompt_db_hint = (
+                        not has_lmdb_hint
+                        and prompt_db is not None
+                        and self._check_prompt_db_for_hint(trace.trace_id, prompt_db)
+                    )
+                    if has_lmdb_hint:
+                        # LMDB hinted; trace goes in with_hints only
                         with_hints.append(trace)
+                    elif has_prompt_db_hint:
+                        # hintless, with prompt DB hint; trace goes in BOTH (same trace, rendered differently)
+                        with_hints.append(trace)
+                        without_hints.append(trace)
                     else:
+                        # LMDB hintless; trace goes in without_hints only
                         without_hints.append(trace)
                 # else: drop trace from counterfactual evaluation (no matching pair)
             elif self.config.evaluation_strategy == EvaluationStrategy.hint_presence_split:
                 # hint_presence_split: simple partition based on whether trace has the target hint
-                if trace_has_hint:
+                has_lmdb_hint = self._has_lmdb_hint(trace.trace_id)
+                has_prompt_db_hint = (
+                    not has_lmdb_hint
+                    and prompt_db is not None
+                    and self._check_prompt_db_for_hint(trace.trace_id, prompt_db)
+                )
+                if has_lmdb_hint:
                     with_hints.append(trace)
+                elif has_prompt_db_hint:
+                    # prompt DB hint - trace goes in BOTH (same trace, rendered differently)
+                    with_hints.append(trace)
+                    without_hints.append(trace)
                 else:
                     without_hints.append(trace)
         return with_hints, without_hints
@@ -301,12 +410,14 @@ class ShortcutBiasDataModule(
         for eval_subset_name in self.config.eval_subset_names:
             if eval_subset_name not in subset_traces_meta:
                 continue
+            parent_trace_count = len(subset_traces_meta[eval_subset_name])
             with_hints_key = f"{eval_subset_name}_with_hints"
             without_hints_key = f"{eval_subset_name}_without_hints"
             with_hints_info = derived_subsets.get(with_hints_key)
             without_hints_info = derived_subsets.get(without_hints_key)
             with_hints_count = len(with_hints_info.traces) if with_hints_info else 0
             without_hints_count = len(without_hints_info.traces) if without_hints_info else 0
+            # check minimum counts (hard error)
             if with_hints_count < self.config.min_samples_with_hints:
                 raise ValueError(
                     f"eval subset '{with_hints_key}' has only {with_hints_count} samples "
@@ -316,4 +427,14 @@ class ShortcutBiasDataModule(
                 raise ValueError(
                     f"eval subset '{without_hints_key}' has only {without_hints_count} samples "
                     f"(minimum required: {self.config.min_samples_without_hints})"
+                )
+            # warn if derived subset counts are significantly lower than parent (soft warning)
+            # this can indicate that counterfactual pairing dropped many traces, or that
+            # trace filtering (max_trace_steps, etc.) will further reduce usable samples
+            derived_total = with_hints_count + without_hints_count
+            if parent_trace_count > 0 and derived_total < 0.5 * parent_trace_count:
+                logger.warning(
+                    f"derived subsets for '{eval_subset_name}' have only {derived_total} traces "
+                    f"(parent has {parent_trace_count}); this may indicate aggressive filtering "
+                    "or missing hint pairs for counterfactual evaluation"
                 )

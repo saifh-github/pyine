@@ -390,6 +390,31 @@ class TestGetCodeTypeSetFromStr:
         result = get_code_type_set_from_str("unknown_category")
         assert result == frozenset({SampleCodeType.original})
 
+    def test_subset_name_with_hints_suffix(self) -> None:
+        # subset names like "valid_with_hints" should detect hinted type
+        result = get_code_type_set_from_str("valid_with_hints")
+        assert SampleCodeType.hinted in result
+        # "without_hints" should NOT detect hinted (negation pattern)
+        result_without = get_code_type_set_from_str("valid_without_hints")
+        assert SampleCodeType.hinted not in result_without
+        assert result_without == frozenset({SampleCodeType.original})
+
+    def test_negation_pattern_word_boundary(self) -> None:
+        # "no_" as part of "notification_" should NOT negate the pattern
+        result = get_code_type_set_from_str("train_no_notification_hinted")
+        assert SampleCodeType.hinted in result  # should NOT be negated
+        # proper "no_" prefix SHOULD negate
+        result_no = get_code_type_set_from_str("train_no_hinted")
+        assert SampleCodeType.hinted not in result_no
+        # proper "_no_" prefix SHOULD negate
+        result_subset_no = get_code_type_set_from_str("valid_no_hinted")
+        assert SampleCodeType.hinted not in result_subset_no
+        # "not_" patterns
+        result_not = get_code_type_set_from_str("not_hinted")
+        assert SampleCodeType.hinted not in result_not
+        result_subset_not = get_code_type_set_from_str("train_not_hinted")
+        assert SampleCodeType.hinted not in result_subset_not
+
 
 class TestGetAllSupportedCodeTypeSets:
     """Tests for the get_all_supported_code_type_sets function."""

@@ -248,6 +248,42 @@ def test_subsample_traces_by_solution_round_robin_and_deterministic() -> None:
     assert len({t.solution_id for t in kept1}) >= 2  # at least 2 solutions represented
 
 
+def test_subsample_traces_by_solution_leveling_preserves_diversity() -> None:
+    """Verify leveling removes from largest solutions first, preserving diversity."""
+    # setup: solA has 5 traces, solB has 2, solC has 1 (total=8)
+    traces = [
+        _DummyTrace("a1", "solA"),
+        _DummyTrace("a2", "solA"),
+        _DummyTrace("a3", "solA"),
+        _DummyTrace("a4", "solA"),
+        _DummyTrace("a5", "solA"),
+        _DummyTrace("b1", "solB"),
+        _DummyTrace("b2", "solB"),
+        _DummyTrace("c1", "solC"),
+    ]
+    rng = np.random.default_rng(42)
+    # target 4: leveling should reduce solA from 5→2, keeping solB=2, solC=1
+    kept, discarded = keywords_mod.KeywordBiasDataModule._subsample_traces_by_solution(traces, 4, rng)
+    assert len(kept) == 4
+    assert len(discarded) == 4
+    # verify all 3 solutions are still represented
+    kept_solutions = {t.solution_id for t in kept}
+    assert kept_solutions == {"solA", "solB", "solC"}, f"expected all solutions, got {kept_solutions}"
+    # verify solC kept its only trace
+    kept_c = [t for t in kept if t.solution_id == "solC"]
+    assert len(kept_c) == 1
+
+
+def test_subsample_traces_by_solution_single_solution() -> None:
+    """Verify works with single solution (no leveling needed, just removal)."""
+    traces = [_DummyTrace(f"a{i}", "solA") for i in range(5)]
+    rng = np.random.default_rng(0)
+    kept, discarded = keywords_mod.KeywordBiasDataModule._subsample_traces_by_solution(traces, 2, rng)
+    assert len(kept) == 2
+    assert len(discarded) == 3
+    assert all(t.solution_id == "solA" for t in kept)
+
+
 def _make_trace_metadata(
     identifier: str,
     code: str = "x = 1",

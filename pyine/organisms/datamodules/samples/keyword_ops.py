@@ -63,6 +63,15 @@ class KeywordInjector(pydantic.BaseModel):
     selected line in the code, without otherwise modifying the code structure. This can be useful
     to create quick/easy test cases, with the understanding that these will not necessarily be
     as natural as cases where the keywords occur naturally in the code.
+
+    Design note: keywords are injected as comments rather than as actual code. This approach:
+        - is simpler and safer (won't break code execution or introduce syntax errors);
+        - preserves the original code semantics exactly;
+        - may allow models to learn to ignore comments (potential limitation); but
+        - differs from natural keyword occurrence in actual variable/function names.
+
+    Future enhancement: inject as variable assignment (e.g., ``keyword = None``) or docstring
+    for a more realistic distribution of keyword appearances.
     """
 
     model_config = pydantic.ConfigDict(frozen=True)
@@ -271,15 +280,31 @@ class SampleKeywordManipulatorWrapper:
 
     The wrapper preserves the underlying dataset's interface (len, getitem, epoch handling).
 
-    Note on sample identifiers:
+    Note on sample identifiers and counterfactual mode:
         In standard mode, sample identifiers are preserved from the underlying dataset.
         In counterfactual mode (`counterfactual_mode=True`), sample identifiers are modified
         with suffixes to ensure uniqueness across paired versions:
+
         - "::cf_with" suffix for "with keyword" versions (even indices)
         - "::cf_without" suffix for "without keyword" versions (odd indices)
+
         This is necessary because counterfactual mode doubles the dataset length by producing
         two versions of each sample, and downstream consumers (e.g., data stores, evaluators)
         require unique identifiers.
+
+    Note on derived vs base subset behavior:
+        When accessing **BASE** eval subsets (e.g., "valid") in counterfactual mode:
+        - Sample count is DOUBLED (each trace yields 2 samples: with/without keyword);
+        - Identifiers get "::cf_with" or "::cf_without" suffixes;
+        - Even indices: with keyword; odd indices: without keyword.
+
+        When accessing **DERIVED** subsets (e.g., "valid_with_keyword", "valid_without_keyword"):
+        - Sample count is NOT doubled;
+        - Identifiers are NOT modified (no ::cf_* suffix);
+        - Manipulation (inject/refactor) is applied based on which derived subset is accessed.
+
+        This distinction exists because derived subsets are pre-partitioned by keyword presence,
+        while base subsets in counterfactual mode create virtual pairs on-the-fly.
     """
 
     def __init__(
