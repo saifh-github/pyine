@@ -13,6 +13,8 @@ import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.base
+import pyine.organisms.datamodules.samples
+import pyine.organisms.datamodules.samples.common
 import pyine.prompts
 import pyine.prompts.names
 import pyine.utils.reprod
@@ -21,6 +23,9 @@ from pyine.organisms.datamodules.shortcuts_configs import (
     HintType,
     ShortcutBiasDataModuleConfig,
 )
+
+if typing.TYPE_CHECKING:
+    import torch.utils.data
 
 logger = logging.getLogger(__name__)
 
@@ -438,3 +443,155 @@ class ShortcutBiasDataModule(
                     f"(parent has {parent_trace_count}); this may indicate aggressive filtering "
                     "or missing hint pairs for counterfactual evaluation"
                 )
+
+    def _get_overlapping_trace_ids(
+        self,
+        eval_subset_name: str,
+    ) -> frozenset[str]:
+        """Get trace IDs that appear in both _with_hints and _without_hints derived subsets.
+
+        These are traces with prompt DB hints (but no LMDB hint augmentation) that will be
+        rendered differently depending on which derived subset is accessed. Sample identifiers
+        for these traces need modification to ensure uniqueness.
+
+        Args:
+            eval_subset_name: Base eval subset name (e.g., "valid").
+
+        Returns:
+            Frozenset of trace identifiers that appear in both derived subsets.
+        """
+        assert self._metadata is not None
+        with_hints_key = f"{eval_subset_name}_with_hints"
+        without_hints_key = f"{eval_subset_name}_without_hints"
+        if with_hints_key not in self._metadata.derived_subsets:
+            return frozenset()
+        if without_hints_key not in self._metadata.derived_subsets:
+            return frozenset()
+        with_hints_ids = frozenset(t.identifier for t in self._metadata.derived_subsets[with_hints_key].traces)
+        without_hints_ids = frozenset(t.identifier for t in self._metadata.derived_subsets[without_hints_key].traces)
+        return with_hints_ids & without_hints_ids
+
+    @typing.override
+    def get_parser(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
+        """Returns a data parser, wrapped with identifier modification if needed.
+
+        For derived hint subsets (`_with_hints`, `_without_hints`), traces that appear in BOTH
+        subsets (prompt DB hint traces) have their sample identifiers modified with suffixes
+        to ensure uniqueness:
+
+        - `::with_hint` suffix for samples from `_with_hints` subset
+        - `::without_hint` suffix for samples from `_without_hints` subset
+
+        This is necessary because the same trace can be rendered with or without hints depending
+        on the subset, and downstream consumers (caches, evaluators, data stores) require unique
+        identifiers.
+
+        Args:
+            subset_name: Name of the subset to get parser for.
+
+        Returns:
+            Sample builder, optionally wrapped with identifier modification.
+        """
+        base_parser = super().get_parser(subset_name)
+        if not self._is_setup_complete():
+            raise RuntimeError("data parsers are not ready yet, call `setup()` first")
+        # check if this is a derived hints subset that needs identifier modification
+        if subset_name.endswith("_with_hints"):
+            parent_subset = subset_name[: -len("_with_hints")]
+            overlapping_ids = self._get_overlapping_trace_ids(parent_subset)
+            if overlapping_ids:
+                return SampleHintIdentifierWrapper(
+                    wrapped_dataset=base_parser,
+                    overlapping_trace_ids=overlapping_ids,
+                    hint_suffix="with_hint",
+                )  # type: ignore[return-value]
+        elif subset_name.endswith("_without_hints"):
+            parent_subset = subset_name[: -len("_without_hints")]
+            overlapping_ids = self._get_overlapping_trace_ids(parent_subset)
+            if overlapping_ids:
+                return SampleHintIdentifierWrapper(
+                    wrapped_dataset=base_parser,
+                    overlapping_trace_ids=overlapping_ids,
+                    hint_suffix="without_hint",
+                )  # type: ignore[return-value]
+        return base_parser
+
+
+class SampleHintIdentifierWrapper:
+    """Wrapper that modifies sample identifiers for traces appearing in multiple hint subsets.
+
+    This wrapper ensures unique sample identifiers when the same trace appears in both
+    `_with_hints` and `_without_hints` derived subsets. For overlapping traces, the identifier
+    is modified by appending a suffix (e.g., `::with_hint` or `::without_hint`).
+
+    This is necessary because traces with prompt DB hints (but no LMDB hint augmentation) can
+    be rendered with or without hints depending on the derived subset accessed. Without identifier
+    modification, the same identifier would map to different content, causing issues in:
+    - Evaluation result tracking (results would overwrite each other);
+    - Caching (wrong cached content could be returned);
+    - Data stores and logging (duplicate key errors or data corruption).
+    """
+
+    def __init__(
+        self,
+        wrapped_dataset: torch.utils.data.Dataset[pyine.organisms.datamodules.samples.common.SampleData],
+        overlapping_trace_ids: frozenset[str],
+        hint_suffix: str,
+    ) -> None:
+        """Initialize the wrapper.
+
+        Args:
+            wrapped_dataset: The underlying dataset (typically a SampleBuilder).
+            overlapping_trace_ids: Set of trace identifiers that appear in both hint subsets
+                and need identifier modification.
+            hint_suffix: Suffix to append to overlapping identifiers (e.g., "with_hint").
+        """
+        self._wrapped = wrapped_dataset
+        self._overlapping_ids = overlapping_trace_ids
+        self._suffix = f"::{hint_suffix}"
+
+    def __len__(self) -> int:
+        """Return the number of samples."""
+        return len(self._wrapped)  # type: ignore[arg-type]
+
+    def __getitem__(
+        self,
+        index: int,
+    ) -> pyine.organisms.datamodules.samples.common.SampleData:
+        """Get a sample, modifying identifier if it's an overlapping trace."""
+        sample = self._wrapped[index]
+        if sample.identifier in self._overlapping_ids:
+            return sample._replace(identifier=f"{sample.identifier}{self._suffix}")
+        return sample
+
+    @property
+    def current_epoch(self) -> int:
+        """Return the current epoch from the wrapped dataset."""
+        if hasattr(self._wrapped, "current_epoch"):
+            return self._wrapped.current_epoch  # type: ignore[union-attr]
+        return 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the epoch on the wrapped dataset if supported."""
+        if hasattr(self._wrapped, "set_epoch"):
+            self._wrapped.set_epoch(epoch)  # type: ignore[union-attr]
+
+    @property
+    def orig_traces(self) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
+        """Return original traces from wrapped dataset (for compatibility with base parser)."""
+        if hasattr(self._wrapped, "orig_traces"):
+            return self._wrapped.orig_traces  # type: ignore[union-attr]
+        return []
+
+    def get_stats(self) -> dict[str, int | float | str]:
+        """Get statistics from the wrapped dataset with additional wrapper info."""
+        stats: dict[str, int | float | str] = {}
+        if hasattr(self._wrapped, "get_stats"):
+            wrapped_stats = self._wrapped.get_stats()  # type: ignore[union-attr]
+            stats = typing.cast("dict[str, int | float | str]", wrapped_stats)
+        stats["overlapping_trace_count"] = len(self._overlapping_ids)
+        stats["hint_suffix"] = self._suffix
+        return stats

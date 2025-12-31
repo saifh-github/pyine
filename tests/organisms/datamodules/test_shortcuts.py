@@ -11,6 +11,7 @@ import transformers
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.samples
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.shortcuts as shortcuts_mod
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.reprod
@@ -1002,3 +1003,144 @@ def test_shortcuts_datamodule_examples_round_trip(
             )
             assert _normalized_contains(prompt_txt, round_tripped_inputs), "inputs missing from prompt text?"
     dm.teardown()
+
+
+def _make_sample_data(identifier: str, code: str = "pass") -> pyine.organisms.datamodules.samples.common.SampleData:
+    """Create a minimal SampleData for testing."""
+    return pyine.organisms.datamodules.samples.common.SampleData(
+        identifier=identifier,
+        code=code,
+        description="",
+        entrypoint="",
+        first_line=0,
+        last_line=1,
+        inputs="",
+        expected_output="None",
+        predict_type="program_output",
+        code_type="original",
+        trace_step_count=1,
+        comma_separated_tags="",
+        has_code_override=False,
+        complexity_metrics={},
+    )
+
+
+class TestSampleHintIdentifierWrapper:
+    """Tests for the SampleHintIdentifierWrapper class."""
+
+    def test_modifies_overlapping_identifiers(self) -> None:
+        """Wrapper should add suffix to identifiers in overlapping set."""
+        sample1 = _make_sample_data("trace_1", "def foo(): pass")
+        sample2 = _make_sample_data("trace_2", "def bar(): pass")
+        mock_dataset = [sample1, sample2]
+        overlapping_ids = frozenset(["trace_1"])  # only trace_1 is overlapping
+        wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=mock_dataset,  # type: ignore[arg-type]
+            overlapping_trace_ids=overlapping_ids,
+            hint_suffix="with_hint",
+        )
+        # trace_1 should have suffix added
+        result1 = wrapper[0]
+        assert result1.identifier == "trace_1::with_hint"
+        # trace_2 should NOT have suffix (not overlapping)
+        result2 = wrapper[1]
+        assert result2.identifier == "trace_2"
+
+    def test_preserves_non_overlapping_identifiers(self) -> None:
+        """Wrapper should not modify identifiers not in overlapping set."""
+        sample = _make_sample_data("trace_3", "x = 1")
+        wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=[sample],  # type: ignore[arg-type]
+            overlapping_trace_ids=frozenset(["other_trace"]),
+            hint_suffix="without_hint",
+        )
+        result = wrapper[0]
+        assert result.identifier == "trace_3"  # unchanged
+
+    def test_different_suffixes_create_unique_identifiers(self) -> None:
+        """Same trace with different suffixes should have unique identifiers."""
+        sample = _make_sample_data("shared_trace")
+        overlapping = frozenset(["shared_trace"])
+        wrapper_with = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=[sample],  # type: ignore[arg-type]
+            overlapping_trace_ids=overlapping,
+            hint_suffix="with_hint",
+        )
+        wrapper_without = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=[sample],  # type: ignore[arg-type]
+            overlapping_trace_ids=overlapping,
+            hint_suffix="without_hint",
+        )
+        assert wrapper_with[0].identifier == "shared_trace::with_hint"
+        assert wrapper_without[0].identifier == "shared_trace::without_hint"
+        assert wrapper_with[0].identifier != wrapper_without[0].identifier
+
+    def test_get_stats_includes_wrapper_info(self) -> None:
+        """Wrapper stats should include overlapping trace count and suffix."""
+        mock_wrapped = mock.Mock()
+        mock_wrapped.get_stats.return_value = {"base_stat": 42}
+        wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=mock_wrapped,
+            overlapping_trace_ids=frozenset(["a", "b", "c"]),
+            hint_suffix="with_hint",
+        )
+        stats = wrapper.get_stats()
+        assert stats["overlapping_trace_count"] == 3
+        assert stats["hint_suffix"] == "::with_hint"
+        assert stats["base_stat"] == 42
+
+    def test_len_matches_wrapped_dataset(self) -> None:
+        """Wrapper length should match underlying dataset."""
+        mock_wrapped = mock.Mock()
+        mock_wrapped.__len__ = mock.Mock(return_value=5)
+        wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
+            wrapped_dataset=mock_wrapped,
+            overlapping_trace_ids=frozenset(),
+            hint_suffix="test",
+        )
+        assert len(wrapper) == 5
+
+
+class TestGetOverlappingTraceIds:
+    """Tests for the _get_overlapping_trace_ids method."""
+
+    def test_returns_intersection_of_derived_subsets(self) -> None:
+        """Should return trace IDs present in both with_hints and without_hints."""
+        dm = _make_stub_shortcuts_datamodule()
+        trace_meta_a = _make_mock_trace_metadata("trace_a")
+        trace_meta_b = _make_mock_trace_metadata("trace_b")
+        trace_meta_c = _make_mock_trace_metadata("trace_c")
+        dm._metadata = types.SimpleNamespace(
+            derived_subsets={
+                "valid_with_hints": types.SimpleNamespace(traces=[trace_meta_a, trace_meta_b]),
+                "valid_without_hints": types.SimpleNamespace(traces=[trace_meta_b, trace_meta_c]),
+            }
+        )
+        result = dm._get_overlapping_trace_ids("valid")
+        assert result == frozenset(["trace_b"])
+
+    def test_returns_empty_when_no_overlap(self) -> None:
+        """Should return empty set when derived subsets are disjoint."""
+        dm = _make_stub_shortcuts_datamodule()
+        trace_meta_a = _make_mock_trace_metadata("trace_a")
+        trace_meta_b = _make_mock_trace_metadata("trace_b")
+        dm._metadata = types.SimpleNamespace(
+            derived_subsets={
+                "valid_with_hints": types.SimpleNamespace(traces=[trace_meta_a]),
+                "valid_without_hints": types.SimpleNamespace(traces=[trace_meta_b]),
+            }
+        )
+        result = dm._get_overlapping_trace_ids("valid")
+        assert result == frozenset()
+
+    def test_returns_empty_when_derived_subset_missing(self) -> None:
+        """Should return empty set when derived subsets don't exist."""
+        dm = _make_stub_shortcuts_datamodule()
+        dm._metadata = types.SimpleNamespace(derived_subsets={})
+        result = dm._get_overlapping_trace_ids("valid")
+        assert result == frozenset()
+
+
+def _make_mock_trace_metadata(identifier: str) -> types.SimpleNamespace:
+    """Helper to create mock trace metadata with identifier."""
+    return types.SimpleNamespace(identifier=identifier)

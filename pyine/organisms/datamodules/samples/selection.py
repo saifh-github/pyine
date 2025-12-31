@@ -142,7 +142,7 @@ def _find_db_match_for_target_type(
                         matched_any = True
                 if records and not matched_any:
                     # records exist but none matched; likely tag format issue
-                    sample_tags = [r.tags for r in records[:3]]
+                    sample_tags = list({t for r in records for t in r.tags})
                     records_fetched_no_match.append((db_keys.identifier, sample_tags))
     if not potential_choices:
         # log debug info about records that were fetched but didn't match
