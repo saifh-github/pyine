@@ -48,6 +48,10 @@ class _MockTraceId:
         return self._is_misleading
 
     @property
+    def augment_category(self) -> str | None:
+        return self._augment_category
+
+    @property
     def split_augment_categories(self) -> list[str]:
         return self._augment_category.split("+") if self._augment_category else []
 
@@ -163,26 +167,59 @@ class TestCheckPromptDatabaseForHint:
         dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
         mock_prompt_db = mock.MagicMock()
-        mock_prompt_db.count_entries.return_value = 1
+        # return a record with hinted code type tag
+        mock_record = mock.MagicMock()
+        mock_record.tags = ["augment:hinted"]
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
 
     def test_returns_false_when_no_hint_in_db(self) -> None:
         dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
         mock_prompt_db = mock.MagicMock()
-        mock_prompt_db.count_entries.return_value = 0
+        mock_prompt_db.get_by_identifier.return_value = []
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
+
+    def test_returns_false_when_record_has_wrong_tags(self) -> None:
+        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mock.MagicMock()
+        # return a record but with wrong/no code type tag
+        mock_record = mock.MagicMock()
+        mock_record.tags = ["some_other_tag"]
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
 
     def test_checks_misleading_prompts_for_misleading_hint_type(self) -> None:
         dm = _make_stub_shortcuts_datamodule(hint_type=HintType.misleading)
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
         mock_prompt_db = mock.MagicMock()
-        mock_prompt_db.count_entries.return_value = 1
+        # return a record with misleading code type tag
+        mock_record = mock.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
         # verify it checked for issues_docs prompt (misleading hint)
-        call_args = mock_prompt_db.count_entries.call_args
-        prompt_names_checked = call_args[1].get("prompt_name", [])
-        assert any("issues" in str(pn).lower() for pn in prompt_names_checked)
+        # get_by_identifier is called once per prompt name, check all calls
+        all_prompt_names = [call[1].get("prompt_name") for call in mock_prompt_db.get_by_identifier.call_args_list]
+        assert any("issues" in str(pn).lower() for pn in all_prompt_names if pn)
+
+    def test_augmented_trace_looks_for_augmented_hinted_code(self) -> None:
+        """Test that an obfuscated trace looks for obfuscated_hinted, not just hinted."""
+        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+        # trace with obfuscated augment
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001", augment_category="obfuscated")
+        mock_prompt_db = mock.MagicMock()
+        # record with just "hinted" should NOT match (we need obfuscated_hinted)
+        mock_record_hinted_only = mock.MagicMock()
+        mock_record_hinted_only.tags = ["augment:hinted"]
+        mock_prompt_db.get_by_identifier.return_value = [mock_record_hinted_only]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
+        # record with "obfuscated_hinted" SHOULD match
+        mock_record_obfuscated_hinted = mock.MagicMock()
+        mock_record_obfuscated_hinted.tags = ["augment:obfuscated_hinted"]
+        mock_prompt_db.get_by_identifier.return_value = [mock_record_obfuscated_hinted]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
 
 
 class TestShouldUsePromptDatabaseForHints:
@@ -343,6 +380,43 @@ class TestPartitionTracesByHintStrategy:
         assert len(without_hints) == 1
         assert with_hints[0].identifier == "t1"
         assert without_hints[0].identifier == "t2"
+
+    def test_counterfactual_equal_counts_with_multiple_same_family_traces(self) -> None:
+        """Test counterfactual mode produces equal counts when multiple traces share family_id."""
+        dm = _make_stub_shortcuts_datamodule(evaluation_strategy=EvaluationStrategy.counterfactual)
+        base_trace_id = _MockTraceId("test/p0001/s0001/t0001")
+        # one hinted trace
+        trace_hinted = _MockTraceMeta(
+            "t1",
+            _MockTraceId("t1", augment_category="hints_docs", is_hinted=True),
+        )
+        trace_hinted.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        # multiple hintless traces (same family)
+        trace_hintless1 = _MockTraceMeta(
+            "t2",
+            _MockTraceId("t2", is_hinted=False),
+        )
+        trace_hintless1.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        trace_hintless2 = _MockTraceMeta(
+            "t3",
+            _MockTraceId("t3", is_hinted=False),
+        )
+        trace_hintless2.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        all_traces = [trace_hinted, trace_hintless1, trace_hintless2]
+        # family map: only stores ONE hintless trace (t3 overwrites t2)
+        family_map = {
+            str(base_trace_id): {
+                frozenset(): {
+                    "with_hint": trace_hinted,
+                    "without_hint": trace_hintless2,  # only one stored
+                }
+            },
+        }
+        with_hints, without_hints = dm._partition_traces_by_hint_strategy(all_traces, family_map)
+        # counterfactual should produce exactly equal counts (1:1 pairing)
+        assert len(with_hints) == len(without_hints) == 1
+        assert with_hints[0].identifier == "t1"
+        assert without_hints[0].identifier == "t3"  # the registered pair member, not all hintless traces
 
 
 @pytest.fixture

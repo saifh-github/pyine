@@ -154,24 +154,59 @@ class ShortcutBiasDataModule(
         trace_id: pyine.data.traces.dataset_utils.TraceIdentifier,
         prompt_db: pyine.prompts.PromptResultDB,
     ) -> bool:
-        """Checks if the prompt result DB has hinted code for this trace."""
-        # determine which prompt names to check based on hint type
+        """Checks if the prompt result DB has hinted code for this trace.
+
+        This method verifies that valid hinted code is actually available in the prompt DB,
+        not just that an entry exists. This ensures consistency between trace partitioning
+        (which uses this check) and sample generation (which requires matching code types).
+
+        The method accounts for the trace's existing (non-hint) augments. For example, if a trace
+        has `obfuscated` augment, we look for `{obfuscated, hinted}` code type, not just `{hinted}`.
+        """
+        # sanity check: this method should only be called for non-LMDB-hinted traces
+        assert not self._has_lmdb_hint(trace_id), f"trace already has hint: {trace_id}"
+        # determine which prompt names and hint code type to check based on hint type
         if self.config.hint_type == HintType.helpful:
             hint_prompt_names: list[pyine.prompts.PromptNameType] = [
                 pyine.prompts.names.PromptNames.HINTS_DOCS,
                 pyine.prompts.names.PromptNames.HINTS_TESTS,
             ]
+            hint_code_type = pyine.organisms.datamodules.samples.common.SampleCodeType.hinted
         else:  # misleading hints
             hint_prompt_names = [
                 pyine.prompts.names.PromptNames.ISSUES_DOCS,
             ]
-        # use count_entries for fast existence check (avoids fetching full records)
-        # query with exact trace ID since hints are stored for specific test cases
-        count = prompt_db.count_entries(
-            identifier=str(trace_id),
-            prompt_name=hint_prompt_names,
+            hint_code_type = pyine.organisms.datamodules.samples.common.SampleCodeType.misleading
+        # get the trace's current code type (may include non-hint augments like obfuscated, stubbed)
+        # use get_code_type_set_from_str to handle the augment_category string directly
+        trace_code_types = pyine.organisms.datamodules.samples.common.get_code_type_set_from_str(
+            trace_id.augment_category
         )
-        return count > 0
+        is_original = trace_code_types == frozenset(
+            {pyine.organisms.datamodules.samples.common.SampleCodeType.original}
+        )
+        # build the target code type by combining trace's base augments with the hint type
+        # e.g., if trace is {obfuscated}, target is {obfuscated, hinted}
+        # e.g., if trace is {original}, target is {hinted}
+        if is_original:
+            target_types = frozenset({hint_code_type})
+        else:
+            target_types = trace_code_types | {hint_code_type}
+        target_code_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(target_types)
+        # fetch actual records and verify they have the target code type in their tags
+        # this ensures the check is consistent with sample generation behavior
+        for prompt_name in hint_prompt_names:
+            records = prompt_db.get_by_identifier(
+                identifier=str(trace_id),
+                prompt_name=prompt_name,
+            )
+            for record in records:
+                record_code_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet.create_from_tags(
+                    record.tags
+                )
+                if record_code_type == target_code_type:
+                    return True
+        return False
 
     def _should_use_prompt_db_for_hints(self) -> bool:
         """Checks if prompt DB should be used based on the default dataparser config."""
@@ -316,7 +351,7 @@ class ShortcutBiasDataModule(
 
         The difference between strategies is in WHICH traces are included:
         - `hint_presence_split`: all traces are included (simple partition by hint presence);
-        - `counterfactual`: only traces with a matching pair (same base augments +/- hint).
+        - `counterfactual`: only the specific paired traces (exactly 1:1 correspondence).
 
         For traces with hints in the prompt DB (but no LMDB hint), the same trace can appear
         in BOTH subsets since it can be rendered with or without hints at sample time.
@@ -344,34 +379,33 @@ class ShortcutBiasDataModule(
         """
         with_hints: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         without_hints: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
-        for trace in traces:
-            if self.config.evaluation_strategy == EvaluationStrategy.counterfactual:
-                # counterfactual: only include traces that have a complete pair (same base augments)
-                family_id = str(trace.trace_id.get_augmentless_identifier())
-                base_augments = self._get_base_augments(trace.trace_id)
-                family_info = family_pairing_map.get(family_id, {})
-                pair_info = family_info.get(base_augments, {})
-                has_complete_pair = "with_hint" in pair_info and "without_hint" in pair_info
-                if has_complete_pair:
-                    has_lmdb_hint = self._has_lmdb_hint(trace.trace_id)
-                    has_prompt_db_hint = (
-                        not has_lmdb_hint
-                        and prompt_db is not None
-                        and self._check_prompt_db_for_hint(trace.trace_id, prompt_db)
-                    )
-                    if has_lmdb_hint:
-                        # LMDB hinted; trace goes in with_hints only
-                        with_hints.append(trace)
-                    elif has_prompt_db_hint:
-                        # hintless, with prompt DB hint; trace goes in BOTH (same trace, rendered differently)
-                        with_hints.append(trace)
-                        without_hints.append(trace)
+        if self.config.evaluation_strategy == EvaluationStrategy.counterfactual:
+            # counterfactual mode: iterate over the pairing map to extract exact pairs
+            # this ensures 1:1 correspondence (each pair contributes exactly one trace to each subset)
+            subset_trace_ids = {trace.identifier for trace in traces}
+            for _family_id, augment_groups in family_pairing_map.items():
+                for _base_augments, pair_info in augment_groups.items():
+                    has_complete_pair = "with_hint" in pair_info and "without_hint" in pair_info
+                    if not has_complete_pair:
+                        continue
+                    with_hint_trace = pair_info["with_hint"]
+                    without_hint_trace = pair_info["without_hint"]
+                    # for prompt DB hints, same trace object is in both slots
+                    if with_hint_trace is without_hint_trace:
+                        # prompt DB hint: same trace goes to both subsets if in this subset
+                        if with_hint_trace.identifier in subset_trace_ids:
+                            with_hints.append(with_hint_trace)
+                            without_hints.append(without_hint_trace)
                     else:
-                        # LMDB hintless; trace goes in without_hints only
-                        without_hints.append(trace)
-                # else: drop trace from counterfactual evaluation (no matching pair)
-            elif self.config.evaluation_strategy == EvaluationStrategy.hint_presence_split:
-                # hint_presence_split: simple partition based on whether trace has the target hint
+                        # LMDB pair: both traces must be in this subset to form a valid pair
+                        with_in_subset = with_hint_trace.identifier in subset_trace_ids
+                        without_in_subset = without_hint_trace.identifier in subset_trace_ids
+                        if with_in_subset and without_in_subset:
+                            with_hints.append(with_hint_trace)
+                            without_hints.append(without_hint_trace)
+        elif self.config.evaluation_strategy == EvaluationStrategy.hint_presence_split:
+            # hint_presence_split: simple partition based on whether trace has the target hint
+            for trace in traces:
                 has_lmdb_hint = self._has_lmdb_hint(trace.trace_id)
                 has_prompt_db_hint = (
                     not has_lmdb_hint
