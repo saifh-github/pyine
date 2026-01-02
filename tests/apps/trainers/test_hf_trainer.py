@@ -13,6 +13,7 @@ import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.transformers
+import pyine.utils.transformers.callbacks
 
 
 class _FakePreparedDataset:
@@ -1245,4 +1246,145 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
     assert (output_dir / "checkpoint-2").is_dir()
 
 
-# @@@@ TODO: add more tests to check the core RL training workflow?
+def test_rl_train_uses_resume_artifacts_correctly(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    """Test that rl_train correctly passes checkpoint_path to model loading."""
+    # track calls to config.get_model and config.get_tokenizer
+    get_model_calls: list[dict[str, typing.Any]] = []
+    # create a mock model
+    mock_model = mocker.MagicMock()
+    mock_model.config = mocker.MagicMock()
+    mock_model.config.name_or_path = "test-model"
+
+    def mock_get_model(checkpoint_path: pathlib.Path | None = None) -> typing.Any:
+        get_model_calls.append({"checkpoint_path": checkpoint_path})
+        return mock_model
+
+    # create mock reward manager and adapter
+    mock_reward_manager = mocker.MagicMock()
+    mock_reward_manager.set_key_prefix = mocker.MagicMock()
+    mock_reward_manager.flush_stats = mocker.MagicMock()
+    mock_reward_manager.get_state = mocker.MagicMock(return_value={})
+    mock_reward_manager.load_state = mocker.MagicMock()
+
+    mock_reward_adapter = mocker.MagicMock()
+    mock_reward_adapter.get_state = mocker.MagicMock(return_value={})
+    mock_reward_adapter.load_state = mocker.MagicMock()
+
+    # create a mock GRPOTrainer that records train() calls
+    train_kwargs_received: list[dict[str, typing.Any]] = []
+
+    class MockGRPOTrainer:
+        def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+            self.model = mock_model
+            self.processing_class = mocker.MagicMock()
+            self.state = types.SimpleNamespace(
+                global_step=5,
+                epoch=1.0,
+                log_history=[],
+            )
+            self.callback_handler = types.SimpleNamespace(callbacks=[])
+
+        def train(self, **kwargs: typing.Any) -> None:
+            train_kwargs_received.append(kwargs)
+
+        def add_callback(self, callback: typing.Any) -> None:
+            self.callback_handler.callbacks.append(callback)
+
+    # patch TRL GRPOTrainer
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.trl,
+        "GRPOTrainer",
+        MockGRPOTrainer,
+    )
+
+    class MockGRPOConfig:
+        def __init__(self, **kwargs: typing.Any) -> None:
+            del kwargs
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.trl,
+        "GRPOConfig",
+        MockGRPOConfig,
+    )
+
+    # patch RewardManager and TRLRewardAdapter
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.organisms.models.rewards.core.manager,
+        "RewardManager",
+        lambda *args, **kwargs: mock_reward_manager,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.organisms.models.rewards.trl,
+        "TRLRewardAdapter",
+        lambda *args, **kwargs: mock_reward_adapter,
+    )
+
+    # create minimal mock datamodule
+    mock_train_ds = mocker.MagicMock()
+    mock_train_ds.__len__.return_value = 10
+    mock_datamodule = types.SimpleNamespace(
+        get_hf_messages_dataset=lambda **kwargs: mock_train_ds,
+    )
+
+    # create mock config
+    checkpoint_dir = tmp_path / "checkpoint-5"
+    checkpoint_dir.mkdir(parents=True)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    reward_manager_config = types.SimpleNamespace(
+        logging=types.SimpleNamespace(
+            enabled=False,
+            main_process_only=True,
+            wandb_key_prefix="reward",
+        ),
+    )
+
+    mock_config = types.SimpleNamespace(
+        grpo_config=types.SimpleNamespace(
+            do_eval=False,
+            to_dict=lambda: {"output_dir": str(output_dir), "do_eval": False, "report_to": []},
+        ),
+        reward_manager_config=reward_manager_config,
+        get_model=mock_get_model,
+    )
+
+    # test case 1: without resume_artifacts, checkpoint_path should be None
+    get_model_calls.clear()
+    train_kwargs_received.clear()
+    trainer = pyine.apps.trainers.hf_trainer.rl_train(
+        datamodule=mock_datamodule,
+        config=mock_config,  # type: ignore[arg-type]
+        runtime=None,
+        resume_artifacts=None,
+        shutdown_manager=None,
+    )
+    assert len(get_model_calls) == 1
+    assert get_model_calls[0]["checkpoint_path"] is None
+    assert len(train_kwargs_received) == 1
+    assert "resume_from_checkpoint" not in train_kwargs_received[0]
+    assert any(
+        isinstance(cb, pyine.utils.transformers.callbacks.RewardLoggingCallback)
+        for cb in trainer.callback_handler.callbacks
+    ), "RewardLoggingCallback should be added to RL trainer"
+
+    # test case 2: with resume_artifacts, checkpoint_path should be passed
+    get_model_calls.clear()
+    train_kwargs_received.clear()
+    resume_artifacts = types.SimpleNamespace(checkpoint_path=checkpoint_dir)
+    trainer = pyine.apps.trainers.hf_trainer.rl_train(
+        datamodule=mock_datamodule,
+        config=mock_config,  # type: ignore[arg-type]
+        runtime=None,
+        resume_artifacts=resume_artifacts,
+        shutdown_manager=None,
+    )
+    assert len(get_model_calls) == 1
+    assert get_model_calls[0]["checkpoint_path"] == checkpoint_dir
+    assert len(train_kwargs_received) == 1
+    assert "resume_from_checkpoint" in train_kwargs_received[0]
+    assert str(train_kwargs_received[0]["resume_from_checkpoint"]) == str(checkpoint_dir)

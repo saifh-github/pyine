@@ -871,3 +871,44 @@ class RewardManager:
             {f"{prefix_norm}run/terms/{k}": float(v) for k, v in term_summaries.items()},
             {f"{prefix_norm}run/categories/{k}": float(v) for k, v in category_summaries.items()},
         )
+
+    def get_state(
+        self,
+    ) -> dict[str, typing.Any]:
+        """Return serializable state for checkpoint persistence.
+
+        Returns:
+            Dictionary containing:
+            - total_stats: serialized RunningStats for total rewards;
+            - term_stats: dict of serialized RunningStats per term;
+            - category_stats: dict of serialized RunningStats per category;
+            - step: current step counter (or None).
+        """
+        return {
+            "total_stats": self._total_stats.as_state(),
+            "term_stats": {name: stats.as_state() for name, stats in self._term_stats.items()},
+            "category_stats": {name: stats.as_state() for name, stats in self._category_stats.items()},
+            "step": self._step,
+        }
+
+    def load_state(
+        self,
+        state: dict[str, typing.Any],
+    ) -> None:
+        """Restore state from checkpoint.
+
+        Args:
+            state: Dictionary with keys: total_stats, term_stats, category_stats, step.
+
+        Raises:
+            KeyError: If required keys are missing from state.
+        """
+        self._total_stats = stats_utils.RunningStats.from_state(state["total_stats"])
+        for name, term_state in state["term_stats"].items():
+            if name not in self._term_stats:
+                raise KeyError(f"term '{name}' in checkpoint state not found in current config")
+            self._term_stats[name] = stats_utils.RunningStats.from_state(term_state)
+        self._category_stats.clear()
+        for name, cat_state in state["category_stats"].items():
+            self._category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
+        self._step = state["step"]

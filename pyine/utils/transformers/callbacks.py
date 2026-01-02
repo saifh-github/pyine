@@ -1,9 +1,12 @@
 import collections.abc
+import json
 import logging
+import pathlib
 import typing
 
 import transformers
 
+import pyine.utils.reprod
 import pyine.utils.transformers.checkpoints
 
 logger = logging.getLogger(__name__)
@@ -366,27 +369,41 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         base_prefix: str = "",
         train_prefix: str = "train",
         eval_prefix: str = "eval",
+        resume_from_checkpoint: str | pathlib.Path | None = None,
     ) -> None:
         """Initialize the callback.
 
         Args:
-            reward_manager: The RewardManager instance to manage. Should have `set_key_prefix`
-                and `flush_stats` methods.
-            reward_adapter: Optional TRLRewardAdapter instance for failure tracking. Should have
-                `get_failure_stats` and `reset_failure_stats` methods.
+            reward_manager: The RewardManager instance to manage. Should have `set_key_prefix`,
+                `flush_stats`, `get_state`, and `load_state` methods.
+            reward_adapter: Optional TRLRewardAdapter instance for failure tracking and state
+                persistence. Should have `get_failure_stats`, `reset_failure_stats`, `get_state`,
+                and `load_state` methods.
             base_prefix: Static prefix prepended to phase prefixes (e.g., from wandb_key_prefix).
             train_prefix: Prefix to use for training phase logs (default: "train").
             eval_prefix: Prefix to use for evaluation phase logs (default: "eval").
+            resume_from_checkpoint: Path to checkpoint directory to resume from. When provided,
+                reward state will be loaded from this checkpoint on train begin.
         """
         assert hasattr(reward_manager, "set_key_prefix"), "reward manager missing 'set_key_prefix'"
         assert callable(reward_manager.set_key_prefix)
         assert hasattr(reward_manager, "flush_stats"), "reward manager missing 'flush_stats'"
         assert callable(reward_manager.flush_stats)
+        assert hasattr(reward_manager, "get_state"), "reward manager missing 'get_state'"
+        assert callable(reward_manager.get_state)
+        assert hasattr(reward_manager, "load_state"), "reward manager missing 'load_state'"
+        assert callable(reward_manager.load_state)
+        if reward_adapter is not None:
+            assert hasattr(reward_adapter, "get_state"), "reward adapter missing 'get_state'"
+            assert callable(reward_adapter.get_state)
+            assert hasattr(reward_adapter, "load_state"), "reward adapter missing 'load_state'"
+            assert callable(reward_adapter.load_state)
         self.reward_manager = reward_manager
         self.reward_adapter = reward_adapter
         self.base_prefix = base_prefix
         self.train_prefix = train_prefix
         self.eval_prefix = eval_prefix
+        self.resume_from_checkpoint = pathlib.Path(resume_from_checkpoint) if resume_from_checkpoint else None
         self._in_eval: bool | None = None
 
     def _make_prefix(self, phase: str) -> str:
@@ -471,6 +488,58 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self._in_eval = False  # evaluation done, switch back right away
 
     @typing.override
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Load reward state from checkpoint if resuming training.
+
+        Raises:
+            FileNotFoundError: If resuming from checkpoint but reward_state.json is missing.
+        """
+        if self.resume_from_checkpoint is None:
+            return
+        reward_state_path = self.resume_from_checkpoint / "reward_state.json"
+        if not reward_state_path.exists():
+            raise FileNotFoundError(
+                f"reward_state.json not found in checkpoint: {self.resume_from_checkpoint}; "
+                "checkpoint may be incomplete or from an older version"
+            )
+        self._load_reward_state(reward_state_path)
+
+    @typing.override
+    def on_save(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Save reward state to checkpoint directory."""
+        if not state.is_world_process_zero:
+            return  # only save on main process to avoid race conditions
+        # get checkpoint folder from kwargs (transformers 4.46+), fall back to utility
+        checkpoint_folder = kwargs.get("checkpoint_folder")
+        if checkpoint_folder is None:
+            checkpoint_folder = pyine.utils.transformers.checkpoints.get_checkpoint_folder_path(args, state)
+        checkpoint_path = pathlib.Path(checkpoint_folder)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"checkpoint directory does not exist: {checkpoint_path}")
+        adapter_state: dict[str, typing.Any] = {}
+        if self.reward_adapter is not None:
+            adapter_state = self.reward_adapter.get_state()
+        manager_state = self.reward_manager.get_state()
+        reward_state = {
+            "version": pyine.utils.reprod.get_framework_version(),
+            "adapter": adapter_state,
+            "manager": manager_state,
+        }
+        (checkpoint_path / "reward_state.json").write_text(json.dumps(reward_state, indent=2, sort_keys=True))
+
+    @typing.override
     def on_train_end(
         self,
         args: transformers.TrainingArguments,
@@ -481,3 +550,31 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         """Flush any remaining stats at the end of training."""
         self._log_failure_stats(step=None)
         self.reward_manager.flush_stats(step=None)
+
+    def _load_reward_state(
+        self,
+        path: pathlib.Path,
+    ) -> None:
+        """Load reward state from checkpoint file.
+
+        Args:
+            path: Path to reward_state.json file.
+
+        Raises:
+            json.JSONDecodeError: If the file contains invalid JSON.
+            OSError: If the file cannot be read.
+            KeyError: If required keys are missing from the state.
+        """
+        state = json.loads(path.read_text())
+        checkpoint_version = state["version"]
+        current_version = pyine.utils.reprod.get_framework_version()
+        logger.debug(f"loading reward state from checkpoint ({checkpoint_version=}, {current_version=})")
+        if "adapter" not in state:
+            raise KeyError("reward_state.json missing required 'adapter' key")
+        if "manager" not in state:
+            raise KeyError("reward_state.json missing required 'manager' key")
+        if self.reward_adapter is not None:
+            self.reward_adapter.load_state(state["adapter"])
+            logger.debug("restored reward adapter state from checkpoint")
+        self.reward_manager.load_state(state["manager"])
+        logger.debug("restored reward manager state from checkpoint")

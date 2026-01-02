@@ -1033,3 +1033,34 @@ class TestPackageLevelExports:
         import pyine.organisms.models.rewards as rewards
 
         assert rewards.RewardOutput is pyine.organisms.models.rewards.core.types.RewardOutput
+
+
+class TestRewardManagerState:
+    def test_state_roundtrip(
+        self,
+    ) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    weight=2.0,
+                    params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager.set_step(5)
+        model_output = "<final>ok</final>"
+        sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output=model_output,
+            sample_data=rewards_conftest.make_sample_data("s1"),
+            parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
+        )
+        manager.compute_output(sample_ctx, log=False)
+        state = manager.get_state()
+        restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        restored.load_state(state)
+        assert restored.get_state() == state

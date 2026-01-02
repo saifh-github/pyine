@@ -22,6 +22,7 @@ import torch
 import torch.utils.data
 import transformers
 
+import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_sft_trainer_configs
 import pyine.apps.trainers.hf_trainer
 import pyine.configs.schemas
@@ -232,4 +233,140 @@ class TestHFTrainerSFTIntegration:
             wandb_run=sft_runtime_config.wandb_run,
             expected_categories=expected_categories,
             metric_suffix="loss",
+        )
+
+    def test_sft_training_resume_from_checkpoint(
+        self,
+        isolate_caches_and_outputs: None,
+        real_datamodule_config: pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModuleConfig,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Test that SFT training can resume from a checkpoint correctly."""
+        output_dir = tmp_path / "checkpoints"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        use_fp16 = torch.cuda.is_available() and not use_bf16
+        # phase 1: train for 3 steps, save checkpoint at step 3
+        training_args_phase1 = pyine.utils.transformers.TrainingArgsConfig(
+            output_dir=str(output_dir),
+            do_train=True,
+            do_eval=False,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            save_strategy="steps",
+            save_steps=3,
+            logging_steps=1,
+            report_to=[],
+            dataloader_num_workers=0,
+            seed=42,
+            fp16=use_fp16,
+            bf16=use_bf16,
+            remove_unused_columns=False,
+            load_best_model_at_end=False,
+        )
+        config_phase1 = pyine.apps.trainers.hf_sft_trainer_configs.SFTTrainerAppMainConfig(
+            base_model="HuggingFaceTB/SmolLM-360M-Instruct",
+            quantization_mode="none",
+            auto_model_config={"low_cpu_mem_usage": True},
+            training_args_config=training_args_phase1,
+            datamodule_config=real_datamodule_config,
+            use_wandb_logging=False,
+            evals_config=pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+                eval_batch_size=2,
+                category_extraction_config=pyine.evals.utils.SampleCategoryExtractionConfig(
+                    enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+                ),
+            ),
+        )
+        runtime_phase1 = pyine.configs.schemas.RuntimeConfig(
+            exp_name="resume-test",
+            run_name="phase1",
+            app_name="test_sft_resume",
+            output_dir=str(tmp_path / "runtime1"),
+            seed=42,
+        )
+        datamodule = pyine.organisms.datamodules.shortcuts.ShortcutBiasDataModule(real_datamodule_config)
+        datamodule.prepare_data()
+        datamodule.setup()
+        trainer_phase1 = pyine.apps.trainers.hf_trainer.sft_train(
+            datamodule=datamodule,
+            config=config_phase1,
+            runtime=runtime_phase1,
+            resume_artifacts=None,
+            shutdown_manager=None,
+        )
+        assert trainer_phase1.state.global_step == 3
+        checkpoint_dir = output_dir / "checkpoint-3"
+        assert checkpoint_dir.exists(), "checkpoint-3 should exist after phase 1"
+        # add a marker file to checkpoint-3 to verify it doesn't get overwritten
+        # if phase 2 trains from scratch, it would recreate checkpoint-3 and lose this marker
+        marker_file = checkpoint_dir / ".phase1_marker"
+        marker_file.write_text("created by phase 1")
+
+        # phase 2: resume from checkpoint and train for 3 more steps (total 6)
+        training_args_phase2 = pyine.utils.transformers.TrainingArgsConfig(
+            output_dir=str(output_dir),
+            do_train=True,
+            do_eval=False,
+            per_device_train_batch_size=2,
+            max_steps=6,
+            save_strategy="steps",
+            save_steps=3,
+            logging_steps=1,
+            report_to=[],
+            dataloader_num_workers=0,
+            seed=42,
+            fp16=use_fp16,
+            bf16=use_bf16,
+            remove_unused_columns=False,
+            load_best_model_at_end=False,
+        )
+        config_phase2 = pyine.apps.trainers.hf_sft_trainer_configs.SFTTrainerAppMainConfig(
+            base_model="HuggingFaceTB/SmolLM-360M-Instruct",
+            quantization_mode="none",
+            auto_model_config={"low_cpu_mem_usage": True},
+            training_args_config=training_args_phase2,
+            datamodule_config=real_datamodule_config,
+            use_wandb_logging=False,
+            evals_config=pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+                eval_batch_size=2,
+                category_extraction_config=pyine.evals.utils.SampleCategoryExtractionConfig(
+                    enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+                ),
+            ),
+        )
+        resume_artifacts = pyine.apps.trainers.common.ResumeArtifacts(
+            run_dir=tmp_path / "runtime1",
+            checkpoint_path=checkpoint_dir,
+            checkpoint_metadata_dict={},
+            checkpoint_metadata_path=None,
+            previous_config_dict={},
+            previous_config_path=None,
+            previous_runtime_dict={},
+            previous_runtime_path=None,
+            previous_metadata_dict={},
+            previous_metadata_path=None,
+            wandb_resume_kwargs={},
+        )
+        runtime_phase2 = pyine.configs.schemas.RuntimeConfig(
+            exp_name="resume-test",
+            run_name="phase2",
+            app_name="test_sft_resume",
+            output_dir=str(tmp_path / "runtime2"),
+            seed=42,
+        )
+        trainer_phase2 = pyine.apps.trainers.hf_trainer.sft_train(
+            datamodule=datamodule,
+            config=config_phase2,
+            runtime=runtime_phase2,
+            resume_artifacts=resume_artifacts,
+            shutdown_manager=None,
+        )
+        assert trainer_phase2.state.global_step == 6, "training should resume and reach step 6"
+        assert (output_dir / "checkpoint-6").exists(), "checkpoint-6 should exist after phase 2"
+        # verify that checkpoint-3 was NOT recreated (marker file still exists)
+        # if phase 2 trained from scratch, it would save at step 3 and overwrite checkpoint-3
+        assert marker_file.exists(), (
+            "marker file in checkpoint-3 was deleted, meaning checkpoint-3 was recreated; "
+            "phase 2 likely trained from scratch instead of resuming"
         )

@@ -331,6 +331,32 @@ class TRLRewardAdapter:
         self._skip_count = 0
         self._error_count = 0
 
+    def get_state(
+        self,
+    ) -> dict[str, int]:
+        """Return serializable state for checkpoint persistence.
+
+        Returns:
+            Dictionary with keys: total_count, skip_count, error_count.
+        """
+        return self.get_failure_stats()
+
+    def load_state(
+        self,
+        state: dict[str, int],
+    ) -> None:
+        """Restore state from checkpoint.
+
+        Args:
+            state: Dictionary with keys: total_count, skip_count, error_count.
+
+        Raises:
+            KeyError: If required keys are missing from state.
+        """
+        self._total_count = state["total_count"]
+        self._skip_count = state["skip_count"]
+        self._error_count = state["error_count"]
+
     def _build_context(
         self,
         completion: list[dict[str, str]],
