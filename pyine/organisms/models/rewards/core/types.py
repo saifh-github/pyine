@@ -17,6 +17,7 @@ import pydantic
 
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
+import pyine.utils.stats as stats_utils
 
 if typing.TYPE_CHECKING:
     import pyine.organisms.models.rewards.core.configs as reward_configs
@@ -190,6 +191,194 @@ class RewardOutput:
     """Additional scalar metrics (keyed by `term/metric`)."""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class RunSummaries:
+    """Container for all run-level summary metrics.
+
+    Used as the return type for `RewardManager._get_run_summaries()` to provide better readability
+    and IDE support compared to a tuple.
+    """
+
+    reward_totals: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    """Aggregated total reward stats (mean, std, etc.)."""
+    reward_term_summaries: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    """Per-term aggregated reward stats."""
+    reward_category_summaries: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    """Per-category aggregated reward stats."""
+    parsing_summaries: dict[str, float] | None = None
+    """Global parsing stats (only when parsing configured)."""
+    parsing_category_summaries: dict[str, float] | None = None
+    """Per-category parsing stats (only when both parsing and category_extractor configured)."""
+
+
+@dataclasses.dataclass(slots=True)
+class ParsingStatsAccumulator:
+    """Accumulator for parsing statistics across samples.
+
+    Tracks output/reasoning/answer lengths and format issue counts (missing reasoning, missing
+    answer, malformed tags). Supports both global and category-wise stats when a category extractor
+    is configured.
+    """
+
+    # global length stats
+    output_length: stats_utils.RunningStats
+    """Running stats for raw model output length (chars)."""
+    reasoning_length: stats_utils.RunningStats
+    """Running stats for reasoning length (only samples with reasoning)."""
+    answer_length: stats_utils.RunningStats
+    """Running stats for final answer length (only samples with answer)."""
+
+    # global format counts
+    total_count: int = 0
+    """Total number of samples processed."""
+    missing_reasoning_count: int = 0
+    """Count of samples without reasoning."""
+    missing_answer_count: int = 0
+    """Count of samples without final answer."""
+    malformed_count: int = 0
+    """Count of samples with malformed tag structure."""
+
+    # category-wise stats
+    category_output_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for output length."""
+    category_reasoning_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for reasoning length."""
+    category_answer_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for answer length."""
+    category_total_count: dict[str, int] = dataclasses.field(
+        default_factory=lambda: dict[str, int](),
+    )
+    """Per-category sample counts."""
+    category_missing_reasoning_count: dict[str, int] = dataclasses.field(
+        default_factory=lambda: dict[str, int](),
+    )
+    """Per-category counts of samples without reasoning."""
+    category_missing_answer_count: dict[str, int] = dataclasses.field(
+        default_factory=lambda: dict[str, int](),
+    )
+    """Per-category counts of samples without final answer."""
+    category_malformed_count: dict[str, int] = dataclasses.field(
+        default_factory=lambda: dict[str, int](),
+    )
+    """Per-category counts of samples with malformed tag structure."""
+
+    @classmethod
+    def new(cls) -> "ParsingStatsAccumulator":
+        """Create a fresh accumulator with initialized RunningStats."""
+        return cls(
+            output_length=stats_utils.RunningStats(),
+            reasoning_length=stats_utils.RunningStats(),
+            answer_length=stats_utils.RunningStats(),
+        )
+
+    def reset(self) -> None:
+        """Reset all stats to initial state."""
+        self.output_length = stats_utils.RunningStats()
+        self.reasoning_length = stats_utils.RunningStats()
+        self.answer_length = stats_utils.RunningStats()
+        self.total_count = 0
+        self.missing_reasoning_count = 0
+        self.missing_answer_count = 0
+        self.malformed_count = 0
+        self.category_output_length.clear()
+        self.category_reasoning_length.clear()
+        self.category_answer_length.clear()
+        self.category_total_count.clear()
+        self.category_missing_reasoning_count.clear()
+        self.category_missing_answer_count.clear()
+        self.category_malformed_count.clear()
+
+    def as_state(self) -> dict[str, typing.Any]:
+        """Serialize accumulator state for checkpointing."""
+        return {
+            "output_length": self.output_length.as_state(),
+            "reasoning_length": self.reasoning_length.as_state(),
+            "answer_length": self.answer_length.as_state(),
+            "total_count": self.total_count,
+            "missing_reasoning_count": self.missing_reasoning_count,
+            "missing_answer_count": self.missing_answer_count,
+            "malformed_count": self.malformed_count,
+            "category_output_length": {k: v.as_state() for k, v in self.category_output_length.items()},
+            "category_reasoning_length": {k: v.as_state() for k, v in self.category_reasoning_length.items()},
+            "category_answer_length": {k: v.as_state() for k, v in self.category_answer_length.items()},
+            "category_total_count": dict(self.category_total_count),
+            "category_missing_reasoning_count": dict(self.category_missing_reasoning_count),
+            "category_missing_answer_count": dict(self.category_missing_answer_count),
+            "category_malformed_count": dict(self.category_malformed_count),
+        }
+
+    @classmethod
+    def from_state(
+        cls,
+        state: dict[str, typing.Any],
+    ) -> "ParsingStatsAccumulator":
+        """Deserialize accumulator from checkpoint state."""
+        return cls(
+            output_length=stats_utils.RunningStats.from_state(state["output_length"]),
+            reasoning_length=stats_utils.RunningStats.from_state(state["reasoning_length"]),
+            answer_length=stats_utils.RunningStats.from_state(state["answer_length"]),
+            total_count=state["total_count"],
+            missing_reasoning_count=state["missing_reasoning_count"],
+            missing_answer_count=state["missing_answer_count"],
+            malformed_count=state["malformed_count"],
+            category_output_length={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_output_length"].items()
+            },
+            category_reasoning_length={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_reasoning_length"].items()
+            },
+            category_answer_length={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_answer_length"].items()
+            },
+            category_total_count=dict(state["category_total_count"]),
+            category_missing_reasoning_count=dict(state["category_missing_reasoning_count"]),
+            category_missing_answer_count=dict(state["category_missing_answer_count"]),
+            category_malformed_count=dict(state.get("category_malformed_count", {})),
+        )
+
+    def merge(
+        self,
+        other: "ParsingStatsAccumulator",
+    ) -> None:
+        """Merge another accumulator's stats into this one (for distributed training)."""
+        self.output_length.merge(other.output_length)
+        self.reasoning_length.merge(other.reasoning_length)
+        self.answer_length.merge(other.answer_length)
+        self.total_count += other.total_count
+        self.missing_reasoning_count += other.missing_reasoning_count
+        self.missing_answer_count += other.missing_answer_count
+        self.malformed_count += other.malformed_count
+        # merge category-wise stats
+        for category, stats in other.category_output_length.items():
+            if category not in self.category_output_length:
+                self.category_output_length[category] = stats_utils.RunningStats()
+            self.category_output_length[category].merge(stats)
+        for category, stats in other.category_reasoning_length.items():
+            if category not in self.category_reasoning_length:
+                self.category_reasoning_length[category] = stats_utils.RunningStats()
+            self.category_reasoning_length[category].merge(stats)
+        for category, stats in other.category_answer_length.items():
+            if category not in self.category_answer_length:
+                self.category_answer_length[category] = stats_utils.RunningStats()
+            self.category_answer_length[category].merge(stats)
+        for category, count in other.category_total_count.items():
+            self.category_total_count[category] = self.category_total_count.get(category, 0) + count
+        for category, count in other.category_missing_reasoning_count.items():
+            self.category_missing_reasoning_count[category] = (
+                self.category_missing_reasoning_count.get(category, 0) + count
+            )
+        for category, count in other.category_missing_answer_count.items():
+            self.category_missing_answer_count[category] = self.category_missing_answer_count.get(category, 0) + count
+        for category, count in other.category_malformed_count.items():
+            self.category_malformed_count[category] = self.category_malformed_count.get(category, 0) + count
+
+
 class OutputParser(typing.Protocol):
     """Protocol for extracting structured fields from a model output.
 
@@ -228,7 +417,8 @@ class RewardLogger(typing.Protocol):
             sample_id: Unique identifier for the sample.
             total: Total reward value, or None to omit from logging.
             terms: Per-term reward values.
-            metrics: Per-term metrics.
+            metrics: Per-sample metrics including term-emitted metrics, parsing metrics
+                (under `parsing/*`), and category labels (under `categories/*`).
             step: Optional logging step.
         """
         ...
@@ -236,12 +426,42 @@ class RewardLogger(typing.Protocol):
     def log_run(
         self,
         *,
-        totals: collections.abc.Mapping[str, float],
-        term_summaries: collections.abc.Mapping[str, float],
-        category_summaries: collections.abc.Mapping[str, float],
+        reward_totals: collections.abc.Mapping[str, float],
+        reward_term_summaries: collections.abc.Mapping[str, float],
+        reward_category_summaries: collections.abc.Mapping[str, float],
+        parsing_summaries: collections.abc.Mapping[str, float] | None = None,
+        parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
     ) -> None:
-        """Log run-level summary metrics."""
+        """Log run-level summary metrics.
+
+        Args:
+            reward_totals: Aggregated total reward stats.
+            reward_term_summaries: Per-term aggregated reward stats.
+            reward_category_summaries: Per-category aggregated reward stats.
+            parsing_summaries: Global parsing stats (optional).
+            parsing_category_summaries: Per-category parsing stats (optional).
+            step: Optional logging step.
+        """
+        ...
+
+    def log_failures(
+        self,
+        *,
+        failure_ratio: float,
+        failure_count: int,
+        step: int | None = None,
+    ) -> None:
+        """Log failure statistics from reward computation.
+
+        Failures include samples that were skipped or errored during reward computation.
+        External logging backends (e.g., WandB) emit these under a `failures/` prefix.
+
+        Args:
+            failure_ratio: Ratio of failed samples to total samples.
+            failure_count: Total number of failed samples.
+            step: Optional logging step.
+        """
         ...
 
 

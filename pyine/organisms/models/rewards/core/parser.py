@@ -63,6 +63,7 @@ class TagsOutputParser:
         need_final_scan_for_reasoning = bool(self._config.reasoning_from_final_prefix and want_reasoning)
         final_selected_open_start: int | None = None
 
+        has_malformed_structure = False
         if want_final or need_final_scan_for_reasoning:
             final_result = pyine.utils.parsing.extract_tag_blocks(
                 raw,
@@ -70,6 +71,8 @@ class TagsOutputParser:
                 open_regex=self._final_open_re,
                 close_regex=self._final_close_re,
             )
+            if final_result.has_malformed_structure:
+                has_malformed_structure = True
             if self._config.strict and final_result.has_malformed_structure:
                 raise ValueError(
                     "malformed tag structure detected: "
@@ -102,6 +105,8 @@ class TagsOutputParser:
                     open_regex=self._reasoning_open_re,
                     close_regex=self._reasoning_close_re,
                 )
+                if reasoning_result.has_malformed_structure:
+                    has_malformed_structure = True
                 if self._config.strict and reasoning_result.has_malformed_structure:
                     raise ValueError(
                         "malformed tag structure detected: "
@@ -117,6 +122,8 @@ class TagsOutputParser:
                 if self._config.capture_diagnostics:
                     fields.update(self._format_diagnostics(reasoning_result, raw))
 
+        if self._config.capture_diagnostics:
+            fields["is_malformed"] = str(has_malformed_structure).lower()
         return reward_types.ParsedOutput(
             raw=raw,
             final_answer=final_answer,

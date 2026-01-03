@@ -39,27 +39,27 @@ class TestInMemoryRewardLogger:
     def test_log_run_records_run_event(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
         logger.log_run(
-            totals={"count": 100.0, "mean_total": 0.75},
-            term_summaries={"term_a": 0.5, "term_b": 0.25},
-            category_summaries={"cat_a": 0.8},
+            reward_totals={"count": 100.0, "mean_total": 0.75},
+            reward_term_summaries={"term_a": 0.5, "term_b": 0.25},
+            reward_category_summaries={"cat_a": 0.8},
             step=50,
         )
         assert len(logger.runs) == 1
         entry = logger.runs[0]
-        assert entry["totals"] == {"count": 100.0, "mean_total": 0.75}
-        assert entry["term_summaries"] == {"term_a": 0.5, "term_b": 0.25}
-        assert entry["category_summaries"] == {"cat_a": 0.8}
+        assert entry["reward_totals"] == {"count": 100.0, "mean_total": 0.75}
+        assert entry["reward_term_summaries"] == {"term_a": 0.5, "term_b": 0.25}
+        assert entry["reward_category_summaries"] == {"cat_a": 0.8}
         assert entry["step"] == 50
 
     def test_log_run_without_step(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
-        logger.log_run(totals={}, term_summaries={}, category_summaries={})
+        logger.log_run(reward_totals={}, reward_term_summaries={}, reward_category_summaries={})
         assert logger.runs[0]["step"] is None
 
     def test_samples_and_runs_are_independent(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
         logger.log("s1", total=1.0, terms={}, metrics={})
-        logger.log_run(totals={"count": 1.0}, term_summaries={}, category_summaries={})
+        logger.log_run(reward_totals={"count": 1.0}, reward_term_summaries={}, reward_category_summaries={})
         logger.log("s2", total=2.0, terms={}, metrics={})
         assert len(logger.samples) == 2
         assert len(logger.runs) == 1
@@ -78,6 +78,25 @@ class TestInMemoryRewardLogger:
         metrics["b"] = 999
         assert logger.samples[0]["terms"] == {"a": 1.0}  # logger has copy
         assert logger.samples[0]["metrics"] == {"b": 2}
+
+    def test_log_failures_records_to_failures_list(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        logger.log_failures(failure_ratio=0.25, failure_count=5, step=10)
+        assert len(logger.failures) == 1
+        assert logger.runs == []  # not mixed into runs
+        entry = logger.failures[0]
+        assert entry["failure_ratio"] == 0.25
+        assert entry["failure_count"] == 5
+        assert entry["step"] == 10
+
+    def test_log_failures_without_step(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        logger.log_failures(failure_ratio=0.1, failure_count=2)
+        assert logger.failures[0]["step"] is None
+
+    def test_failures_list_is_initially_empty(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        assert logger.failures == []
 
 
 class TestMakeWandBRewardLogger:
@@ -164,9 +183,9 @@ class TestWandBRewardLogger:
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
         logger.log_run(
-            totals={"count": 100.0, "mean": 0.5},
-            term_summaries={"t1": 0.3},
-            category_summaries={"cat1": 0.8},
+            reward_totals={"count": 100.0, "mean": 0.5},
+            reward_term_summaries={"t1": 0.3},
+            reward_category_summaries={"cat1": 0.8},
             step=50,
         )
         assert len(logged_payloads) == 1
@@ -201,3 +220,33 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="", step=100)
         logger.log("s1", total=1.0, terms={}, metrics={}, step=200)
         assert logged_payloads[0][1] == 200
+
+    def test_log_failures_calls_wandb_run_log(self) -> None:
+        logged_payloads: list[tuple[dict, int | None]] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict, step: int | None = None) -> None:
+                logged_payloads.append((dict(payload), step))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        logger.log_failures(failure_ratio=0.25, failure_count=5, step=10)
+        assert len(logged_payloads) == 1
+        payload, step = logged_payloads[0]
+        assert step == 10
+        assert payload["failures/failure_ratio"] == 0.25
+        assert payload["failures/failure_count"] == 5.0
+
+    def test_log_failures_with_key_prefix(self) -> None:
+        logged_payloads: list[tuple[dict, int | None]] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict, step: int | None = None) -> None:
+                logged_payloads.append((dict(payload), step))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run, key_prefix="train/")
+        logger.log_failures(failure_ratio=0.1, failure_count=2, step=5)
+        payload, _ = logged_payloads[0]
+        assert "train/failures/failure_ratio" in payload
+        assert "train/failures/failure_count" in payload

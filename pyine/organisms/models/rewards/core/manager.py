@@ -205,6 +205,9 @@ class RewardManager:
             pyine.evals.utils.SampleCategoryExtractor(category_config) if category_config is not None else None
         )
         self._category_stats: dict[str, stats_utils.RunningStats] = {}
+        self._parsing_stats: reward_types.ParsingStatsAccumulator | None = (
+            reward_types.ParsingStatsAccumulator.new() if config.parsing is not None else None
+        )
         self._warn_tag_inconsistencies()
 
     def _warn_tag_inconsistencies(self) -> None:
@@ -304,7 +307,7 @@ class RewardManager:
         if self._logger and hasattr(self._logger, "set_key_prefix"):
             self._logger.set_key_prefix(key_prefix)  # type: ignore[reportUnknownMemberType]
 
-    def get_total_metrics(self) -> dict[str, float]:
+    def get_reward_total_metrics(self) -> dict[str, float]:
         """Returns aggregated total reward metrics.
 
         Keys are bare (e.g., `mean`, `std`) - callers should add appropriate prefixes.
@@ -320,7 +323,7 @@ class RewardManager:
             "sample_count": float(self._total_stats.count),
         }
 
-    def get_term_metrics(self) -> dict[str, float]:
+    def get_reward_term_metrics(self) -> dict[str, float]:
         """Returns aggregated term-wise reward metrics.
 
         Keys are `{term}/mean`, `{term}/std`, etc. - callers should add appropriate prefixes.
@@ -337,7 +340,7 @@ class RewardManager:
             metrics[f"{term}/sample_count"] = float(stats.count)
         return metrics
 
-    def get_category_metrics(self) -> dict[str, float]:
+    def get_reward_category_metrics(self) -> dict[str, float]:
         """Returns aggregated category-wise reward metrics.
 
         Keys are `{category}/mean`, etc. - callers should add appropriate prefixes.
@@ -354,18 +357,136 @@ class RewardManager:
             metrics[f"{category}/sample_count"] = float(stats.count)
         return metrics
 
+    def get_parsing_metrics(self) -> dict[str, float]:
+        """Returns aggregated global parsing metrics.
+
+        Returns empty dict if parsing is not configured or no samples processed. Keys are
+        `output_length/mean`, `missing_reasoning_ratio`, etc.
+
+        Note: `missing_reasoning_ratio` and `reasoning_length/*` are only emitted when reasoning
+        extraction is enabled (enabled_fields is "both" or "reasoning_only"). Similarly,
+        `missing_answer_ratio` and `answer_length/*` are only emitted when final answer extraction
+        is enabled (enabled_fields is "both" or "final_only"). `malformed_ratio` is only emitted
+        when `capture_diagnostics=True` in the parsing config.
+        """
+        if self._parsing_stats is None or self._parsing_stats.total_count == 0:
+            return {}
+        stats = self._parsing_stats
+        metrics: dict[str, float] = {}
+        # determine which fields are enabled
+        enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
+        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
+        answer_enabled = enabled_fields in ("both", "final_only")
+        # output length stats (always tracked)
+        if stats.output_length.count > 0:
+            assert stats.output_length.min is not None and stats.output_length.max is not None
+            metrics["output_length/mean"] = stats.output_length.mean()
+            metrics["output_length/std"] = stats.output_length.std()
+            metrics["output_length/min"] = stats.output_length.min
+            metrics["output_length/max"] = stats.output_length.max
+        # reasoning length stats (only when reasoning enabled and samples have reasoning)
+        if reasoning_enabled and stats.reasoning_length.count > 0:
+            assert stats.reasoning_length.min is not None and stats.reasoning_length.max is not None
+            metrics["reasoning_length/mean"] = stats.reasoning_length.mean()
+            metrics["reasoning_length/std"] = stats.reasoning_length.std()
+            metrics["reasoning_length/min"] = stats.reasoning_length.min
+            metrics["reasoning_length/max"] = stats.reasoning_length.max
+        # answer length stats (only when answer enabled and samples have answer)
+        if answer_enabled and stats.answer_length.count > 0:
+            assert stats.answer_length.min is not None and stats.answer_length.max is not None
+            metrics["answer_length/mean"] = stats.answer_length.mean()
+            metrics["answer_length/std"] = stats.answer_length.std()
+            metrics["answer_length/min"] = stats.answer_length.min
+            metrics["answer_length/max"] = stats.answer_length.max
+        # format ratios (only for enabled fields)
+        total = float(stats.total_count)
+        if reasoning_enabled:
+            metrics["missing_reasoning_ratio"] = stats.missing_reasoning_count / total
+        if answer_enabled:
+            metrics["missing_answer_ratio"] = stats.missing_answer_count / total
+        # malformed_ratio only meaningful when capture_diagnostics is enabled
+        if self._config.parsing and self._config.parsing.capture_diagnostics:
+            metrics["malformed_ratio"] = stats.malformed_count / total
+        metrics["sample_count"] = total
+        return metrics
+
+    def get_parsing_category_metrics(self) -> dict[str, float]:
+        """Returns category-wise parsing metrics.
+
+        Returns empty dict if parsing or category extraction is not configured. Keys are
+        `{category}/output_length/mean`, `{category}/missing_reasoning_ratio`, etc.
+
+        Note: `missing_reasoning_ratio` and `reasoning_length/*` are only emitted when reasoning
+        extraction is enabled. Similarly, `missing_answer_ratio` and `answer_length/*` are only
+        emitted when final answer extraction is enabled. `malformed_ratio` is only emitted when
+        `capture_diagnostics=True` in the parsing config.
+        """
+        if self._parsing_stats is None or self._category_extractor is None:
+            return {}
+        stats = self._parsing_stats
+        metrics: dict[str, float] = {}
+        # determine which fields are enabled
+        enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
+        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
+        answer_enabled = enabled_fields in ("both", "final_only")
+        for category in sorted(stats.category_total_count.keys()):
+            total = float(stats.category_total_count.get(category, 0))
+            if total == 0:
+                continue
+            # output length
+            if category in stats.category_output_length and stats.category_output_length[category].count > 0:
+                cat_output = stats.category_output_length[category]
+                assert cat_output.min is not None and cat_output.max is not None
+                metrics[f"{category}/output_length/mean"] = cat_output.mean()
+                metrics[f"{category}/output_length/std"] = cat_output.std()
+                metrics[f"{category}/output_length/min"] = cat_output.min
+                metrics[f"{category}/output_length/max"] = cat_output.max
+            # reasoning length (only when reasoning enabled)
+            if reasoning_enabled:
+                if category in stats.category_reasoning_length and stats.category_reasoning_length[category].count > 0:
+                    cat_reasoning = stats.category_reasoning_length[category]
+                    assert cat_reasoning.min is not None and cat_reasoning.max is not None
+                    metrics[f"{category}/reasoning_length/mean"] = cat_reasoning.mean()
+                    metrics[f"{category}/reasoning_length/std"] = cat_reasoning.std()
+                    metrics[f"{category}/reasoning_length/min"] = cat_reasoning.min
+                    metrics[f"{category}/reasoning_length/max"] = cat_reasoning.max
+            # answer length (only when answer enabled)
+            if answer_enabled:
+                if category in stats.category_answer_length and stats.category_answer_length[category].count > 0:
+                    cat_answer = stats.category_answer_length[category]
+                    assert cat_answer.min is not None and cat_answer.max is not None
+                    metrics[f"{category}/answer_length/mean"] = cat_answer.mean()
+                    metrics[f"{category}/answer_length/std"] = cat_answer.std()
+                    metrics[f"{category}/answer_length/min"] = cat_answer.min
+                    metrics[f"{category}/answer_length/max"] = cat_answer.max
+            # format ratios (only for enabled fields)
+            if reasoning_enabled:
+                missing_reasoning = float(stats.category_missing_reasoning_count.get(category, 0))
+                metrics[f"{category}/missing_reasoning_ratio"] = missing_reasoning / total
+            if answer_enabled:
+                missing_answer = float(stats.category_missing_answer_count.get(category, 0))
+                metrics[f"{category}/missing_answer_ratio"] = missing_answer / total
+            # malformed_ratio only meaningful when capture_diagnostics is enabled
+            if self._config.parsing and self._config.parsing.capture_diagnostics:
+                malformed = float(stats.category_malformed_count.get(category, 0))
+                metrics[f"{category}/malformed_ratio"] = malformed / total
+            metrics[f"{category}/sample_count"] = total
+        return metrics
+
     def reset_accumulators(
         self,
     ) -> None:
-        """Reset all statistics accumulators (total, term, category).
+        """Reset all statistics accumulators (reward totals/terms/categories, and parsing).
 
-        This resets only the running statistics, not term state. Use `reset()` to also
-        reset term state for a new run.
+        This resets only the running statistics, not term state. Use `reset()` to also reset term
+        state for a new run.
         """
         self._total_stats = stats_utils.RunningStats()
         for key in self._term_stats:
             self._term_stats[key] = stats_utils.RunningStats()
         self._category_stats.clear()
+        if self._parsing_stats is not None:
+            self._parsing_stats.reset()
 
     def flush_stats(
         self,
@@ -373,13 +494,17 @@ class RewardManager:
     ) -> None:
         """Log all accumulated statistics and reset accumulators.
 
-        This logs total, per-term, and category-wise metrics, then resets all accumulators.
-        Typically called by a callback after an evaluation phase completes.
+        This logs total, per-term, category-wise, and parsing metrics, then resets all accumulators.
+        Use this for periodic logging during training when you need to continue accumulating fresh
+        stats afterward (e.g., after an eval phase completes, before switching to the next phase).
+
+        For end-of-training logging where no more samples will be processed, use `finalize_run()`
+        instead, which logs without resetting.
 
         Respects distributed settings from LoggingConfig:
-        - barrier_before_finalize: sync before logging
-        - gather_distributed_summaries: merge stats across ranks
-        - main_process_only: only log on rank 0
+        - barrier_before_finalize: sync before logging;
+        - gather_distributed_summaries: merge stats across ranks;
+        - main_process_only: only log on rank 0.
 
         Args:
             step: Optional logging step override (defaults to manager step).
@@ -394,15 +519,13 @@ class RewardManager:
         has_stats = self._total_stats.count > 0
         # get summaries if we have stats (needed for gather even if not logging locally)
         if has_stats:
-            totals, term_summaries, category_summaries = self._get_run_summaries()
+            summaries = self._get_run_summaries()
         else:
             # create empty summaries for gathering (all ranks must participate)
-            totals, term_summaries, category_summaries = {}, {}, {}
+            summaries = reward_types.RunSummaries()
         # gather distributed summaries if configured (all ranks must participate)
         if self._config.logging.gather_distributed_summaries and self._is_distributed():
-            totals, term_summaries, category_summaries = self._gather_run_summaries(
-                totals, term_summaries, category_summaries
-            )
+            summaries = self._gather_run_summaries(summaries)
         # reset accumulators and return early if not logging
         if not should_log or not has_stats:
             self.reset_accumulators()
@@ -411,16 +534,25 @@ class RewardManager:
         if self._config.logging.main_process_only and not self._is_main_process():
             self.reset_accumulators()
             return
-        scoped_totals, scoped_term_summaries, scoped_category_summaries = self._scope_run_fields(
-            totals, term_summaries, category_summaries
-        )
-        if hasattr(self._logger, "log_run"):
-            self._logger.log_run(
-                totals=scoped_totals,
-                term_summaries=scoped_term_summaries,
-                category_summaries=scoped_category_summaries,
-                step=log_step,
+        scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
+            self._scope_reward_run_fields(
+                summaries.reward_totals,
+                summaries.reward_term_summaries,
+                summaries.reward_category_summaries,
             )
+        )
+        scoped_parsing, scoped_parsing_category = self._scope_parsing_fields(
+            summaries.parsing_summaries,
+            summaries.parsing_category_summaries,
+        )
+        self._logger.log_run(
+            reward_totals=scoped_reward_totals,
+            reward_term_summaries=scoped_reward_term_summaries,
+            reward_category_summaries=scoped_reward_category_summaries,
+            parsing_summaries=scoped_parsing,
+            parsing_category_summaries=scoped_parsing_category,
+            step=log_step,
+        )
         self.reset_accumulators()
 
     def compute(
@@ -536,7 +668,19 @@ class RewardManager:
         log: bool = True,
         step: int | None = None,
     ) -> None:
-        """Optionally log run-level summaries.
+        """Log run-level summaries without resetting accumulators.
+
+        Use this at the end of training when no more samples will be processed. Unlike
+        `flush_stats()`, this does NOT reset accumulators afterward, allowing subsequent
+        queries to `get_*_metrics()` methods to return the final accumulated values.
+
+        For periodic logging during training where you need to continue accumulating fresh
+        stats afterward, use `flush_stats()` instead.
+
+        Respects distributed settings from LoggingConfig:
+        - barrier_before_finalize: sync before logging;
+        - gather_distributed_summaries: merge stats across ranks;
+        - main_process_only: only log on rank 0.
 
         Args:
             log: If False, suppress run-level logging even if enabled in config.
@@ -552,28 +696,36 @@ class RewardManager:
         has_stats = self._total_stats.count > 0
         # get summaries if we have stats (needed for gather even if not logging locally)
         if has_stats:
-            totals, term_summaries, category_summaries = self._get_run_summaries()
+            summaries = self._get_run_summaries()
         else:
             # create empty summaries for gathering (all ranks must participate)
-            totals, term_summaries, category_summaries = {}, {}, {}
+            summaries = reward_types.RunSummaries()
         # gather distributed summaries if configured (all ranks must participate)
         if self._config.logging.gather_distributed_summaries and self._is_distributed():
-            totals, term_summaries, category_summaries = self._gather_run_summaries(
-                totals, term_summaries, category_summaries
-            )
+            summaries = self._gather_run_summaries(summaries)
         # return early if not logging or no stats
         if not should_log or not has_stats:
             return
         # return early if only main process should log and this is not main
         if self._config.logging.main_process_only and not self._is_main_process():
             return
-        scoped_totals, scoped_term_summaries, scoped_category_summaries = self._scope_run_fields(
-            totals, term_summaries, category_summaries
+        scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
+            self._scope_reward_run_fields(
+                summaries.reward_totals,
+                summaries.reward_term_summaries,
+                summaries.reward_category_summaries,
+            )
+        )
+        scoped_parsing, scoped_parsing_category = self._scope_parsing_fields(
+            summaries.parsing_summaries,
+            summaries.parsing_category_summaries,
         )
         self._logger.log_run(
-            totals=scoped_totals,
-            term_summaries=scoped_term_summaries,
-            category_summaries=scoped_category_summaries,
+            reward_totals=scoped_reward_totals,
+            reward_term_summaries=scoped_reward_term_summaries,
+            reward_category_summaries=scoped_reward_category_summaries,
+            parsing_summaries=scoped_parsing,
+            parsing_category_summaries=scoped_parsing_category,
             step=step_to_use,
         )
 
@@ -681,24 +833,32 @@ class RewardManager:
             extras=extras or {},
         )
 
-    def _get_run_summaries(self) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        """Compute local run-level summaries (mean/min/max/std) for total, per-term, and category values.
+    def _get_run_summaries(self) -> reward_types.RunSummaries:
+        """Compute local run-level summaries (mean/min/max/std) for total, per-term, category, and parsing values.
 
-        Returns a tuple of (total_stats, per_term_stats, per_category_stats) dicts.
+        Returns a RunSummaries dataclass with all aggregated metrics.
         """
         if self._total_stats.count == 0:
-            return {}, {}, {}
-        total_summaries = self.get_total_metrics()
-        term_summaries = self.get_term_metrics()
-        category_summaries = self.get_category_metrics()
-        return total_summaries, term_summaries, category_summaries
+            return reward_types.RunSummaries()
+        reward_totals = self.get_reward_total_metrics()
+        reward_term_summaries = self.get_reward_term_metrics()
+        reward_category_summaries = self.get_reward_category_metrics()
+        parsing_summaries = self.get_parsing_metrics() if self._parsing_stats else None
+        parsing_category_summaries = (
+            self.get_parsing_category_metrics() if self._parsing_stats and self._category_extractor else None
+        )
+        return reward_types.RunSummaries(
+            reward_totals=reward_totals,
+            reward_term_summaries=reward_term_summaries,
+            reward_category_summaries=reward_category_summaries,
+            parsing_summaries=parsing_summaries,
+            parsing_category_summaries=parsing_category_summaries,
+        )
 
     def _gather_run_summaries(
         self,
-        totals: dict[str, float],
-        term_summaries: dict[str, float],
-        categories_summaries: dict[str, float],
-    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        summaries: reward_types.RunSummaries,
+    ) -> reward_types.RunSummaries:
         """Gather run stats across ranks and compute global summaries (rank0 returns merged).
 
         Note: Only rank 0 receives the merged summaries. Non-main ranks return their original
@@ -706,21 +866,26 @@ class RewardManager:
         non-main ranks will still log their local (unmerged) summaries to avoid blocking, which
         may be surprising. For consistent logging, keep `main_process_only=True` (the default).
 
-        Returns a tuple of (total_stats, per_term_stats, per_category_stats) dicts.
+        Returns RunSummaries with merged stats on rank 0, original summaries on other ranks.
         """
-        payload = {
+        payload: dict[str, typing.Any] = {
             "total": self._total_stats.as_state(),
             "terms": {name: stats.as_state() for name, stats in self._term_stats.items()},
             "categories": {name: stats.as_state() for name, stats in self._category_stats.items()},
         }
+        if self._parsing_stats is not None:
+            payload["parsing"] = self._parsing_stats.as_state()
         gathered = pyine.utils.distrib.all_gather_objects(payload)
         if not self._is_main_process():
-            return totals, term_summaries, categories_summaries
+            return summaries
         merged_total = stats_utils.RunningStats()
         merged_terms: dict[str, stats_utils.RunningStats] = {
             name: stats_utils.RunningStats() for name in self._term_stats
         }
         merged_categories: dict[str, stats_utils.RunningStats] = {}
+        merged_parsing: reward_types.ParsingStatsAccumulator | None = (
+            reward_types.ParsingStatsAccumulator.new() if self._parsing_stats is not None else None
+        )
         for item in gathered:
             total_state = typing.cast("collections.abc.Mapping[str, int | float]", item["total"])
             merged_total.merge(stats_utils.RunningStats.from_state(total_state))
@@ -739,9 +904,14 @@ class RewardManager:
                 if category_name not in merged_categories:
                     merged_categories[category_name] = stats_utils.RunningStats()
                 merged_categories[category_name].merge(stats_utils.RunningStats.from_state(state))
+            if merged_parsing is not None and "parsing" in item:
+                parsing_state = typing.cast("dict[str, typing.Any]", item["parsing"])
+                merged_parsing.merge(reward_types.ParsingStatsAccumulator.from_state(parsing_state))
         self._total_stats = merged_total
         self._term_stats = merged_terms
         self._category_stats = merged_categories
+        if merged_parsing is not None:
+            self._parsing_stats = merged_parsing
         return self._get_run_summaries()
 
     @staticmethod
@@ -805,6 +975,112 @@ class RewardManager:
                 if category not in self._category_stats:
                     self._category_stats[category] = stats_utils.RunningStats()
                 self._category_stats[category].update(total_reward)
+        self._update_parsing_stats(sample_ctx)
+
+    @staticmethod
+    def _is_malformed(
+        parsed: reward_types.ParsedOutput,
+    ) -> bool:
+        """Check if output has any malformed tag structure.
+
+        Returns False if diagnostics are not captured (capture_diagnostics=False in config).
+        """
+        return parsed.fields.get("is_malformed", "false") == "true"
+
+    def _update_parsing_stats(
+        self,
+        sample_ctx: reward_types.SampleContext,
+    ) -> None:
+        """Update parsing-related run stats if parsing is configured."""
+        if self._parsing_stats is None or sample_ctx.parsed is None:
+            return
+        parsed = sample_ctx.parsed
+        output_len = len(parsed.raw)
+        has_reasoning = parsed.reasoning is not None
+        has_answer = parsed.final_answer is not None
+        is_malformed = self._is_malformed(parsed)
+        # update global length stats
+        self._parsing_stats.output_length.update(float(output_len))
+        if has_reasoning:
+            self._parsing_stats.reasoning_length.update(float(len(parsed.reasoning)))  # type: ignore[arg-type]
+        if has_answer:
+            self._parsing_stats.answer_length.update(float(len(parsed.final_answer)))  # type: ignore[arg-type]
+        # update global format counts
+        self._parsing_stats.total_count += 1
+        if not has_reasoning:
+            self._parsing_stats.missing_reasoning_count += 1
+        if not has_answer:
+            self._parsing_stats.missing_answer_count += 1
+        if is_malformed:
+            self._parsing_stats.malformed_count += 1
+        # update category-wise stats if category extractor configured
+        if self._category_extractor is not None:
+            sample_data_dict = sample_ctx.sample_data._asdict()
+            categories = self._category_extractor.extract_categories(sample_data_dict)
+            for category in categories:
+                # output length
+                if category not in self._parsing_stats.category_output_length:
+                    self._parsing_stats.category_output_length[category] = stats_utils.RunningStats()
+                self._parsing_stats.category_output_length[category].update(float(output_len))
+                # reasoning length
+                if has_reasoning:
+                    if category not in self._parsing_stats.category_reasoning_length:
+                        self._parsing_stats.category_reasoning_length[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_reasoning_length[category].update(float(len(parsed.reasoning)))  # type: ignore[arg-type]
+                # answer length
+                if has_answer:
+                    if category not in self._parsing_stats.category_answer_length:
+                        self._parsing_stats.category_answer_length[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_answer_length[category].update(float(len(parsed.final_answer)))  # type: ignore[arg-type]
+                # category counts
+                self._parsing_stats.category_total_count[category] = (
+                    self._parsing_stats.category_total_count.get(category, 0) + 1
+                )
+                if not has_reasoning:
+                    self._parsing_stats.category_missing_reasoning_count[category] = (
+                        self._parsing_stats.category_missing_reasoning_count.get(category, 0) + 1
+                    )
+                if not has_answer:
+                    self._parsing_stats.category_missing_answer_count[category] = (
+                        self._parsing_stats.category_missing_answer_count.get(category, 0) + 1
+                    )
+                if is_malformed:
+                    self._parsing_stats.category_malformed_count[category] = (
+                        self._parsing_stats.category_malformed_count.get(category, 0) + 1
+                    )
+
+    def _compute_sample_parsing_metrics(
+        self,
+        sample_ctx: reward_types.SampleContext,
+    ) -> dict[str, reward_types.MetricValue]:
+        """Compute per-sample parsing metrics for logging.
+
+        Only emits metrics for fields that are enabled in the parsing config.
+        """
+        if sample_ctx.parsed is None:
+            return {}
+        parsed = sample_ctx.parsed
+        # determine which fields are enabled
+        enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
+        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
+        answer_enabled = enabled_fields in ("both", "final_only")
+        metrics: dict[str, reward_types.MetricValue] = {
+            "parsing/output_length": len(parsed.raw),
+        }
+        # is_malformed only meaningful when capture_diagnostics is enabled
+        if self._config.parsing and self._config.parsing.capture_diagnostics:
+            metrics["parsing/is_malformed"] = self._is_malformed(parsed)
+        if reasoning_enabled:
+            has_reasoning = parsed.reasoning is not None
+            metrics["parsing/has_reasoning"] = has_reasoning
+            if has_reasoning:
+                metrics["parsing/reasoning_length"] = len(parsed.reasoning)  # type: ignore[arg-type]
+        if answer_enabled:
+            has_answer = parsed.final_answer is not None
+            metrics["parsing/has_answer"] = has_answer
+            if has_answer:
+                metrics["parsing/answer_length"] = len(parsed.final_answer)  # type: ignore[arg-type]
+        return metrics
 
     def _maybe_log_sample(
         self,
@@ -829,7 +1105,19 @@ class RewardManager:
         terms: dict[str, float] = dict(output.weighted_terms) if self._config.logging.log_terms else {}
         metrics: dict[str, reward_types.MetricValue] = dict(output.metrics) if self._config.logging.log_metrics else {}
         total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
-        scoped_terms, scoped_metrics = self._scope_sample_fields(terms, metrics)
+        # apply scope prefix to reward terms/metrics first
+        scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
+        # add parsing metrics after scoping (fixed parsing/ prefix, not scoped)
+        if self._config.logging.log_metrics:
+            if self._config.parsing is not None and sample_ctx.parsed is not None:
+                parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
+                scoped_metrics.update(parsing_metrics)
+            # add category labels for filtering (not scoped)
+            if self._category_extractor is not None:
+                sample_data_dict = sample_ctx.sample_data._asdict()
+                categories = self._category_extractor.extract_categories(sample_data_dict)
+                for category in categories:
+                    scoped_metrics[f"categories/{category}"] = True
         self._logger.log(sample_id, total=total_to_log, terms=scoped_terms, metrics=scoped_metrics, step=step_to_use)
 
     @staticmethod
@@ -842,12 +1130,12 @@ class RewardManager:
         """Return whether this run appears to be distributed."""
         return pyine.utils.distrib.is_distributed()
 
-    def _scope_sample_fields(
+    def _scope_reward_sample_fields(
         self,
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
     ) -> tuple[dict[str, float], dict[str, reward_types.MetricValue]]:
-        """Apply the configured scope prefix to per-sample term/metric keys."""
+        """Apply the configured scope prefix to per-sample reward term/metric keys."""
         prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
             return dict(terms), dict(metrics)
@@ -856,21 +1144,41 @@ class RewardManager:
             {f"{prefix_norm}metrics/{k}": v for k, v in metrics.items()},
         )
 
-    def _scope_run_fields(
+    def _scope_reward_run_fields(
         self,
-        totals: collections.abc.Mapping[str, float],
-        term_summaries: collections.abc.Mapping[str, float],
-        category_summaries: collections.abc.Mapping[str, float],
+        reward_totals: collections.abc.Mapping[str, float],
+        reward_term_summaries: collections.abc.Mapping[str, float],
+        reward_category_summaries: collections.abc.Mapping[str, float],
     ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        """Apply the configured scope prefix to run-level summary keys."""
+        """Apply the configured scope prefix to run-level reward summary keys."""
         prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
         if not prefix_norm:
-            return dict(totals), dict(term_summaries), dict(category_summaries)
+            return dict(reward_totals), dict(reward_term_summaries), dict(reward_category_summaries)
         return (
-            {f"{prefix_norm}run/{k}": float(v) for k, v in totals.items()},
-            {f"{prefix_norm}run/terms/{k}": float(v) for k, v in term_summaries.items()},
-            {f"{prefix_norm}run/categories/{k}": float(v) for k, v in category_summaries.items()},
+            {f"{prefix_norm}run/{k}": float(v) for k, v in reward_totals.items()},
+            {f"{prefix_norm}run/terms/{k}": float(v) for k, v in reward_term_summaries.items()},
+            {f"{prefix_norm}run/categories/{k}": float(v) for k, v in reward_category_summaries.items()},
         )
+
+    def _scope_parsing_fields(
+        self,
+        parsing_summaries: dict[str, float] | None,
+        parsing_category_summaries: dict[str, float] | None,
+    ) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+        """Apply fixed 'parsing/' prefix to parsing summary keys.
+
+        Unlike reward metrics which use the configurable scope_prefix, parsing
+        metrics always use a fixed 'parsing/' prefix for clarity.
+        """
+        if parsing_summaries is None and parsing_category_summaries is None:
+            return None, None
+        scoped_parsing = {f"parsing/{k}": float(v) for k, v in parsing_summaries.items()} if parsing_summaries else None
+        scoped_parsing_category = (
+            {f"parsing/categories/{k}": float(v) for k, v in parsing_category_summaries.items()}
+            if parsing_category_summaries
+            else None
+        )
+        return scoped_parsing, scoped_parsing_category
 
     def get_state(
         self,
@@ -882,14 +1190,18 @@ class RewardManager:
             - total_stats: serialized RunningStats for total rewards;
             - term_stats: dict of serialized RunningStats per term;
             - category_stats: dict of serialized RunningStats per category;
+            - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled);
             - step: current step counter (or None).
         """
-        return {
+        state: dict[str, typing.Any] = {
             "total_stats": self._total_stats.as_state(),
             "term_stats": {name: stats.as_state() for name, stats in self._term_stats.items()},
             "category_stats": {name: stats.as_state() for name, stats in self._category_stats.items()},
             "step": self._step,
         }
+        if self._parsing_stats is not None:
+            state["parsing_stats"] = self._parsing_stats.as_state()
+        return state
 
     def load_state(
         self,
@@ -898,7 +1210,8 @@ class RewardManager:
         """Restore state from checkpoint.
 
         Args:
-            state: Dictionary with keys: total_stats, term_stats, category_stats, step.
+            state: Dictionary with keys: total_stats, term_stats, category_stats, step,
+                and optionally parsing_stats.
 
         Raises:
             KeyError: If required keys are missing from state.
@@ -912,3 +1225,6 @@ class RewardManager:
         for name, cat_state in state["category_stats"].items():
             self._category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
         self._step = state["step"]
+        # restore parsing stats if present and parsing is enabled
+        if self._parsing_stats is not None and "parsing_stats" in state:
+            self._parsing_stats = reward_types.ParsingStatsAccumulator.from_state(state["parsing_stats"])

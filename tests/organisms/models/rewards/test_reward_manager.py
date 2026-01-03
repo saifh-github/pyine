@@ -460,14 +460,14 @@ class TestRewardManager:
         manager.finalize_run()
         assert len(logger_obj.runs) == 1
         run_entry = logger_obj.runs[0]
-        totals = run_entry["totals"]
-        term_summaries = run_entry["term_summaries"]
-        assert isinstance(totals, dict)
-        assert isinstance(term_summaries, dict)
+        reward_totals = run_entry["reward_totals"]
+        reward_term_summaries = run_entry["reward_term_summaries"]
+        assert isinstance(reward_totals, dict)
+        assert isinstance(reward_term_summaries, dict)
         # scoped totals: {scope_prefix}/run/{metric_key}
-        assert "reward/run/mean" in totals
+        assert "reward/run/mean" in reward_totals
         # scoped terms: {scope_prefix}/run/terms/{metric_key}
-        assert "reward/run/terms/parseable/mean" in term_summaries
+        assert "reward/run/terms/parseable/mean" in reward_term_summaries
 
     def test_term_config_returns_configured_spec(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -750,7 +750,7 @@ class TestCategoryWiseRewardTracking:
         manager.compute_output(ctx1, log=False)
         manager.compute_output(ctx2, log=False)
         manager.compute_output(ctx3, log=False)
-        metrics = manager.get_category_metrics()
+        metrics = manager.get_reward_category_metrics()
         # original: mean=(1.0 + 0.0) / 2 = 0.5, std=0.5, min=0.0, max=1.0
         # note: getters return bare keys (callers add prefixes)
         assert "code_type/original/mean" in metrics
@@ -789,9 +789,9 @@ class TestCategoryWiseRewardTracking:
             sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
         )
         manager.compute_output(ctx, log=False)
-        assert len(manager.get_category_metrics()) > 0
+        assert len(manager.get_reward_category_metrics()) > 0
         manager.reset_accumulators()
-        assert len(manager.get_category_metrics()) == 0
+        assert len(manager.get_reward_category_metrics()) == 0
 
     def test_category_tracking_disabled_without_config(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -815,7 +815,7 @@ class TestCategoryWiseRewardTracking:
         )
         manager.compute_output(ctx, log=False)
         # no categories accumulated when config is None
-        assert len(manager.get_category_metrics()) == 0
+        assert len(manager.get_reward_category_metrics()) == 0
 
     def test_set_key_prefix_delegates_to_logger(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
@@ -1035,6 +1035,28 @@ class TestPackageLevelExports:
         assert rewards.RewardOutput is pyine.organisms.models.rewards.core.types.RewardOutput
 
 
+def _deep_equal_with_nan(
+    val1: object,
+    val2: object,
+) -> bool:
+    """Compare two values, treating NaN == NaN as True."""
+    import math
+
+    if isinstance(val1, float) and isinstance(val2, float):
+        if math.isnan(val1) and math.isnan(val2):
+            return True
+        return val1 == val2
+    if isinstance(val1, dict) and isinstance(val2, dict):
+        if val1.keys() != val2.keys():
+            return False
+        return all(_deep_equal_with_nan(val1[k], val2[k]) for k in val1)
+    if isinstance(val1, (list, tuple)) and isinstance(val2, (list, tuple)):
+        if len(val1) != len(val2):
+            return False
+        return all(_deep_equal_with_nan(v1, v2) for v1, v2 in zip(val1, val2, strict=True))
+    return val1 == val2
+
+
 class TestRewardManagerState:
     def test_state_roundtrip(
         self,
@@ -1063,4 +1085,5 @@ class TestRewardManagerState:
         state = manager.get_state()
         restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         restored.load_state(state)
-        assert restored.get_state() == state
+        # use custom comparison to handle NaN values in parsing stats
+        assert _deep_equal_with_nan(restored.get_state(), state)

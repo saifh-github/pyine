@@ -431,11 +431,10 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         failure_count = skip_count + error_count
         failure_ratio = failure_count / total_count
         logger = getattr(self.reward_manager, "_logger", None)
-        if logger is not None and hasattr(logger, "log_run"):
-            logger.log_run(
-                totals={"failure_ratio": failure_ratio, "failure_count": float(failure_count)},
-                term_summaries={},
-                category_summaries={},
+        if logger is not None and hasattr(logger, "log_failures"):
+            logger.log_failures(
+                failure_ratio=failure_ratio,
+                failure_count=failure_count,
                 step=step,
             )
         self.reward_adapter.reset_failure_stats()

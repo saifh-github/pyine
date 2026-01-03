@@ -125,7 +125,7 @@ class LoggingConfig(reward_types.BaseConfig):
     log_terms: bool = True
     """Whether to include per-term weighted values in logs."""
     log_metrics: bool = True
-    """Whether to include term-emitted metrics in logs."""
+    """Whether to include term-emitted and parsing metrics in logs."""
     log_every_n_examples: pydantic.PositiveInt = 1
     """Log every N examples (frequency gate)."""
     scope_prefix: str = "reward/"

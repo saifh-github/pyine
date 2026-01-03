@@ -23,6 +23,7 @@ class InMemoryRewardLogger:
         """Create an in-memory logger with empty buffers."""
         self.samples: list[dict[str, object]] = []
         self.runs: list[dict[str, object]] = []
+        self.failures: list[dict[str, object]] = []
 
     def log(
         self,
@@ -47,18 +48,39 @@ class InMemoryRewardLogger:
     def log_run(
         self,
         *,
-        totals: collections.abc.Mapping[str, float],
-        term_summaries: collections.abc.Mapping[str, float],
-        category_summaries: collections.abc.Mapping[str, float],
+        reward_totals: collections.abc.Mapping[str, float],
+        reward_term_summaries: collections.abc.Mapping[str, float],
+        reward_category_summaries: collections.abc.Mapping[str, float],
+        parsing_summaries: collections.abc.Mapping[str, float] | None = None,
+        parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
     ) -> None:
         """Record a run-level logging event in memory."""
-        self.runs.append(
+        record: dict[str, object] = {
+            "step": step,
+            "reward_totals": dict(reward_totals),
+            "reward_term_summaries": dict(reward_term_summaries),
+            "reward_category_summaries": dict(reward_category_summaries),
+        }
+        if parsing_summaries is not None:
+            record["parsing_summaries"] = dict(parsing_summaries)
+        if parsing_category_summaries is not None:
+            record["parsing_category_summaries"] = dict(parsing_category_summaries)
+        self.runs.append(record)
+
+    def log_failures(
+        self,
+        *,
+        failure_ratio: float,
+        failure_count: int,
+        step: int | None = None,
+    ) -> None:
+        """Record a failure stats logging event in memory."""
+        self.failures.append(
             {
                 "step": step,
-                "totals": dict(totals),
-                "term_summaries": dict(term_summaries),
-                "category_summaries": dict(category_summaries),
+                "failure_ratio": failure_ratio,
+                "failure_count": failure_count,
             }
         )
 
@@ -164,20 +186,41 @@ class WandBRewardLogger:
     def log_run(
         self,
         *,
-        totals: collections.abc.Mapping[str, float],
-        term_summaries: collections.abc.Mapping[str, float],
-        category_summaries: collections.abc.Mapping[str, float],
+        reward_totals: collections.abc.Mapping[str, float],
+        reward_term_summaries: collections.abc.Mapping[str, float],
+        reward_category_summaries: collections.abc.Mapping[str, float],
+        parsing_summaries: collections.abc.Mapping[str, float] | None = None,
+        parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
     ) -> None:
         """Log a run-level summary payload to W&B."""
         payload_step = self._step if step is None else step
         payload: dict[str, float] = {}
-        payload.update({k: float(v) for k, v in totals.items()})
-        payload.update({k: float(v) for k, v in term_summaries.items()})
-        payload.update({k: float(v) for k, v in category_summaries.items()})
+        payload.update({k: float(v) for k, v in reward_totals.items()})
+        payload.update({k: float(v) for k, v in reward_term_summaries.items()})
+        payload.update({k: float(v) for k, v in reward_category_summaries.items()})
+        if parsing_summaries:
+            payload.update({k: float(v) for k, v in parsing_summaries.items()})
+        if parsing_category_summaries:
+            payload.update({k: float(v) for k, v in parsing_category_summaries.items()})
         self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
+
+    def log_failures(
+        self,
+        *,
+        failure_ratio: float,
+        failure_count: int,
+        step: int | None = None,
+    ) -> None:
+        """Log failure statistics to W&B under the failures/ prefix."""
+        payload_step = self._step if step is None else step
+        payload = {
+            "failures/failure_ratio": failure_ratio,
+            "failures/failure_count": float(failure_count),
+        }
+        self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
 
     def set_step(
         self,

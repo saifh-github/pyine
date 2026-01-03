@@ -122,14 +122,14 @@ def _worker_gather_summaries_gpu(rank: int, world_size: int, result_queue: mp.Qu
         assert logger is not None
         assert len(logger.runs) == 1
         run_entry = logger.runs[0]
-        totals = run_entry["totals"]
+        reward_totals = run_entry["reward_totals"]
         # expected: (2 samples from rank0 + 3 from rank1) = 5 total samples
         # all rewards are 1.0, so mean should be 1.0
-        assert "reward/run/sample_count" in totals
-        assert totals["reward/run/sample_count"] == 5.0
-        assert "reward/run/mean" in totals
-        assert totals["reward/run/mean"] == pytest.approx(1.0)
-        result_queue.put({"success": True, "totals": totals})
+        assert "reward/run/sample_count" in reward_totals
+        assert reward_totals["reward/run/sample_count"] == 5.0
+        assert "reward/run/mean" in reward_totals
+        assert reward_totals["reward/run/mean"] == pytest.approx(1.0)
+        result_queue.put({"success": True, "reward_totals": reward_totals})
     else:
         result_queue.put({"success": True})
     _cleanup_distributed()
@@ -213,8 +213,8 @@ def _worker_finalize_run_cpu(rank: int, world_size: int) -> None:
         assert len(logger.runs) == 1
         # should only see rank 0's stats (3 samples)
         run_entry = logger.runs[0]
-        totals = run_entry["totals"]
-        assert totals["reward/run/sample_count"] == 3.0
+        reward_totals = run_entry["reward_totals"]
+        assert reward_totals["reward/run/sample_count"] == 3.0
     _cleanup_distributed()
 
 
@@ -255,11 +255,11 @@ def _worker_mixed_logger_states_cpu(rank: int, world_size: int, result_queue: mp
         assert logger is not None
         assert len(logger.runs) == 1
         run_entry = logger.runs[0]
-        totals = run_entry["totals"]
+        reward_totals = run_entry["reward_totals"]
         # should aggregate stats from all ranks: 2 ranks * 4 samples = 8 total
         # note: scope_prefix="" means no prefix at all (not even /run/)
-        assert totals["sample_count"] == 8.0
-        assert totals["mean"] == pytest.approx(1.0)
+        assert reward_totals["sample_count"] == 8.0
+        assert reward_totals["mean"] == pytest.approx(1.0)
         result_queue.put({"rank": rank, "success": True})
     else:
         # non-main ranks should complete without error
@@ -293,7 +293,7 @@ class TestRewardManagerDistributedGPU:
         results = []
         while not result_queue.empty():
             results.append(result_queue.get())
-        rank0_result = next((r for r in results if "totals" in r), None)
+        rank0_result = next((r for r in results if "reward_totals" in r), None)
         assert rank0_result is not None
         assert rank0_result["success"]
 
