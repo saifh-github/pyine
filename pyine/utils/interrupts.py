@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import pathlib
 import signal
 import threading
 import time
@@ -14,9 +15,6 @@ import transformers
 
 import pyine.utils.distrib
 import pyine.utils.transformers
-
-if typing.TYPE_CHECKING:
-    import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -265,8 +263,11 @@ class GracefulShutdownCallback(transformers.TrainerCallback):
         """Writes checkpoint metadata after each checkpoint save."""
         if not pyine.utils.distrib.is_main_process():
             return control
-        # the callback should be called AFTER the creation of the checkpoint, so we know it should exist at this point
-        ckpt_dir_path = pyine.utils.transformers.get_checkpoint_folder_path(args, state)
+        # get checkpoint folder from kwargs (transformers 4.46+), fall back to utility
+        checkpoint_folder = kwargs.get("checkpoint_folder")
+        if checkpoint_folder is None:
+            checkpoint_folder = pyine.utils.transformers.get_checkpoint_folder_path(args, state)
+        ckpt_dir_path = pathlib.Path(checkpoint_folder)
         if not ckpt_dir_path.is_dir():
             raise RuntimeError(f"checkpoint directory does not exist: {ckpt_dir_path}")
         self._metadata_writer(ckpt_dir_path, state)
