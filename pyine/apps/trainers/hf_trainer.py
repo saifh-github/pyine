@@ -172,6 +172,7 @@ def rl_train(
     logger.info("instantiating model and tokenizer...")
     checkpoint_path = resume_artifacts.checkpoint_path if resume_artifacts else None
     model = config.get_model(checkpoint_path=checkpoint_path)
+    tokenizer = config.get_tokenizer(checkpoint_path=checkpoint_path)
 
     # 2. Prepare RL dataset from datamodule
     # Use the datamodule's native RL dataset method which reuses existing infrastructure
@@ -213,6 +214,7 @@ def rl_train(
     reward_manager = pyine.organisms.models.rewards.core.manager.RewardManager(
         config.reward_manager_config,
         logger=reward_logger,
+        tokenizer=tokenizer,
     )
     reward_adapter = pyine.organisms.models.rewards.trl.TRLRewardAdapter(
         manager=reward_manager,

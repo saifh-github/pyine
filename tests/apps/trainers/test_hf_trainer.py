@@ -1254,6 +1254,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
     """Test that rl_train correctly passes checkpoint_path to model loading."""
     # track calls to config.get_model and config.get_tokenizer
     get_model_calls: list[dict[str, typing.Any]] = []
+    get_tokenizer_calls: list[dict[str, typing.Any]] = []
     # create a mock model
     mock_model = mocker.MagicMock()
     mock_model.config = mocker.MagicMock()
@@ -1262,6 +1263,12 @@ def test_rl_train_uses_resume_artifacts_correctly(
     def mock_get_model(checkpoint_path: pathlib.Path | None = None) -> typing.Any:
         get_model_calls.append({"checkpoint_path": checkpoint_path})
         return mock_model
+
+    mock_tokenizer = mocker.MagicMock()
+
+    def mock_get_tokenizer(checkpoint_path: pathlib.Path | None = None) -> typing.Any:
+        get_tokenizer_calls.append({"checkpoint_path": checkpoint_path})
+        return mock_tokenizer
 
     # create mock reward manager and adapter
     mock_reward_manager = mocker.MagicMock()
@@ -1351,10 +1358,12 @@ def test_rl_train_uses_resume_artifacts_correctly(
         ),
         reward_manager_config=reward_manager_config,
         get_model=mock_get_model,
+        get_tokenizer=mock_get_tokenizer,
     )
 
     # test case 1: without resume_artifacts, checkpoint_path should be None
     get_model_calls.clear()
+    get_tokenizer_calls.clear()
     train_kwargs_received.clear()
     trainer = pyine.apps.trainers.hf_trainer.rl_train(
         datamodule=mock_datamodule,
@@ -1365,6 +1374,8 @@ def test_rl_train_uses_resume_artifacts_correctly(
     )
     assert len(get_model_calls) == 1
     assert get_model_calls[0]["checkpoint_path"] is None
+    assert len(get_tokenizer_calls) == 1
+    assert get_tokenizer_calls[0]["checkpoint_path"] is None
     assert len(train_kwargs_received) == 1
     assert "resume_from_checkpoint" not in train_kwargs_received[0]
     assert any(
@@ -1374,6 +1385,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
 
     # test case 2: with resume_artifacts, checkpoint_path should be passed
     get_model_calls.clear()
+    get_tokenizer_calls.clear()
     train_kwargs_received.clear()
     resume_artifacts = types.SimpleNamespace(checkpoint_path=checkpoint_dir)
     trainer = pyine.apps.trainers.hf_trainer.rl_train(
@@ -1385,6 +1397,8 @@ def test_rl_train_uses_resume_artifacts_correctly(
     )
     assert len(get_model_calls) == 1
     assert get_model_calls[0]["checkpoint_path"] == checkpoint_dir
+    assert len(get_tokenizer_calls) == 1
+    assert get_tokenizer_calls[0]["checkpoint_path"] == checkpoint_dir
     assert len(train_kwargs_received) == 1
     assert "resume_from_checkpoint" in train_kwargs_received[0]
     assert str(train_kwargs_received[0]["resume_from_checkpoint"]) == str(checkpoint_dir)
