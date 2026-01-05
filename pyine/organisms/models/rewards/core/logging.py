@@ -8,6 +8,8 @@ import collections.abc
 import json
 import typing
 
+import wandb
+
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.parsing as parsing_utils
@@ -33,6 +35,8 @@ class InMemoryRewardLogger:
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
         step: int | None = None,
+        prompt: str | None = None,
+        model_output: str | None = None,
     ) -> None:
         """Record a per-sample logging event in memory."""
         record: dict[str, object] = {
@@ -40,6 +44,8 @@ class InMemoryRewardLogger:
             "step": step,
             "terms": dict(terms),
             "metrics": dict(metrics),
+            "prompt": prompt,
+            "model_output": model_output,
         }
         if total is not None:
             record["total"] = float(total)
@@ -88,8 +94,7 @@ class InMemoryRewardLogger:
 class WandBRewardLogger:
     """RewardLogger implementation backed by a W&B run.
 
-    This logger intentionally avoids importing `wandb` at import time. It expects a `wandb.Run`-like
-    object with a `.log(dict, step=...)` method.
+    Expects a `wandb.Run`-like object with a `.log(dict)` method.
     """
 
     def __init__(
@@ -103,6 +108,7 @@ class WandBRewardLogger:
         table_key: str | None = None,
         table_flush_every_n_logs: int = 100,
         table_max_rows: int = 1000,
+        step_metric_key: str = "train/global_step",
     ) -> None:
         """Create a WandB-backed logger.
 
@@ -111,23 +117,26 @@ class WandBRewardLogger:
             scope_prefix: Normalized prefix for reward keys (e.g., "reward/"); used to derive
                 total_key and table_key.
             key_prefix: Optional extra prefix applied to all keys emitted to W&B.
-            step: Optional fixed W&B step to use for all logs.
+            step: Optional step value logged under `step_metric_key` (not WandB internal step).
             log_tables: Whether to log a W&B table with per-sample reward breakdowns.
             table_key: W&B key for the rewards table (defaults to `<scope_prefix>rewards_table`).
             table_flush_every_n_logs: Flush the table every N logger calls.
             table_max_rows: Maximum number of buffered rows before forcing a flush.
+            step_metric_key: Key used for the step metric in logged payloads. Defaults to
+                "train/global_step" to align with HuggingFace Trainer's WandbCallback.
         """
         self._wandb_run = wandb_run
         self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
-        prefix_norm = parsing_utils.normalize_path_prefix(scope_prefix)
-        self._total_key = f"{prefix_norm}total" if prefix_norm else "total"
+        self._scope_prefix = parsing_utils.normalize_path_prefix(scope_prefix)
+        self._total_key = f"{self._scope_prefix}total" if self._scope_prefix else "total"
         self._step = step
         self._log_tables = log_tables
-        self._table_key = table_key if table_key is not None else f"{prefix_norm}rewards_table"
+        self._table_key = table_key if table_key is not None else f"{self._scope_prefix}rewards_table"
         self._table_flush_every_n_logs = int(table_flush_every_n_logs)
         self._table_max_rows = int(table_max_rows)
         self._table_log_count = 0
         self._table_rows: list[dict[str, object]] = []
+        self._step_metric_key = step_metric_key
 
     def _prefix_key(
         self,
@@ -155,6 +164,8 @@ class WandBRewardLogger:
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
         step: int | None = None,
+        prompt: str | None = None,
+        model_output: str | None = None,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
         payload_step = self._step if step is None else step
@@ -163,7 +174,10 @@ class WandBRewardLogger:
             payload[self._total_key] = float(total)
         payload.update({k: float(v) for k, v in terms.items()})
         payload.update(dict(metrics))
-        self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
+        prefixed = self._prefix_payload(payload)
+        if payload_step is not None:
+            prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
+        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self._table_log_count += 1
             prefixed_terms = self._prefix_payload(dict(terms))
@@ -172,6 +186,8 @@ class WandBRewardLogger:
                 {
                     "sample_id": sample_id,
                     "step": payload_step,
+                    "prompt": prompt,
+                    "model_output": model_output,
                     "total": total,  # may be None
                     "terms_json": json.dumps(prefixed_terms, sort_keys=True),
                     "metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
@@ -203,7 +219,10 @@ class WandBRewardLogger:
             payload.update({k: float(v) for k, v in parsing_summaries.items()})
         if parsing_category_summaries:
             payload.update({k: float(v) for k, v in parsing_category_summaries.items()})
-        self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
+        prefixed: dict[str, object] = self._prefix_payload(payload)
+        if payload_step is not None:
+            prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
+        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
 
@@ -216,17 +235,20 @@ class WandBRewardLogger:
     ) -> None:
         """Log failure statistics to W&B under the failures/ prefix."""
         payload_step = self._step if step is None else step
-        payload = {
+        payload: dict[str, float] = {
             "failures/failure_ratio": failure_ratio,
             "failures/failure_count": float(failure_count),
         }
-        self._wandb_run.log(self._prefix_payload(payload), step=payload_step)  # type: ignore[reportUnknownMemberType]
+        prefixed: dict[str, object] = self._prefix_payload(payload)
+        if payload_step is not None:
+            prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
+        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
 
     def set_step(
         self,
         step: int | None,
     ) -> None:
-        """Set a default W&B step for subsequent logs."""
+        """Set a default step value for subsequent logs (logged under `step_metric_key`)."""
         self._step = step
 
     def set_key_prefix(
@@ -249,21 +271,24 @@ class WandBRewardLogger:
         """Flush buffered table rows to W&B (no-op if table logging is disabled)."""
         if not self._log_tables or not self._table_rows:
             return
-        import wandb
-
         table = wandb.Table(
-            columns=["sample_id", "step", "total", "terms_json", "metrics_json"],
+            columns=["sample_id", "step", "prompt", "model_output", "total", "terms_json", "metrics_json"],
         )
         table_obj = typing.cast("typing.Any", table)
         for row in self._table_rows:
             table_obj.add_data(
                 row["sample_id"],
                 row["step"],
+                row["prompt"],
+                row["model_output"],
                 row["total"],
                 row["terms_json"],
                 row["metrics_json"],
             )
-        self._wandb_run.log({self._prefix_key(self._table_key): table}, step=step)  # type: ignore[reportUnknownMemberType]
+        payload: dict[str, object] = {self._prefix_key(self._table_key): table}
+        if step is not None:
+            payload[self._step_metric_key] = step
+        self._wandb_run.log(payload)  # type: ignore[reportUnknownMemberType]
         self._table_rows.clear()
 
 
@@ -281,7 +306,7 @@ def make_wandb_reward_logger(
     Args:
         wandb_run: A `wandb.Run`-like object that supports `.log(...)`.
         logging_config: Reward logging configuration (notably `scope_prefix` and `wandb_key_prefix`).
-        step: Optional fixed W&B step to use for all logs.
+        step: Optional step value logged under `step_metric_key` (not WandB internal step).
 
     Returns:
         A WandB-backed reward logger with total logged under `<scope_prefix>/total`.
@@ -301,4 +326,5 @@ def make_wandb_reward_logger(
         table_key=table_key,
         table_flush_every_n_logs=int(logging_config.table_flush_every_n_logs),
         table_max_rows=int(logging_config.table_max_rows),
+        step_metric_key=logging_config.step_metric_key,
     )

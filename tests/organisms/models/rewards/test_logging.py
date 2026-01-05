@@ -134,11 +134,11 @@ class TestMakeWandBRewardLogger:
 
 class TestWandBRewardLogger:
     def test_log_calls_wandb_run_log(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)  # default scope_prefix="reward/"
@@ -150,18 +150,18 @@ class TestWandBRewardLogger:
             step=10,
         )
         assert len(logged_payloads) == 1
-        payload, step = logged_payloads[0]
-        assert step == 10
+        payload = logged_payloads[0]
+        assert payload["train/global_step"] == 10
         assert payload["reward/total"] == 1.5
         assert payload["t1"] == 1.0
         assert payload["m1"] is True
 
     def test_log_with_key_prefix(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(
@@ -169,16 +169,16 @@ class TestWandBRewardLogger:
             key_prefix="exp/",
         )
         logger.log("s1", total=1.0, terms={"t1": 0.5}, metrics={}, step=1)
-        payload, _ = logged_payloads[0]
+        payload = logged_payloads[0]
         assert "exp/reward/total" in payload
         assert "exp/t1" in payload
 
     def test_log_run_calls_wandb_run_log(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
@@ -189,64 +189,64 @@ class TestWandBRewardLogger:
             step=50,
         )
         assert len(logged_payloads) == 1
-        payload, step = logged_payloads[0]
-        assert step == 50
+        payload = logged_payloads[0]
+        assert payload["train/global_step"] == 50
         assert payload["count"] == 100.0
         assert payload["mean"] == 0.5
         assert payload["t1"] == 0.3
         assert payload["cat1"] == 0.8
 
     def test_set_step_updates_default_step(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="")
         logger.set_step(42)
         logger.log("s1", total=1.0, terms={}, metrics={})
-        assert logged_payloads[0][1] == 42
+        assert logged_payloads[0]["train/global_step"] == 42
 
     def test_explicit_step_overrides_default(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="", step=100)
         logger.log("s1", total=1.0, terms={}, metrics={}, step=200)
-        assert logged_payloads[0][1] == 200
+        assert logged_payloads[0]["train/global_step"] == 200  # explicit step overrides default
 
     def test_log_failures_calls_wandb_run_log(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
         logger.log_failures(failure_ratio=0.25, failure_count=5, step=10)
         assert len(logged_payloads) == 1
-        payload, step = logged_payloads[0]
-        assert step == 10
+        payload = logged_payloads[0]
+        assert payload["train/global_step"] == 10
         assert payload["failures/failure_ratio"] == 0.25
         assert payload["failures/failure_count"] == 5.0
 
     def test_log_failures_with_key_prefix(self) -> None:
-        logged_payloads: list[tuple[dict, int | None]] = []
+        logged_payloads: list[dict] = []
 
         class MockWandBRun:
-            def log(self, payload: dict, step: int | None = None) -> None:
-                logged_payloads.append((dict(payload), step))
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run, key_prefix="train/")
         logger.log_failures(failure_ratio=0.1, failure_count=2, step=5)
-        payload, _ = logged_payloads[0]
+        payload = logged_payloads[0]
         assert "train/failures/failure_ratio" in payload
         assert "train/failures/failure_count" in payload

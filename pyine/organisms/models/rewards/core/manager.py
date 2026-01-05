@@ -1261,7 +1261,15 @@ class RewardManager:
                 categories = self._category_extractor.extract_categories(sample_data_dict)
                 for category in categories:
                     scoped_metrics[f"categories/{category}"] = True
-        self._logger.log(sample_id, total=total_to_log, terms=scoped_terms, metrics=scoped_metrics, step=step_to_use)
+        self._logger.log(
+            sample_id,
+            total=total_to_log,
+            terms=scoped_terms,
+            metrics=scoped_metrics,
+            step=step_to_use,
+            prompt=sample_ctx.prompt,
+            model_output=sample_ctx.model_output,
+        )
 
     @staticmethod
     def _is_main_process() -> bool:

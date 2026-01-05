@@ -156,6 +156,14 @@ class LoggingConfig(reward_types.BaseConfig):
     table_max_rows: pydantic.PositiveInt = 1000
     """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
 
+    step_metric_key: str = "train/global_step"
+    """Key used for the step metric in WandB logging.
+
+    Defaults to "train/global_step" to align with HuggingFace Trainer's WandbCallback, which calls
+    `wandb.define_metric("*", step_metric="train/global_step")`. Change this if using a different
+    trainer or custom step tracking.
+    """
+
     category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = None
     """Configuration for extracting categories from sample data for category-wise reward logging.
 

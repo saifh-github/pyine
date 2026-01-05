@@ -461,13 +461,15 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Flush train stats, switch to eval prefix, and set logging step during evaluation."""
+        """Flush train stats, switch to eval prefix, and clear step during evaluation."""
         if self._in_eval is not True:
             # flush train stats before switching to eval (flush_stats resets accumulators)
             self.reward_manager.flush_stats()
             self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
             self._in_eval = True
-        self.reward_manager.set_step(state.global_step)
+        # clear step for per-sample eval logs; global_step doesn't change during eval, so logging
+        # multiple samples at the same step would cause WandB to overwrite scalar metrics
+        self.reward_manager.set_step(None)
 
     @typing.override
     def on_evaluate(
@@ -482,8 +484,9 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         # if eval had zero samples, _in_eval stays False and we skip flushing to avoid
         # logging train stats at the eval boundary under a misleading context
         if self._in_eval is True:
-            self._log_failure_stats(step=None)
-            self.reward_manager.flush_stats(step=None)
+            # anchor eval summary at current global_step so it aligns with training metrics
+            self._log_failure_stats(step=state.global_step)
+            self.reward_manager.flush_stats(step=state.global_step)
         self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
         self._in_eval = False  # evaluation done, switch back right away
 

@@ -485,6 +485,8 @@ class RewardLogger(typing.Protocol):
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, MetricValue],
         step: int | None = None,
+        prompt: str | None = None,
+        model_output: str | None = None,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
 
@@ -495,6 +497,8 @@ class RewardLogger(typing.Protocol):
             metrics: Per-sample metrics including term-emitted metrics, parsing metrics
                 (under `parsing/*`), and category labels (under `categories/*`).
             step: Optional logging step.
+            prompt: Optional prompt text for table logging.
+            model_output: Optional raw model output for table logging.
         """
         ...
 

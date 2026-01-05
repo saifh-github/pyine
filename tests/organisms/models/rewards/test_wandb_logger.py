@@ -1,6 +1,8 @@
+import json
 import typing
 
 import pytest
+import pytest_mock
 
 import pyine.organisms.models.rewards.core.logging as reward_logging
 
@@ -9,18 +11,8 @@ class _FakeWandBRun:
     def __init__(self) -> None:
         self.logged: list[dict[str, object]] = []
 
-    def log(
-        self,
-        payload: dict[str, object],
-        *,
-        step: int | None = None,
-    ) -> None:
-        self.logged.append(
-            {
-                "payload": dict(payload),
-                "step": step,
-            }
-        )
+    def log(self, payload: dict[str, object]) -> None:
+        self.logged.append(dict(payload))
 
 
 class TestWandBRewardLogger:
@@ -38,14 +30,24 @@ class TestWandBRewardLogger:
             step=7,
         )
         assert len(fake_run.logged) == 1
-        entry = fake_run.logged[0]
-        assert entry["step"] == 7
-        payload = typing.cast("dict[str, object]", entry["payload"])
+        payload = fake_run.logged[0]
+        assert payload["train/global_step"] == 7
         assert payload["train/reward/total"] == pytest.approx(1.0)
         assert payload["train/reward/terms/t"] == pytest.approx(0.25)
         assert payload["train/reward/metrics/m"] == 2
 
-    def test_key_prefix_applies_to_table_key_and_json(self) -> None:
+    def test_key_prefix_applies_to_table_key_and_json(self, mocker: pytest_mock.MockerFixture) -> None:
+        # capture table rows via add_data calls
+        added_rows: list[tuple] = []
+
+        class FakeTable:
+            def __init__(self, columns: list[str]) -> None:
+                self.columns = columns
+
+            def add_data(self, *args: object) -> None:
+                added_rows.append(args)
+
+        mocker.patch.object(reward_logging.wandb, "Table", FakeTable)
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(
             fake_run,
@@ -60,15 +62,33 @@ class TestWandBRewardLogger:
             terms={"reward/terms/t": 0.25},
             metrics={"reward/metrics/m": 2},
             step=7,
+            prompt="test prompt",
+            model_output="test output",
         )
         assert len(fake_run.logged) == 2
-        table_payload = typing.cast("dict[str, object]", fake_run.logged[1]["payload"])
-        assert list(table_payload.keys()) == ["train/reward/rewards_table"]
-        table = typing.cast("typing.Any", table_payload["train/reward/rewards_table"])
-        assert table.columns == ["sample_id", "step", "total", "terms_json", "metrics_json"]
-        assert len(table.data) == 1
-        assert "\"train/reward/terms/t\"" in table.data[0][3]
-        assert "\"train/reward/metrics/m\"" in table.data[0][4]
+        table_payload = fake_run.logged[1]
+        # verify table key is prefixed
+        assert "train/reward/rewards_table" in table_payload
+        # verify table was created with correct columns
+        table_obj = table_payload["train/reward/rewards_table"]
+        expected_cols = ["sample_id", "step", "prompt", "model_output", "total", "terms_json", "metrics_json"]
+        assert table_obj.columns == expected_cols
+        # verify row content
+        assert len(added_rows) == 1
+        row = added_rows[0]
+        assert row[0] == "s1"  # sample_id
+        assert row[1] == 7  # step
+        assert row[2] == "test prompt"  # prompt
+        assert row[3] == "test output"  # model_output
+        assert row[4] == 1.0  # total
+        # verify terms_json contains prefixed keys
+        terms_json = json.loads(typing.cast("str", row[5]))
+        assert "train/reward/terms/t" in terms_json
+        assert terms_json["train/reward/terms/t"] == 0.25
+        # verify metrics_json contains prefixed keys
+        metrics_json = json.loads(typing.cast("str", row[6]))
+        assert "train/reward/metrics/m" in metrics_json
+        assert metrics_json["train/reward/metrics/m"] == 2
 
     def test_set_key_prefix_switches_prefix_dynamically(self) -> None:
         fake_run = _FakeWandBRun()
@@ -96,11 +116,11 @@ class TestWandBRewardLogger:
         )
         assert len(fake_run.logged) == 2
         # verify first entry has train prefix
-        payload1 = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        payload1 = typing.cast("dict[str, object]", fake_run.logged[0])
         assert "train/reward/total" in payload1
         assert payload1["train/reward/total"] == pytest.approx(1.0)
         # verify second entry has valid prefix
-        payload2 = typing.cast("dict[str, object]", fake_run.logged[1]["payload"])
+        payload2 = typing.cast("dict[str, object]", fake_run.logged[1])
         assert "valid/reward/total" in payload2
         assert "train/reward/total" not in payload2
         assert payload2["valid/reward/total"] == pytest.approx(2.0)
@@ -120,7 +140,7 @@ class TestWandBRewardLogger:
             metrics={},
             step=1,
         )
-        payload = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        payload = typing.cast("dict[str, object]", fake_run.logged[0])
         # should have normalized prefix with trailing slash applied
         assert "eval/reward/total" in payload
 
@@ -139,7 +159,7 @@ class TestWandBRewardLogger:
             metrics={},
             step=1,
         )
-        payload = typing.cast("dict[str, object]", fake_run.logged[0]["payload"])
+        payload = typing.cast("dict[str, object]", fake_run.logged[0])
         # should have no key_prefix, just scope_prefix
         assert "reward/total" in payload
         assert "train/reward/total" not in payload
