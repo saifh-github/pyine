@@ -4,11 +4,15 @@ These tests are split from test_reward_manager.py for maintainability.
 """
 
 import pytest
+import tokenizers
+import transformers
 
 import pyine.evals.utils
 import pyine.organisms.models.rewards.core.configs
 import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
+import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.stats as stats_utils
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -50,7 +54,7 @@ class TestParsingStatsLogging:
         assert "parsing_summaries" not in logger_obj.runs[0]
 
     def test_parsing_stats_track_lengths(self) -> None:
-        """Verify output_length, reasoning_length, answer_length accumulate correctly."""
+        """Verify output_length_chars, reasoning_length_chars, answer_length_chars accumulate correctly."""
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
@@ -73,10 +77,10 @@ class TestParsingStatsLogging:
         manager.compute_output(ctx1, log=False)
         metrics = manager.get_parsing_metrics()
         assert metrics["sample_count"] == 1.0
-        assert metrics["output_length/mean"] > 0
+        assert metrics["output_length_chars/mean"] > 0
         # reasoning was present
-        assert metrics["reasoning_length/mean"] > 0
-        assert metrics["answer_length/mean"] > 0
+        assert metrics["reasoning_length_chars/mean"] > 0
+        assert metrics["answer_length_chars/mean"] > 0
 
     def test_parsing_stats_track_missing_counts(self) -> None:
         """Verify missing_reasoning_ratio and missing_answer_ratio are computed correctly."""
@@ -188,7 +192,7 @@ class TestParsingStatsLogging:
         parsing_summaries = run_entry["parsing_summaries"]
         assert isinstance(parsing_summaries, dict)
         # keys should have parsing/ prefix
-        assert "parsing/output_length/mean" in parsing_summaries
+        assert "parsing/output_length_chars/mean" in parsing_summaries
         assert "parsing/sample_count" in parsing_summaries
 
     def test_parsing_stats_checkpoint_roundtrip(self) -> None:
@@ -249,7 +253,9 @@ class TestParsingStatsLogging:
         restored_category_metrics = restored.get_parsing_category_metrics()
         # verify global stats
         assert restored_metrics["sample_count"] == original_metrics["sample_count"]
-        assert restored_metrics["output_length/mean"] == pytest.approx(original_metrics["output_length/mean"])
+        assert restored_metrics["output_length_chars/mean"] == pytest.approx(
+            original_metrics["output_length_chars/mean"]
+        )
         assert restored_metrics["missing_reasoning_ratio"] == pytest.approx(original_metrics["missing_reasoning_ratio"])
         assert restored_metrics["malformed_ratio"] == pytest.approx(original_metrics["malformed_ratio"])
         # verify category stats
@@ -312,7 +318,7 @@ class TestParsingStatsLogging:
         metrics = sample_entry["metrics"]
         assert isinstance(metrics, dict)
         # per-sample parsing metrics should be present
-        assert "parsing/output_length" in metrics
+        assert "parsing/output_length_chars" in metrics
         assert "parsing/has_reasoning" in metrics
         assert "parsing/has_answer" in metrics
         assert metrics["parsing/has_reasoning"] is True
@@ -425,7 +431,7 @@ class TestParsingStatsIntegration:
         # verify per-sample metrics were logged (separate parsing/ prefix)
         assert len(logger_obj.samples) == 3
         sample1_metrics = logger_obj.samples[0]["metrics"]
-        assert "parsing/output_length" in sample1_metrics
+        assert "parsing/output_length_chars" in sample1_metrics
         assert "parsing/has_reasoning" in sample1_metrics
         assert "parsing/has_answer" in sample1_metrics
         assert sample1_metrics["parsing/has_reasoning"] is True
@@ -438,7 +444,7 @@ class TestParsingStatsIntegration:
         # verify run-level parsing metrics before flush
         parsing_metrics = manager.get_parsing_metrics()
         assert parsing_metrics["sample_count"] == 3.0
-        assert parsing_metrics["output_length/mean"] > 0
+        assert parsing_metrics["output_length_chars/mean"] > 0
         assert "missing_reasoning_ratio" in parsing_metrics
         assert "missing_answer_ratio" in parsing_metrics
         # 2 of 3 missing reasoning (samples 2 and 3)
@@ -452,7 +458,7 @@ class TestParsingStatsIntegration:
         assert "parsing_summaries" in run_entry
         parsing_summaries = run_entry["parsing_summaries"]
         assert isinstance(parsing_summaries, dict)
-        assert "parsing/output_length/mean" in parsing_summaries
+        assert "parsing/output_length_chars/mean" in parsing_summaries
         assert "parsing/missing_reasoning_ratio" in parsing_summaries
         # verify reset after flush
         assert manager.get_parsing_metrics() == {}
@@ -592,3 +598,207 @@ class TestParsingStatsIntegration:
         assert isinstance(parsing_category_summaries, dict)
         # keys should have parsing/categories/ prefix
         assert "parsing/categories/code_type/original/sample_count" in parsing_category_summaries
+
+
+class TestTokenLengthTracking:
+    """Tests for token-based length tracking functionality."""
+
+    def test_token_tracking_disabled_by_default(self) -> None:
+        """Verify token lengths are not tracked when track_token_lengths=False (default)."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
+                fallback_policy="none",
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<reasoning>think</reasoning><final>answer</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute_output(ctx, log=False)
+        metrics = manager.get_parsing_metrics()
+        # char metrics present, token metrics absent
+        assert "output_length_chars/mean" in metrics
+        assert "output_length_tokens/mean" not in metrics
+
+    def test_token_tracking_with_openai_tokenizer(self) -> None:
+        """Verify token lengths are tracked when using OpenAI tiktoken."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
+                fallback_policy="none",
+                track_token_lengths=True,
+                openai_tokenizer_model="gpt-4",
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<reasoning>think hard</reasoning><final>answer</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute_output(ctx, log=False)
+        metrics = manager.get_parsing_metrics()
+        # both char and token metrics should be present
+        assert "output_length_chars/mean" in metrics
+        assert "output_length_tokens/mean" in metrics
+        assert "reasoning_length_chars/mean" in metrics
+        assert "reasoning_length_tokens/mean" in metrics
+        assert "answer_length_chars/mean" in metrics
+        assert "answer_length_tokens/mean" in metrics
+        # token counts should be less than char counts for normal text
+        assert metrics["output_length_tokens/mean"] < metrics["output_length_chars/mean"]
+
+    def test_token_tracking_with_hf_tokenizer(self) -> None:
+        """Verify token lengths are tracked when using HuggingFace tokenizer."""
+        # build a tiny local tokenizer that won't need downloads
+        hf_tokenizer = tokenizers.Tokenizer(tokenizers.models.WordLevel(unk_token="[UNK]"))  # noqa: S106
+        hf_tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()  # type: ignore[assignment]
+        # train on some tokens
+        trainer = tokenizers.trainers.WordLevelTrainer(
+            special_tokens=["[UNK]"],
+            vocab_size=100,
+        )
+        hf_tokenizer.train_from_iterator(
+            ["think hard answer final reasoning"],
+            trainer=trainer,
+        )
+        # wrap in PreTrainedTokenizerFast
+        tokenizer = transformers.PreTrainedTokenizerFast(tokenizer_object=hf_tokenizer)
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
+                fallback_policy="none",
+                track_token_lengths=True,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, tokenizer=tokenizer)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<reasoning>think hard</reasoning><final>answer</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute_output(ctx, log=False)
+        metrics = manager.get_parsing_metrics()
+        # both char and token metrics should be present
+        assert "output_length_chars/mean" in metrics
+        assert "output_length_tokens/mean" in metrics
+        # token count should be > 0
+        assert metrics["output_length_tokens/mean"] > 0
+
+    def test_token_tracking_requires_tokenizer_config(self) -> None:
+        """Verify ValueError raised when track_token_lengths=True but no tokenizer available."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
+                fallback_policy="none",
+                track_token_lengths=True,  # enabled
+                openai_tokenizer_model=None,  # no model set
+            ),
+        )
+        with pytest.raises(ValueError, match="track_token_lengths=True requires"):
+            pyine.organisms.models.rewards.core.manager.RewardManager(config)  # no tokenizer arg
+
+    def test_per_sample_token_metrics_logged(self) -> None:
+        """Verify per-sample token length metrics are logged when token tracking enabled."""
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
+                fallback_policy="none",
+                track_token_lengths=True,
+                openai_tokenizer_model="gpt-4",
+            ),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_examples=1,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<reasoning>think</reasoning><final>answer</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute_output(ctx)
+        assert len(logger_obj.samples) == 1
+        sample_metrics = logger_obj.samples[0]["metrics"]
+        # both char and token metrics should be present in per-sample log
+        assert "parsing/output_length_chars" in sample_metrics
+        assert "parsing/output_length_tokens" in sample_metrics
+        assert "parsing/reasoning_length_chars" in sample_metrics
+        assert "parsing/reasoning_length_tokens" in sample_metrics
+
+
+class TestParsingStatsAccumulatorMerge:
+    """Tests for ParsingStatsAccumulator.merge() with token stats."""
+
+    def test_merge_token_stats(self) -> None:
+        """Verify merge() correctly combines token length stats."""
+        acc1 = reward_types.ParsingStatsAccumulator.new()
+        acc2 = reward_types.ParsingStatsAccumulator.new()
+        # add some data to both accumulators
+        acc1.output_length_chars.update(100.0)
+        acc1.output_length_tokens.update(20.0)
+        acc1.total_count = 1
+        acc2.output_length_chars.update(200.0)
+        acc2.output_length_tokens.update(40.0)
+        acc2.total_count = 1
+        # merge
+        acc1.merge(acc2)
+        # verify merged stats
+        assert acc1.total_count == 2
+        assert acc1.output_length_chars.count == 2
+        assert acc1.output_length_tokens.count == 2
+        assert acc1.output_length_chars.mean() == pytest.approx(150.0)
+        assert acc1.output_length_tokens.mean() == pytest.approx(30.0)
+
+    def test_merge_category_token_stats(self) -> None:
+        """Verify merge() correctly combines category-wise token length stats."""
+        acc1 = reward_types.ParsingStatsAccumulator.new()
+        acc2 = reward_types.ParsingStatsAccumulator.new()
+        # add category stats to acc1
+        acc1.category_output_length_tokens["cat_a"] = stats_utils.RunningStats()
+        acc1.category_output_length_tokens["cat_a"].update(10.0)
+        # add category stats to acc2 with same category
+        acc2.category_output_length_tokens["cat_a"] = stats_utils.RunningStats()
+        acc2.category_output_length_tokens["cat_a"].update(30.0)
+        # add new category only in acc2
+        acc2.category_output_length_tokens["cat_b"] = stats_utils.RunningStats()
+        acc2.category_output_length_tokens["cat_b"].update(50.0)
+        # merge
+        acc1.merge(acc2)
+        # verify merged stats
+        assert "cat_a" in acc1.category_output_length_tokens
+        assert "cat_b" in acc1.category_output_length_tokens
+        assert acc1.category_output_length_tokens["cat_a"].count == 2
+        assert acc1.category_output_length_tokens["cat_a"].mean() == pytest.approx(20.0)
+        assert acc1.category_output_length_tokens["cat_b"].count == 1
+        assert acc1.category_output_length_tokens["cat_b"].mean() == pytest.approx(50.0)

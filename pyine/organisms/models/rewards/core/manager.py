@@ -6,6 +6,8 @@ import math
 import typing
 import warnings
 
+import transformers
+
 import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
@@ -16,6 +18,7 @@ import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.distrib
 import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
+import pyine.utils.tokenizers
 
 _MAX_METRIC_STRING_LENGTH = 500
 """Threshold for string metric length warnings. Strings exceeding this emit a warning."""
@@ -136,6 +139,7 @@ class RewardManager:
         parser: reward_types.OutputParser | None = None,
         logger: reward_types.RewardLogger | None = None,
         registry: reward_registry.RewardRegistry | None = None,
+        tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast | None = None,
     ) -> None:
         """Create a RewardManager from configuration.
 
@@ -144,11 +148,15 @@ class RewardManager:
             parser: Optional parser override. When provided, takes precedence over `config.parsing`.
             logger: Optional logger implementation for reward logging.
             registry: Optional registry snapshot to resolve term factories (defaults to global registry).
+            tokenizer: Optional HuggingFace tokenizer for token length tracking. When provided and
+                parsing.track_token_lengths=True, will be used for counting tokens. If not provided
+                but track_token_lengths=True, falls back to tiktoken with parsing.openai_tokenizer_model.
 
         Raises:
             KeyError: If any term spec references an unknown registry type.
             TypeError: If a term factory has an incompatible signature.
-            ValueError: If config validation fails (e.g., duplicate term names) or term construction fails.
+            ValueError: If config validation fails (e.g., duplicate term names) or term construction fails,
+                or if track_token_lengths=True but no tokenizer source is available.
         """
         self._config = config
         self._registry = reward_registry.get_global_registry() if registry is None else registry
@@ -208,7 +216,49 @@ class RewardManager:
         self._parsing_stats: reward_types.ParsingStatsAccumulator | None = (
             reward_types.ParsingStatsAccumulator.new() if config.parsing is not None else None
         )
+        self._token_counter = self._setup_token_counter(tokenizer)
+        self._cached_token_lengths: tuple[int | None, int | None, int | None] | None = None
+        """Cache for (output, reasoning, answer) token lengths to avoid recomputation during logging."""
         self._warn_tag_inconsistencies()
+
+    def _setup_token_counter(
+        self,
+        tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast | None,
+    ) -> typing.Callable[[str], int] | None:
+        """Set up the token counter based on configuration and provided tokenizer.
+
+        Args:
+            tokenizer: Optional HuggingFace tokenizer provided to __init__.
+
+        Returns:
+            A callable that counts tokens in a string, or None if token tracking is disabled.
+
+        Raises:
+            ValueError: If track_token_lengths=True but no tokenizer source is available.
+        """
+        if self._config.parsing is None or not self._config.parsing.track_token_lengths:
+            return None
+        if tokenizer is not None:
+
+            def _count_hf_tokens(text: str) -> int:
+                return len(tokenizer.encode(text, add_special_tokens=False))  # type: ignore[reportUnknownMemberType]
+
+            return _count_hf_tokens
+        openai_model = self._config.parsing.openai_tokenizer_model
+        if openai_model is not None:
+            tiktoken_encoding = pyine.utils.tokenizers.get_openai_tokenizer(
+                model_id=openai_model,
+                raise_if_not_found=False,
+            )
+
+            def _count_tiktoken_tokens(text: str) -> int:
+                return len(tiktoken_encoding.encode(text, disallowed_special=()))
+
+            return _count_tiktoken_tokens
+        raise ValueError(
+            "track_token_lengths=True requires either a tokenizer argument to RewardManager "
+            "or openai_tokenizer_model set in ParsingConfig"
+        )
 
     def _warn_tag_inconsistencies(self) -> None:
         """Warn if term configurations reference different tags than the active parser.
@@ -361,11 +411,12 @@ class RewardManager:
         """Returns aggregated global parsing metrics.
 
         Returns empty dict if parsing is not configured or no samples processed. Keys are
-        `output_length/mean`, `missing_reasoning_ratio`, etc.
+        `output_length_chars/mean`, `missing_reasoning_ratio`, etc. When token tracking is enabled,
+        also includes `output_length_tokens/mean`, etc.
 
-        Note: `missing_reasoning_ratio` and `reasoning_length/*` are only emitted when reasoning
+        Note: `missing_reasoning_ratio` and `reasoning_length_*` are only emitted when reasoning
         extraction is enabled (enabled_fields is "both" or "reasoning_only"). Similarly,
-        `missing_answer_ratio` and `answer_length/*` are only emitted when final answer extraction
+        `missing_answer_ratio` and `answer_length_*` are only emitted when final answer extraction
         is enabled (enabled_fields is "both" or "final_only"). `malformed_ratio` is only emitted
         when `capture_diagnostics=True` in the parsing config.
         """
@@ -377,27 +428,48 @@ class RewardManager:
         enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
         reasoning_enabled = enabled_fields in ("both", "reasoning_only")
         answer_enabled = enabled_fields in ("both", "final_only")
-        # output length stats (always tracked)
-        if stats.output_length.count > 0:
-            assert stats.output_length.min is not None and stats.output_length.max is not None
-            metrics["output_length/mean"] = stats.output_length.mean()
-            metrics["output_length/std"] = stats.output_length.std()
-            metrics["output_length/min"] = stats.output_length.min
-            metrics["output_length/max"] = stats.output_length.max
-        # reasoning length stats (only when reasoning enabled and samples have reasoning)
-        if reasoning_enabled and stats.reasoning_length.count > 0:
-            assert stats.reasoning_length.min is not None and stats.reasoning_length.max is not None
-            metrics["reasoning_length/mean"] = stats.reasoning_length.mean()
-            metrics["reasoning_length/std"] = stats.reasoning_length.std()
-            metrics["reasoning_length/min"] = stats.reasoning_length.min
-            metrics["reasoning_length/max"] = stats.reasoning_length.max
-        # answer length stats (only when answer enabled and samples have answer)
-        if answer_enabled and stats.answer_length.count > 0:
-            assert stats.answer_length.min is not None and stats.answer_length.max is not None
-            metrics["answer_length/mean"] = stats.answer_length.mean()
-            metrics["answer_length/std"] = stats.answer_length.std()
-            metrics["answer_length/min"] = stats.answer_length.min
-            metrics["answer_length/max"] = stats.answer_length.max
+        # output length stats in chars (always tracked)
+        if stats.output_length_chars.count > 0:
+            assert stats.output_length_chars.min is not None and stats.output_length_chars.max is not None
+            metrics["output_length_chars/mean"] = stats.output_length_chars.mean()
+            metrics["output_length_chars/std"] = stats.output_length_chars.std()
+            metrics["output_length_chars/min"] = stats.output_length_chars.min
+            metrics["output_length_chars/max"] = stats.output_length_chars.max
+        # output length stats in tokens (only when token tracking enabled)
+        if stats.output_length_tokens.count > 0:
+            assert stats.output_length_tokens.min is not None and stats.output_length_tokens.max is not None
+            metrics["output_length_tokens/mean"] = stats.output_length_tokens.mean()
+            metrics["output_length_tokens/std"] = stats.output_length_tokens.std()
+            metrics["output_length_tokens/min"] = stats.output_length_tokens.min
+            metrics["output_length_tokens/max"] = stats.output_length_tokens.max
+        # reasoning length stats in chars (only when reasoning enabled and samples have reasoning)
+        if reasoning_enabled and stats.reasoning_length_chars.count > 0:
+            assert stats.reasoning_length_chars.min is not None and stats.reasoning_length_chars.max is not None
+            metrics["reasoning_length_chars/mean"] = stats.reasoning_length_chars.mean()
+            metrics["reasoning_length_chars/std"] = stats.reasoning_length_chars.std()
+            metrics["reasoning_length_chars/min"] = stats.reasoning_length_chars.min
+            metrics["reasoning_length_chars/max"] = stats.reasoning_length_chars.max
+        # reasoning length stats in tokens
+        if reasoning_enabled and stats.reasoning_length_tokens.count > 0:
+            assert stats.reasoning_length_tokens.min is not None and stats.reasoning_length_tokens.max is not None
+            metrics["reasoning_length_tokens/mean"] = stats.reasoning_length_tokens.mean()
+            metrics["reasoning_length_tokens/std"] = stats.reasoning_length_tokens.std()
+            metrics["reasoning_length_tokens/min"] = stats.reasoning_length_tokens.min
+            metrics["reasoning_length_tokens/max"] = stats.reasoning_length_tokens.max
+        # answer length stats in chars (only when answer enabled and samples have answer)
+        if answer_enabled and stats.answer_length_chars.count > 0:
+            assert stats.answer_length_chars.min is not None and stats.answer_length_chars.max is not None
+            metrics["answer_length_chars/mean"] = stats.answer_length_chars.mean()
+            metrics["answer_length_chars/std"] = stats.answer_length_chars.std()
+            metrics["answer_length_chars/min"] = stats.answer_length_chars.min
+            metrics["answer_length_chars/max"] = stats.answer_length_chars.max
+        # answer length stats in tokens
+        if answer_enabled and stats.answer_length_tokens.count > 0:
+            assert stats.answer_length_tokens.min is not None and stats.answer_length_tokens.max is not None
+            metrics["answer_length_tokens/mean"] = stats.answer_length_tokens.mean()
+            metrics["answer_length_tokens/std"] = stats.answer_length_tokens.std()
+            metrics["answer_length_tokens/min"] = stats.answer_length_tokens.min
+            metrics["answer_length_tokens/max"] = stats.answer_length_tokens.max
         # format ratios (only for enabled fields)
         total = float(stats.total_count)
         if reasoning_enabled:
@@ -414,10 +486,11 @@ class RewardManager:
         """Returns category-wise parsing metrics.
 
         Returns empty dict if parsing or category extraction is not configured. Keys are
-        `{category}/output_length/mean`, `{category}/missing_reasoning_ratio`, etc.
+        `{category}/output_length_chars/mean`, `{category}/missing_reasoning_ratio`, etc. When token
+        tracking is enabled, also includes `{category}/output_length_tokens/mean`, etc.
 
-        Note: `missing_reasoning_ratio` and `reasoning_length/*` are only emitted when reasoning
-        extraction is enabled. Similarly, `missing_answer_ratio` and `answer_length/*` are only
+        Note: `missing_reasoning_ratio` and `reasoning_length_*` are only emitted when reasoning
+        extraction is enabled. Similarly, `missing_answer_ratio` and `answer_length_*` are only
         emitted when final answer extraction is enabled. `malformed_ratio` is only emitted when
         `capture_diagnostics=True` in the parsing config.
         """
@@ -433,32 +506,56 @@ class RewardManager:
             total = float(stats.category_total_count.get(category, 0))
             if total == 0:
                 continue
-            # output length
-            if category in stats.category_output_length and stats.category_output_length[category].count > 0:
-                cat_output = stats.category_output_length[category]
-                assert cat_output.min is not None and cat_output.max is not None
-                metrics[f"{category}/output_length/mean"] = cat_output.mean()
-                metrics[f"{category}/output_length/std"] = cat_output.std()
-                metrics[f"{category}/output_length/min"] = cat_output.min
-                metrics[f"{category}/output_length/max"] = cat_output.max
-            # reasoning length (only when reasoning enabled)
+            # output length (chars)
+            cat_output_chars = stats.category_output_length_chars.get(category)
+            if cat_output_chars is not None and cat_output_chars.count > 0:
+                assert cat_output_chars.min is not None and cat_output_chars.max is not None
+                metrics[f"{category}/output_length_chars/mean"] = cat_output_chars.mean()
+                metrics[f"{category}/output_length_chars/std"] = cat_output_chars.std()
+                metrics[f"{category}/output_length_chars/min"] = cat_output_chars.min
+                metrics[f"{category}/output_length_chars/max"] = cat_output_chars.max
+            # output length (tokens)
+            cat_output_tokens = stats.category_output_length_tokens.get(category)
+            if cat_output_tokens is not None and cat_output_tokens.count > 0:
+                assert cat_output_tokens.min is not None and cat_output_tokens.max is not None
+                metrics[f"{category}/output_length_tokens/mean"] = cat_output_tokens.mean()
+                metrics[f"{category}/output_length_tokens/std"] = cat_output_tokens.std()
+                metrics[f"{category}/output_length_tokens/min"] = cat_output_tokens.min
+                metrics[f"{category}/output_length_tokens/max"] = cat_output_tokens.max
+            # reasoning length (chars, only when reasoning enabled)
             if reasoning_enabled:
-                if category in stats.category_reasoning_length and stats.category_reasoning_length[category].count > 0:
-                    cat_reasoning = stats.category_reasoning_length[category]
-                    assert cat_reasoning.min is not None and cat_reasoning.max is not None
-                    metrics[f"{category}/reasoning_length/mean"] = cat_reasoning.mean()
-                    metrics[f"{category}/reasoning_length/std"] = cat_reasoning.std()
-                    metrics[f"{category}/reasoning_length/min"] = cat_reasoning.min
-                    metrics[f"{category}/reasoning_length/max"] = cat_reasoning.max
-            # answer length (only when answer enabled)
+                cat_reasoning_chars = stats.category_reasoning_length_chars.get(category)
+                if cat_reasoning_chars is not None and cat_reasoning_chars.count > 0:
+                    assert cat_reasoning_chars.min is not None and cat_reasoning_chars.max is not None
+                    metrics[f"{category}/reasoning_length_chars/mean"] = cat_reasoning_chars.mean()
+                    metrics[f"{category}/reasoning_length_chars/std"] = cat_reasoning_chars.std()
+                    metrics[f"{category}/reasoning_length_chars/min"] = cat_reasoning_chars.min
+                    metrics[f"{category}/reasoning_length_chars/max"] = cat_reasoning_chars.max
+                # reasoning length (tokens)
+                cat_reasoning_tokens = stats.category_reasoning_length_tokens.get(category)
+                if cat_reasoning_tokens is not None and cat_reasoning_tokens.count > 0:
+                    assert cat_reasoning_tokens.min is not None and cat_reasoning_tokens.max is not None
+                    metrics[f"{category}/reasoning_length_tokens/mean"] = cat_reasoning_tokens.mean()
+                    metrics[f"{category}/reasoning_length_tokens/std"] = cat_reasoning_tokens.std()
+                    metrics[f"{category}/reasoning_length_tokens/min"] = cat_reasoning_tokens.min
+                    metrics[f"{category}/reasoning_length_tokens/max"] = cat_reasoning_tokens.max
+            # answer length (chars, only when answer enabled)
             if answer_enabled:
-                if category in stats.category_answer_length and stats.category_answer_length[category].count > 0:
-                    cat_answer = stats.category_answer_length[category]
-                    assert cat_answer.min is not None and cat_answer.max is not None
-                    metrics[f"{category}/answer_length/mean"] = cat_answer.mean()
-                    metrics[f"{category}/answer_length/std"] = cat_answer.std()
-                    metrics[f"{category}/answer_length/min"] = cat_answer.min
-                    metrics[f"{category}/answer_length/max"] = cat_answer.max
+                cat_answer_chars = stats.category_answer_length_chars.get(category)
+                if cat_answer_chars is not None and cat_answer_chars.count > 0:
+                    assert cat_answer_chars.min is not None and cat_answer_chars.max is not None
+                    metrics[f"{category}/answer_length_chars/mean"] = cat_answer_chars.mean()
+                    metrics[f"{category}/answer_length_chars/std"] = cat_answer_chars.std()
+                    metrics[f"{category}/answer_length_chars/min"] = cat_answer_chars.min
+                    metrics[f"{category}/answer_length_chars/max"] = cat_answer_chars.max
+                # answer length (tokens)
+                cat_answer_tokens = stats.category_answer_length_tokens.get(category)
+                if cat_answer_tokens is not None and cat_answer_tokens.count > 0:
+                    assert cat_answer_tokens.min is not None and cat_answer_tokens.max is not None
+                    metrics[f"{category}/answer_length_tokens/mean"] = cat_answer_tokens.mean()
+                    metrics[f"{category}/answer_length_tokens/std"] = cat_answer_tokens.std()
+                    metrics[f"{category}/answer_length_tokens/min"] = cat_answer_tokens.min
+                    metrics[f"{category}/answer_length_tokens/max"] = cat_answer_tokens.max
             # format ratios (only for enabled fields)
             if reasoning_enabled:
                 missing_reasoning = float(stats.category_missing_reasoning_count.get(category, 0))
@@ -992,19 +1089,40 @@ class RewardManager:
         sample_ctx: reward_types.SampleContext,
     ) -> None:
         """Update parsing-related run stats if parsing is configured."""
+        self._cached_token_lengths = None  # clear cache from previous sample
         if self._parsing_stats is None or sample_ctx.parsed is None:
             return
         parsed = sample_ctx.parsed
-        output_len = len(parsed.raw)
+        output_len_chars = len(parsed.raw)
         has_reasoning = parsed.reasoning is not None
         has_answer = parsed.final_answer is not None
         is_malformed = self._is_malformed(parsed)
-        # update global length stats
-        self._parsing_stats.output_length.update(float(output_len))
-        if has_reasoning:
-            self._parsing_stats.reasoning_length.update(float(len(parsed.reasoning)))  # type: ignore[arg-type]
-        if has_answer:
-            self._parsing_stats.answer_length.update(float(len(parsed.final_answer)))  # type: ignore[arg-type]
+        reasoning_len_chars = len(parsed.reasoning) if has_reasoning else None  # type: ignore[arg-type]
+        answer_len_chars = len(parsed.final_answer) if has_answer else None  # type: ignore[arg-type]
+        # compute token lengths if enabled (and cache for potential use in per-sample logging)
+        output_len_tokens: int | None = None
+        reasoning_len_tokens: int | None = None
+        answer_len_tokens: int | None = None
+        if self._token_counter is not None:
+            output_len_tokens = self._token_counter(parsed.raw)
+            if has_reasoning:
+                reasoning_len_tokens = self._token_counter(parsed.reasoning)  # type: ignore[arg-type]
+            if has_answer:
+                answer_len_tokens = self._token_counter(parsed.final_answer)  # type: ignore[arg-type]
+            self._cached_token_lengths = (output_len_tokens, reasoning_len_tokens, answer_len_tokens)
+        # update global character length stats
+        self._parsing_stats.output_length_chars.update(float(output_len_chars))
+        if reasoning_len_chars is not None:
+            self._parsing_stats.reasoning_length_chars.update(float(reasoning_len_chars))
+        if answer_len_chars is not None:
+            self._parsing_stats.answer_length_chars.update(float(answer_len_chars))
+        # update global token length stats
+        if output_len_tokens is not None:
+            self._parsing_stats.output_length_tokens.update(float(output_len_tokens))
+        if reasoning_len_tokens is not None:
+            self._parsing_stats.reasoning_length_tokens.update(float(reasoning_len_tokens))
+        if answer_len_tokens is not None:
+            self._parsing_stats.answer_length_tokens.update(float(answer_len_tokens))
         # update global format counts
         self._parsing_stats.total_count += 1
         if not has_reasoning:
@@ -1018,20 +1136,35 @@ class RewardManager:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
             for category in categories:
-                # output length
-                if category not in self._parsing_stats.category_output_length:
-                    self._parsing_stats.category_output_length[category] = stats_utils.RunningStats()
-                self._parsing_stats.category_output_length[category].update(float(output_len))
-                # reasoning length
-                if has_reasoning:
-                    if category not in self._parsing_stats.category_reasoning_length:
-                        self._parsing_stats.category_reasoning_length[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_reasoning_length[category].update(float(len(parsed.reasoning)))  # type: ignore[arg-type]
-                # answer length
-                if has_answer:
-                    if category not in self._parsing_stats.category_answer_length:
-                        self._parsing_stats.category_answer_length[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_answer_length[category].update(float(len(parsed.final_answer)))  # type: ignore[arg-type]
+                # output length (chars)
+                if category not in self._parsing_stats.category_output_length_chars:
+                    self._parsing_stats.category_output_length_chars[category] = stats_utils.RunningStats()
+                self._parsing_stats.category_output_length_chars[category].update(float(output_len_chars))
+                # reasoning length (chars)
+                if reasoning_len_chars is not None:
+                    if category not in self._parsing_stats.category_reasoning_length_chars:
+                        self._parsing_stats.category_reasoning_length_chars[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_reasoning_length_chars[category].update(float(reasoning_len_chars))
+                # answer length (chars)
+                if answer_len_chars is not None:
+                    if category not in self._parsing_stats.category_answer_length_chars:
+                        self._parsing_stats.category_answer_length_chars[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_answer_length_chars[category].update(float(answer_len_chars))
+                # output length (tokens)
+                if output_len_tokens is not None:
+                    if category not in self._parsing_stats.category_output_length_tokens:
+                        self._parsing_stats.category_output_length_tokens[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_output_length_tokens[category].update(float(output_len_tokens))
+                # reasoning length (tokens)
+                if reasoning_len_tokens is not None:
+                    if category not in self._parsing_stats.category_reasoning_length_tokens:
+                        self._parsing_stats.category_reasoning_length_tokens[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_reasoning_length_tokens[category].update(float(reasoning_len_tokens))
+                # answer length (tokens)
+                if answer_len_tokens is not None:
+                    if category not in self._parsing_stats.category_answer_length_tokens:
+                        self._parsing_stats.category_answer_length_tokens[category] = stats_utils.RunningStats()
+                    self._parsing_stats.category_answer_length_tokens[category].update(float(answer_len_tokens))
                 # category counts
                 self._parsing_stats.category_total_count[category] = (
                     self._parsing_stats.category_total_count.get(category, 0) + 1
@@ -1056,6 +1189,7 @@ class RewardManager:
         """Compute per-sample parsing metrics for logging.
 
         Only emits metrics for fields that are enabled in the parsing config.
+        Uses cached token lengths from _update_parsing_stats() to avoid recomputation.
         """
         if sample_ctx.parsed is None:
             return {}
@@ -1064,9 +1198,14 @@ class RewardManager:
         enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
         reasoning_enabled = enabled_fields in ("both", "reasoning_only")
         answer_enabled = enabled_fields in ("both", "final_only")
+        # use cached token lengths (computed in _update_parsing_stats)
+        cached = self._cached_token_lengths
         metrics: dict[str, reward_types.MetricValue] = {
-            "parsing/output_length": len(parsed.raw),
+            "parsing/output_length_chars": len(parsed.raw),
         }
+        # add token length if token tracking is enabled
+        if cached is not None:
+            metrics["parsing/output_length_tokens"] = cached[0]  # type: ignore[arg-type]
         # is_malformed only meaningful when capture_diagnostics is enabled
         if self._config.parsing and self._config.parsing.capture_diagnostics:
             metrics["parsing/is_malformed"] = self._is_malformed(parsed)
@@ -1074,12 +1213,16 @@ class RewardManager:
             has_reasoning = parsed.reasoning is not None
             metrics["parsing/has_reasoning"] = has_reasoning
             if has_reasoning:
-                metrics["parsing/reasoning_length"] = len(parsed.reasoning)  # type: ignore[arg-type]
+                metrics["parsing/reasoning_length_chars"] = len(parsed.reasoning)  # type: ignore[arg-type]
+                if cached is not None:
+                    metrics["parsing/reasoning_length_tokens"] = cached[1]  # type: ignore[arg-type]
         if answer_enabled:
             has_answer = parsed.final_answer is not None
             metrics["parsing/has_answer"] = has_answer
             if has_answer:
-                metrics["parsing/answer_length"] = len(parsed.final_answer)  # type: ignore[arg-type]
+                metrics["parsing/answer_length_chars"] = len(parsed.final_answer)  # type: ignore[arg-type]
+                if cached is not None:
+                    metrics["parsing/answer_length_tokens"] = cached[2]  # type: ignore[arg-type]
         return metrics
 
     def _maybe_log_sample(

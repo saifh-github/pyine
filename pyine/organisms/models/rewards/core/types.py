@@ -215,18 +215,26 @@ class RunSummaries:
 class ParsingStatsAccumulator:
     """Accumulator for parsing statistics across samples.
 
-    Tracks output/reasoning/answer lengths and format issue counts (missing reasoning, missing
-    answer, malformed tags). Supports both global and category-wise stats when a category extractor
-    is configured.
+    Tracks output/reasoning/answer lengths (in chars and optionally tokens) and format issue counts
+    (missing reasoning, missing answer, malformed tags). Supports both global and category-wise
+    stats when a category extractor is configured.
     """
 
-    # global length stats
-    output_length: stats_utils.RunningStats
+    # global character length stats
+    output_length_chars: stats_utils.RunningStats
     """Running stats for raw model output length (chars)."""
-    reasoning_length: stats_utils.RunningStats
-    """Running stats for reasoning length (only samples with reasoning)."""
-    answer_length: stats_utils.RunningStats
-    """Running stats for final answer length (only samples with answer)."""
+    reasoning_length_chars: stats_utils.RunningStats
+    """Running stats for reasoning length in chars (only samples with reasoning)."""
+    answer_length_chars: stats_utils.RunningStats
+    """Running stats for final answer length in chars (only samples with answer)."""
+
+    # global token length stats (optional, only populated when token tracking enabled)
+    output_length_tokens: stats_utils.RunningStats
+    """Running stats for raw model output length (tokens)."""
+    reasoning_length_tokens: stats_utils.RunningStats
+    """Running stats for reasoning length in tokens (only samples with reasoning)."""
+    answer_length_tokens: stats_utils.RunningStats
+    """Running stats for final answer length in tokens (only samples with answer)."""
 
     # global format counts
     total_count: int = 0
@@ -238,19 +246,35 @@ class ParsingStatsAccumulator:
     malformed_count: int = 0
     """Count of samples with malformed tag structure."""
 
-    # category-wise stats
-    category_output_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+    # category-wise character length stats
+    category_output_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
         default_factory=lambda: dict[str, stats_utils.RunningStats](),
     )
-    """Per-category running stats for output length."""
-    category_reasoning_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+    """Per-category running stats for output length (chars)."""
+    category_reasoning_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
         default_factory=lambda: dict[str, stats_utils.RunningStats](),
     )
-    """Per-category running stats for reasoning length."""
-    category_answer_length: dict[str, stats_utils.RunningStats] = dataclasses.field(
+    """Per-category running stats for reasoning length (chars)."""
+    category_answer_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
         default_factory=lambda: dict[str, stats_utils.RunningStats](),
     )
-    """Per-category running stats for answer length."""
+    """Per-category running stats for answer length (chars)."""
+
+    # category-wise token length stats (optional)
+    category_output_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for output length (tokens)."""
+    category_reasoning_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for reasoning length (tokens)."""
+    category_answer_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
+        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+    )
+    """Per-category running stats for answer length (tokens)."""
+
+    # category-wise format counts
     category_total_count: dict[str, int] = dataclasses.field(
         default_factory=lambda: dict[str, int](),
     )
@@ -272,23 +296,32 @@ class ParsingStatsAccumulator:
     def new(cls) -> "ParsingStatsAccumulator":
         """Create a fresh accumulator with initialized RunningStats."""
         return cls(
-            output_length=stats_utils.RunningStats(),
-            reasoning_length=stats_utils.RunningStats(),
-            answer_length=stats_utils.RunningStats(),
+            output_length_chars=stats_utils.RunningStats(),
+            reasoning_length_chars=stats_utils.RunningStats(),
+            answer_length_chars=stats_utils.RunningStats(),
+            output_length_tokens=stats_utils.RunningStats(),
+            reasoning_length_tokens=stats_utils.RunningStats(),
+            answer_length_tokens=stats_utils.RunningStats(),
         )
 
     def reset(self) -> None:
         """Reset all stats to initial state."""
-        self.output_length = stats_utils.RunningStats()
-        self.reasoning_length = stats_utils.RunningStats()
-        self.answer_length = stats_utils.RunningStats()
+        self.output_length_chars = stats_utils.RunningStats()
+        self.reasoning_length_chars = stats_utils.RunningStats()
+        self.answer_length_chars = stats_utils.RunningStats()
+        self.output_length_tokens = stats_utils.RunningStats()
+        self.reasoning_length_tokens = stats_utils.RunningStats()
+        self.answer_length_tokens = stats_utils.RunningStats()
         self.total_count = 0
         self.missing_reasoning_count = 0
         self.missing_answer_count = 0
         self.malformed_count = 0
-        self.category_output_length.clear()
-        self.category_reasoning_length.clear()
-        self.category_answer_length.clear()
+        self.category_output_length_chars.clear()
+        self.category_reasoning_length_chars.clear()
+        self.category_answer_length_chars.clear()
+        self.category_output_length_tokens.clear()
+        self.category_reasoning_length_tokens.clear()
+        self.category_answer_length_tokens.clear()
         self.category_total_count.clear()
         self.category_missing_reasoning_count.clear()
         self.category_missing_answer_count.clear()
@@ -297,16 +330,26 @@ class ParsingStatsAccumulator:
     def as_state(self) -> dict[str, typing.Any]:
         """Serialize accumulator state for checkpointing."""
         return {
-            "output_length": self.output_length.as_state(),
-            "reasoning_length": self.reasoning_length.as_state(),
-            "answer_length": self.answer_length.as_state(),
+            "output_length_chars": self.output_length_chars.as_state(),
+            "reasoning_length_chars": self.reasoning_length_chars.as_state(),
+            "answer_length_chars": self.answer_length_chars.as_state(),
+            "output_length_tokens": self.output_length_tokens.as_state(),
+            "reasoning_length_tokens": self.reasoning_length_tokens.as_state(),
+            "answer_length_tokens": self.answer_length_tokens.as_state(),
             "total_count": self.total_count,
             "missing_reasoning_count": self.missing_reasoning_count,
             "missing_answer_count": self.missing_answer_count,
             "malformed_count": self.malformed_count,
-            "category_output_length": {k: v.as_state() for k, v in self.category_output_length.items()},
-            "category_reasoning_length": {k: v.as_state() for k, v in self.category_reasoning_length.items()},
-            "category_answer_length": {k: v.as_state() for k, v in self.category_answer_length.items()},
+            "category_output_length_chars": {k: v.as_state() for k, v in self.category_output_length_chars.items()},
+            "category_reasoning_length_chars": {
+                k: v.as_state() for k, v in self.category_reasoning_length_chars.items()
+            },
+            "category_answer_length_chars": {k: v.as_state() for k, v in self.category_answer_length_chars.items()},
+            "category_output_length_tokens": {k: v.as_state() for k, v in self.category_output_length_tokens.items()},
+            "category_reasoning_length_tokens": {
+                k: v.as_state() for k, v in self.category_reasoning_length_tokens.items()
+            },
+            "category_answer_length_tokens": {k: v.as_state() for k, v in self.category_answer_length_tokens.items()},
             "category_total_count": dict(self.category_total_count),
             "category_missing_reasoning_count": dict(self.category_missing_reasoning_count),
             "category_missing_answer_count": dict(self.category_missing_answer_count),
@@ -320,21 +363,36 @@ class ParsingStatsAccumulator:
     ) -> "ParsingStatsAccumulator":
         """Deserialize accumulator from checkpoint state."""
         return cls(
-            output_length=stats_utils.RunningStats.from_state(state["output_length"]),
-            reasoning_length=stats_utils.RunningStats.from_state(state["reasoning_length"]),
-            answer_length=stats_utils.RunningStats.from_state(state["answer_length"]),
+            output_length_chars=stats_utils.RunningStats.from_state(state["output_length_chars"]),
+            reasoning_length_chars=stats_utils.RunningStats.from_state(state["reasoning_length_chars"]),
+            answer_length_chars=stats_utils.RunningStats.from_state(state["answer_length_chars"]),
+            output_length_tokens=stats_utils.RunningStats.from_state(state["output_length_tokens"]),
+            reasoning_length_tokens=stats_utils.RunningStats.from_state(state["reasoning_length_tokens"]),
+            answer_length_tokens=stats_utils.RunningStats.from_state(state["answer_length_tokens"]),
             total_count=state["total_count"],
             missing_reasoning_count=state["missing_reasoning_count"],
             missing_answer_count=state["missing_answer_count"],
             malformed_count=state["malformed_count"],
-            category_output_length={
-                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_output_length"].items()
+            category_output_length_chars={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_output_length_chars"].items()
             },
-            category_reasoning_length={
-                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_reasoning_length"].items()
+            category_reasoning_length_chars={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_reasoning_length_chars"].items()
             },
-            category_answer_length={
-                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_answer_length"].items()
+            category_answer_length_chars={
+                k: stats_utils.RunningStats.from_state(v) for k, v in state["category_answer_length_chars"].items()
+            },
+            category_output_length_tokens={
+                k: stats_utils.RunningStats.from_state(v)
+                for k, v in state.get("category_output_length_tokens", {}).items()
+            },
+            category_reasoning_length_tokens={
+                k: stats_utils.RunningStats.from_state(v)
+                for k, v in state.get("category_reasoning_length_tokens", {}).items()
+            },
+            category_answer_length_tokens={
+                k: stats_utils.RunningStats.from_state(v)
+                for k, v in state.get("category_answer_length_tokens", {}).items()
             },
             category_total_count=dict(state["category_total_count"]),
             category_missing_reasoning_count=dict(state["category_missing_reasoning_count"]),
@@ -347,26 +405,43 @@ class ParsingStatsAccumulator:
         other: "ParsingStatsAccumulator",
     ) -> None:
         """Merge another accumulator's stats into this one (for distributed training)."""
-        self.output_length.merge(other.output_length)
-        self.reasoning_length.merge(other.reasoning_length)
-        self.answer_length.merge(other.answer_length)
+        self.output_length_chars.merge(other.output_length_chars)
+        self.reasoning_length_chars.merge(other.reasoning_length_chars)
+        self.answer_length_chars.merge(other.answer_length_chars)
+        self.output_length_tokens.merge(other.output_length_tokens)
+        self.reasoning_length_tokens.merge(other.reasoning_length_tokens)
+        self.answer_length_tokens.merge(other.answer_length_tokens)
         self.total_count += other.total_count
         self.missing_reasoning_count += other.missing_reasoning_count
         self.missing_answer_count += other.missing_answer_count
         self.malformed_count += other.malformed_count
-        # merge category-wise stats
-        for category, stats in other.category_output_length.items():
-            if category not in self.category_output_length:
-                self.category_output_length[category] = stats_utils.RunningStats()
-            self.category_output_length[category].merge(stats)
-        for category, stats in other.category_reasoning_length.items():
-            if category not in self.category_reasoning_length:
-                self.category_reasoning_length[category] = stats_utils.RunningStats()
-            self.category_reasoning_length[category].merge(stats)
-        for category, stats in other.category_answer_length.items():
-            if category not in self.category_answer_length:
-                self.category_answer_length[category] = stats_utils.RunningStats()
-            self.category_answer_length[category].merge(stats)
+        # merge category-wise character length stats
+        for category, stats in other.category_output_length_chars.items():
+            if category not in self.category_output_length_chars:
+                self.category_output_length_chars[category] = stats_utils.RunningStats()
+            self.category_output_length_chars[category].merge(stats)
+        for category, stats in other.category_reasoning_length_chars.items():
+            if category not in self.category_reasoning_length_chars:
+                self.category_reasoning_length_chars[category] = stats_utils.RunningStats()
+            self.category_reasoning_length_chars[category].merge(stats)
+        for category, stats in other.category_answer_length_chars.items():
+            if category not in self.category_answer_length_chars:
+                self.category_answer_length_chars[category] = stats_utils.RunningStats()
+            self.category_answer_length_chars[category].merge(stats)
+        # merge category-wise token length stats
+        for category, stats in other.category_output_length_tokens.items():
+            if category not in self.category_output_length_tokens:
+                self.category_output_length_tokens[category] = stats_utils.RunningStats()
+            self.category_output_length_tokens[category].merge(stats)
+        for category, stats in other.category_reasoning_length_tokens.items():
+            if category not in self.category_reasoning_length_tokens:
+                self.category_reasoning_length_tokens[category] = stats_utils.RunningStats()
+            self.category_reasoning_length_tokens[category].merge(stats)
+        for category, stats in other.category_answer_length_tokens.items():
+            if category not in self.category_answer_length_tokens:
+                self.category_answer_length_tokens[category] = stats_utils.RunningStats()
+            self.category_answer_length_tokens[category].merge(stats)
+        # merge category-wise counts
         for category, count in other.category_total_count.items():
             self.category_total_count[category] = self.category_total_count.get(category, 0) + count
         for category, count in other.category_missing_reasoning_count.items():

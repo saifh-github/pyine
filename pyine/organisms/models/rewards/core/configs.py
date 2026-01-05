@@ -84,6 +84,16 @@ class ParsingConfig(reward_types.BaseConfig):
     """Whether malformed tag structure should raise (unclosed/stray closes/nesting)."""
     capture_diagnostics: bool = True
     """Whether to include tag diagnostics in `ParsedOutput.fields`."""
+    track_token_lengths: bool = False
+    """Whether to track token-based lengths in addition to character lengths.
+
+    When enabled, requires either a tokenizer argument to RewardManager or openai_tokenizer_model.
+    """
+    openai_tokenizer_model: str | None = None
+    """OpenAI model ID for tiktoken tokenizer (e.g., 'gpt-4').
+
+    Used for token counting when track_token_lengths=True and no HF tokenizer is provided.
+    """
 
     @pydantic.field_validator("final_tag", "reasoning_tag")
     @classmethod
