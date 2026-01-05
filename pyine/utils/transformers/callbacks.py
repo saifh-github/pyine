@@ -447,10 +447,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Set train prefix at the start of each training step."""
+        """Set train prefix and logging step at the start of each training step."""
         if self._in_eval is not False:
             self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
             self._in_eval = False
+        self.reward_manager.set_step(state.global_step)
 
     @typing.override
     def on_prediction_step(
@@ -460,13 +461,13 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Flush train stats, then switch to eval prefix when entering evaluation phase."""
+        """Flush train stats, switch to eval prefix, and set logging step during evaluation."""
         if self._in_eval is not True:
             # flush train stats before switching to eval (flush_stats resets accumulators)
-            # (use None for step to let wandb auto-increment; avoids step conflicts)
-            self.reward_manager.flush_stats(step=None)
+            self.reward_manager.flush_stats()
             self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
             self._in_eval = True
+        self.reward_manager.set_step(state.global_step)
 
     @typing.override
     def on_evaluate(
