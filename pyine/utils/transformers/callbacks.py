@@ -405,6 +405,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self.eval_prefix = eval_prefix
         self.resume_from_checkpoint = pathlib.Path(resume_from_checkpoint) if resume_from_checkpoint else None
         self._in_eval: bool | None = None
+        self._saw_eval_prediction_step: bool = False
 
     def _make_prefix(self, phase: str) -> str:
         """Combine base_prefix with phase prefix."""
@@ -439,6 +440,24 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             )
         self.reward_adapter.reset_failure_stats()
 
+    def _switch_to_eval(self, step: int | None = None) -> None:
+        """Switch to eval prefix, flush train stats, and clear step.
+
+        This method handles the train -> eval transition by flushing accumulated training stats
+        under the current (train) prefix before switching to eval mode. It should be called BEFORE
+        evaluation starts to ensure the first eval batch logs correctly.
+
+        Args:
+            step: Optional step to anchor the flush (defaults to current manager step).
+        """
+        if self._in_eval:
+            return
+        self.reward_manager.flush_stats(step=step)
+        self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
+        self.reward_manager.set_step(None)  # clear step for eval
+        self._in_eval = True
+        self._saw_eval_prediction_step = False  # reset for new eval phase
+
     @typing.override
     def on_step_begin(
         self,
@@ -454,6 +473,23 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self.reward_manager.set_step(state.global_step)
 
     @typing.override
+    def on_step_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Switch to eval prefix before step-based evaluation.
+
+        DefaultFlowCallback sets control.should_evaluate = True in its own on_step_end, and Trainer
+        calls _maybe_log_save_evaluate() immediately after all callbacks' on_step_end. By switching
+        here, we ensure the first eval batch logs under the correct prefix.
+        """
+        if control.should_evaluate:
+            self._switch_to_eval(step=state.global_step)
+
+    @typing.override
     def on_prediction_step(
         self,
         args: transformers.TrainingArguments,
@@ -461,15 +497,41 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Flush train stats, switch to eval prefix, and clear step during evaluation."""
+        """Set eval prefix and clear step during evaluation.
+
+        Note: this hook fires AFTER prediction_step() returns, so the first eval batch has already
+        been processed. We do NOT flush here because:
+        - If pre-eval switching worked (on_step_end/on_epoch_end), we're already in eval;
+        - If pre-eval switching was missed, flushing now would flush a mixed train+eval
+          accumulator under the wrong context.
+
+        We only set the prefix (no flush) to ensure subsequent batches log correctly.
+        """
         if self._in_eval is not True:
-            # flush train stats before switching to eval (flush_stats resets accumulators)
-            self.reward_manager.flush_stats()
+            # woops... don't call _switch_to_eval(); no flush, just set prefix.
             self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
             self._in_eval = True
+        self._saw_eval_prediction_step = True  # mark that we processed at least one eval batch
         # clear step for per-sample eval logs; global_step doesn't change during eval, so logging
         # multiple samples at the same step would cause WandB to overwrite scalar metrics
         self.reward_manager.set_step(None)
+
+    @typing.override
+    def on_epoch_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Switch to eval prefix before epoch-based evaluation.
+
+        DefaultFlowCallback sets control.should_evaluate = True in its own on_epoch_end for
+        eval_strategy="epoch". Trainer evaluates immediately after on_epoch_end, so we switch
+        here to ensure the first eval batch logs under the correct prefix.
+        """
+        if control.should_evaluate:
+            self._switch_to_eval(step=state.global_step)
 
     @typing.override
     def on_evaluate(
@@ -480,13 +542,13 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         """Flush accumulated stats and reset to train prefix after evaluation completes."""
-        # only flush if we actually entered eval phase (on_prediction_step was called)
-        # if eval had zero samples, _in_eval stays False and we skip flushing to avoid
-        # logging train stats at the eval boundary under a misleading context
-        if self._in_eval is True:
+        # only flush if we actually processed eval samples (on_prediction_step was called);
+        # if eval had zero samples, skip flushing to avoid logging stale stats under eval prefix
+        if self._saw_eval_prediction_step:
             # anchor eval summary at current global_step so it aligns with training metrics
             self._log_failure_stats(step=state.global_step)
             self.reward_manager.flush_stats(step=state.global_step)
+        self._saw_eval_prediction_step = False  # reset for next eval
         self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
         self._in_eval = False  # evaluation done, switch back right away
 
@@ -498,20 +560,31 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Load reward state from checkpoint if resuming training.
+        """Initialize prefix and load reward state from checkpoint if resuming training.
+
+        This method follows a specific order to ensure correct prefix/accumulator semantics:
+        1. Load checkpoint state first (if resuming), restoring step and accumulators;
+        2. Always set train prefix and _in_eval = False (consistent starting point);
+        3. If eval_on_start=True, transition train→eval properly via _switch_to_eval().
 
         Raises:
             FileNotFoundError: If resuming from checkpoint but reward_state.json is missing.
         """
-        if self.resume_from_checkpoint is None:
-            return
-        reward_state_path = self.resume_from_checkpoint / "reward_state.json"
-        if not reward_state_path.exists():
-            raise FileNotFoundError(
-                f"reward_state.json not found in checkpoint: {self.resume_from_checkpoint}; "
-                "checkpoint may be incomplete or from an older version"
-            )
-        self._load_reward_state(reward_state_path)
+        # 1. load checkpoint state FIRST (restores step and accumulators)
+        if self.resume_from_checkpoint is not None:
+            reward_state_path = self.resume_from_checkpoint / "reward_state.json"
+            if not reward_state_path.exists():
+                raise FileNotFoundError(
+                    f"reward_state.json not found in checkpoint: {self.resume_from_checkpoint}; "
+                    "checkpoint may be incomplete or from an older version"
+                )
+            self._load_reward_state(reward_state_path)
+        # 2. always start in train mode (prefix + state)
+        self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
+        self._in_eval = False
+        # 3. if eval_on_start, transition train→eval properly (flush under train prefix, then switch)
+        if getattr(args, "eval_on_start", False):
+            self._switch_to_eval(step=state.global_step)
 
     @typing.override
     def on_save(
