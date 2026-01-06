@@ -64,6 +64,8 @@ class TestWandBRewardLogger:
             step=7,
             prompt="test prompt",
             model_output="test output",
+            categories=["difficulty:easy", "total_steps:10"],
+            tags=["tag1", "tag2:value"],
         )
         assert len(fake_run.logged) == 2
         table_payload = fake_run.logged[1]
@@ -71,7 +73,17 @@ class TestWandBRewardLogger:
         assert "train/reward/rewards_table" in table_payload
         # verify table was created with correct columns
         table_obj = table_payload["train/reward/rewards_table"]
-        expected_cols = ["sample_id", "step", "prompt", "model_output", "total", "terms_json", "metrics_json"]
+        expected_cols = [
+            "sample_id",
+            "step",
+            "prompt",
+            "model_output",
+            "total",
+            "terms_json",
+            "metrics_json",
+            "categories_json",
+            "tags_json",
+        ]
         assert table_obj.columns == expected_cols
         # verify row content
         assert len(added_rows) == 1
@@ -89,6 +101,12 @@ class TestWandBRewardLogger:
         metrics_json = json.loads(typing.cast("str", row[6]))
         assert "train/reward/metrics/m" in metrics_json
         assert metrics_json["train/reward/metrics/m"] == 2
+        # verify categories_json contains category labels
+        categories_json = json.loads(typing.cast("str", row[7]))
+        assert categories_json == ["difficulty:easy", "total_steps:10"]
+        # verify tags_json contains sample tags
+        tags_json = json.loads(typing.cast("str", row[8]))
+        assert tags_json == ["tag1", "tag2:value"]
 
     def test_set_key_prefix_switches_prefix_dynamically(self) -> None:
         fake_run = _FakeWandBRun()

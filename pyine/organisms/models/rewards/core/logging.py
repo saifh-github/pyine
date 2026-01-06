@@ -37,6 +37,8 @@ class InMemoryRewardLogger:
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        categories: collections.abc.Sequence[str] | None = None,
+        tags: collections.abc.Sequence[str] | None = None,
     ) -> None:
         """Record a per-sample logging event in memory."""
         record: dict[str, object] = {
@@ -46,6 +48,8 @@ class InMemoryRewardLogger:
             "metrics": dict(metrics),
             "prompt": prompt,
             "model_output": model_output,
+            "categories": list(categories) if categories is not None else None,
+            "tags": list(tags) if tags is not None else None,
         }
         if total is not None:
             record["total"] = float(total)
@@ -166,6 +170,8 @@ class WandBRewardLogger:
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        categories: collections.abc.Sequence[str] | None = None,
+        tags: collections.abc.Sequence[str] | None = None,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
         payload_step = self._step if step is None else step
@@ -191,6 +197,8 @@ class WandBRewardLogger:
                     "total": total,  # may be None
                     "terms_json": json.dumps(prefixed_terms, sort_keys=True),
                     "metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
+                    "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
+                    "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
                 }
             )
             if (
@@ -272,7 +280,17 @@ class WandBRewardLogger:
         if not self._log_tables or not self._table_rows:
             return
         table = wandb.Table(
-            columns=["sample_id", "step", "prompt", "model_output", "total", "terms_json", "metrics_json"],
+            columns=[
+                "sample_id",
+                "step",
+                "prompt",
+                "model_output",
+                "total",
+                "terms_json",
+                "metrics_json",
+                "categories_json",
+                "tags_json",
+            ],
         )
         table_obj = typing.cast("typing.Any", table)
         for row in self._table_rows:
@@ -284,6 +302,8 @@ class WandBRewardLogger:
                 row["total"],
                 row["terms_json"],
                 row["metrics_json"],
+                row["categories_json"],
+                row["tags_json"],
             )
         payload: dict[str, object] = {self._prefix_key(self._table_key): table}
         if step is not None:

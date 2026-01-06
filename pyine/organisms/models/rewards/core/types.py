@@ -487,6 +487,8 @@ class RewardLogger(typing.Protocol):
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        categories: collections.abc.Sequence[str] | None = None,
+        tags: collections.abc.Sequence[str] | None = None,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
 
@@ -499,6 +501,8 @@ class RewardLogger(typing.Protocol):
             step: Optional logging step.
             prompt: Optional prompt text for table logging.
             model_output: Optional raw model output for table logging.
+            categories: Optional list of category labels for the sample (for table logging).
+            tags: Optional list of sample tags (for table logging).
         """
         ...
 

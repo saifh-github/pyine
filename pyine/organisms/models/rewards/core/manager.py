@@ -1250,15 +1250,18 @@ class RewardManager:
         total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
         # apply scope prefix to reward terms/metrics first
         scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
+        # extract categories for table logging and scalar filtering labels
+        categories: list[str] | None = None
+        if self._category_extractor is not None:
+            sample_data_dict = sample_ctx.sample_data._asdict()
+            categories = self._category_extractor.extract_categories(sample_data_dict)
         # add parsing metrics after scoping (fixed parsing/ prefix, not scoped)
         if self._config.logging.log_metrics:
             if self._config.parsing is not None and sample_ctx.parsed is not None:
                 parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
                 scoped_metrics.update(parsing_metrics)
             # add category labels for filtering (not scoped)
-            if self._category_extractor is not None:
-                sample_data_dict = sample_ctx.sample_data._asdict()
-                categories = self._category_extractor.extract_categories(sample_data_dict)
+            if categories:
                 for category in categories:
                     scoped_metrics[f"categories/{category}"] = True
         self._logger.log(
@@ -1269,6 +1272,8 @@ class RewardManager:
             step=step_to_use,
             prompt=sample_ctx.prompt,
             model_output=sample_ctx.model_output,
+            categories=categories,
+            tags=sample_ctx.tags or None,
         )
 
     @staticmethod
