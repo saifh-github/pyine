@@ -204,6 +204,10 @@ python -m pyine.apps.trainers.hf_trainer \
   config.training_args_config.learning_rate=1e-5
 ```
 
+**Optional performance:** for supported models, you can enable Flash Attention 2 via
+`config.auto_model_config.attn_implementation: "flash_attention_2"` (see the project root
+[`README.md`](./README.md) for install instructions: `uv sync --extra flash_attn`).
+
 #### Option B: OpenAI Fine-tuner
 
 ```bash

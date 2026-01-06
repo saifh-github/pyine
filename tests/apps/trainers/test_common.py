@@ -756,3 +756,42 @@ def test_validate_wandb_sweeper_requirements(
     assert len(job_returns) == 3  # list of job outputs
     assert all(jr.status == hydra.core.utils.JobStatus.COMPLETED for jr in job_returns)
     assert len(validation_called) == 3
+
+
+def test_flash_attention_fallback_to_sdpa(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that flash_attention_2 falls back to sdpa when unavailable."""
+    monkeypatch.setattr(
+        trainer_common.transformers.utils,
+        "is_flash_attn_2_available",
+        lambda: False,
+    )
+    auto_config = {"attn_implementation": "flash_attention_2", "use_cache": False}
+    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    assert resolved["attn_implementation"] == "sdpa"
+    assert resolved["use_cache"] is False
+
+
+def test_flash_attention_kept_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that flash_attention_2 is kept when available."""
+    monkeypatch.setattr(
+        trainer_common.transformers.utils,
+        "is_flash_attn_2_available",
+        lambda: True,
+    )
+    auto_config = {"attn_implementation": "flash_attention_2"}
+    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    assert resolved["attn_implementation"] == "flash_attention_2"
+
+
+def test_resolve_attn_implementation_no_change_for_other_impl() -> None:
+    """Test that non-flash_attention_2 implementations are not modified."""
+    auto_config = {"attn_implementation": "sdpa", "use_cache": True}
+    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    assert resolved == auto_config
+
+
+def test_resolve_attn_implementation_empty_config() -> None:
+    """Test that empty config returns empty config."""
+    auto_config: dict[str, typing.Any] = {}
+    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    assert resolved == {}

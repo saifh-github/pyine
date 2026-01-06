@@ -34,6 +34,21 @@ import pyine.utils.transformers
 logger = logging.getLogger(__name__)
 
 
+def _resolve_attn_implementation(
+    auto_model_config: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
+    """Resolve attention implementation with fallback to SDPA if flash-attn unavailable."""
+    requested_impl = auto_model_config.get("attn_implementation")
+    if requested_impl == "flash_attention_2":
+        if not transformers.utils.is_flash_attn_2_available():  # pyright: ignore[reportPrivateImportUsage]
+            logger.warning(
+                "flash-attn not available, falling back to sdpa attention implementation; "
+                "install flash-attn for better performance: uv sync --extra flash_attn"
+            )
+            return {**auto_model_config, "attn_implementation": "sdpa"}
+    return auto_model_config
+
+
 def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
     """Validates that wandb logging is enabled when using the wandb sweeper.
 
@@ -808,6 +823,8 @@ def instantiate_model(
     if auto_model_config is None:
         auto_model_config = {}
 
+    resolved_auto_config = _resolve_attn_implementation(auto_model_config)
+
     if checkpoint_path is not None:
         # Load model from checkpoint
         logger.info(f"setting up model from checkpoint: {checkpoint_path}")
@@ -824,6 +841,7 @@ def instantiate_model(
                     checkpoint_path,
                     torch_dtype=dtype,
                     device_map=device_map_to_use,
+                    **resolved_auto_config,
                 ),
             )
         else:
@@ -835,6 +853,7 @@ def instantiate_model(
                     checkpoint_path,
                     torch_dtype=dtype,
                     device_map=device_map_to_use,
+                    **resolved_auto_config,
                 ),
             )
     else:
@@ -844,7 +863,7 @@ def instantiate_model(
         model_kwargs: dict[str, typing.Any] = {
             "torch_dtype": dtype,
             "device_map": device_map_to_use,
-            **auto_model_config,
+            **resolved_auto_config,
         }
         if quantization_mode == "qlora":
             logger.info("  (setting up model using QLoRA 4-bit quantization)")

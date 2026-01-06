@@ -106,6 +106,25 @@ uv run pre-commit install
 **Note:** Always use `uv sync` rather than `uv pip install` when working with projects that have a
 `uv.lock` file. This ensures you get the exact dependency versions specified in the lockfile.
 
+### **Flash Attention (Optional)**
+
+For faster training with supported models (Qwen3, Llama, etc.), install Flash Attention:
+
+```shell
+# requires CUDA and compatible (recent) GPU (e.g. Ampere, Ada, Hopper, ...)
+# note: the dependency extra is named `flash_attn` in `pyproject.toml` (uv may display it as `flash-attn`).
+uv sync --extra flash_attn
+```
+
+If the above fails (flash-attn requires CUDA compilation), try:
+
+```shell
+uv pip install flash-attn --no-build-isolation
+```
+
+Note: Flash Attention only works on Linux with NVIDIA GPUs. If unavailable, the framework
+automatically falls back to PyTorch's SDPA implementation.
+
 ### Setting up environment variables
 
 The project relies on the [dotenv library](https://github.com/theskumar/python-dotenv) to manage

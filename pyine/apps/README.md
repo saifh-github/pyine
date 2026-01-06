@@ -37,6 +37,10 @@ Training/evaluation (Hydra-based apps):
 For instructions on how to create and manage new experiment configuration files for the apps that
 rely on Hydra, see [this document](../configs/README.md).
 
+Performance note: the HuggingFace trainer can optionally use Flash Attention 2 via
+`config.auto_model_config.attn_implementation: "flash_attention_2"`; see the project root
+[`README.md`](../../README.md) for install instructions (`uv sync --extra flash_attn`).
+
 ______________________________________________________________________
 
 ### Split a source dataset into train/valid/test and partitions

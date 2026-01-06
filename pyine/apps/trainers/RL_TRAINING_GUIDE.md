@@ -19,6 +19,7 @@ The RL training system is integrated into the main trainer framework and support
 - Python environment with all dependencies installed (`trl`, `transformers`, `torch`, etc.)
 - TACO dataset downloaded and processed
 - **vLLM server required**: Multi GPUs: at least one for the vLLM server, plus separate GPU(s) for training
+- Optional (performance): Flash Attention 2 support via `flash-attn` (see the project root [`README.md`](../../../README.md))
 
 ## Quick Start
 
@@ -55,6 +56,7 @@ config:
   # Model settings
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
+    attn_implementation: "flash_attention_2"  # optional; requires flash-attn (see repo root README)
 
   # Datamodule configuration (detailed structure required for proper dataset loading)
   datamodule_config:

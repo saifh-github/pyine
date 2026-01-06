@@ -913,6 +913,16 @@ wheels = [
 ]
 
 [[package]]
+name = "flash-attn"
+version = "2.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops", marker = "sys_platform == 'linux'" },
+    { name = "torch", marker = "sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/b2/8d76c41ad7974ee264754709c22963447f7f8134613fd9ce80984ed0dab7/flash_attn-2.8.3.tar.gz", hash = "sha256:1e71dd64a9e0280e0447b8a0c2541bad4bf6ac65bdeaa2f90e51a9e57de0370d", size = 8447812, upload-time = "2025-08-15T08:28:12.911Z" }
+
+[[package]]
 name = "flashinfer-python"
 version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3145,6 +3155,9 @@ dev = [
     { name = "seaborn" },
     { name = "wordcloud" },
 ]
+flash-attn = [
+    { name = "flash-attn", marker = "sys_platform == 'linux'" },
+]
 vllm = [
     { name = "trl", extra = ["vllm"], marker = "sys_platform != 'darwin'" },
 ]
@@ -3160,6 +3173,7 @@ requires-dist = [
     { name = "deepspeed", specifier = ">=0.18.3" },
     { name = "evaluate", specifier = ">=0.4.5,<1.0.0" },
     { name = "filelock", specifier = ">=3.20.0,<4.0.0" },
+    { name = "flash-attn", marker = "sys_platform == 'linux' and extra == 'flash-attn'", specifier = ">=2.8.3" },
     { name = "gitpython", specifier = ">=3.1.45,<4.0.0" },
     { name = "hydra-colorlog", specifier = ">=1.2.0,<2.0.0" },
     { name = "hydra-core", specifier = ">=1.3.2,<1.4.0" },
@@ -3211,7 +3225,7 @@ requires-dist = [
     { name = "wandb", specifier = ">=0.23.1,<1.0.0" },
     { name = "wordcloud", marker = "extra == 'dev'", specifier = ">=1.9.4" },
 ]
-provides-extras = ["dev", "vllm"]
+provides-extras = ["dev", "vllm", "flash-attn"]
 
 [[package]]
 name = "pyparsing"

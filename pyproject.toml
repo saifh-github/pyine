@@ -55,7 +55,6 @@ dependencies = [
     "trl>=0.26.1",
     "unidiff>=0.7.5,<0.8.0",
     "wandb>=0.23.1,<1.0.0",
-    # @@@@ TODO: add install instructions for flash-attn?
 ]
 
 [project.optional-dependencies]
@@ -77,6 +76,9 @@ dev = [
 ]
 vllm = [
     "trl[vllm]>=0.26.1; sys_platform != 'darwin'",  # can't install vLLM on MacOS
+]
+flash_attn = [
+    "flash-attn>=2.8.3; sys_platform == 'linux'",  # CUDA-only, Linux
 ]
 
 [build-system]
