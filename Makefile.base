@@ -6,7 +6,7 @@
 SRC_DIR ?= src
 TEST_DIR ?= tests
 
-.PHONY: info help clean install lock lock-deps stats setup-nbstripout check-notebooks
+.PHONY: info help clean install install-all lock lock-deps stats setup-nbstripout check-notebooks
 .PHONY: lint lint-precommit lint-ruff lint-pyright format
 .PHONY: test tests test-integration tests-integration test-slow tests-slow test-all tests-all test-full tests-full
 .PHONY: check coverage cov
@@ -43,6 +43,25 @@ install: ## Installs development environment and dependencies
 	fi
 	@if [ ! -d .venv ]; then uv venv; fi
 	uv sync --extra dev
+	@if [ -f .pre-commit-config.yaml ]; then \
+		echo "Installing pre-commit hooks..."; \
+		uv run pre-commit install; \
+	fi
+	@$(MAKE) setup-nbstripout
+
+install-all: ## Installs all dependencies including optional extras (vllm, flash_attn)
+	@command -v uv >/dev/null 2>&1 || { echo "Error: uv is not installed. Please install uv first."; exit 1; }
+	@if [ -d .venv ]; then \
+		echo "Warning: .venv already exists. Remove it and recreate? (y/N)"; \
+		read -r answer; \
+		if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
+			rm -rf .venv; \
+		else \
+			echo "Keeping existing .venv"; \
+		fi; \
+	fi
+	@if [ ! -d .venv ]; then uv venv; fi
+	uv sync --all-extras
 	@if [ -f .pre-commit-config.yaml ]; then \
 		echo "Installing pre-commit hooks..."; \
 		uv run pre-commit install; \

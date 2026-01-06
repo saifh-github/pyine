@@ -84,6 +84,15 @@ This will:
 - Install all dependencies from `uv.lock` (including dev dependencies)
 - Set up pre-commit hooks automatically
 
+**For compute nodes with CUDA support**, use `make install-all` to also install optional dependencies
+like `vllm` and `flash-attn`:
+
+```shell
+make install-all
+```
+
+This installs all optional extras in addition to dev dependencies.
+
 ### **Manual Installation**
 
 If you prefer to install manually or need more control:
@@ -95,9 +104,11 @@ source .venv/bin/activate  # for MacOS/Linux
 .\.venv\Scripts\activate   # for Windows
 
 # Install dependencies from lockfile
-uv sync --extra dev  # includes dev tools (pytest, ruff, etc.)
+uv sync --extra dev                 # includes dev tools (pytest, ruff, etc.)
 # or
-uv sync              # for base dependencies only
+uv sync --all-extras                # includes all optional dependencies (dev, vllm, flash_attn)
+# or
+uv sync                             # for base dependencies only
 
 # (Optional) Install pre-commit hooks
 uv run pre-commit install
@@ -106,24 +117,10 @@ uv run pre-commit install
 **Note:** Always use `uv sync` rather than `uv pip install` when working with projects that have a
 `uv.lock` file. This ensures you get the exact dependency versions specified in the lockfile.
 
-### **Flash Attention (Optional)**
+**Note on optional dependencies:** The `vllm` and `flash_attn` extras are platform-specific:
 
-For faster training with supported models (Qwen3, Llama, etc.), install Flash Attention:
-
-```shell
-# requires CUDA and compatible (recent) GPU (e.g. Ampere, Ada, Hopper, ...)
-# note: the dependency extra is named `flash_attn` in `pyproject.toml` (uv may display it as `flash-attn`).
-uv sync --extra flash_attn
-```
-
-If the above fails (flash-attn requires CUDA compilation), try:
-
-```shell
-uv pip install flash-attn --no-build-isolation
-```
-
-Note: Flash Attention only works on Linux with NVIDIA GPUs. If unavailable, the framework
-automatically falls back to PyTorch's SDPA implementation.
+- `vllm` is only available on Linux (not macOS);
+- `flash_attn` requires Linux with CUDA and a compatible GPU (e.g., Ampere, Ada, Hopper, ...).
 
 ### Setting up environment variables
 

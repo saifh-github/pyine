@@ -200,6 +200,9 @@ docstring-code-format = true  # Format code blocks in docstrings
 skip-magic-trailing-comma = false  # Keep Black's trailing comma behavior
 line-ending = "auto"  # Use system default line endings
 
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]
+
 [tool.pyright]
 typeCheckingMode = "strict"
 include = ["pyine"]
