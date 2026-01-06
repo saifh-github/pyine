@@ -2,10 +2,12 @@ import collections.abc
 import json
 import logging
 import pathlib
+import time
 import typing
 
 import transformers
 
+import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.transformers.checkpoints
 
@@ -15,6 +17,7 @@ __all__ = [
     "StdoutMilestones",
     "EpochAwarenessCallback",
     "RewardLoggingCallback",
+    "ThroughputLoggingCallback",
     "create_epoch_awareness_callback",
 ]
 
@@ -52,9 +55,11 @@ class StdoutMilestones(transformers.TrainerCallback):
 
     # -------------------------- internal helpers --------------------------
 
-    def _should_print(self, args: transformers.TrainingArguments) -> bool:
+    def _should_print(self) -> bool:
         """Check if output should be printed on this process."""
-        return (not self.only_main_process) or (typing.cast("int", getattr(args, "process_index", 0)) == 0)
+        if not self.only_main_process:
+            return True
+        return pyine.utils.distrib.is_main_process()
 
     @staticmethod
     def _fmt_epoch(epoch: float | None) -> str:
@@ -83,7 +88,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called at the end of trainer initialization."""
-        if self._should_print(args):
+        if self._should_print():
             self.print_fn("init_end")
 
     @typing.override
@@ -95,7 +100,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called at the beginning of training."""
-        if not self._should_print(args):
+        if not self._should_print():
             return
         self.print_fn("train_begin")
         if self.print_config_at_start:
@@ -130,7 +135,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called at the beginning of each epoch."""
-        if self._should_print(args):
+        if self._should_print():
             self.print_fn(f"epoch_begin; epoch={self._fmt_epoch(state.epoch)}, global_step={state.global_step}")
 
     @typing.override
@@ -142,7 +147,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called at the end of each epoch."""
-        if self._should_print(args):
+        if self._should_print():
             self.print_fn(f"epoch_end; epoch={self._fmt_epoch(state.epoch)}, global_step={state.global_step}")
 
     @typing.override
@@ -156,7 +161,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         """Called when logging occurs during training."""
         assert "logs" in kwargs and isinstance(kwargs["logs"], collections.abc.Mapping)
         logs = typing.cast("collections.abc.Mapping[str, float | int | str | bool]", kwargs["logs"])
-        if self._should_print(args) and logs:
+        if self._should_print() and logs:
             self.print_fn(f"log; step={state.global_step}, " + self._fmt_dict(logs))
 
     @typing.override
@@ -170,7 +175,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         """Called after evaluation."""
         assert "metrics" in kwargs and isinstance(kwargs["metrics"], collections.abc.Mapping)
         metrics = typing.cast("collections.abc.Mapping[str, float | int]", kwargs["metrics"])
-        if self._should_print(args) and metrics:
+        if self._should_print() and metrics:
             self.print_fn(
                 f"evaluate; step={state.global_step}, epoch={self._fmt_epoch(state.epoch)}, " + self._fmt_dict(metrics)
             )
@@ -185,7 +190,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called after prediction."""
-        if self._should_print(args) and metrics:
+        if self._should_print() and metrics:
             self.print_fn(
                 f"predict; step={state.global_step}, epoch={self._fmt_epoch(state.epoch)}, " + self._fmt_dict(metrics)
             )
@@ -199,7 +204,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called when saving a checkpoint."""
-        if not self._should_print(args):
+        if not self._should_print():
             return
         ckpt_dir_path = pyine.utils.transformers.checkpoints.get_checkpoint_folder_path(args, state)
         self.print_fn(f"save; checkpoint_dir={ckpt_dir_path.absolute()}")
@@ -213,7 +218,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Called at the end of training."""
-        if self._should_print(args):
+        if self._should_print():
             self.print_fn(
                 f"train_end; steps={state.global_step}, "
                 f"best_metric={state.best_metric}, "
@@ -654,3 +659,105 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             logger.debug("restored reward adapter state from checkpoint")
         self.reward_manager.load_state(state["manager"])
         logger.debug("restored reward manager state from checkpoint")
+
+
+class ThroughputLoggingCallback(transformers.TrainerCallback):
+    """Injects rolling throughput metrics into the trainer's log dict.
+
+    Tracks elapsed compute time between `on_log` calls (excluding checkpoint I/O) and
+    calculates throughput. Metrics are injected into the `logs` dict passed to `on_log`,
+    so they flow to whatever reporters the trainer uses (W&B, TensorBoard, etc.).
+
+    Injected metrics:
+        - `{prefix}samples_per_second`: Training samples processed per second
+        - `{prefix}steps_per_second`: Optimizer steps per second
+
+    Args:
+        only_main_process: If True, only injects metrics on the main process (rank 0).
+        prefix: Prefix for metric keys.
+    """
+
+    def __init__(
+        self,
+        *,
+        only_main_process: bool = True,
+        prefix: str = "throughput/",
+    ) -> None:
+        self.only_main_process = only_main_process
+        self.prefix = prefix
+        self._last_log_time: float | None = None
+        self._last_log_step: int = 0
+
+    def _should_log(self) -> bool:
+        """Check if metrics should be logged on this process."""
+        if not self.only_main_process:
+            return True
+        return pyine.utils.distrib.is_main_process()
+
+    def _get_effective_batch_size(
+        self,
+        args: transformers.TrainingArguments,
+    ) -> int:
+        """Calculate effective batch size accounting for distributed training and gradient accumulation."""
+        per_device_batch_size = typing.cast("int", getattr(args, "per_device_train_batch_size", 1))
+        world_size = typing.cast("int", getattr(args, "world_size", 1))
+        grad_accum_steps = typing.cast("int", getattr(args, "gradient_accumulation_steps", 1))
+        return per_device_batch_size * world_size * grad_accum_steps
+
+    @typing.override
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Initialize timing state at the start of training."""
+        self._last_log_time = time.perf_counter()
+        self._last_log_step = state.global_step
+
+    @typing.override
+    def on_log(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Calculate and inject throughput metrics whenever the trainer logs."""
+        if not self._should_log():
+            return
+        if self._last_log_time is None:
+            self._last_log_time = time.perf_counter()  # on_train_begin wasn't called
+            self._last_log_step = state.global_step
+            return
+        current_time = time.perf_counter()
+        elapsed = current_time - self._last_log_time
+        steps_delta = state.global_step - self._last_log_step
+        if elapsed <= 0 or steps_delta <= 0:
+            self._last_log_time = current_time  # avoid division by zero
+            self._last_log_step = state.global_step
+            return
+        effective_batch_size = self._get_effective_batch_size(args)
+        samples_delta = steps_delta * effective_batch_size
+        samples_per_second = samples_delta / elapsed
+        steps_per_second = steps_delta / elapsed
+        # inject metrics into the logs dict so they flow to whatever reporters are configured
+        logs = kwargs.get("logs")
+        if logs is not None and isinstance(logs, dict):
+            logs[f"{self.prefix}samples_per_second"] = samples_per_second
+            logs[f"{self.prefix}steps_per_second"] = steps_per_second
+        # update state for next interval
+        self._last_log_time = current_time
+        self._last_log_step = state.global_step
+
+    @typing.override
+    def on_save(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Reset timing after checkpoint save to exclude I/O overhead from throughput."""
+        self._last_log_time = time.perf_counter()  # exclude checkpoint I/O from next interval

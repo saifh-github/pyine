@@ -42,6 +42,8 @@ class TraceFilteringConfig(pydantic.BaseModel):
     identifier, e.g. `TACO/train/p000001/s0001/t0001`). Family members differ only by augmentation.
     """
 
+    # @@@@ TODO: update lengths to be optionally counted as tokens? (add flag to toggle between chars/tokens?)
+
     model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
 

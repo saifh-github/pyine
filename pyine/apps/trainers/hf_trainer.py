@@ -115,7 +115,8 @@ def sft_train(
     ):
         raise ValueError("training_args_config.save_steps must be > 0 when save_strategy='steps'")
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
-    callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
+    throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback()
+    callbacks: list[transformers.TrainerCallback] = [milestone_logger, throughput_callback, eval_metrics_callback]
     train_subset_names = getattr(config.datamodule_config, "train_subset_names", [])
     epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
         train_dataset=train_ds,
@@ -259,7 +260,11 @@ def rl_train(
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)
 
-    # 7. Train with resume support
+    # 7. Add throughput logging callback
+    throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback()
+    pyine.apps.trainers.common.add_callback_to_trainer(trainer, throughput_callback)
+
+    # 8. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
     pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
     pyine.apps.trainers.common.log_shutdown_status(shutdown_manager, training_type="RL training")

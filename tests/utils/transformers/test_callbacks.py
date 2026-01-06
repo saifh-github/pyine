@@ -13,37 +13,25 @@ class TestStdoutMilestones:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Test _should_print returns True on main process when only_main_process=True."""
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         callback = callbacks_module.StdoutMilestones(only_main_process=True)
-        args = mocker.MagicMock(process_index=0)
-        assert callback._should_print(args) is True
+        assert callback._should_print() is True
 
     def test_should_print_main_process_on_worker(
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Test _should_print returns False on worker process when only_main_process=True."""
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback = callbacks_module.StdoutMilestones(only_main_process=True)
-        args = mocker.MagicMock(process_index=1)
-        assert callback._should_print(args) is False
+        assert callback._should_print() is False
 
     def test_should_print_all_processes(
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Test _should_print returns True on all processes when only_main_process=False."""
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback = callbacks_module.StdoutMilestones(only_main_process=False)
-        args = mocker.MagicMock(process_index=1)
-        assert callback._should_print(args) is True
-
-    def test_should_print_missing_process_index(
-        self,
-        mocker: pytest_mock.MockerFixture,
-    ) -> None:
-        """Test _should_print handles missing process_index attribute."""
-        callback = callbacks_module.StdoutMilestones(only_main_process=True)
-        args = mocker.MagicMock(spec=[])  # No process_index attribute
-        assert callback._should_print(args) is True
+        assert callback._should_print() is True
 
     def test_fmt_epoch_with_float(self) -> None:
         """Test _fmt_epoch formats float epoch correctly."""
@@ -85,7 +73,7 @@ class TestStdoutMilestones:
 
     @pytest.fixture
     def callback(self, mock_print_fn: pytest.FixtureRequest) -> callbacks_module.StdoutMilestones:
-        """Create a callbacks_module.StdoutMilestones instance with mock print function."""
+        """Create a StdoutMilestones instance with mock print function."""
         return callbacks_module.StdoutMilestones(print_fn=mock_print_fn)
 
     @pytest.fixture
@@ -153,12 +141,13 @@ class TestStdoutMilestones:
         self,
         callback: pytest.FixtureRequest,
         mock_print_fn: pytest.FixtureRequest,
+        args: pytest.FixtureRequest,
         state: pytest.FixtureRequest,
         control: pytest.FixtureRequest,
         mocker: pytest.FixtureRequest,
     ) -> None:
         """Test on_init_end doesn't print on worker process."""
-        args = mocker.MagicMock(process_index=1)
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback.on_init_end(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -192,12 +181,13 @@ class TestStdoutMilestones:
         self,
         callback: pytest.FixtureRequest,
         mock_print_fn: pytest.FixtureRequest,
+        args: pytest.FixtureRequest,
         state: pytest.FixtureRequest,
         control: pytest.FixtureRequest,
         mocker: pytest.FixtureRequest,
     ) -> None:
         """Test on_train_begin doesn't print on worker process."""
-        args = mocker.MagicMock(process_index=1)
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback.on_train_begin(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -267,12 +257,13 @@ class TestStdoutMilestones:
         self,
         callback: pytest.FixtureRequest,
         mock_print_fn: pytest.FixtureRequest,
+        args: pytest.FixtureRequest,
         state: pytest.FixtureRequest,
         control: pytest.FixtureRequest,
         mocker: pytest.FixtureRequest,
     ) -> None:
         """Test on_log doesn't print on worker process."""
-        args = mocker.MagicMock(process_index=1)
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         logs = {"loss": 0.5}
         callback.on_log(args, state, control, logs=logs)
         mock_print_fn.assert_not_called()
@@ -348,12 +339,13 @@ class TestStdoutMilestones:
         self,
         callback: pytest.FixtureRequest,
         mock_print_fn: pytest.FixtureRequest,
+        args: pytest.FixtureRequest,
         state: pytest.FixtureRequest,
         control: pytest.FixtureRequest,
         mocker: pytest.FixtureRequest,
     ) -> None:
         """Test on_save doesn't print on worker process."""
-        args = mocker.MagicMock(process_index=1)
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback.on_save(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -375,17 +367,18 @@ class TestStdoutMilestones:
         self,
         callback: pytest.FixtureRequest,
         mock_print_fn: pytest.FixtureRequest,
+        args: pytest.FixtureRequest,
         state: pytest.FixtureRequest,
         control: pytest.FixtureRequest,
         mocker: pytest.FixtureRequest,
     ) -> None:
         """Test on_train_end doesn't print on worker process."""
-        args = mocker.MagicMock(process_index=1)
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         callback.on_train_end(args, state, control)
         mock_print_fn.assert_not_called()
 
     def test_callback_inheritance(self) -> None:
-        """Test that callbacks_module.StdoutMilestones properly inherits from TrainerCallback."""
+        """Test that StdoutMilestones properly inherits from TrainerCallback."""
         callback = callbacks_module.StdoutMilestones()
         assert isinstance(callback, transformers.TrainerCallback)
 
@@ -672,3 +665,214 @@ class TestRewardLoggingCallback:
         callback._saw_eval_prediction_step = False
         callback.on_prediction_step(args, state, control)
         assert callback._saw_eval_prediction_step is True
+
+
+class TestThroughputLoggingCallback:
+    @pytest.fixture
+    def args(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> pytest_mock.MockFixture:
+        return mocker.MagicMock(
+            per_device_train_batch_size=4,
+            world_size=2,
+            gradient_accumulation_steps=2,
+        )
+
+    @pytest.fixture
+    def state(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> pytest_mock.MockFixture:
+        return mocker.MagicMock(global_step=0)
+
+    @pytest.fixture
+    def control(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> pytest_mock.MockFixture:
+        return mocker.MagicMock()
+
+    def test_should_log_main_process(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
+        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        assert callback._should_log() is True
+
+    def test_should_log_worker_process(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        assert callback._should_log() is False
+
+    def test_should_log_all_processes(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=False)
+        assert callback._should_log() is True
+
+    def test_effective_batch_size(
+        self,
+        args: pytest_mock.MockFixture,
+    ) -> None:
+        callback = callbacks_module.ThroughputLoggingCallback()
+        # 4 * 2 * 2 = 16
+        assert callback._get_effective_batch_size(args) == 16
+
+    def test_effective_batch_size_missing_attrs(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        callback = callbacks_module.ThroughputLoggingCallback()
+        args = mocker.MagicMock(spec=[])  # no attributes
+        # defaults to 1 * 1 * 1 = 1
+        assert callback._get_effective_batch_size(args) == 1
+
+    def test_on_train_begin_initializes_state(
+        self,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        callback = callbacks_module.ThroughputLoggingCallback()
+        assert callback._last_log_time is None
+        callback.on_train_begin(args, state, control)
+        assert callback._last_log_time is not None
+        assert callback._last_log_step == 0
+
+    def test_on_log_calculates_throughput(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        # patch perf_counter to return fixed values: 100.0 at train_begin, 102.0 at on_log
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 102.0]  # 2 seconds elapsed
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        state.global_step = 10  # 10 steps completed
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # effective batch size = 4 * 2 * 2 = 16
+        # samples = 10 * 16 = 160, elapsed = 2 seconds
+        assert logs["throughput/samples_per_second"] == 80.0  # 160 / 2
+        assert logs["throughput/steps_per_second"] == 5.0  # 10 / 2
+
+    def test_on_log_skips_on_worker_process(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        state = mocker.MagicMock(global_step=10)
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        assert "throughput/samples_per_second" not in logs
+        assert "throughput/steps_per_second" not in logs
+
+    def test_on_log_handles_zero_elapsed(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        # patch perf_counter to return same value (elapsed == 0)
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.return_value = 100.0
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        state.global_step = 10  # steps advanced but time didn't
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # should skip logging due to zero elapsed time (avoids division by zero)
+        assert "throughput/samples_per_second" not in logs
+
+    def test_on_log_handles_zero_steps(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        # patch perf_counter: time advances but steps don't
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        # global_step hasn't changed (steps_delta = 0)
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        assert "throughput/samples_per_second" not in logs
+
+    def test_custom_prefix(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]  # 1 second elapsed
+        callback = callbacks_module.ThroughputLoggingCallback(prefix="train/speed/")
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        state.global_step = 5
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        assert "train/speed/samples_per_second" in logs
+        assert "train/speed/steps_per_second" in logs
+        # 5 steps * 16 batch size / 1 second = 80 samples/sec
+        assert logs["train/speed/samples_per_second"] == 80.0
+        assert logs["train/speed/steps_per_second"] == 5.0
+
+    def test_on_save_resets_timing(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 105.0, 106.0]  # train_begin, on_save, on_log
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        # checkpoint happens at t=105 (5 sec of I/O)
+        callback.on_save(args, state, control)
+        # on_log happens at t=106, but timer was reset at t=105
+        state.global_step = 10
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # elapsed = 106 - 105 = 1 second (not 6 seconds)
+        assert logs["throughput/steps_per_second"] == 10.0
+
+    def test_resume_training_with_nonzero_step(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Test that resuming training (global_step > 0) works correctly."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=500)  # resumed from step 500
+        callback.on_train_begin(args, state, control)
+        assert callback._last_log_step == 500
+        state.global_step = 510  # 10 more steps
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        assert logs["throughput/steps_per_second"] == 10.0
+
+    def test_callback_inheritance(self) -> None:
+        callback = callbacks_module.ThroughputLoggingCallback()
+        assert isinstance(callback, transformers.TrainerCallback)
