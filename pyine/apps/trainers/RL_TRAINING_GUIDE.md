@@ -229,7 +229,8 @@ config:
 CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
     --model Qwen/Qwen3-4B-Instruct-2507 \
     --data_parallel_size 3 \
-    --port 8000
+    --port 8000 \
+    --max_model_len 4096  # adjust this carefully based on your expected prompt/output lengths!
 ```
 
 Wait for server to start and show:
@@ -238,7 +239,18 @@ Wait for server to start and show:
 INFO: Uvicorn running on http://0.0.0.0:8000
 ```
 
-**Note:** Make sure the `--port` argument matches `grpo_config.vllm_server_port` in your experiment config.
+**Note 1:** Make sure the `--port` argument matches `grpo_config.vllm_server_port` in your
+experiment config.
+
+**Note 2:** the `--max_model_len` argument is important because it effectively sets the
+“worst-case” sequence size the engine must be ready to serve, and that choice drives memory
+planning and attention-kernel behavior. If you set it much larger than you actually need (or leave
+it to its default, which uses the model's full context size), vLLM will reserve more KV-cache space,
+have fewer usable cache blocks for a given GPU memory budget, fit fewer concurrent sequences,
+and hit cache pressure or earlier swapping/evictions, which lowers throughput and adds overhead;
+if you set it close to your true longest prompt+generation length, you free KV-cache capacity,
+increase batching/concurrency, reduce memory waste, and typically get better, more stable generation
+speed.
 
 ### Step 3: Run RL Training
 

@@ -35,6 +35,7 @@ config:
   # Model settings (same as SFT v0)
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
+    attn_implementation: "flash_attention_2"  # use flash attention for faster training
 
   # Datamodule config (updated to match prototype structure)
   datamodule_config:
@@ -124,7 +125,7 @@ config:
     report_to: ["wandb"]
     # ------------
     per_device_train_batch_size: 1  # GRPO typically uses smaller batch sizes
-    per_device_eval_batch_size: 4  # Larger eval batch (from prototype train_grpo.py)
+    per_device_eval_batch_size: 24  # Larger eval batch (from prototype train_grpo.py)
     gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8 (from prototype)
     learning_rate: 1e-5  # Lower than SFT (2e-4) for RL stability
     weight_decay: 0.05
@@ -150,8 +151,9 @@ config:
     # ------------
     # GRPO-specific parameters (from prototype train_grpo.py)
     num_generations: 8  # Generate 8 samples per prompt for exploration
-    num_generations_eval: 2  # Use fewer generations during eval to save compute
+    num_generations_eval: 1  # Use fewer generations during eval to save compute
     max_completion_length: 2048  # Allow longer completions for complex code execution
+    max_prompt_length: 5000  # truncate prompts beyond this length (last-resort)
     temperature: 0.7
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient
