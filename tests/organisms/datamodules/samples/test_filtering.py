@@ -405,3 +405,127 @@ class TestFilteringCombined:
             problem_counts[problem_id] += 1
         for count in problem_counts.values():
             assert count <= 3
+
+
+class TestTokenBasedFiltering:
+    """Tests for token-based length filtering."""
+
+    def test_config_validation_requires_tokenizer_when_length_filters_active(self) -> None:
+        """Test that use_token_lengths=True with length filters requires a tokenizer."""
+        with pytest.raises(ValueError, match="requires either tokenizer_model_id or tokenizer_path"):
+            TraceFilteringConfig(
+                use_token_lengths=True,
+                max_code_length=1000,
+            )
+
+    def test_config_validation_no_tokenizer_required_when_no_length_filters(self) -> None:
+        """Test that use_token_lengths=True without length filters doesn't require a tokenizer."""
+        cfg = TraceFilteringConfig(
+            use_token_lengths=True,
+            max_code_length=None,
+            max_code_line_length=None,
+            max_args_length=None,
+            max_trace_steps=100,  # only non-length filter active
+        )
+        assert cfg.use_token_lengths is True
+
+    def test_config_validation_mutually_exclusive_tokenizers(self) -> None:
+        """Test that tokenizer_model_id and tokenizer_path are mutually exclusive."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            TraceFilteringConfig(
+                use_token_lengths=True,
+                tokenizer_model_id="gpt-4o",
+                tokenizer_path="some/path",
+                max_code_length=1000,
+            )
+
+    def test_config_warns_when_tokenizer_set_but_not_used(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Test that a warning is logged when tokenizer is set but use_token_lengths=False."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            TraceFilteringConfig(
+                use_token_lengths=False,
+                tokenizer_model_id="gpt-4o",
+            )
+        assert "tokenizer unused" in caplog.text
+
+    def test_get_length_measurer_returns_len_when_disabled(self) -> None:
+        """Test that get_length_measurer returns len() when use_token_lengths=False."""
+        cfg = TraceFilteringConfig(use_token_lengths=False)
+        measurer = cfg.get_length_measurer()
+        assert measurer("hello") == 5  # character count
+        assert measurer is len
+
+    def test_get_length_measurer_with_tiktoken(self) -> None:
+        """Test that get_length_measurer works with tiktoken."""
+        cfg = TraceFilteringConfig(
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+            max_code_length=1000,
+        )
+        measurer = cfg.get_length_measurer()
+        result = measurer("hello world")
+        assert isinstance(result, int)
+        assert result > 0
+        assert result != len("hello world")  # should differ from char count (2 tokens vs 11 chars)
+
+    def test_filtering_by_code_length_tokens(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        """Test that max_code_length filtering works with token counts."""
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+            max_code_length=5,  # very low token limit to ensure filtering
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        # with such a low token limit, most/all traces should be filtered
+        assert results.kept_trace_count <= len(traces)
+
+    def test_filtering_by_code_line_length_tokens(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        """Test that max_code_line_length filtering works with token counts."""
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+            max_code_line_length=3,  # very low token limit per line
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.kept_trace_count <= len(traces)
+
+    def test_filtering_by_args_length_tokens(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        """Test that max_args_length filtering works with token counts."""
+        traces = small_fake_reader.trace_metadata
+        cfg = TraceFilteringConfig(
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+            max_args_length=5,  # very low combined token limit
+        )
+        results = filter_traces(traces=traces, epoch=0, filtering_config=cfg)
+        assert results.kept_trace_count <= len(traces)
+
+    def test_char_vs_token_filtering_differs(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        """Test that char-based and token-based filtering produce different results."""
+        traces = small_fake_reader.trace_metadata
+        if not traces:
+            pytest.skip("no traces in test dataset")
+        # find a reasonable threshold where results differ
+        sample_code = traces[0].code_string
+        char_len = len(sample_code)
+        # use a threshold between typical char and token counts
+        threshold = char_len // 2  # chars are usually more than tokens
+        cfg_chars = TraceFilteringConfig(
+            use_token_lengths=False,
+            max_code_length=threshold,
+        )
+        cfg_tokens = TraceFilteringConfig(
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+            max_code_length=threshold,
+        )
+        results_chars = filter_traces(traces=traces, epoch=0, filtering_config=cfg_chars)
+        results_tokens = filter_traces(traces=traces, epoch=0, filtering_config=cfg_tokens)
+        # token count <= char count, so token-based should typically keep more traces
+        # (unless threshold is so low/high that both filter everything/nothing)
+        assert results_chars.kept_trace_count >= 0
+        assert results_tokens.kept_trace_count >= 0

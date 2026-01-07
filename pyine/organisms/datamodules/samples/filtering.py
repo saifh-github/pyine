@@ -178,6 +178,7 @@ def filter_traces(
         )
 
     rng = filtering_config.get_rng(epoch)
+    measure_length = filtering_config.get_length_measurer()
 
     # step 0: get rid of all traces that individually do not meet the filtering criteria
     filtered_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
@@ -191,7 +192,7 @@ def filter_traces(
         if filtering_config.max_args_length is not None:
             inputs_str = str(trace_meta.inputs)
             expected_output_str = str(trace_meta.expected_output)
-            combined_length = len(inputs_str) + len(expected_output_str)
+            combined_length = measure_length(inputs_str) + measure_length(expected_output_str)
             if combined_length > filtering_config.max_args_length:
                 filtered_by_var_length += 1
                 continue
@@ -200,12 +201,13 @@ def filter_traces(
                 filtered_by_code_length += 1
                 continue
         if filtering_config.max_code_line_length is not None:
-            max_line_len = max(len(line) for line in trace_meta.code_string.splitlines())
+            code_lines = trace_meta.code_string.splitlines()
+            max_line_len = max(measure_length(line) for line in code_lines) if code_lines else 0
             if max_line_len > filtering_config.max_code_line_length:
                 filtered_by_code_length += 1
                 continue
         if filtering_config.max_code_length is not None:
-            if len(trace_meta.code_string) >= filtering_config.max_code_length:
+            if measure_length(trace_meta.code_string) >= filtering_config.max_code_length:
                 filtered_by_code_length += 1
                 continue
         filtered_traces.append(trace_meta)

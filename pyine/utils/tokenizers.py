@@ -36,6 +36,19 @@ def get_hf_tokenizer(
     return typing.cast("transformers.PreTrainedTokenizer", tokenizer)
 
 
+@functools.lru_cache(maxsize=16)
+def get_hf_tokenizer_cached(
+    pretrained_model_name_or_path: str,
+) -> transformers.PreTrainedTokenizer:
+    """Get a cached HuggingFace tokenizer from a pretrained model name or path.
+
+    This is a simpler cached version of get_hf_tokenizer for use cases where only the path
+    is needed (e.g., token counting for filtering). For tokenizers with special configuration
+    options, use get_hf_tokenizer directly.
+    """
+    return get_hf_tokenizer(pretrained_model_name_or_path)
+
+
 @functools.lru_cache(maxsize=64)
 def get_openai_tokenizer(
     model_id: str,

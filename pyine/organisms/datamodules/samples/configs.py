@@ -9,6 +9,7 @@ import pydantic
 
 import pyine.data.datamodule
 import pyine.utils.code.execution
+import pyine.utils.tokenizers
 from pyine.organisms.datamodules.samples.common import (
     SampleCodeType,
     SampleCodeTypeSet,
@@ -41,8 +42,6 @@ class TraceFilteringConfig(pydantic.BaseModel):
     groups traces that share the same solution code AND test arguments (i.e., same augmentless trace
     identifier, e.g. `TACO/train/p000001/s0001/t0001`). Family members differ only by augmentation.
     """
-
-    # @@@@ TODO: update lengths to be optionally counted as tokens? (add flag to toggle between chars/tokens?)
 
     model_config = pydantic.ConfigDict(frozen=True, arbitrary_types_allowed=False, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
@@ -79,11 +78,26 @@ class TraceFilteringConfig(pydantic.BaseModel):
     max_code_line_count: int | None = pydantic.Field(default=1000, ge=1)
     """Maximum number of code lines allowed in a trace; exceeding traces are skipped."""
     max_code_line_length: int | None = pydantic.Field(default=1000, ge=1)
-    """Maximum length (in chars) of a single code line in a trace; exceeding traces are skipped."""
+    """Maximum length of a single code line; chars by default, tokens when use_token_lengths=True."""
     max_code_length: int | None = pydantic.Field(default=10_000, ge=1)
-    """Maximum length (in chars) of code strings in a trace; exceeding traces are skipped."""
+    """Maximum length of code strings; chars by default, tokens when use_token_lengths=True."""
     max_args_length: int | None = pydantic.Field(default=1000, ge=1)
-    """Maximum length (in chars) of trace inputs or expected outputs; exceeding traces are skipped."""
+    """Maximum combined length of trace inputs and expected outputs; chars by default."""
+    use_token_lengths: bool = False
+    """If True, interpret length caps as token counts instead of character counts.
+
+    Requires tokenizer_model_id or tokenizer_path when any of those length filters are active.
+    """
+    tokenizer_model_id: str | None = None
+    """OpenAI/tiktoken model ID (e.g., 'gpt-4o') for token counting.
+
+    Uses pyine.utils.tokenizers.get_openai_tokenizer(). Mutually exclusive with tokenizer_path.
+    """
+    tokenizer_path: str | None = None
+    """HuggingFace tokenizer path for token counting.
+
+    Uses pyine.utils.tokenizers.get_hf_tokenizer(). Mutually exclusive with tokenizer_model_id.
+    """
 
     @property
     def any_filtering_enabled(self) -> bool:
@@ -105,6 +119,22 @@ class TraceFilteringConfig(pydantic.BaseModel):
         """Validates the content of the config beyond basic validation."""
         if not self.any_filtering_enabled:
             logger.warning("TraceFilteringConfig has no active filters; all traces will pass filtering")
+        # validate token-based filtering configuration
+        has_token_length_filter = (
+            self.max_code_line_length is not None
+            or self.max_code_length is not None
+            or self.max_args_length is not None
+        )
+        if self.use_token_lengths and has_token_length_filter:
+            if self.tokenizer_model_id is None and self.tokenizer_path is None:
+                raise ValueError(
+                    "use_token_lengths=True with active length filters requires "
+                    "either tokenizer_model_id or tokenizer_path"
+                )
+        if self.tokenizer_model_id is not None and self.tokenizer_path is not None:
+            raise ValueError("tokenizer_model_id and tokenizer_path are mutually exclusive")
+        if not self.use_token_lengths and (self.tokenizer_model_id is not None or self.tokenizer_path is not None):
+            logger.warning("tokenizer_model_id/tokenizer_path set but use_token_lengths=False; tokenizer unused")
         return self
 
     def get_rng(self, epoch: int | None = None) -> np.random.Generator:
@@ -116,6 +146,34 @@ class TraceFilteringConfig(pydantic.BaseModel):
         if self.seed is None:
             return get_rng()  # always return a non-deterministic rng, no matter the epoch
         return get_rng(np.random.SeedSequence([self.seed, 0 if epoch is None else epoch]))
+
+    def get_length_measurer(self) -> typing.Callable[[str], int]:
+        """Return a function that measures text length (chars or tokens).
+
+        When use_token_lengths=True:
+          - tiktoken (via tokenizer_model_id): uses encode() directly;
+          - HuggingFace (via tokenizer_path): uses encode(add_special_tokens=False).
+        """
+        if not self.use_token_lengths:
+            return len
+        if self.tokenizer_model_id is not None:
+            tokenizer = pyine.utils.tokenizers.get_openai_tokenizer(
+                model_id=self.tokenizer_model_id,
+                raise_if_not_found=False,
+            )
+
+            def _measure_tiktoken(text: str) -> int:
+                return len(tokenizer.encode(text))
+
+            return _measure_tiktoken
+        if self.tokenizer_path is not None:
+            tokenizer = pyine.utils.tokenizers.get_hf_tokenizer_cached(self.tokenizer_path)
+
+            def _measure_hf(text: str) -> int:
+                return len(tokenizer.encode(text, add_special_tokens=False))  # type: ignore[reportUnknownMemberType]
+
+            return _measure_hf
+        raise NotImplementedError("validation should prevent this")
 
 
 def get_default_code_type_prob_map() -> dict[SampleCodeTypeSet | str, float]:
