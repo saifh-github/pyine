@@ -80,6 +80,9 @@ vllm = [
 flash_attn = [
     "flash-attn>=2.8.3; sys_platform == 'linux'",  # CUDA-only, Linux
 ]
+liger = [
+    "liger-kernel>=0.6.4; sys_platform == 'linux'",  # CUDA-only, Linux
+]
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
