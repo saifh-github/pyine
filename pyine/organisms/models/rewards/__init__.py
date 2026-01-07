@@ -4,7 +4,7 @@ This package provides:
 - `RewardManager`: orchestrates term evaluation, aggregation, and optional logging.
 - `SampleContext` / `RunInitContext`: typed containers for per-sample and per-run data.
 - Built-in reward terms (see `list_available_terms()` for discovery).
-- TRL integration via `make_trl_reward_fn()` for HuggingFace TRL trainers.
+- TRL integration via `TRLRewardAdapter` for HuggingFace TRL trainers.
 
 For advanced usage (custom terms, parsers, loggers), see the `core` subpackage which provides
 protocols like `RewardTerm`, `OutputParser`, and `RewardLogger`.
@@ -41,8 +41,8 @@ Convenience imports for common use cases:
         print(f"{term_info.canonical_type}: {term_info.aliases}")
 
     # TRL integration
-    reward_fn = rewards.make_trl_reward_fn(manager, prompt_key="prompt")
-    # use with GRPOTrainer: trainer = GRPOTrainer(..., reward_funcs=[reward_fn])
+    adapter = rewards.TRLRewardAdapter(manager, prompt_key="prompt")
+    # use with GRPOTrainer: trainer = GRPOTrainer(..., reward_funcs=[adapter])
     ```
 """
 
@@ -63,7 +63,6 @@ if typing.TYPE_CHECKING:
     from pyine.organisms.models.rewards.trl import MessageSelectionPolicy as MessageSelectionPolicy
     from pyine.organisms.models.rewards.trl import TRLRewardAdapter as TRLRewardAdapter
     from pyine.organisms.models.rewards.trl import TRLRewardResult as TRLRewardResult
-    from pyine.organisms.models.rewards.trl import make_trl_reward_fn as make_trl_reward_fn
 
 __all__ = [
     # convenience re-exports
@@ -81,7 +80,6 @@ __all__ = [
     "MessageSelectionPolicy",
     "TRLRewardAdapter",
     "TRLRewardResult",
-    "make_trl_reward_fn",
 ]
 
 
@@ -139,8 +137,4 @@ def __getattr__(name: str) -> typing.Any:
         from pyine.organisms.models.rewards.trl import TRLRewardResult
 
         return TRLRewardResult
-    if name == "make_trl_reward_fn":
-        from pyine.organisms.models.rewards.trl import make_trl_reward_fn
-
-        return make_trl_reward_fn
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

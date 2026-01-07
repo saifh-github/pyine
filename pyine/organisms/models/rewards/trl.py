@@ -25,15 +25,15 @@ Usage:
     # create a reward manager with desired terms
     manager = rewards.make_simple_manager([("match", "hard_match", 1.0)])
 
-    # create a TRL-compatible reward function
-    reward_fn = rewards_trl.make_trl_reward_fn(
+    # create a TRL-compatible reward adapter
+    adapter = rewards_trl.TRLRewardAdapter(
         manager=manager,
-        prompt_key="prompt",  # kwarg key for prompts
-        sample_data_key="sample_data",  # kwarg key for SampleData objects
+        prompt_key="prompt",
+        sample_data_key="sample_data",
     )
 
     # use with GRPOTrainer
-    trainer = GRPOTrainer(..., reward_funcs=[reward_fn])
+    trainer = GRPOTrainer(..., reward_funcs=[adapter])
     ```
 """
 
@@ -390,68 +390,3 @@ class TRLRewardAdapter:
             sample_data=sample_data,
             code_exec_eval=code_exec_eval,
         )
-
-
-def make_trl_reward_fn(
-    manager: "reward_manager.RewardManager",
-    *,
-    prompt_key: str = "prompt",
-    sample_data_key: str = "sample_data",
-    context_builder: SampleContextBuilder | None = None,
-    assistant_role: str = "assistant",
-    message_selection_policy: MessageSelectionPolicy = MessageSelectionPolicy.last,
-    skip_on_error: bool = True,
-) -> collections.abc.Callable[..., list[float | None]]:
-    """Create a TRL-compatible reward function from a RewardManager.
-
-    This is the recommended way to integrate our rewards with TRL trainers.
-
-    Args:
-        manager: The RewardManager instance to use for reward computation.
-        prompt_key: Kwarg key for the list of prompts (default "prompt").
-        sample_data_key: Kwarg key for SampleData objects (default "sample_data").
-            Required unless a custom context_builder is provided.
-        context_builder: Optional custom callable to build SampleContext objects.
-        assistant_role: Message role to extract model output from (default "assistant").
-        message_selection_policy: Which message to select if multiple match (default "last").
-        skip_on_error: If True, return None for samples that fail; if False, raise.
-
-    Returns:
-        A callable with signature `(completions, **kwargs) -> list[float | None]`.
-        The returned function has a `__name__` attribute for TRL compatibility.
-
-    Example:
-        ```python
-        import pyine.organisms.models.rewards as rewards
-        import pyine.organisms.models.rewards.trl as rewards_trl
-
-        manager = rewards.make_simple_manager([("format", "parseable_answer", 1.0)])
-        reward_fn = rewards_trl.make_trl_reward_fn(manager, prompt_key="prompt")
-
-        # use with TRL trainer
-        from trl import GRPOTrainer
-
-        trainer = GRPOTrainer(..., reward_funcs=[reward_fn])
-        ```
-    """
-    # Create the adapter instance
-    adapter = TRLRewardAdapter(
-        manager=manager,
-        prompt_key=prompt_key,
-        sample_data_key=sample_data_key,
-        context_builder=context_builder,
-        assistant_role=assistant_role,
-        message_selection_policy=message_selection_policy,
-        skip_on_error=skip_on_error,
-    )
-
-    # Return a proper function (not a class instance) for cleaner TRL integration
-    # Functions naturally have __name__ attribute, so TRL's reward tracking works seamlessly
-    def trl_reward_function(
-        completions: TRLCompletions,
-        **kwargs: typing.Any,
-    ) -> list[float | None]:
-        """TRL-compatible reward function that wraps a RewardManager."""
-        return adapter(completions, **kwargs)
-
-    return trl_reward_function
