@@ -18,7 +18,9 @@ The RL training system is integrated into the main trainer framework and support
 
 - Python environment with all dependencies installed (`trl`, `transformers`, `torch`, etc.)
 - TACO dataset downloaded and processed
-- **vLLM server required**: Multi GPUs: at least one for the vLLM server, plus separate GPU(s) for training
+- **GPU requirements**: Multi-GPU setup recommended. Mode selection depends on your use case (see vLLM Configuration section below)
+  - **Colocate mode** (recommended): vLLM shares GPUs with training. Improves GPU utilization by avoiding idle phases typical of on-policy RL algorithms
+  - **Server mode**: Separate GPUs dedicated to vLLM server and training
 - Optional (performance): Flash Attention 2 support via `flash-attn` (see the project root [`README.md`](../../../README.md))
 
 ## Quick Start
@@ -174,9 +176,17 @@ config:
     temperature: 0.7
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient (0.00 = no KL penalty)
+    scale_rewards: "group"  # Scale rewards by "group" (default), "batch", or "none"
     use_vllm: true  # vLLM acceleration required
-    vllm_server_port: 8000  # Must match your vLLM server port
     vllm_importance_sampling_correction: true
+    vllm_mode: "colocate"  # "colocate" (recommended) or "server"
+    # vLLM configuration for colocated mode (shares GPUs with training)
+    vllm_gpu_memory_utilization: 0.2  # Control GPU memory for vLLM (default 0.3)
+    vllm_max_model_length: 8072  # Context window for vLLM (optional, inferred if omitted)
+    vllm_tensor_parallel_size: 1  # Tensor parallelism size (use 1 for data parallelism)
+    vllm_enable_sleep_mode: False  # Offload weights during optimizer step (adds latency)
+    # vLLM configuration for server mode (separate vLLM server required)
+    vllm_server_port: 8000  # Must match your vLLM server port (server mode only)
 
   # Reward manager configuration
   reward_manager_config:
@@ -219,18 +229,77 @@ config:
     eval_batch_size: 24
 ```
 
-### Step 2: Start vLLM Server
+### Step 2: Configure vLLM Mode
+
+Choose between two vLLM modes based on your GPU setup:
+
+#### Option A: Colocate Mode (Recommended)
+
+**Best for**: Most multi-GPU training setups. vLLM shares GPUs with the training process.
+
+**Key Advantage - Improved GPU Utilization**:
+On-policy RL algorithms like GRPO alternate between two phases:
+
+1. **Generation phase**: Model generates rollout samples (GPUs busy with inference)
+2. **Training phase**: Model trains on collected samples (GPUs busy with gradient updates)
+
+In **server mode**, these phases create idle time—when training GPUs are generating, the vLLM server is idle, and vice versa. In **colocate mode**, the same GPUs handle both phases, eliminating idle time and significantly improving overall GPU utilization.
+
+**Additional Advantages**:
+
+- Simpler setup - no manual vLLM server management
+- Automatic lifecycle management by TRL
+- Supports tensor parallelism for large models via `vllm_tensor_parallel_size`
+- Can shard models across multiple GPUs when needed
+
+**Configuration**: Set in your experiment config:
+
+```yaml
+grpo_config:
+  use_vllm: true
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.2  # Adjust based on model size (default 0.3)
+  vllm_max_model_length: 8072  # Set to max(prompt_len + completion_len)
+  vllm_tensor_parallel_size: 1  # Use 1 for data parallelism, or >1 for tensor parallelism
+  vllm_enable_sleep_mode: False  # Enable to save memory (adds latency)
+```
+
+**No additional setup required** - proceed directly to Step 3!
+
+#### Option B: Server Mode
+
+**Best for**: Specialized scenarios where dedicated vLLM hardware is beneficial.
+
+**When to use**:
+
+- Off-policy RL algorithms where generation and training can happen simultaneously
+- Scenarios where you need persistent vLLM serving across multiple training runs
+- Maximum control over vLLM server configuration and resource allocation
+
+**Note on GPU utilization**: For on-policy algorithms like GRPO, server mode results in idle GPU time
+as generation and training phases alternate. Colocate mode is generally more efficient for these algorithms.
+
+**Configuration**: Set in your experiment config:
+
+```yaml
+grpo_config:
+  use_vllm: true
+  vllm_mode: "server"
+  vllm_server_port: 8000  # Must match your vLLM server port
+```
+
+**Setup required**: Start vLLM server before training:
 
 **IMPORTANT**: vLLM and training must use different GPUs with no overlap!
 
 ```bash
 # Terminal 1: Start vLLM server (use base model, TRL handles weight syncing)
-# Port must match grpo_config.vllm_server_port in your config (default: 8000)
+# Port must match grpo_config.vllm_server_port in your config
 CUDA_VISIBLE_DEVICES=0,1,2 trl vllm-serve \
     --model Qwen/Qwen3-4B-Instruct-2507 \
     --data_parallel_size 3 \
     --port 8000 \
-    --max_model_len 4096  # adjust this carefully based on your expected prompt/output lengths!
+    --max_model_len 4096  # adjust based on expected prompt/output lengths!
 ```
 
 Wait for server to start and show:
@@ -242,8 +311,8 @@ INFO: Uvicorn running on http://0.0.0.0:8000
 **Note 1:** Make sure the `--port` argument matches `grpo_config.vllm_server_port` in your
 experiment config.
 
-**Note 2:** the `--max_model_len` argument is important because it effectively sets the
-“worst-case” sequence size the engine must be ready to serve, and that choice drives memory
+**Note 2:** The `--max_model_len` argument is important because it effectively sets the
+"worst-case" sequence size the engine must be ready to serve, and that choice drives memory
 planning and attention-kernel behavior. If you set it much larger than you actually need (or leave
 it to its default, which uses the model's full context size), vLLM will reserve more KV-cache space,
 have fewer usable cache blocks for a given GPU memory budget, fit fewer concurrent sequences,
@@ -254,40 +323,133 @@ speed.
 
 ### Step 3: Run RL Training
 
-**Terminal 2: Basic training (single GPU for training):**
+#### Colocate Mode
+
+**Multi-GPU training:**
 
 ```bash
-# Use separate GPU(s) from vLLM server
-CUDA_VISIBLE_DEVICES=3 uv run python -m pyine.apps.trainers.hf_trainer \
+CUDA_VISIBLE_DEVICES=0,1,2 uv run accelerate launch \
+    pyine/apps/trainers/hf_trainer.py \
     +experiment=my_rl_experiment
 ```
 
-Note: The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches
+**With DeepSpeed (recommended for large models):**
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2 uv run accelerate launch \
+    --config_file pyine/configs/accelerate/deepspeed_zero3.yaml \
+    pyine/apps/trainers/hf_trainer.py \
+    +experiment=my_rl_experiment
+```
+
+#### Server Mode
+
+**IMPORTANT**: Use separate GPUs from vLLM server!
+
+**Multi-GPU training (server mode):**
+
+```bash
+# vLLM on GPUs 0,1,2, training on GPUs 3,4,5
+CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
+    pyine/apps/trainers/hf_trainer.py \
+    +experiment=my_rl_experiment
+```
+
+**With DeepSpeed:**
+
+```bash
+# vLLM on GPUs 0,1,2, training on GPUs 3,4,5
+CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
+    --config_file pyine/configs/accelerate/deepspeed_zero3.yaml \
+    pyine/apps/trainers/hf_trainer.py \
+    +experiment=my_rl_experiment
+```
+
+#### General Notes
+
+The `hf_trainer.py` entry point handles both SFT and RL training. It automatically dispatches
 to the correct trainer based on the config type (determined by the `_target_` field in your
 experiment config).
 
 **With custom overrides:**
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 uv run python -m pyine.apps.trainers.hf_trainer \
+uv run python -m pyine.apps.trainers.hf_trainer \
     +experiment=my_rl_experiment \
     config.grpo_config.learning_rate=5e-6 \
     config.grpo_config.num_generations=8
 ```
 
-**Distributed training with Accelerate (multiple training GPUs):**
-
-```bash
-CUDA_VISIBLE_DEVICES=3,4 uv run accelerate launch \
-    pyine/apps/trainers/hf_trainer.py \
-    +experiment=my_rl_experiment
-```
-
 ## vLLM Configuration Details
 
-### GPU Separation (Critical!)
+### Mode Selection
 
-vLLM and training **must use different GPUs** - no overlap!
+TRL supports two modes for vLLM integration:
+
+#### Colocate Mode (`vllm_mode: "colocate"`)
+
+**How it works**: TRL manages a vLLM engine in the same process as training. The engine shares GPU(s)
+with the training model and is automatically lifecycle-managed (started/stopped with training).
+
+**Key Benefit - Maximum GPU Utilization**: On-policy RL algorithms like GRPO alternate between generation
+and training phases. In server mode, this creates idle GPU time—when training GPUs generate rollouts,
+the vLLM server idles, and vice versa. Colocate mode eliminates this inefficiency by using the same
+GPUs for both phases, dramatically improving overall GPU utilization and reducing training time.
+
+**Configuration parameters**:
+
+- `vllm_gpu_memory_utilization`: (default `0.3`) Controls GPU memory reserved for vLLM. Lower values
+  (e.g., `0.2`) leave more memory for training. Adjust based on model size and available VRAM.
+- `vllm_max_model_length`: (optional) Context window size. Should be at least
+  `max(prompt_length) + max_completion_length`. If omitted, inferred from model config. Setting this
+  explicitly helps optimize KV-cache allocation (see Note below).
+- `vllm_tensor_parallel_size`: (default `1`) Tensor parallelism size for vLLM. Use `1` for data
+  parallelism across GPUs (recommended for most cases). Use higher values (2, 4, etc.) to shard large
+  models across multiple GPUs when needed. Note: This is independent of training parallelism—you can
+  use DeepSpeed ZeRO for training while vLLM uses tensor parallelism for inference.
+- `vllm_enable_sleep_mode`: (default `False`) When enabled, vLLM offloads weights and KV-cache to CPU
+  during optimizer steps, reducing GPU memory usage. However, waking the engine adds host-device
+  transfer latency on each generation phase.
+
+**When to use**: Recommended default for most RL training setups. Especially good for:
+
+- On-policy RL algorithms (GRPO, PPO, etc.) where maximizing GPU utilization is critical
+- Multi-GPU training where you want to avoid the idle-phase inefficiency of server mode
+- Any setup where simplicity and efficiency are priorities
+
+**Example**:
+
+```yaml
+grpo_config:
+  use_vllm: true
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.2
+  vllm_max_model_length: 8072
+  vllm_tensor_parallel_size: 1
+  vllm_enable_sleep_mode: False
+```
+
+#### Server Mode (`vllm_mode: "server"`)
+
+**How it works**: You manually start a separate vLLM server process on dedicated GPU(s). Training
+communicates with this server via HTTP. TRL automatically syncs model weights to the server during
+training.
+
+**Configuration parameters**:
+
+- `vllm_server_port`: (default `8000`) HTTP port of your vLLM server. Must match the `--port` argument
+  used when starting the server.
+
+**When to use**:
+
+- Off-policy RL algorithms where generation and training can happen simultaneously
+- Persistent vLLM serving across multiple training runs or experiments
+- Maximum control over vLLM server configuration and resource allocation
+
+**Note on efficiency**: For on-policy algorithms like GRPO, server mode creates idle GPU time as
+generation and training phases alternate. This reduces overall GPU utilization compared to colocate mode.
+
+**GPU Separation (Critical!)**: vLLM server and training **must use different GPUs** - no overlap!
 
 ```bash
 # CORRECT - No overlap
@@ -298,6 +460,26 @@ CUDA_VISIBLE_DEVICES=3,4      # Training
 CUDA_VISIBLE_DEVICES=0,1,2    # vLLM server
 CUDA_VISIBLE_DEVICES=2,3      # Training
 ```
+
+**Example**:
+
+```yaml
+grpo_config:
+  use_vllm: true
+  vllm_mode: "server"
+  vllm_server_port: 8000
+```
+
+### Important Note on `vllm_max_model_length` (Colocate Mode)
+
+The `vllm_max_model_length` parameter is important because it effectively sets the "worst-case"
+sequence size the vLLM engine must be ready to serve, and that choice drives memory planning and
+attention-kernel behavior. If you set it much larger than you actually need (or leave it to its
+default, which uses the model's full context size), vLLM will reserve more KV-cache space, have fewer
+usable cache blocks for a given GPU memory budget, fit fewer concurrent sequences, and hit cache
+pressure or earlier swapping/evictions, which lowers throughput and adds overhead. If you set it close
+to your true longest `prompt_length + completion_length`, you free KV-cache capacity, increase
+batching/concurrency, reduce memory waste, and typically get better, more stable generation speed.
 
 ## Distributed Training with DeepSpeed
 
@@ -331,9 +513,24 @@ same_network: true
 use_cpu: false
 ```
 
-**Important:** Adjust `num_processes` to match your number of **training GPUs** (excluding vLLM GPUs).
+**Important:** Adjust `num_processes` to match your number of **training GPUs**:
+
+- **Colocate mode**: Set to total number of GPUs (vLLM shares these GPUs)
+- **Server mode**: Set to number of training GPUs only (excluding vLLM server GPUs)
 
 ### Step 2: Launch with DeepSpeed
+
+#### Colocate Mode
+
+```bash
+# Example: 3 GPUs for training with colocated vLLM
+CUDA_VISIBLE_DEVICES=0,1,2 uv run accelerate launch \
+    --config_file pyine/configs/accelerate/deepspeed_zero3.yaml \
+    pyine/apps/trainers/hf_trainer.py \
+    +experiment=my_rl_experiment
+```
+
+#### Server Mode
 
 ```bash
 # Example: 3 GPUs for training (GPUs 3,4,5), separate from vLLM (GPUs 0,1,2)
@@ -352,8 +549,9 @@ CUDA_VISIBLE_DEVICES=3,4,5 uv run accelerate launch \
 
 ### Important Notes
 
-- **GPU Separation**: Remember that vLLM and training must use separate GPUs!
+- **GPU Separation (Server Mode only)**: Remember that vLLM server and training must use separate GPUs!
   - Example: vLLM on GPUs 0,1,2 -> Training on GPUs 3,4,5
+- **Colocate Mode**: vLLM shares GPUs with training, so no separation needed
 - **Config adjustment**: Update `num_processes` in config to match your training GPU count
 - **Batch size**: With distributed training, effective batch size = `per_device_train_batch_size` × `num_processes` × `gradient_accumulation_steps`
 
@@ -470,22 +668,40 @@ grpo_config:
   num_generations: 8        # Samples per prompt (higher = better exploration)
   num_generations_eval: 2   # Fewer during eval to save compute
   max_completion_length: 2048  # Max tokens (higher for complex code)
+  max_prompt_length: 5000   # Truncate prompts beyond this length (last-resort)
   temperature: 0.7          # Sampling temperature
   top_p: 0.9               # Nucleus sampling
   beta: 0.00               # KL penalty coefficient (0.00 = no penalty)
+  scale_rewards: "group"    # Scale rewards by "group" (default), "batch", or "none"
 
   # vLLM settings (required)
   use_vllm: true
-  vllm_server_port: 8000
   vllm_importance_sampling_correction: true
+  vllm_mode: "colocate"     # "colocate" (recommended) or "server"
+
+  # Colocate mode settings (when vllm_mode: "colocate")
+  vllm_gpu_memory_utilization: 0.2  # GPU memory for vLLM (default 0.3)
+  vllm_max_model_length: 8072  # Context window (optional, inferred if omitted)
+  vllm_tensor_parallel_size: 1  # Tensor parallelism (use 1 for data parallelism)
+  vllm_enable_sleep_mode: False  # Offload weights during optimizer step
+
+  # Server mode settings (when vllm_mode: "server")
+  vllm_server_port: 8000    # Must match your vLLM server port
 ```
 
 **Important Notes:**
 
 - **`_target_` field**: Your config must include `_target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig` to dispatch to the RL trainer (see example config above)
+- **`vllm_mode`**: Choose `"colocate"` (recommended) for maximum GPU utilization in on-policy RL, or `"server"` for specialized use cases
 - **`beta` parameter**: Controls KL divergence penalty. Set to 0.00 for no penalty (pure reward optimization), or use small values (0.01-0.05) to stay closer to the base model
 - **`num_generations`**: Higher values (8+) provide better exploration but increase compute cost
 - **`max_completion_length`**: Set higher (2048+) for code generation tasks to allow complete solutions
+- **Colocate mode parameters**: Only relevant when `vllm_mode: "colocate"`
+  - `vllm_gpu_memory_utilization`: Adjust based on model size and VRAM (lower = more memory for training)
+  - `vllm_max_model_length`: Set to optimize KV-cache allocation (see detailed note in vLLM Configuration section)
+  - `vllm_tensor_parallel_size`: Use `1` for data parallelism, or higher values (2, 4, etc.) to shard large models across GPUs
+  - `vllm_enable_sleep_mode`: Enable to reduce memory usage at the cost of added latency
+- **Server mode parameters**: Only relevant when `vllm_mode: "server"`. Ensure `vllm_server_port` matches your manually started vLLM server
 
 ### Prompt Templates
 

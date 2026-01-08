@@ -154,6 +154,7 @@ def _get_grpo_configs(
             "temperature": 0.7,
             "top_p": 0.9,
             "beta": 0.05,
+            "scale_rewards": "group",
             "use_vllm": False,
             "vllm_server_port": 8000,
             "vllm_importance_sampling_correction": True,

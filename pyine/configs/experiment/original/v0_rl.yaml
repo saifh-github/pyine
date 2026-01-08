@@ -166,9 +166,18 @@ config:
     temperature: 0.7
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient
+    scale_rewards: "group" # If to scale rewards by "group" (default) "batch" or "none"
     use_vllm: true  # Prototype uses true, but requires manual vLLM server setup
-    vllm_server_port: 8050  # From prototype (was 8000)
     vllm_importance_sampling_correction: true
+    vllm_mode: "colocate"  # "server" (default) or "colocate"
+    # vLLM configuration for colocated mode
+    vllm_gpu_memory_utilization: 0.2 # (default 0.3) Control the GPU memory utilization for vLLM.
+    vllm_max_model_length: 8072 # (optional): Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus `max_completion_length`; if omitted, it is inferred from the model config.
+    vllm_tensor_parallel_size: 1 # (optional, defaults to `1`) Control the tensor parallel size for vLLM. If the model fits in a single GPU, set it to `1`, will use data parallelism.
+    vllm_enable_sleep_mode: False # (default False) Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but waking the engine adds host–device transfer latency.
+    # vLLM configuration for server mode
+    vllm_server_port: 8050  # From prototype (was 8000)
+
 
   # Reward manager configuration
   reward_manager_config:
@@ -209,7 +218,7 @@ config:
 
     # Logging configuration (disabled by default, can be enabled for debugging)
     logging:
-      enabled: false
+      enabled: true
       log_total: true
       log_terms: true
       log_metrics: true

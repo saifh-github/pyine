@@ -727,17 +727,57 @@ def prepare_datamodule(
     return dm
 
 
+def _is_deepspeed_enabled() -> bool:
+    """Detects if DeepSpeed is being used for training.
+
+    Checks multiple indicators:
+    1. Accelerate's PartialState if available
+    2. DeepSpeed initialization status
+    3. Environment variables set by Accelerate
+
+    Returns:
+        True if DeepSpeed is detected, False otherwise.
+    """
+    import os
+
+    # Check environment variables set by Accelerate
+    if os.environ.get("ACCELERATE_USE_DEEPSPEED"):
+        return True
+
+    # Try to check Accelerate's state
+    try:
+        from accelerate import PartialState
+
+        state = PartialState()
+        if hasattr(state, "distributed_type"):
+            from accelerate.utils import DistributedType
+
+            if state.distributed_type == DistributedType.DEEPSPEED:
+                return True
+    except (ImportError, RuntimeError):
+        # Accelerate not available or not initialized yet
+        pass
+
+    return False
+
+
 def get_device_map() -> dict[str, torch.device | str] | str | None:
     """Returns the device map to use with models for distributed/single-GPU training.
 
     This function determines the appropriate device placement strategy based on whether
     we're running in distributed mode or not:
-    - In distributed mode: Place model on specific GPU per process (allows Accelerate to handle distribution)
+    - DeepSpeed mode: Return None (DeepSpeed handles device placement)
+    - Standard DDP mode: Place model on specific GPU per process (allows Accelerate to handle distribution)
     - Single GPU/CPU mode: Use 'auto' for automatic device placement
 
     Returns:
         Device map specification compatible with transformers.from_pretrained()
     """
+    # DeepSpeed handles its own device placement, so we must return None
+    if _is_deepspeed_enabled():
+        logger.debug("DeepSpeed detected; setting device_map=None")
+        return None
+
     if pyine.utils.distrib.is_distributed():
         if torch.cuda.is_available():
             local_rank = pyine.utils.distrib.get_local_rank(default=0)
