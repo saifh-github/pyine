@@ -67,9 +67,9 @@ def rl_training_config(
         logging_dir=str(logging_dir),
         do_train=True,
         do_eval=True,
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
-        gradient_accumulation_steps=1,
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=2,  # must be divisible by num_generations
+        gradient_accumulation_steps=2,  # accumulate to maintain effective batch size
         max_steps=5,
         eval_strategy="steps",
         eval_steps=5,
@@ -89,7 +89,7 @@ def rl_training_config(
         greater_is_better=False,
         # GRPO-specific settings for minimal test
         num_generations=2,  # keep low for speed
-        max_completion_length=32,  # short completions for speed
+        max_completion_length=24,  # short completions for speed and memory
         temperature=0.7,
         beta=0.1,
         use_vllm=False,
@@ -120,6 +120,15 @@ def rl_training_config(
             multi_tag_policy="last",
             strict=False,
             capture_diagnostics=True,
+        ),
+        verbosity_scaling=pyine.organisms.models.rewards.core.configs.VerbosityScalingConfig(
+            enabled=True,
+            mode="relative",
+            temperature=1.0,
+            min_factor=0.1,
+            max_factor=1.0,
+            emit_metrics=True,
+            skip_negative_rewards=True,
         ),
         logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
             enabled=True,  # enable wandb logging for reward metrics
@@ -328,6 +337,15 @@ class TestHFTrainerRLIntegration:
                 fallback_policy="entire_output",
                 multi_tag_policy="last",
                 strict=False,
+            ),
+            verbosity_scaling=pyine.organisms.models.rewards.core.configs.VerbosityScalingConfig(
+                enabled=True,
+                mode="relative",
+                temperature=1.0,
+                min_factor=0.1,
+                max_factor=1.0,
+                emit_metrics=False,  # disabled for resume test to reduce noise
+                skip_negative_rewards=True,
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=False,
