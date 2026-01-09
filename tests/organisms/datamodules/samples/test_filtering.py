@@ -443,7 +443,7 @@ class TestTokenBasedFiltering:
         """Test that a warning is logged when tokenizer is set but use_token_lengths=False."""
         import logging
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="pyine.organisms.datamodules.samples.configs"):
             TraceFilteringConfig(
                 use_token_lengths=False,
                 tokenizer_model_id="gpt-4o",

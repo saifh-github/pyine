@@ -55,7 +55,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
-            output=pyine.organisms.models.rewards.core.configs.OutputConfig(return_breakdown_default=True),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         model_output = "<final>ok</final>"
@@ -65,9 +65,9 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
         )
-        total, breakdown = manager.compute(sample_ctx)
-        assert total == 2.0
-        assert breakdown == {"parseable": 2.0}
+        output = manager.compute(sample_ctx)
+        assert output.total == 2.0
+        assert output.weighted_terms == {"parseable": 2.0}
 
     def test_parseable_answer_qol_clean_stop_and_single_block(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -85,6 +85,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         model_output = "<final>ok</final>\n"
@@ -94,7 +95,7 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
         )
-        output = manager.compute_output(sample_ctx, log=False)
+        output = manager.compute(sample_ctx, log=False)
         assert output.total == 1.75
         assert output.metrics["parseable/has_final_answer"] is True
         assert output.metrics["parseable/has_single_final_block"] is True
@@ -116,6 +117,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         model_output = "<final>ok</final> trailing"
@@ -125,7 +127,7 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
         )
-        output = manager.compute_output(sample_ctx, log=False)
+        output = manager.compute(sample_ctx, log=False)
         assert output.total == 1.25
         assert output.metrics["parseable/stops_after_final_tag"] is False
 
@@ -148,6 +150,7 @@ class TestRewardManager:
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t1", type="test_needs_parsed"),
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t2", type="test_needs_parsed"),
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
         model_output = "raw"
@@ -157,7 +160,7 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s2"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="x"),
         )
-        output = manager.compute_output(sample_ctx, log=False)
+        output = manager.compute(sample_ctx, log=False)
         assert output.total == 2.0
 
     def test_logging_frequency_and_scoping(self) -> None:
@@ -187,11 +190,11 @@ class TestRewardManager:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s2"),
         )
-        manager.compute_output(sample1)
-        manager.compute_output(sample2)
+        manager.compute(sample1)
+        manager.compute(sample2)
         assert len(logger_obj.samples) == 1
         entry = logger_obj.samples[0]
-        terms = entry["terms"]
+        terms = entry["reward_terms"]
         assert isinstance(terms, dict)
         assert "reward/terms/parseable" in terms
         manager.finalize_run()
@@ -220,9 +223,9 @@ class TestRewardManager:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(sample)
+        manager.compute(sample)
         assert logger_obj.samples[0]["step"] == 123
-        manager.compute_output(sample, step=7)
+        manager.compute(sample, step=7)
         assert logger_obj.samples[1]["step"] == 7
 
     def test_introspection_term_names_and_get_term(self) -> None:
@@ -234,7 +237,8 @@ class TestRewardManager:
                     type="parseable_answer",
                     enabled=False,
                 ),
-            ]
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         assert manager.term_names == ("t1", "t2")
@@ -251,13 +255,14 @@ class TestRewardManager:
                     type="parseable_answer",
                     require_parsed=True,
                 )
-            ]
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         with pytest.raises(ValueError, match="require parsed"):
             pyine.organisms.models.rewards.core.manager.RewardManager(config)
 
     def test_require_parsed_enforced_at_runtime(self) -> None:
-        """Verify that compute_output raises if parsed=None but require_parsed=True."""
+        """Verify that compute raises if parsed=None but require_parsed=True."""
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
@@ -267,6 +272,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -276,7 +282,7 @@ class TestRewardManager:
             parsed=None,  # explicitly None, bypassing build_sample_context
         )
         with pytest.raises(ValueError, match="parsed is None.*require parsed.*build_sample_context"):
-            manager.compute_output(sample_ctx)
+            manager.compute(sample_ctx)
 
     def test_registry_snapshot_supports_aliases(self) -> None:
         import pyine.organisms.models.rewards.terms
@@ -291,6 +297,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=snapshot)
         model_output = "<final>ok</final>"
@@ -300,7 +307,7 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
         )
-        assert manager.compute(sample_ctx) == 1.0
+        assert manager.compute(sample_ctx).total == 1.0
 
     def test_no_enabled_terms_raises(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -310,7 +317,8 @@ class TestRewardManager:
                     type="parseable_answer",
                     enabled=False,
                 )
-            ]
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -319,13 +327,14 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
         with pytest.raises(ValueError, match="no enabled"):
-            manager.compute_output(sample_ctx)
+            manager.compute(sample_ctx)
 
     def test_unknown_term_type_raises(self) -> None:
         with pytest.raises(KeyError, match="unknown key"):
             pyine.organisms.models.rewards.core.manager.RewardManager(
                 pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-                    terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="x", type="does_not_exist")]
+                    terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="x", type="does_not_exist")],
+                    logging=rewards_conftest.make_disabled_logging_config(),
                 )
             )
 
@@ -349,6 +358,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(final_tag="final"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
@@ -377,6 +387,7 @@ class TestRewardManager:
                     type="test_sample_id_suffix",
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
         sample1 = rewards_conftest.make_sample_context(identifier="s1")
@@ -430,12 +441,12 @@ class TestRewardManager:
             config, logger=logger_obj, registry=registry
         )
         ctx = rewards_conftest.make_sample_context(identifier="s1")
-        manager.compute_output(ctx)
+        manager.compute(ctx)
         assert len(logger_obj.samples) == 1
         entry = logger_obj.samples[0]
-        assert "total" not in entry
-        assert entry["terms"] == {}
-        assert entry["metrics"] == {}
+        assert entry["reward_total"] is None
+        assert entry["reward_terms"] == {}
+        assert entry["reward_metrics"] == {}
 
     def test_finalize_run_scopes_run_summaries(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
@@ -456,7 +467,7 @@ class TestRewardManager:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         manager.finalize_run()
         assert len(logger_obj.runs) == 1
         run_entry = logger_obj.runs[0]
@@ -469,24 +480,6 @@ class TestRewardManager:
         # scoped terms: {scope_prefix}/run/terms/{metric_key}
         assert "reward/run/terms/parseable/mean" in reward_term_summaries
 
-    def test_term_config_returns_configured_spec(self) -> None:
-        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-            terms=[
-                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
-                    name="parseable",
-                    type="parseable_answer",
-                    weight=2.0,
-                    enabled=True,
-                )
-            ]
-        )
-        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
-        spec = manager.term_config("parseable")
-        assert spec.type == "parseable_answer"
-        assert spec.weight == 2.0
-        with pytest.raises(KeyError, match="unknown term"):
-            manager.term_config("does_not_exist")
-
     def test_invalid_term_factory_signature_raises(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
 
@@ -498,7 +491,8 @@ class TestRewardManager:
 
         registry.register_term("bad_signature", factory)  # type: ignore[arg-type]
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_signature")]
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_signature")],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         with pytest.raises(TypeError, match="invalid term factory signature"):
             pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
@@ -531,12 +525,13 @@ class TestRewardManager:
 
         registry.register_term("bad_value", factory)
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_value")]
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_value")],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
         ctx = rewards_conftest.make_sample_context(identifier="s1")
         with pytest.raises(TypeError, match="non-numeric"):
-            manager.compute_output(ctx, log=False)
+            manager.compute(ctx, log=False)
 
     def test_term_result_validation_rejects_non_finite_values_and_metrics(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
@@ -586,21 +581,23 @@ class TestRewardManager:
         ctx = rewards_conftest.make_sample_context(identifier="s1")
         manager_value = pyine.organisms.models.rewards.core.manager.RewardManager(
             pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_value")]
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_value")],
+                logging=rewards_conftest.make_disabled_logging_config(),
             ),
             registry=registry,
         )
         with pytest.raises(ValueError, match="non-finite value"):
-            manager_value.compute_output(ctx, log=False)
+            manager_value.compute(ctx, log=False)
 
         manager_metric = pyine.organisms.models.rewards.core.manager.RewardManager(
             pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_metric")]
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="nan_metric")],
+                logging=rewards_conftest.make_disabled_logging_config(),
             ),
             registry=registry,
         )
         with pytest.raises(ValueError, match="non-finite"):
-            manager_metric.compute_output(ctx, log=False)
+            manager_metric.compute(ctx, log=False)
 
     def test_term_result_validation_rejects_invalid_metric_keys_and_types(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
@@ -648,21 +645,23 @@ class TestRewardManager:
         ctx = rewards_conftest.make_sample_context(identifier="s1")
         manager_key = pyine.organisms.models.rewards.core.manager.RewardManager(
             pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_key")]
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_key")],
+                logging=rewards_conftest.make_disabled_logging_config(),
             ),
             registry=registry,
         )
         with pytest.raises(ValueError, match="invalid metric key"):
-            manager_key.compute_output(ctx, log=False)
+            manager_key.compute(ctx, log=False)
 
         manager_type = pyine.organisms.models.rewards.core.manager.RewardManager(
             pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_type")]
+                terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="bad_type")],
+                logging=rewards_conftest.make_disabled_logging_config(),
             ),
             registry=registry,
         )
         with pytest.raises(TypeError, match="invalid type"):
-            manager_type.compute_output(ctx, log=False)
+            manager_type.compute(ctx, log=False)
 
     def test_long_string_metric_emits_warning_but_is_accepted(self) -> None:
         import warnings
@@ -697,13 +696,14 @@ class TestRewardManager:
 
         registry.register_term("long_string_metric", factory)
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
-            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="long_string_metric")]
+            terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="long_string_metric")],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, registry=registry)
         ctx = rewards_conftest.make_sample_context(identifier="s1")
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
-            output = manager.compute_output(ctx, log=False)
+            output = manager.compute(ctx, log=False)
         assert output.total == 1.0
         assert len(recorded) == 1
         assert "exceeds" in str(recorded[0].message)
@@ -747,9 +747,9 @@ class TestCategoryWiseRewardTracking:
             model_output="no final tag here",
             sample_data=rewards_conftest.make_sample_data("s3", code_type="original"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
-        manager.compute_output(ctx3, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
+        manager.compute(ctx3, log=False)
         metrics = manager.get_reward_category_metrics()
         # original: mean=(1.0 + 0.0) / 2 = 0.5, std=0.5, min=0.0, max=1.0
         # note: getters return bare keys (callers add prefixes)
@@ -788,7 +788,7 @@ class TestCategoryWiseRewardTracking:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         assert len(manager.get_reward_category_metrics()) > 0
         manager.reset_accumulators()
         assert len(manager.get_reward_category_metrics()) == 0
@@ -813,7 +813,7 @@ class TestCategoryWiseRewardTracking:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         # no categories accumulated when config is None
         assert len(manager.get_reward_category_metrics()) == 0
 
@@ -839,70 +839,26 @@ class TestCategoryWiseRewardTracking:
         manager.set_key_prefix("")
 
 
-class TestMakeSimpleManager:
-    def test_creates_manager_with_single_term(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
-            [
-                ("format", "parseable_answer", 0.5),
-            ]
-        )
-        assert manager.term_names == ("format",)
-        assert manager.enabled_term_names == ("format",)
-
-    def test_computes_rewards(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
-            [
-                ("format", "parseable_answer", 1.0),
-            ]
-        )
-        model_output = "<final>ok</final>"
-        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
-            prompt="p",
-            model_output=model_output,
-            sample_data=rewards_conftest.make_sample_data("s1"),
-            parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
-        )
-        total = manager.compute(ctx)
-        assert total == 1.0
-
-    def test_parsing_disabled_returns_zero_for_missing_final(self) -> None:
-        # without parsing, parseable_answer can't find the final answer and returns reward_if_missing
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
-            [("format", "parseable_answer", 1.0)],
-            parsing=False,
-        )
-        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
-            prompt="p",
-            model_output="<final>ok</final>",
-            sample_data=rewards_conftest.make_sample_data("s1"),
-        )
-        output = manager.compute_output(ctx, log=False)
-        assert output.total == 0.0  # parsed is None, so no final answer detected
-
-    def test_custom_tags(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
-            [("format", "parseable_answer", 1.0)],
-            final_tag="answer",
-            reasoning_tag="think",
-        )
-        model_output = "<answer>ok</answer>"
-        ctx = pyine.organisms.models.rewards.core.types.SampleContext(
-            prompt="p",
-            model_output=model_output,
-            sample_data=rewards_conftest.make_sample_data("s1"),
-            parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok", final_tag="answer"),
-        )
-        total = manager.compute(ctx)
-        assert total == 1.0
-
-    def test_empty_terms_raises(self) -> None:
-        with pytest.raises(ValueError, match="at least one term"):
-            pyine.organisms.models.rewards.core.manager.make_simple_manager([])
+def _make_test_manager(parsing: bool = True) -> pyine.organisms.models.rewards.core.manager.RewardManager:
+    """Create a simple manager for tests."""
+    config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+        terms=[
+            pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                name="format",
+                type="parseable_answer",
+                weight=1.0,
+                require_parsed=parsing,
+            )
+        ],
+        parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(final_tag="final") if parsing else None,
+        logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(enabled=False),
+    )
+    return pyine.organisms.models.rewards.core.manager.RewardManager(config)
 
 
 class TestBuildSampleContext:
     def test_builds_context_with_parsing(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager([("format", "parseable_answer", 1.0)])
+        manager = _make_test_manager(parsing=True)
         ctx = manager.build_sample_context(
             prompt="p",
             model_output="<final>ok</final>",
@@ -914,10 +870,7 @@ class TestBuildSampleContext:
         assert ctx.parsed.final_answer == "ok"
 
     def test_builds_context_without_parsing(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager(
-            [("format", "parseable_answer", 1.0)],
-            parsing=False,
-        )
+        manager = _make_test_manager(parsing=False)
         ctx = manager.build_sample_context(
             prompt="p",
             model_output="<final>ok</final>",
@@ -926,7 +879,7 @@ class TestBuildSampleContext:
         assert ctx.parsed is None
 
     def test_builds_context_with_code_exec_eval(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager([("format", "parseable_answer", 1.0)])
+        manager = _make_test_manager(parsing=True)
         code_exec_eval = pyine.organisms.models.rewards.core.types.CodeExecEvalData(
             expected="42",
             predicted="42",
@@ -940,7 +893,7 @@ class TestBuildSampleContext:
         assert ctx.code_exec_eval is code_exec_eval
 
     def test_builds_context_with_extras(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager([("format", "parseable_answer", 1.0)])
+        manager = _make_test_manager(parsing=True)
         ctx = manager.build_sample_context(
             prompt="p",
             model_output="<final>ok</final>",
@@ -950,14 +903,14 @@ class TestBuildSampleContext:
         assert ctx.extras == {"key": "value"}
 
     def test_compute_with_build_sample_context(self) -> None:
-        manager = pyine.organisms.models.rewards.core.manager.make_simple_manager([("format", "parseable_answer", 1.0)])
+        manager = _make_test_manager(parsing=True)
         ctx = manager.build_sample_context(
             prompt="p",
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        total = manager.compute(ctx)
-        assert total == 1.0
+        output = manager.compute(ctx)
+        assert output.total == 1.0
 
 
 class TestListAvailableTerms:
@@ -993,11 +946,6 @@ class TestPackageLevelExports:
         import pyine.organisms.models.rewards as rewards
 
         assert rewards.RewardManager is pyine.organisms.models.rewards.core.manager.RewardManager
-
-    def test_rewards_package_exports_make_simple_manager(self) -> None:
-        import pyine.organisms.models.rewards as rewards
-
-        assert rewards.make_simple_manager is pyine.organisms.models.rewards.core.manager.make_simple_manager
 
     def test_rewards_package_exports_list_available_terms(self) -> None:
         import pyine.organisms.models.rewards as rewards
@@ -1071,6 +1019,7 @@ class TestRewardManagerState:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         manager.set_step(5)
@@ -1081,7 +1030,7 @@ class TestRewardManagerState:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="ok"),
         )
-        manager.compute_output(sample_ctx, log=False)
+        manager.compute(sample_ctx, log=False)
         state = manager.get_state()
         restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         restored.load_state(state)

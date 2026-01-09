@@ -32,6 +32,8 @@ class AggregationConfig(reward_types.BaseConfig):
     """Optional minimum clip value applied to each unweighted term value."""
     clip_term_max: float | None = None
     """Optional maximum clip value applied to each unweighted term value."""
+    return_raw_breakdown: bool = False
+    """Whether to include raw (pre-clipping, pre-weighting) values in RewardOutput.raw_terms."""
 
     @pydantic.model_validator(mode="after")
     def _validate_clip_ranges(self) -> "AggregationConfig":
@@ -50,13 +52,101 @@ class AggregationConfig(reward_types.BaseConfig):
         return self
 
 
-class OutputConfig(reward_types.BaseConfig):
-    """Configuration for `RewardManager.compute()` return values."""
+class VerbosityScalingConfig(reward_types.BaseConfig):
+    """Configuration for verbosity-based reward scaling.
 
-    return_breakdown_default: bool = False
-    """Whether `compute()` returns a breakdown by default."""
-    return_raw_breakdown: bool = False
-    """Whether to also include raw (pre-clipping, pre-weighting) values in breakdown output."""
+    When enabled, applies a multiplicative factor to the aggregated reward based on output length.
+    Supports two modes: absolute (threshold-based decay) and relative (group-normalized sigmoid).
+
+    Verbosity scaling requires a tokenizer source for token counting. Either provide a HF tokenizer
+    argument to RewardManager, or set parsing.openai_tokenizer_model to use tiktoken. Token counting
+    is automatically enabled when verbosity_scaling.enabled=True.
+
+    Important:
+        For relative mode, "group" means samples sharing the same prompt (identified by trace_id
+        in GRPO training). TRL adapter groups completions before computing relative scaling.
+
+    Relative mode and max_factor:
+        In relative mode, samples at or below the group mean get factor ~max_factor, not necessarily 1.0.
+        If max_factor < 1.0, even "non-verbose" samples will receive some penalty. Set max_factor=1.0
+        if you want no penalty for samples at or below the mean.
+
+    Skip behavior in relative mode:
+        When relative mode cannot compute meaningful scaling (group size < 2, or std = 0), the factor
+        is set to 1.0 regardless of max_factor. This is a safe fallback that avoids penalizing samples
+        when relative comparison is impossible. A warning is emitted once per scaler instance.
+
+    Ordering with clip_total:
+        Verbosity scaling is applied AFTER aggregation and any clip_total_min/clip_total_max clipping.
+        This means the final scaled reward may fall outside the clip bounds. If you need strict bounds,
+        set min_factor appropriately or apply additional post-processing.
+
+    Note on negative rewards:
+        Multiplication by factor < 1 moves negative rewards toward 0 (i.e., increases them).
+        If this is undesired, ensure rewards are non-negative before scaling.
+    """
+
+    enabled: bool = True
+    """Whether verbosity scaling is active."""
+    length_source: reward_types.LengthSource = reward_types.LengthSource.model_output
+    """Which text source to measure for length-based scaling.
+
+    Only model_output, parsed_reasoning, and parsed_final_answer are currently supported
+    (others will raise at config validation time).
+    """
+    mode: typing.Literal["absolute", "relative"] = "absolute"
+    """Scaling mode: 'absolute' uses fixed thresholds, 'relative' uses group normalization."""
+    decay_type: typing.Literal["linear", "exponential"] = "linear"
+    """Decay function for absolute mode."""
+    threshold_tokens: pydantic.NonNegativeInt = 0
+    """Token count below which no penalty is applied (absolute mode)."""
+    end_tokens: pydantic.PositiveInt = 1000
+    """Token count at which factor reaches min_factor (absolute mode, linear decay)."""
+    decay_rate: pydantic.PositiveFloat = 0.001
+    """Decay rate for absolute-exponential mode: factor = max_factor * exp(-decay_rate * excess)."""
+    temperature: pydantic.PositiveFloat = 1.0
+    """Sigmoid temperature for relative mode (higher = gentler slope)."""
+    min_factor: pydantic.NonNegativeFloat = 0.0
+    """Minimum value for the verbosity factor (floor). Must be <= max_factor."""
+    max_factor: pydantic.PositiveFloat = 1.0
+    """Maximum value for the verbosity factor (ceiling). Factor starts here and decays toward min_factor."""
+    emit_metrics: bool = True
+    """Whether to emit verbosity-related metrics."""
+    skip_negative_rewards: bool = True
+    """If True, skip scaling for samples with negative rewards (factor=1.0).
+
+    Since multiplication by factor < 1 moves negative rewards toward 0 (increases them),
+    this option prevents that behavior. When enabled, only positive rewards are scaled.
+    """
+
+    _SUPPORTED_LENGTH_SOURCES: typing.ClassVar[frozenset[reward_types.LengthSource]] = frozenset(
+        {
+            reward_types.LengthSource.model_output,
+            reward_types.LengthSource.parsed_reasoning,
+            reward_types.LengthSource.parsed_final_answer,
+        }
+    )
+
+    @pydantic.model_validator(mode="after")
+    def _validate_config(self) -> "VerbosityScalingConfig":
+        """Validate config constraints."""
+        if self.length_source not in self._SUPPORTED_LENGTH_SOURCES:
+            supported = ", ".join(sorted(s.value for s in self._SUPPORTED_LENGTH_SOURCES))
+            raise ValueError(
+                f"verbosity_scaling length_source={self.length_source.value!r} is not supported; "
+                f"supported sources are: {supported}"
+            )
+        if float(self.min_factor) > float(self.max_factor):
+            raise ValueError(f"min_factor ({self.min_factor}) must be <= max_factor ({self.max_factor})")
+        if float(self.max_factor) > 1.0:
+            raise ValueError(f"max_factor ({self.max_factor}) must be <= 1.0 for penalty behavior")
+        if self.mode == "absolute" and self.decay_type == "linear":
+            if int(self.end_tokens) <= int(self.threshold_tokens):
+                raise ValueError(
+                    f"end_tokens ({self.end_tokens}) must be > threshold_tokens ({self.threshold_tokens}) "
+                    "when mode='absolute' and decay_type='linear'"
+                )
+        return self
 
 
 class ParsingConfig(reward_types.BaseConfig):
@@ -72,8 +162,8 @@ class ParsingConfig(reward_types.BaseConfig):
     """Which parsed fields to extract (skips scanning disabled fields)."""
     final_tag: str = "final"
     """Tag name used to extract the final answer when using `mode=\"tags\"`."""
-    reasoning_from_final_prefix: bool = False
-    """If True, set reasoning to all text before the selected `<final_tag>` block (if present)."""
+    reasoning_from_outside_final: bool = False
+    """If True, set reasoning to all text outside the selected `<final_tag>` block (before and/or after)."""
     reasoning_tag: str = "reasoning"
     """Tag name used to extract reasoning when using `mode=\"tags\"`."""
     fallback_policy: typing.Literal["none", "last_line", "entire_output"] = "none"
@@ -88,11 +178,14 @@ class ParsingConfig(reward_types.BaseConfig):
     """Whether to track token-based lengths in addition to character lengths.
 
     When enabled, requires either a tokenizer argument to RewardManager or openai_tokenizer_model.
+
+    Note: Token counting is also enabled when verbosity_scaling.enabled=True, even if this is False.
     """
     openai_tokenizer_model: str | None = None
     """OpenAI model ID for tiktoken tokenizer (e.g., 'gpt-4').
 
-    Used for token counting when track_token_lengths=True and no HF tokenizer is provided.
+    Used for token counting when track_token_lengths=True or verbosity_scaling.enabled=True,
+    and no HF tokenizer is provided to RewardManager.
     """
 
     @pydantic.field_validator("final_tag", "reasoning_tag")
@@ -124,9 +217,11 @@ class LoggingConfig(reward_types.BaseConfig):
 
     Logging is intentionally term-agnostic: terms emit scalar metrics; the manager decides what
     gets logged, how often, and with what key scoping.
+
+    Note: When enabled=True, a logger must be passed to RewardManager() or a ValueError is raised.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     """Whether reward logging is enabled."""
     wandb_key_prefix: str = ""
     """Optional extra key prefix applied by `WandBRewardLogger` (applies to scalars and table key)."""
@@ -246,10 +341,10 @@ class RewardManagerConfig(reward_types.BaseConfig):
     """Aggregation strategy and clipping configuration."""
     logging: LoggingConfig = pydantic.Field(default_factory=LoggingConfig)
     """Logging configuration (frequency, scoping, toggles)."""
-    output: OutputConfig = pydantic.Field(default_factory=OutputConfig)
-    """Return-shape configuration for `RewardManager.compute()`."""
     parsing: ParsingConfig | None = None
     """Optional parsing configuration used to populate `SampleContext.parsed`."""
+    verbosity_scaling: VerbosityScalingConfig | None = None
+    """Optional verbosity-based reward scaling configuration."""
 
     @pydantic.model_validator(mode="after")
     def _validate_terms_unique(self) -> "RewardManagerConfig":

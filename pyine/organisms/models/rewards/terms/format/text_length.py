@@ -21,21 +21,6 @@ import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
 
 
-class LengthSource(enum.StrEnum):
-    """Available sources for length computation."""
-
-    PROMPT = "prompt"
-    """Measure the prompt length."""
-    MODEL_OUTPUT = "model_output"
-    """Measure the full model output length."""
-    PARSED_REASONING = "parsed_reasoning"
-    """Measure the parsed reasoning field length."""
-    PARSED_FINAL_ANSWER = "parsed_final_answer"
-    """Measure the parsed final answer field length."""
-    SAMPLE_CODE = "sample_code"
-    """Measure the sample code field length."""
-
-
 class LengthUnit(enum.StrEnum):
     """Units supported for length computation."""
 
@@ -77,7 +62,7 @@ class LengthRewardComponentConfig(reward_types.BaseConfig):
     """Stable component name used to namespace emitted metrics."""
     enabled: bool = True
     """Whether this component is active."""
-    source: LengthSource = LengthSource.MODEL_OUTPUT
+    source: reward_types.LengthSource = reward_types.LengthSource.model_output
     """Which text source to measure (prompt, output, parsed fields, or sample data fields)."""
     unit: LengthUnit = LengthUnit.CHARS
     """Length unit (`chars`, `lines`, or `openai_tokens`)."""
@@ -172,20 +157,10 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
     def _get_source_text(
         sample_ctx: reward_types.SampleContext,
         *,
-        source: LengthSource,
+        source: reward_types.LengthSource,
     ) -> str | None:
         """Get the source text for length measurement, or None if not available."""
-        if source == LengthSource.PROMPT:
-            return sample_ctx.prompt
-        if source == LengthSource.MODEL_OUTPUT:
-            return sample_ctx.model_output
-        if source == LengthSource.PARSED_REASONING:
-            return None if sample_ctx.parsed is None else sample_ctx.parsed.reasoning
-        if source == LengthSource.PARSED_FINAL_ANSWER:
-            return None if sample_ctx.parsed is None else sample_ctx.parsed.final_answer
-        if source == LengthSource.SAMPLE_CODE:
-            return sample_ctx.sample_data.code
-        raise ValueError(f"unknown length source: {source}")
+        return reward_types.get_text_from_source(sample_ctx, source)
 
     @staticmethod
     def _compute_length(
@@ -247,9 +222,9 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
             if is_missing:
                 if component.missing_text_policy == MissingTextPolicy.ERROR:
                     source_hints = {
-                        LengthSource.PARSED_REASONING: "ensure ParsingConfig.enabled_fields includes reasoning",
-                        LengthSource.PARSED_FINAL_ANSWER: "ensure ParsingConfig.enabled_fields includes final",
-                        LengthSource.SAMPLE_CODE: "ensure sample_data.code is populated",
+                        reward_types.LengthSource.parsed_reasoning: "ensure enabled_fields includes reasoning",
+                        reward_types.LengthSource.parsed_final_answer: "ensure enabled_fields includes final",
+                        reward_types.LengthSource.sample_code: "ensure sample_data.code is populated",
                     }
                     hint = source_hints.get(component.source, "check that the source is available")
                     raise ValueError(

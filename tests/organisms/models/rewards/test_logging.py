@@ -17,9 +17,9 @@ class TestInMemoryRewardLogger:
         assert len(logger.samples) == 1
         entry = logger.samples[0]
         assert entry["sample_id"] == "sample_1"
-        assert entry["total"] == 1.5
-        assert entry["terms"] == {"term_a": 1.0, "term_b": 0.5}
-        assert entry["metrics"] == {"term_a/hit": True, "term_b/count": 3}
+        assert entry["reward_total"] == 1.5
+        assert entry["reward_terms"] == {"term_a": 1.0, "term_b": 0.5}
+        assert entry["reward_metrics"] == {"term_a/hit": True, "term_b/count": 3}
         assert entry["step"] == 10
 
     def test_log_without_step(self) -> None:
@@ -34,7 +34,7 @@ class TestInMemoryRewardLogger:
         logger.log("s3", total=3.0, terms={}, metrics={}, step=3)
         assert len(logger.samples) == 3
         assert [e["sample_id"] for e in logger.samples] == ["s1", "s2", "s3"]
-        assert [e["total"] for e in logger.samples] == [1.0, 2.0, 3.0]
+        assert [e["reward_total"] for e in logger.samples] == [1.0, 2.0, 3.0]
 
     def test_log_run_records_run_event(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
@@ -76,8 +76,8 @@ class TestInMemoryRewardLogger:
         logger.log("s1", total=1.0, terms=terms, metrics=metrics)
         terms["a"] = 999.0  # mutate original
         metrics["b"] = 999
-        assert logger.samples[0]["terms"] == {"a": 1.0}  # logger has copy
-        assert logger.samples[0]["metrics"] == {"b": 2}
+        assert logger.samples[0]["reward_terms"] == {"a": 1.0}  # logger has copy
+        assert logger.samples[0]["reward_metrics"] == {"b": 2}
 
     def test_log_failures_records_to_failures_list(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()

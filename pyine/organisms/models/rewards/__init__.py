@@ -20,13 +20,15 @@ Subpackages (accessible via `pyine.organisms.models.rewards.<subpackage>`):
 Convenience imports for common use cases:
     ```python
     import pyine.organisms.models.rewards as rewards
+    from pyine.organisms.models.rewards.core import configs as reward_configs
 
-    # create a simple manager (only works with terms that have all-default params)
-    manager = rewards.make_simple_manager(
-        [
-            ("format", "parseable_answer", 1.0),
-        ]
+    # create a manager with config
+    config = reward_configs.RewardManagerConfig(
+        terms=[reward_configs.RewardTermSpec(name="format", type="parseable_answer", weight=1.0)],
+        parsing=reward_configs.ParsingConfig(final_tag="final"),
+        logging=reward_configs.LoggingConfig(enabled=False),  # or pass logger= to RewardManager
     )
+    manager = rewards.RewardManager(config)
 
     # build context with automatic parsing, then compute rewards
     ctx = manager.build_sample_context(
@@ -34,7 +36,8 @@ Convenience imports for common use cases:
         model_output="<final>answer</final>",
         sample_data=sample_data,  # from datamodule
     )
-    total = manager.compute(ctx)
+    output = manager.compute(ctx)
+    total = output.total
 
     # discover available terms
     for term_info in rewards.list_available_terms():
@@ -51,7 +54,6 @@ import typing
 # type-only imports for pyright (actual imports are lazy via __getattr__)
 if typing.TYPE_CHECKING:
     from pyine.organisms.models.rewards.core.manager import RewardManager as RewardManager
-    from pyine.organisms.models.rewards.core.manager import make_simple_manager as make_simple_manager
     from pyine.organisms.models.rewards.core.registry import TermInfo as TermInfo
     from pyine.organisms.models.rewards.core.registry import list_available_terms as list_available_terms
     from pyine.organisms.models.rewards.core.types import CodeExecEvalData as CodeExecEvalData
@@ -75,7 +77,6 @@ __all__ = [
     "SampleContext",
     "TermInfo",
     "list_available_terms",
-    "make_simple_manager",
     # TRL integration
     "MessageSelectionPolicy",
     "TRLRewardAdapter",
@@ -89,10 +90,6 @@ def __getattr__(name: str) -> typing.Any:
         from pyine.organisms.models.rewards.core.manager import RewardManager
 
         return RewardManager
-    if name == "make_simple_manager":
-        from pyine.organisms.models.rewards.core.manager import make_simple_manager
-
-        return make_simple_manager
     if name == "TermInfo":
         from pyine.organisms.models.rewards.core.registry import TermInfo
 

@@ -12,7 +12,9 @@ This module uses the generic `pyine.utils.registry.Registry` as its underlying i
 
 import collections.abc
 import dataclasses
+import inspect
 
+import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.registry
 
@@ -160,3 +162,15 @@ def list_available_terms() -> list[TermInfo]:
 
     reward_terms.ensure_builtin_terms_registered()
     return _GLOBAL_REGISTRY.list_available_terms()
+
+
+def validate_factory_signature(
+    factory: reward_types.RewardTermFactory,
+    spec: reward_configs.RewardTermSpec,
+) -> None:
+    """Validate that a factory can be called with `(spec, parser=...)`."""
+    signature = inspect.signature(factory)
+    try:
+        signature.bind(spec, parser=None)
+    except TypeError as exc:
+        raise TypeError(f"invalid term factory signature for name={spec.name} type={spec.type}: {signature}") from exc

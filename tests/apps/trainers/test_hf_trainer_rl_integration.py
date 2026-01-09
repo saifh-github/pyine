@@ -115,7 +115,7 @@ def rl_training_config(
             mode="tags",
             enabled_fields="final_only",
             final_tag="final",
-            reasoning_from_final_prefix=False,
+            reasoning_from_outside_final=False,
             fallback_policy="entire_output",  # use entire output as final answer if no tags
             multi_tag_policy="last",
             strict=False,

@@ -222,7 +222,7 @@ def _get_default_code_exec_reward_manager_configs(
                 "mode": "tags",
                 "enabled_fields": "final_only",
                 "final_tag": "final",
-                "reasoning_from_final_prefix": True,
+                "reasoning_from_outside_final": True,
                 "fallback_policy": "none",
                 "multi_tag_policy": "last",
                 "strict": False,

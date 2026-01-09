@@ -851,10 +851,11 @@ class TestCodeExecTermsIntegration:
                 ),
             ],
             parsing=None,
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = reward_manager.RewardManager(config)
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
-        output = manager.compute_output(ctx)
+        output = manager.compute(ctx)
         assert output.total == 2.0
         assert output.weighted_terms["hard"] == 1.0
         assert output.weighted_terms["soft"] == 1.0
@@ -873,11 +874,12 @@ class TestCodeExecTermsIntegration:
                 ),
             ],
             parsing=None,
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = reward_manager.RewardManager(config)
         # mismatch case: soft_match term emits mismatch_reason as a string metric
         ctx = make_code_exec_sample_context(expected="42", predicted="totally different value")
-        output = manager.compute_output(ctx)
+        output = manager.compute(ctx)
         assert output.total == 0.0
         assert "soft/mismatch_reason" in output.metrics
         assert isinstance(output.metrics["soft/mismatch_reason"], str)
@@ -896,10 +898,11 @@ class TestCodeExecTermsIntegration:
                 ),
             ],
             parsing=None,
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = reward_manager.RewardManager(config)
         ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
-        output = manager.compute_output(ctx)
+        output = manager.compute(ctx)
         assert output.total == 0.0
         assert output.metrics["hard/reward_flipped"] is True
 

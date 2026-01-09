@@ -21,9 +21,15 @@ Usage:
     ```python
     import pyine.organisms.models.rewards as rewards
     import pyine.organisms.models.rewards.trl as rewards_trl
+    from pyine.organisms.models.rewards.core import configs as reward_configs
 
-    # create a reward manager with desired terms
-    manager = rewards.make_simple_manager([("match", "hard_match", 1.0)])
+    # create a reward manager with config
+    config = reward_configs.RewardManagerConfig(
+        terms=[reward_configs.RewardTermSpec(name="match", type="hard_match", weight=1.0)],
+        parsing=reward_configs.ParsingConfig(final_tag="final"),
+        logging=reward_configs.LoggingConfig(enabled=False),  # or pass logger= to RewardManager
+    )
+    manager = rewards.RewardManager(config)
 
     # create a TRL-compatible reward adapter
     adapter = rewards_trl.TRLRewardAdapter(
@@ -201,6 +207,10 @@ class TRLRewardAdapter:
     ) -> TRLRewardResult:
         """Compute rewards with full result information.
 
+        For relative verbosity scaling, groups completions by trace_id (prompt) before computing,
+        so samples for the same prompt are normalized together. Per-sample errors are caught
+        individually during context building.
+
         Args:
             completions: List of completions, each is a list of message dicts.
             return_outputs: If True, include full RewardOutput objects in result.
@@ -211,8 +221,8 @@ class TRLRewardAdapter:
         """
         batch_size = len(completions)
         self._total_count += batch_size
-        rewards: list[float | None] = []
-        outputs: list[reward_types.RewardOutput | None] | None = [] if return_outputs else None
+        # build contexts with per-sample error handling
+        contexts: list[reward_types.SampleContext | None] = []
         errors: dict[int, str] = {}
         prompts = self._get_prompts(batch_size, kwargs)
         sample_data_list = None if self._context_builder else self._get_sample_data_list(batch_size, kwargs)
@@ -227,25 +237,44 @@ class TRLRewardAdapter:
                 )
                 if ctx is None:
                     self._skip_count += 1
-                    rewards.append(None if self._return_none_on_skip else 0.0)
-                    if outputs is not None:
-                        outputs.append(None)
-                    continue
-                output = self._manager.compute_output(ctx)
-                rewards.append(output.total)
-                if outputs is not None:
-                    outputs.append(output)
+                contexts.append(ctx)
             except Exception as exc:
                 if not self._skip_on_error:
                     raise
                 self._error_count += 1
                 error_msg = f"{type(exc).__name__}: {exc}"
                 errors[sample_idx] = error_msg
-                logger.warning("TRL reward computation failed for sample %d: %s", sample_idx, error_msg)
-                rewards.append(None if self._return_none_on_skip else 0.0)
-                if outputs is not None:
-                    outputs.append(None)
-        return TRLRewardResult(rewards=rewards, outputs=outputs, errors=errors)
+                logger.warning(f"TRL context build failed for sample {sample_idx}: {error_msg}")
+                contexts.append(None)
+        # separate valid contexts for batch processing
+        valid_indices = [idx for idx, ctx in enumerate(contexts) if ctx is not None]
+        valid_contexts = [contexts[idx] for idx in valid_indices]
+        if not valid_contexts:
+            # all samples failed/skipped
+            rewards: list[float | None] = [None if self._return_none_on_skip else 0.0] * batch_size
+            outputs_when_empty: list[reward_types.RewardOutput | None] | None = (
+                typing.cast("list[reward_types.RewardOutput | None]", [None] * batch_size) if return_outputs else None
+            )
+            return TRLRewardResult(
+                rewards=rewards,
+                outputs=outputs_when_empty,
+                errors=errors,
+            )
+        # compute rewards (compute_batch auto-groups by trace_id for relative verbosity scaling)
+        # note: we intentionally don't catch errors here; if compute_batch fails on valid contexts,
+        # that's a bug in the reward manager that should be fixed, not silently degraded
+        reward_outputs = self._manager.compute_batch(valid_contexts)  # type: ignore[arg-type]
+        # map results back to original indices
+        rewards: list[float | None] = [None if self._return_none_on_skip else 0.0] * batch_size
+        full_outputs: list[reward_types.RewardOutput | None] | None = (
+            typing.cast("list[reward_types.RewardOutput | None]", [None] * batch_size) if return_outputs else None
+        )
+        for local_idx, global_idx in enumerate(valid_indices):
+            output = reward_outputs[local_idx]
+            rewards[global_idx] = output.total
+            if full_outputs is not None:
+                full_outputs[global_idx] = output
+        return TRLRewardResult(rewards=rewards, outputs=full_outputs, errors=errors)
 
     def _get_prompts(
         self,
@@ -285,9 +314,9 @@ class TRLRewardAdapter:
     ) -> list[samples_common.SampleData]:
         """Extract SampleData objects from kwargs.
 
-        Handles three cases:
-        1. "sample_data" key with SampleData objects
-        2. "sample_data" key with dicts (HF datasets serialize NamedTuples to dicts)
+        Handles the case where HuggingFace datasets serialize NamedTuples to dicts.
+        Reconstructs SampleData instances from these dicts, fixing enum fields that
+        were serialized to strings.
         """
         sample_data: typing.Any = kwargs.get(self._sample_data_key)
 

@@ -42,7 +42,7 @@ class TestParsingStatsLogging:
             model_output="some output",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx)
+        manager.compute(ctx)
         # without parsing, get_parsing_metrics() returns empty dict
         assert manager.get_parsing_metrics() == {}
         # get_state() should not contain parsing_stats key
@@ -66,6 +66,7 @@ class TestParsingStatsLogging:
                 fallback_policy="none",
                 capture_diagnostics=True,
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         # sample with reasoning and answer
@@ -74,7 +75,7 @@ class TestParsingStatsLogging:
             model_output="<reasoning>think hard</reasoning><final>answer1</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx1, log=False)
+        manager.compute(ctx1, log=False)
         metrics = manager.get_parsing_metrics()
         assert metrics["sample_count"] == 1.0
         assert metrics["output_length_chars/mean"] > 0
@@ -95,6 +96,7 @@ class TestParsingStatsLogging:
                 fallback_policy="none",
                 capture_diagnostics=True,
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         # sample 1: has both reasoning and answer
@@ -115,9 +117,9 @@ class TestParsingStatsLogging:
             model_output="just text",
             sample_data=rewards_conftest.make_sample_data("s3"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
-        manager.compute_output(ctx3, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
+        manager.compute(ctx3, log=False)
         metrics = manager.get_parsing_metrics()
         assert metrics["sample_count"] == 3.0
         # 2/3 missing reasoning (s2 and s3)
@@ -138,6 +140,7 @@ class TestParsingStatsLogging:
                 fallback_policy="none",
                 capture_diagnostics=True,
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         # sample 1: well-formed
@@ -152,8 +155,8 @@ class TestParsingStatsLogging:
             model_output="<final><final>nested</final></final>",
             sample_data=rewards_conftest.make_sample_data("s2"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
         metrics = manager.get_parsing_metrics()
         assert metrics["sample_count"] == 2.0
         # 1/2 malformed
@@ -184,7 +187,7 @@ class TestParsingStatsLogging:
             model_output="<final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         manager.flush_stats()
         assert len(logger_obj.runs) == 1
         run_entry = logger_obj.runs[0]
@@ -235,9 +238,9 @@ class TestParsingStatsLogging:
             model_output="<final><final>nested</final></final>",
             sample_data=rewards_conftest.make_sample_data("s3", code_type="bugfix"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
-        manager.compute_output(ctx3, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
+        manager.compute(ctx3, log=False)
         original_metrics = manager.get_parsing_metrics()
         original_category_metrics = manager.get_parsing_category_metrics()
         state = manager.get_state()
@@ -274,6 +277,7 @@ class TestParsingStatsLogging:
                 fallback_policy="none",
                 capture_diagnostics=True,
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = manager.build_sample_context(
@@ -281,7 +285,7 @@ class TestParsingStatsLogging:
             model_output="<final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         assert manager.get_parsing_metrics()["sample_count"] == 1.0
         manager.reset_accumulators()
         # after reset, get_parsing_metrics returns empty dict (no samples)
@@ -312,10 +316,10 @@ class TestParsingStatsLogging:
             model_output="<reasoning>think</reasoning><final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx)
+        manager.compute(ctx)
         assert len(logger_obj.samples) == 1
         sample_entry = logger_obj.samples[0]
-        metrics = sample_entry["metrics"]
+        metrics = sample_entry["reward_metrics"]
         assert isinstance(metrics, dict)
         # per-sample parsing metrics should be present
         assert "parsing/output_length_chars" in metrics
@@ -347,7 +351,7 @@ class TestParsingStatsLogging:
                 model_output="<final>answer</final>",
                 sample_data=rewards_conftest.make_sample_data(f"s{idx}"),
             )
-            manager.compute_output(ctx)
+            manager.compute(ctx)
         # should log samples 1 and 3 (every 2nd sample, 0-indexed)
         assert len(logger_obj.samples) == 2
 
@@ -364,6 +368,7 @@ class TestParsingStatsLogging:
                 fallback_policy="none",
                 capture_diagnostics=False,  # disabled
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         # sample with nested tags (would be malformed if diagnostics were enabled)
@@ -372,7 +377,7 @@ class TestParsingStatsLogging:
             model_output="<final><final>nested</final></final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
         # malformed_ratio should be omitted since diagnostics are disabled
         assert "malformed_ratio" not in metrics
@@ -413,33 +418,33 @@ class TestParsingStatsIntegration:
             model_output="<reasoning>think</reasoning><final>answer1</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx1)
+        manager.compute(ctx1)
         # sample 2: well-formed, answer only (no reasoning)
         ctx2 = manager.build_sample_context(
             prompt="p2",
             model_output="<final>answer2</final>",
             sample_data=rewards_conftest.make_sample_data("s2"),
         )
-        manager.compute_output(ctx2)
+        manager.compute(ctx2)
         # sample 3: no answer tag (missing answer)
         ctx3 = manager.build_sample_context(
             prompt="p3",
             model_output="just text without tags",
             sample_data=rewards_conftest.make_sample_data("s3"),
         )
-        manager.compute_output(ctx3)
+        manager.compute(ctx3)
         # verify per-sample metrics were logged (separate parsing/ prefix)
         assert len(logger_obj.samples) == 3
-        sample1_metrics = logger_obj.samples[0]["metrics"]
+        sample1_metrics = logger_obj.samples[0]["reward_metrics"]
         assert "parsing/output_length_chars" in sample1_metrics
         assert "parsing/has_reasoning" in sample1_metrics
         assert "parsing/has_answer" in sample1_metrics
         assert sample1_metrics["parsing/has_reasoning"] is True
         assert sample1_metrics["parsing/has_answer"] is True
-        sample2_metrics = logger_obj.samples[1]["metrics"]
+        sample2_metrics = logger_obj.samples[1]["reward_metrics"]
         assert sample2_metrics["parsing/has_reasoning"] is False
         assert sample2_metrics["parsing/has_answer"] is True
-        sample3_metrics = logger_obj.samples[2]["metrics"]
+        sample3_metrics = logger_obj.samples[2]["reward_metrics"]
         assert sample3_metrics["parsing/has_answer"] is False
         # verify run-level parsing metrics before flush
         parsing_metrics = manager.get_parsing_metrics()
@@ -497,8 +502,8 @@ class TestParsingStatsIntegration:
             model_output="<final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s2", code_type="bugfix"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
         category_parsing_metrics = manager.get_parsing_category_metrics()
         # original: 1 sample, has reasoning
         assert "code_type/original/sample_count" in category_parsing_metrics
@@ -549,9 +554,9 @@ class TestParsingStatsIntegration:
             model_output="<final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s3", code_type="bugfix"),
         )
-        manager.compute_output(ctx1, log=False)
-        manager.compute_output(ctx2, log=False)
-        manager.compute_output(ctx3, log=False)
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
+        manager.compute(ctx3, log=False)
         category_parsing_metrics = manager.get_parsing_category_metrics()
         # original: 2 samples, 1 malformed -> ratio = 0.5
         assert "code_type/original/malformed_ratio" in category_parsing_metrics
@@ -589,7 +594,7 @@ class TestParsingStatsIntegration:
             model_output="<final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         manager.flush_stats()
         assert len(logger_obj.runs) == 1
         run_entry = logger_obj.runs[0]
@@ -615,6 +620,7 @@ class TestTokenLengthTracking:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(
                 fallback_policy="none",
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = manager.build_sample_context(
@@ -622,7 +628,7 @@ class TestTokenLengthTracking:
             model_output="<reasoning>think</reasoning><final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
         # char metrics present, token metrics absent
         assert "output_length_chars/mean" in metrics
@@ -642,6 +648,7 @@ class TestTokenLengthTracking:
                 track_token_lengths=True,
                 openai_tokenizer_model="gpt-4",
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = manager.build_sample_context(
@@ -649,7 +656,7 @@ class TestTokenLengthTracking:
             model_output="<reasoning>think hard</reasoning><final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
         # both char and token metrics should be present
         assert "output_length_chars/mean" in metrics
@@ -688,6 +695,7 @@ class TestTokenLengthTracking:
                 fallback_policy="none",
                 track_token_lengths=True,
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, tokenizer=tokenizer)
         ctx = manager.build_sample_context(
@@ -695,7 +703,7 @@ class TestTokenLengthTracking:
             model_output="<reasoning>think hard</reasoning><final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
         # both char and token metrics should be present
         assert "output_length_chars/mean" in metrics
@@ -717,8 +725,9 @@ class TestTokenLengthTracking:
                 track_token_lengths=True,  # enabled
                 openai_tokenizer_model=None,  # no model set
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
-        with pytest.raises(ValueError, match="track_token_lengths=True requires"):
+        with pytest.raises(ValueError, match="token counting requires"):
             pyine.organisms.models.rewards.core.manager.RewardManager(config)  # no tokenizer arg
 
     def test_per_sample_token_metrics_logged(self) -> None:
@@ -747,9 +756,9 @@ class TestTokenLengthTracking:
             model_output="<reasoning>think</reasoning><final>answer</final>",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        manager.compute_output(ctx)
+        manager.compute(ctx)
         assert len(logger_obj.samples) == 1
-        sample_metrics = logger_obj.samples[0]["metrics"]
+        sample_metrics = logger_obj.samples[0]["reward_metrics"]
         # both char and token metrics should be present in per-sample log
         assert "parsing/output_length_chars" in sample_metrics
         assert "parsing/output_length_tokens" in sample_metrics

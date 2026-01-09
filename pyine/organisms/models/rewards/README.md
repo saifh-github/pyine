@@ -54,7 +54,8 @@ ctx = reward_types.SampleContext(
     model_output="<answer>4</answer>",
     sample_data=sample_data,
 )
-reward = manager.compute(ctx)  # returns float (or tuple if return_breakdown=True)
+output = manager.compute(ctx)
+reward = output.total  # structured RewardOutput also has weighted_terms, raw_terms, metrics
 ```
 
 ## Built-in Terms
@@ -228,6 +229,89 @@ config = reward_configs.RewardManagerConfig(
 )
 ```
 
+## Verbosity Scaling
+
+The reward manager supports optional verbosity-based scaling that multiplies rewards by a factor
+based on output length. This encourages concise responses by penalizing verbose outputs.
+
+### Setup Requirements
+
+Verbosity scaling requires token counting. You have two options:
+
+1. **Provide a HuggingFace tokenizer** to `RewardManager(tokenizer=tokenizer)` - this is the
+   recommended approach when you already have a tokenizer loaded for your model.
+
+2. **Configure a tiktoken tokenizer** via `parsing.openai_tokenizer_model` - note that this
+   requires a `ParsingConfig` to be defined as well.
+
+### Modes
+
+**Absolute mode**: Factor decays from `max_factor` toward `min_factor` based on absolute token
+thresholds. Use `threshold_tokens` (no penalty below) and `end_tokens` (full penalty at).
+
+```python
+import pyine.organisms.models.rewards.core.configs as reward_configs
+
+config = reward_configs.RewardManagerConfig(
+    terms=[...],
+    verbosity_scaling=reward_configs.VerbosityScalingConfig(
+        enabled=True,
+        mode="absolute",
+        length_source="model_output",
+        decay_type="linear",    # or "exponential"
+        threshold_tokens=500,   # no penalty below this
+        end_tokens=2000,        # full penalty at this (for linear)
+        min_factor=0.1,         # minimum scaling factor
+        max_factor=1.0,         # factor starts here, decays toward min_factor
+    ),
+)
+```
+
+**Relative mode**: Factor computed relative to other samples in the same "group" (prompt). Samples
+at or below mean length get factor ~1.0; above mean get factor < 1.0.
+
+```python
+config = reward_configs.RewardManagerConfig(
+    terms=[...],
+    verbosity_scaling=reward_configs.VerbosityScalingConfig(
+        enabled=True,
+        mode="relative",
+        length_source="model_output",
+        temperature=1.0,  # higher = gentler slope
+        min_factor=0.1,
+        max_factor=1.0,
+    ),
+)
+```
+
+### Group Definition (GRPO)
+
+In GRPO training, "group" = all generations for the same prompt. The TRL adapter groups completions
+by `trace_id` before computing relative scaling, so samples sharing a prompt are normalized together.
+
+For relative mode with `compute()` (single sample), a warning is emitted and scaling is
+skipped. Use `compute_batch(sample_ctxs)` instead (samples are automatically grouped by `trace_id`).
+
+### How It Works
+
+The verbosity factor is applied as a post-aggregation multiplier:
+
+```
+final_reward = aggregated_reward * verbosity_factor
+```
+
+Where `verbosity_factor` is in `[min_factor, max_factor]` (typically 0.0 to 1.0).
+
+### Metrics
+
+When `emit_metrics=True` (default), verbosity scaling emits:
+
+- `verbosity/factor`: the computed scaling factor;
+- `verbosity/token_count`: token count considered for the sample;
+- `verbosity/pre_scaling_reward`: reward before scaling;
+- `verbosity/post_scaling_reward`: reward after scaling;
+- In relative mode: `verbosity/group_mean`, `verbosity/group_std`, `verbosity/z_score`.
+
 ## Creating Custom Terms
 
 ### 1. Define a config class
@@ -351,8 +435,8 @@ for batch in dataloader:
             model_output=output,
             sample_data=sample_data,
         )
-        reward = manager.compute(ctx)
-        rewards.append(reward)
+        output = manager.compute(ctx)
+        rewards.append(output.total)
     # use rewards for policy gradient update
     loss = compute_policy_loss(rewards, ...)
 
@@ -377,7 +461,7 @@ logger = reward_logging.make_wandb_reward_logger(
 manager = reward_manager.RewardManager(config, logger=logger)
 # ...
 manager.set_step(global_step)  # if needed, for subsequent steps
-reward = manager.compute(ctx)  # rewards are automatically logged according to LoggingConfig
+output = manager.compute(ctx)  # rewards are automatically logged according to LoggingConfig
 ```
 
 ## Distributed Training

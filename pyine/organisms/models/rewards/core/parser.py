@@ -60,8 +60,9 @@ class TagsOutputParser:
         fields: dict[str, str] = {}
         want_final = self._config.enabled_fields in ("both", "final_only")
         want_reasoning = self._config.enabled_fields in ("both", "reasoning_only")
-        need_final_scan_for_reasoning = bool(self._config.reasoning_from_final_prefix and want_reasoning)
+        need_final_scan_for_reasoning = bool(self._config.reasoning_from_outside_final and want_reasoning)
         final_selected_open_start: int | None = None
+        final_selected_close_end: int | None = None
 
         has_malformed_structure = False
         if want_final or need_final_scan_for_reasoning:
@@ -88,16 +89,28 @@ class TagsOutputParser:
                     final_answer = selected_final
                 if 0 <= final_idx < len(final_result.block_start_offsets):
                     final_selected_open_start = final_result.block_start_offsets[final_idx]
+                if 0 <= final_idx < len(final_result.block_end_offsets):
+                    final_selected_close_end = final_result.block_end_offsets[final_idx]
             if want_final and final_answer is None and self._config.fallback_policy != "none":
                 final_answer = self._fallback(raw)
             if self._config.capture_diagnostics:
                 fields.update(self._format_diagnostics(final_result, raw))
 
         if want_reasoning:
-            if self._config.reasoning_from_final_prefix and final_selected_open_start is not None:
+            if self._config.reasoning_from_outside_final and final_selected_open_start is not None:
                 prefix = raw[:final_selected_open_start]
-                stripped = prefix.strip()
-                reasoning = stripped if stripped else None
+                suffix = raw[final_selected_close_end:] if final_selected_close_end is not None else ""
+                # combine text before and after final block (separated by newline if both non-empty)
+                prefix_stripped = prefix.strip()
+                suffix_stripped = suffix.strip()
+                if prefix_stripped and suffix_stripped:
+                    reasoning = prefix_stripped + "\n" + suffix_stripped
+                elif prefix_stripped:
+                    reasoning = prefix_stripped
+                elif suffix_stripped:
+                    reasoning = suffix_stripped
+                else:
+                    reasoning = None
             else:
                 reasoning_result = pyine.utils.parsing.extract_tag_blocks(
                     raw,

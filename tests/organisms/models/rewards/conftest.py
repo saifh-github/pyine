@@ -1,8 +1,14 @@
 """Shared fixtures and helpers for reward package tests."""
 
 import pyine.organisms.datamodules.samples.common
+import pyine.organisms.models.rewards.core.configs
 import pyine.organisms.models.rewards.core.types
 import pyine.utils.parsing
+
+
+def make_disabled_logging_config() -> pyine.organisms.models.rewards.core.configs.LoggingConfig:
+    """Create a LoggingConfig with logging disabled for tests that don't need logging."""
+    return pyine.organisms.models.rewards.core.configs.LoggingConfig(enabled=False)
 
 
 def make_sample_data(

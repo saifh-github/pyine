@@ -11,6 +11,7 @@ intentional design choice to integrate cleanly with PyINE's data pipeline.
 
 import collections.abc
 import dataclasses
+import enum
 import typing
 
 import pydantic
@@ -24,6 +25,24 @@ if typing.TYPE_CHECKING:
 
 type MetricValue = bool | int | float | str
 """Type alias for a single metric value emitted by reward terms."""
+
+
+class LengthSource(enum.StrEnum):
+    """Available sources for length computation.
+
+    Shared by TextLengthTerm and VerbosityScalingConfig to avoid import cycles.
+    """
+
+    prompt = enum.auto()
+    """Measure the prompt length."""
+    model_output = enum.auto()
+    """Measure the full model output length."""
+    parsed_reasoning = enum.auto()
+    """Measure the parsed reasoning field length."""
+    parsed_final_answer = enum.auto()
+    """Measure the parsed final answer field length."""
+    sample_code = enum.auto()
+    """Measure the sample code field length."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -158,6 +177,53 @@ class SampleContext:
     def tags(self) -> list[str]:
         """Convenience accessor for `SampleData.get_tag_list()`."""
         return self.sample_data.get_tag_list()
+
+
+def get_text_from_source(
+    sample_ctx: SampleContext,
+    source: LengthSource,
+) -> str | None:
+    """Extract text from sample context based on length source.
+
+    This is a shared helper used by TextLengthTerm and VerbosityScaler to avoid duplication.
+
+    Args:
+        sample_ctx: Sample context to extract text from.
+        source: Which text source to extract.
+
+    Returns:
+        The extracted text, or None if the source is not available (i.e. field not parsed).
+
+    Raises:
+        ValueError: If the source is unknown.
+    """
+    if source == LengthSource.prompt:
+        return sample_ctx.prompt
+    if source == LengthSource.model_output:
+        return sample_ctx.model_output
+    if source == LengthSource.parsed_reasoning:
+        return None if sample_ctx.parsed is None else sample_ctx.parsed.reasoning
+    if source == LengthSource.parsed_final_answer:
+        return None if sample_ctx.parsed is None else sample_ctx.parsed.final_answer
+    if source == LengthSource.sample_code:
+        return sample_ctx.sample_data.code
+    raise ValueError(f"unknown length_source: {source}")
+
+
+@dataclasses.dataclass(slots=True)
+class TokenCountCache:
+    """Cache for token counts keyed by source."""
+
+    counts: dict[LengthSource, int] = dataclasses.field(default_factory=lambda: dict[LengthSource, int]())
+    """Token counts keyed by length source."""
+
+    def get(self, source: LengthSource) -> int | None:
+        """Get cached token count for a source."""
+        return self.counts.get(source)
+
+    def set(self, source: LengthSource, count: int) -> None:
+        """Cache a token count for a source."""
+        self.counts[source] = count
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -453,12 +519,247 @@ class ParsingStatsAccumulator:
         for category, count in other.category_malformed_count.items():
             self.category_malformed_count[category] = self.category_malformed_count.get(category, 0) + count
 
+    def update(
+        self,
+        parsed: ParsedOutput,
+        token_cache: "TokenCountCache | None",
+        categories: list[str] | None,
+    ) -> None:
+        """Update stats from a single sample.
+
+        Args:
+            parsed: Parsed output from the sample.
+            token_cache: Token count cache (if token tracking enabled).
+            categories: List of categories for this sample (if category extraction enabled).
+        """
+        output_len_chars = len(parsed.raw)
+        has_reasoning = parsed.reasoning is not None
+        has_answer = parsed.final_answer is not None
+        is_malformed = parsed.fields.get("is_malformed", "false") == "true"
+        reasoning_len_chars = len(parsed.reasoning) if has_reasoning else None  # type: ignore[arg-type]
+        answer_len_chars = len(parsed.final_answer) if has_answer else None  # type: ignore[arg-type]
+        # get token lengths from cache
+        output_len_tokens: int | None = None
+        reasoning_len_tokens: int | None = None
+        answer_len_tokens: int | None = None
+        if token_cache is not None:
+            output_len_tokens = token_cache.get(LengthSource.model_output)
+            reasoning_len_tokens = token_cache.get(LengthSource.parsed_reasoning)
+            answer_len_tokens = token_cache.get(LengthSource.parsed_final_answer)
+        # update global character length stats
+        self.output_length_chars.update(float(output_len_chars))
+        if reasoning_len_chars is not None:
+            self.reasoning_length_chars.update(float(reasoning_len_chars))
+        if answer_len_chars is not None:
+            self.answer_length_chars.update(float(answer_len_chars))
+        # update global token length stats
+        if output_len_tokens is not None:
+            self.output_length_tokens.update(float(output_len_tokens))
+        if reasoning_len_tokens is not None:
+            self.reasoning_length_tokens.update(float(reasoning_len_tokens))
+        if answer_len_tokens is not None:
+            self.answer_length_tokens.update(float(answer_len_tokens))
+        # update global format counts
+        self.total_count += 1
+        if not has_reasoning:
+            self.missing_reasoning_count += 1
+        if not has_answer:
+            self.missing_answer_count += 1
+        if is_malformed:
+            self.malformed_count += 1
+        # update category-wise stats
+        if categories:
+            for category in categories:
+                self._update_category(
+                    category,
+                    output_len_chars=output_len_chars,
+                    reasoning_len_chars=reasoning_len_chars,
+                    answer_len_chars=answer_len_chars,
+                    output_len_tokens=output_len_tokens,
+                    reasoning_len_tokens=reasoning_len_tokens,
+                    answer_len_tokens=answer_len_tokens,
+                    has_reasoning=has_reasoning,
+                    has_answer=has_answer,
+                    is_malformed=is_malformed,
+                )
+
+    def _update_category(
+        self,
+        category: str,
+        *,
+        output_len_chars: int,
+        reasoning_len_chars: int | None,
+        answer_len_chars: int | None,
+        output_len_tokens: int | None,
+        reasoning_len_tokens: int | None,
+        answer_len_tokens: int | None,
+        has_reasoning: bool,
+        has_answer: bool,
+        is_malformed: bool,
+    ) -> None:
+        """Update stats for a single category."""
+        # output length (chars)
+        if category not in self.category_output_length_chars:
+            self.category_output_length_chars[category] = stats_utils.RunningStats()
+        self.category_output_length_chars[category].update(float(output_len_chars))
+        # reasoning length (chars)
+        if reasoning_len_chars is not None:
+            if category not in self.category_reasoning_length_chars:
+                self.category_reasoning_length_chars[category] = stats_utils.RunningStats()
+            self.category_reasoning_length_chars[category].update(float(reasoning_len_chars))
+        # answer length (chars)
+        if answer_len_chars is not None:
+            if category not in self.category_answer_length_chars:
+                self.category_answer_length_chars[category] = stats_utils.RunningStats()
+            self.category_answer_length_chars[category].update(float(answer_len_chars))
+        # output length (tokens)
+        if output_len_tokens is not None:
+            if category not in self.category_output_length_tokens:
+                self.category_output_length_tokens[category] = stats_utils.RunningStats()
+            self.category_output_length_tokens[category].update(float(output_len_tokens))
+        # reasoning length (tokens)
+        if reasoning_len_tokens is not None:
+            if category not in self.category_reasoning_length_tokens:
+                self.category_reasoning_length_tokens[category] = stats_utils.RunningStats()
+            self.category_reasoning_length_tokens[category].update(float(reasoning_len_tokens))
+        # answer length (tokens)
+        if answer_len_tokens is not None:
+            if category not in self.category_answer_length_tokens:
+                self.category_answer_length_tokens[category] = stats_utils.RunningStats()
+            self.category_answer_length_tokens[category].update(float(answer_len_tokens))
+        # category counts
+        self.category_total_count[category] = self.category_total_count.get(category, 0) + 1
+        if not has_reasoning:
+            self.category_missing_reasoning_count[category] = self.category_missing_reasoning_count.get(category, 0) + 1
+        if not has_answer:
+            self.category_missing_answer_count[category] = self.category_missing_answer_count.get(category, 0) + 1
+        if is_malformed:
+            self.category_malformed_count[category] = self.category_malformed_count.get(category, 0) + 1
+
+    @staticmethod
+    def _emit_running_stats(
+        stats: stats_utils.RunningStats,
+        prefix: str,
+    ) -> dict[str, float]:
+        """Emit mean/std/min/max metrics for a RunningStats object."""
+        if stats.count == 0:
+            return {}
+        assert stats.min is not None and stats.max is not None
+        return {
+            f"{prefix}/mean": stats.mean(),
+            f"{prefix}/std": stats.std(),
+            f"{prefix}/min": stats.min,
+            f"{prefix}/max": stats.max,
+        }
+
+    def get_metrics(
+        self,
+        *,
+        reasoning_enabled: bool = True,
+        answer_enabled: bool = True,
+        capture_diagnostics: bool = False,
+    ) -> dict[str, float]:
+        """Return aggregated global parsing metrics.
+
+        Args:
+            reasoning_enabled: Whether reasoning extraction is enabled.
+            answer_enabled: Whether final answer extraction is enabled.
+            capture_diagnostics: Whether to include malformed_ratio.
+
+        Returns:
+            Dict of metric name to value, empty if no samples processed.
+        """
+        if self.total_count == 0:
+            return {}
+        metrics: dict[str, float] = {}
+        # output length stats (always tracked)
+        metrics.update(self._emit_running_stats(self.output_length_chars, "output_length_chars"))
+        metrics.update(self._emit_running_stats(self.output_length_tokens, "output_length_tokens"))
+        # reasoning length stats (only when enabled)
+        if reasoning_enabled:
+            metrics.update(self._emit_running_stats(self.reasoning_length_chars, "reasoning_length_chars"))
+            metrics.update(self._emit_running_stats(self.reasoning_length_tokens, "reasoning_length_tokens"))
+        # answer length stats (only when enabled)
+        if answer_enabled:
+            metrics.update(self._emit_running_stats(self.answer_length_chars, "answer_length_chars"))
+            metrics.update(self._emit_running_stats(self.answer_length_tokens, "answer_length_tokens"))
+        # format ratios
+        total = float(self.total_count)
+        if reasoning_enabled:
+            metrics["missing_reasoning_ratio"] = self.missing_reasoning_count / total
+        if answer_enabled:
+            metrics["missing_answer_ratio"] = self.missing_answer_count / total
+        if capture_diagnostics:
+            metrics["malformed_ratio"] = self.malformed_count / total
+        metrics["sample_count"] = total
+        return metrics
+
+    def get_category_metrics(
+        self,
+        *,
+        reasoning_enabled: bool = True,
+        answer_enabled: bool = True,
+        capture_diagnostics: bool = False,
+    ) -> dict[str, float]:
+        """Return category-wise parsing metrics.
+
+        Args:
+            reasoning_enabled: Whether reasoning extraction is enabled.
+            answer_enabled: Whether final answer extraction is enabled.
+            capture_diagnostics: Whether to include malformed_ratio.
+
+        Returns:
+            Dict of metric name to value, empty if no categories.
+        """
+        metrics: dict[str, float] = {}
+        for category in sorted(self.category_total_count.keys()):
+            total = float(self.category_total_count.get(category, 0))
+            if total == 0:
+                continue
+            # output length
+            cat_output_chars = self.category_output_length_chars.get(category)
+            if cat_output_chars:
+                metrics.update(self._emit_running_stats(cat_output_chars, f"{category}/output_length_chars"))
+            cat_output_tokens = self.category_output_length_tokens.get(category)
+            if cat_output_tokens:
+                metrics.update(self._emit_running_stats(cat_output_tokens, f"{category}/output_length_tokens"))
+            # reasoning length
+            if reasoning_enabled:
+                cat_reasoning_chars = self.category_reasoning_length_chars.get(category)
+                if cat_reasoning_chars:
+                    metrics.update(self._emit_running_stats(cat_reasoning_chars, f"{category}/reasoning_length_chars"))
+                cat_reasoning_tokens = self.category_reasoning_length_tokens.get(category)
+                if cat_reasoning_tokens:
+                    metrics.update(
+                        self._emit_running_stats(cat_reasoning_tokens, f"{category}/reasoning_length_tokens")
+                    )
+            # answer length
+            if answer_enabled:
+                cat_answer_chars = self.category_answer_length_chars.get(category)
+                if cat_answer_chars:
+                    metrics.update(self._emit_running_stats(cat_answer_chars, f"{category}/answer_length_chars"))
+                cat_answer_tokens = self.category_answer_length_tokens.get(category)
+                if cat_answer_tokens:
+                    metrics.update(self._emit_running_stats(cat_answer_tokens, f"{category}/answer_length_tokens"))
+            # format ratios
+            if reasoning_enabled:
+                missing_reasoning = float(self.category_missing_reasoning_count.get(category, 0))
+                metrics[f"{category}/missing_reasoning_ratio"] = missing_reasoning / total
+            if answer_enabled:
+                missing_answer = float(self.category_missing_answer_count.get(category, 0))
+                metrics[f"{category}/missing_answer_ratio"] = missing_answer / total
+            if capture_diagnostics:
+                malformed = float(self.category_malformed_count.get(category, 0))
+                metrics[f"{category}/malformed_ratio"] = malformed / total
+            metrics[f"{category}/sample_count"] = total
+        return metrics
+
 
 class OutputParser(typing.Protocol):
     """Protocol for extracting structured fields from a model output.
 
     Implementations should be deterministic and side-effect free. The manager calls a parser at
-    most once per `compute_output()` call and attaches the result to `SampleContext.parsed` for
+    most once per `compute()` call and attaches the result to `SampleContext.parsed` for
     the duration of that call. Note: this is not persistent caching; each call parses independently.
     """
 
@@ -487,8 +788,11 @@ class RewardLogger(typing.Protocol):
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        reasoning: str | None = None,
+        final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
 
@@ -501,8 +805,13 @@ class RewardLogger(typing.Protocol):
             step: Optional logging step.
             prompt: Optional prompt text for table logging.
             model_output: Optional raw model output for table logging.
+            reasoning: Optional parsed reasoning text for table logging.
+            final_answer: Optional parsed final answer text for table logging.
             categories: Optional list of category labels for the sample (for table logging).
             tags: Optional list of sample tags (for table logging).
+            **kwargs: Additional keyword arguments for forward compatibility.
+                Custom implementations should accept **kwargs to remain compatible
+                with future additions to the logging interface.
         """
         ...
 

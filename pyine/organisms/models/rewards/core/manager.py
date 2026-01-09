@@ -1,7 +1,6 @@
 """Reward manager implementation."""
 
 import collections.abc
-import inspect
 import math
 import typing
 import warnings
@@ -15,6 +14,7 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.organisms.models.rewards.core.verbosity_scaling as verbosity_scaling
 import pyine.utils.distrib
 import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
@@ -22,87 +22,6 @@ import pyine.utils.tokenizers
 
 _MAX_METRIC_STRING_LENGTH = 500
 """Threshold for string metric length warnings. Strings exceeding this emit a warning."""
-
-
-def make_simple_manager(
-    terms: collections.abc.Sequence[tuple[str, str, float]],
-    *,
-    parsing: bool = True,
-    final_tag: str = "final",
-    reasoning_tag: str = "reasoning",
-    logger: reward_types.RewardLogger | None = None,
-) -> "RewardManager":
-    """Create a RewardManager with minimal configuration.
-
-    This convenience function reduces boilerplate for common use cases where you want
-    to quickly set up a manager with a few weighted terms.
-
-    Args:
-        terms: Sequence of (name, type, weight) tuples specifying the reward terms.
-            Example: `[("format", "parseable_answer", 1.0)]`
-        parsing: Whether to enable tag-based parsing (default True).
-        final_tag: Tag name for final answer extraction when parsing is enabled.
-        reasoning_tag: Tag name for reasoning extraction when parsing is enabled.
-        logger: Optional logger implementation for reward logging.
-
-    Returns:
-        A configured RewardManager instance.
-
-    Raises:
-        ValueError: If no terms are provided or term configuration is invalid.
-
-    Note:
-        This function only works with terms that have all-default parameters. Terms like
-        `text_length` require explicit `params.components`, so use `RewardManager` directly
-        with a full `RewardManagerConfig` for those.
-
-    Example:
-        ```python
-        import pyine.organisms.models.rewards as rewards
-
-        # create a simple manager (only works with terms that have all-default params)
-        manager = rewards.make_simple_manager(
-            [
-                ("format", "parseable_answer", 1.0),
-            ]
-        )
-
-        # build context with automatic parsing, then compute rewards
-        ctx = manager.build_sample_context(
-            prompt="...",
-            model_output="<final>answer</final>",
-            sample_data=sample_data,  # from datamodule
-        )
-        total = manager.compute(ctx)
-        ```
-    """
-    if not terms:
-        raise ValueError("at least one term must be provided")
-    # Note: require_parsed is set uniformly based on whether parsing is enabled. This is
-    # intentionally simple: if parsing is on, all terms declare they need it; if parsing is off,
-    # none do. For fine-grained control, use RewardManager with a full config instead.
-    term_specs = [
-        reward_configs.RewardTermSpec(
-            name=name,
-            type=term_type,
-            weight=weight,
-            require_parsed=parsing,
-        )
-        for name, term_type, weight in terms
-    ]
-    parsing_config = (
-        reward_configs.ParsingConfig(
-            final_tag=final_tag,
-            reasoning_tag=reasoning_tag,
-        )
-        if parsing
-        else None
-    )
-    config = reward_configs.RewardManagerConfig(
-        terms=term_specs,
-        parsing=parsing_config,
-    )
-    return RewardManager(config, logger=logger)
 
 
 class RewardManager:
@@ -118,7 +37,8 @@ class RewardManager:
         ```python
         manager = RewardManager(config)
         ctx = manager.build_sample_context(prompt, model_output, sample_data)
-        reward = manager.compute(ctx)
+        output = manager.compute(ctx)
+        reward = output.total
         ```
 
     Quality-of-life features:
@@ -173,7 +93,7 @@ class RewardManager:
             # ranks don't have a wandb.Run object and thus cannot create a logger. This is fine
             # because when main_process_only=True, the manager skips all logging operations on
             # non-main ranks anyway (see _maybe_log_sample, flush_stats, finalize_run methods).
-            if not config.logging.main_process_only or self._is_main_process():
+            if not config.logging.main_process_only or pyine.utils.distrib.is_main_process():
                 raise ValueError(
                     "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
                     "either pass a logger to RewardManager() or set LoggingConfig.enabled=False"
@@ -197,7 +117,7 @@ class RewardManager:
             if not spec.enabled:
                 continue
             factory = self._registry.get_term_factory(spec.type)
-            self._validate_factory_signature(factory=factory, spec=spec)
+            reward_registry.validate_factory_signature(factory, spec)
             try:
                 self._terms_by_name[spec.name] = factory(spec, parser=self._parser)
             except Exception as exc:
@@ -217,8 +137,11 @@ class RewardManager:
             reward_types.ParsingStatsAccumulator.new() if config.parsing is not None else None
         )
         self._token_counter = self._setup_token_counter(tokenizer)
-        self._cached_token_lengths: tuple[int | None, int | None, int | None] | None = None
-        """Cache for (output, reasoning, answer) token lengths to avoid recomputation during logging."""
+        self._token_count_cache: reward_types.TokenCountCache | None = None
+        self._verbosity_scaler: verbosity_scaling.VerbosityScaler | None = None
+        if config.verbosity_scaling is not None and config.verbosity_scaling.enabled:
+            # _setup_token_counter already raised if verbosity_scaling is enabled but no tokenizer available
+            self._verbosity_scaler = verbosity_scaling.VerbosityScaler(config.verbosity_scaling)
         self._warn_tag_inconsistencies()
 
     def _setup_token_counter(
@@ -227,16 +150,15 @@ class RewardManager:
     ) -> typing.Callable[[str], int] | None:
         """Set up the token counter based on configuration and provided tokenizer.
 
+        Token counting is enabled when either parsing.track_token_lengths=True, or verbosity_scaling
+        is configured and enabled.
+
         Args:
             tokenizer: Optional HuggingFace tokenizer provided to __init__.
-
-        Returns:
-            A callable that counts tokens in a string, or None if token tracking is disabled.
-
-        Raises:
-            ValueError: If track_token_lengths=True but no tokenizer source is available.
         """
-        if self._config.parsing is None or not self._config.parsing.track_token_lengths:
+        needs_parsing_tokens = self._config.parsing is not None and self._config.parsing.track_token_lengths
+        needs_verbosity_tokens = self._config.verbosity_scaling is not None and self._config.verbosity_scaling.enabled
+        if not needs_parsing_tokens and not needs_verbosity_tokens:
             return None
         if tokenizer is not None:
 
@@ -244,7 +166,10 @@ class RewardManager:
                 return len(tokenizer.encode(text, add_special_tokens=False))  # type: ignore[reportUnknownMemberType]
 
             return _count_hf_tokens
-        openai_model = self._config.parsing.openai_tokenizer_model
+        # try to get openai tokenizer model from parsing config
+        openai_model: str | None = None
+        if self._config.parsing is not None:
+            openai_model = self._config.parsing.openai_tokenizer_model
         if openai_model is not None:
             tiktoken_encoding = pyine.utils.tokenizers.get_openai_tokenizer(
                 model_id=openai_model,
@@ -256,8 +181,8 @@ class RewardManager:
 
             return _count_tiktoken_tokens
         raise ValueError(
-            "track_token_lengths=True requires either a tokenizer argument to RewardManager "
-            "or openai_tokenizer_model set in ParsingConfig"
+            "token counting requires either a tokenizer argument to RewardManager "
+            "or parsing.openai_tokenizer_model in config"
         )
 
     def _warn_tag_inconsistencies(self) -> None:
@@ -410,165 +335,32 @@ class RewardManager:
     def get_parsing_metrics(self) -> dict[str, float]:
         """Returns aggregated global parsing metrics.
 
-        Returns empty dict if parsing is not configured or no samples processed. Keys are
-        `output_length_chars/mean`, `missing_reasoning_ratio`, etc. When token tracking is enabled,
-        also includes `output_length_tokens/mean`, etc.
-
-        Note: `missing_reasoning_ratio` and `reasoning_length_*` are only emitted when reasoning
-        extraction is enabled (enabled_fields is "both" or "reasoning_only"). Similarly,
-        `missing_answer_ratio` and `answer_length_*` are only emitted when final answer extraction
-        is enabled (enabled_fields is "both" or "final_only"). `malformed_ratio` is only emitted
-        when `capture_diagnostics=True` in the parsing config.
+        Returns empty dict if parsing is not configured or no samples processed.
         """
-        if self._parsing_stats is None or self._parsing_stats.total_count == 0:
+        if self._parsing_stats is None:
             return {}
-        stats = self._parsing_stats
-        metrics: dict[str, float] = {}
-        # determine which fields are enabled
         enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
-        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
-        answer_enabled = enabled_fields in ("both", "final_only")
-        # output length stats in chars (always tracked)
-        if stats.output_length_chars.count > 0:
-            assert stats.output_length_chars.min is not None and stats.output_length_chars.max is not None
-            metrics["output_length_chars/mean"] = stats.output_length_chars.mean()
-            metrics["output_length_chars/std"] = stats.output_length_chars.std()
-            metrics["output_length_chars/min"] = stats.output_length_chars.min
-            metrics["output_length_chars/max"] = stats.output_length_chars.max
-        # output length stats in tokens (only when token tracking enabled)
-        if stats.output_length_tokens.count > 0:
-            assert stats.output_length_tokens.min is not None and stats.output_length_tokens.max is not None
-            metrics["output_length_tokens/mean"] = stats.output_length_tokens.mean()
-            metrics["output_length_tokens/std"] = stats.output_length_tokens.std()
-            metrics["output_length_tokens/min"] = stats.output_length_tokens.min
-            metrics["output_length_tokens/max"] = stats.output_length_tokens.max
-        # reasoning length stats in chars (only when reasoning enabled and samples have reasoning)
-        if reasoning_enabled and stats.reasoning_length_chars.count > 0:
-            assert stats.reasoning_length_chars.min is not None and stats.reasoning_length_chars.max is not None
-            metrics["reasoning_length_chars/mean"] = stats.reasoning_length_chars.mean()
-            metrics["reasoning_length_chars/std"] = stats.reasoning_length_chars.std()
-            metrics["reasoning_length_chars/min"] = stats.reasoning_length_chars.min
-            metrics["reasoning_length_chars/max"] = stats.reasoning_length_chars.max
-        # reasoning length stats in tokens
-        if reasoning_enabled and stats.reasoning_length_tokens.count > 0:
-            assert stats.reasoning_length_tokens.min is not None and stats.reasoning_length_tokens.max is not None
-            metrics["reasoning_length_tokens/mean"] = stats.reasoning_length_tokens.mean()
-            metrics["reasoning_length_tokens/std"] = stats.reasoning_length_tokens.std()
-            metrics["reasoning_length_tokens/min"] = stats.reasoning_length_tokens.min
-            metrics["reasoning_length_tokens/max"] = stats.reasoning_length_tokens.max
-        # answer length stats in chars (only when answer enabled and samples have answer)
-        if answer_enabled and stats.answer_length_chars.count > 0:
-            assert stats.answer_length_chars.min is not None and stats.answer_length_chars.max is not None
-            metrics["answer_length_chars/mean"] = stats.answer_length_chars.mean()
-            metrics["answer_length_chars/std"] = stats.answer_length_chars.std()
-            metrics["answer_length_chars/min"] = stats.answer_length_chars.min
-            metrics["answer_length_chars/max"] = stats.answer_length_chars.max
-        # answer length stats in tokens
-        if answer_enabled and stats.answer_length_tokens.count > 0:
-            assert stats.answer_length_tokens.min is not None and stats.answer_length_tokens.max is not None
-            metrics["answer_length_tokens/mean"] = stats.answer_length_tokens.mean()
-            metrics["answer_length_tokens/std"] = stats.answer_length_tokens.std()
-            metrics["answer_length_tokens/min"] = stats.answer_length_tokens.min
-            metrics["answer_length_tokens/max"] = stats.answer_length_tokens.max
-        # format ratios (only for enabled fields)
-        total = float(stats.total_count)
-        if reasoning_enabled:
-            metrics["missing_reasoning_ratio"] = stats.missing_reasoning_count / total
-        if answer_enabled:
-            metrics["missing_answer_ratio"] = stats.missing_answer_count / total
-        # malformed_ratio only meaningful when capture_diagnostics is enabled
-        if self._config.parsing and self._config.parsing.capture_diagnostics:
-            metrics["malformed_ratio"] = stats.malformed_count / total
-        metrics["sample_count"] = total
-        return metrics
+        capture_diagnostics = self._config.parsing.capture_diagnostics if self._config.parsing else False
+        return self._parsing_stats.get_metrics(
+            reasoning_enabled=enabled_fields in ("both", "reasoning_only"),
+            answer_enabled=enabled_fields in ("both", "final_only"),
+            capture_diagnostics=capture_diagnostics,
+        )
 
     def get_parsing_category_metrics(self) -> dict[str, float]:
         """Returns category-wise parsing metrics.
 
-        Returns empty dict if parsing or category extraction is not configured. Keys are
-        `{category}/output_length_chars/mean`, `{category}/missing_reasoning_ratio`, etc. When token
-        tracking is enabled, also includes `{category}/output_length_tokens/mean`, etc.
-
-        Note: `missing_reasoning_ratio` and `reasoning_length_*` are only emitted when reasoning
-        extraction is enabled. Similarly, `missing_answer_ratio` and `answer_length_*` are only
-        emitted when final answer extraction is enabled. `malformed_ratio` is only emitted when
-        `capture_diagnostics=True` in the parsing config.
+        Returns empty dict if parsing or category extraction is not configured.
         """
         if self._parsing_stats is None or self._category_extractor is None:
             return {}
-        stats = self._parsing_stats
-        metrics: dict[str, float] = {}
-        # determine which fields are enabled
         enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
-        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
-        answer_enabled = enabled_fields in ("both", "final_only")
-        for category in sorted(stats.category_total_count.keys()):
-            total = float(stats.category_total_count.get(category, 0))
-            if total == 0:
-                continue
-            # output length (chars)
-            cat_output_chars = stats.category_output_length_chars.get(category)
-            if cat_output_chars is not None and cat_output_chars.count > 0:
-                assert cat_output_chars.min is not None and cat_output_chars.max is not None
-                metrics[f"{category}/output_length_chars/mean"] = cat_output_chars.mean()
-                metrics[f"{category}/output_length_chars/std"] = cat_output_chars.std()
-                metrics[f"{category}/output_length_chars/min"] = cat_output_chars.min
-                metrics[f"{category}/output_length_chars/max"] = cat_output_chars.max
-            # output length (tokens)
-            cat_output_tokens = stats.category_output_length_tokens.get(category)
-            if cat_output_tokens is not None and cat_output_tokens.count > 0:
-                assert cat_output_tokens.min is not None and cat_output_tokens.max is not None
-                metrics[f"{category}/output_length_tokens/mean"] = cat_output_tokens.mean()
-                metrics[f"{category}/output_length_tokens/std"] = cat_output_tokens.std()
-                metrics[f"{category}/output_length_tokens/min"] = cat_output_tokens.min
-                metrics[f"{category}/output_length_tokens/max"] = cat_output_tokens.max
-            # reasoning length (chars, only when reasoning enabled)
-            if reasoning_enabled:
-                cat_reasoning_chars = stats.category_reasoning_length_chars.get(category)
-                if cat_reasoning_chars is not None and cat_reasoning_chars.count > 0:
-                    assert cat_reasoning_chars.min is not None and cat_reasoning_chars.max is not None
-                    metrics[f"{category}/reasoning_length_chars/mean"] = cat_reasoning_chars.mean()
-                    metrics[f"{category}/reasoning_length_chars/std"] = cat_reasoning_chars.std()
-                    metrics[f"{category}/reasoning_length_chars/min"] = cat_reasoning_chars.min
-                    metrics[f"{category}/reasoning_length_chars/max"] = cat_reasoning_chars.max
-                # reasoning length (tokens)
-                cat_reasoning_tokens = stats.category_reasoning_length_tokens.get(category)
-                if cat_reasoning_tokens is not None and cat_reasoning_tokens.count > 0:
-                    assert cat_reasoning_tokens.min is not None and cat_reasoning_tokens.max is not None
-                    metrics[f"{category}/reasoning_length_tokens/mean"] = cat_reasoning_tokens.mean()
-                    metrics[f"{category}/reasoning_length_tokens/std"] = cat_reasoning_tokens.std()
-                    metrics[f"{category}/reasoning_length_tokens/min"] = cat_reasoning_tokens.min
-                    metrics[f"{category}/reasoning_length_tokens/max"] = cat_reasoning_tokens.max
-            # answer length (chars, only when answer enabled)
-            if answer_enabled:
-                cat_answer_chars = stats.category_answer_length_chars.get(category)
-                if cat_answer_chars is not None and cat_answer_chars.count > 0:
-                    assert cat_answer_chars.min is not None and cat_answer_chars.max is not None
-                    metrics[f"{category}/answer_length_chars/mean"] = cat_answer_chars.mean()
-                    metrics[f"{category}/answer_length_chars/std"] = cat_answer_chars.std()
-                    metrics[f"{category}/answer_length_chars/min"] = cat_answer_chars.min
-                    metrics[f"{category}/answer_length_chars/max"] = cat_answer_chars.max
-                # answer length (tokens)
-                cat_answer_tokens = stats.category_answer_length_tokens.get(category)
-                if cat_answer_tokens is not None and cat_answer_tokens.count > 0:
-                    assert cat_answer_tokens.min is not None and cat_answer_tokens.max is not None
-                    metrics[f"{category}/answer_length_tokens/mean"] = cat_answer_tokens.mean()
-                    metrics[f"{category}/answer_length_tokens/std"] = cat_answer_tokens.std()
-                    metrics[f"{category}/answer_length_tokens/min"] = cat_answer_tokens.min
-                    metrics[f"{category}/answer_length_tokens/max"] = cat_answer_tokens.max
-            # format ratios (only for enabled fields)
-            if reasoning_enabled:
-                missing_reasoning = float(stats.category_missing_reasoning_count.get(category, 0))
-                metrics[f"{category}/missing_reasoning_ratio"] = missing_reasoning / total
-            if answer_enabled:
-                missing_answer = float(stats.category_missing_answer_count.get(category, 0))
-                metrics[f"{category}/missing_answer_ratio"] = missing_answer / total
-            # malformed_ratio only meaningful when capture_diagnostics is enabled
-            if self._config.parsing and self._config.parsing.capture_diagnostics:
-                malformed = float(stats.category_malformed_count.get(category, 0))
-                metrics[f"{category}/malformed_ratio"] = malformed / total
-            metrics[f"{category}/sample_count"] = total
-        return metrics
+        capture_diagnostics = self._config.parsing.capture_diagnostics if self._config.parsing else False
+        return self._parsing_stats.get_category_metrics(
+            reasoning_enabled=enabled_fields in ("both", "reasoning_only"),
+            answer_enabled=enabled_fields in ("both", "final_only"),
+            capture_diagnostics=capture_diagnostics,
+        )
 
     def reset_accumulators(
         self,
@@ -608,7 +400,7 @@ class RewardManager:
         """
         # barrier BEFORE any early returns to avoid distributed deadlock
         # (must happen before logger checks since non-main ranks may not have a logger)
-        if self._config.logging.barrier_before_finalize and self._is_distributed():
+        if self._config.logging.barrier_before_finalize and pyine.utils.distrib.is_distributed():
             pyine.utils.distrib.barrier()
         # determine if we should log (check logger availability and config)
         should_log = self._logger is not None and self._config.logging.enabled
@@ -621,14 +413,14 @@ class RewardManager:
             # create empty summaries for gathering (all ranks must participate)
             summaries = reward_types.RunSummaries()
         # gather distributed summaries if configured (all ranks must participate)
-        if self._config.logging.gather_distributed_summaries and self._is_distributed():
+        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
             summaries = self._gather_run_summaries(summaries)
         # reset accumulators and return early if not logging
         if not should_log or not has_stats:
             self.reset_accumulators()
             return
         # return early if only main process should log and this is not main
-        if self._config.logging.main_process_only and not self._is_main_process():
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             self.reset_accumulators()
             return
         scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
@@ -652,44 +444,64 @@ class RewardManager:
         )
         self.reset_accumulators()
 
-    def compute(
+    def _compute_core(
         self,
         sample_ctx: reward_types.SampleContext,
-        *,
-        return_breakdown: bool | None = None,
-        log: bool | None = None,
-        step: int | None = None,
-    ) -> float | tuple[float, dict[str, float]]:
-        """Compute a per-sample reward.
+    ) -> reward_types.RewardOutput:
+        """Compute core reward output without verbosity scaling, stats updates, or logging.
+
+        This is the internal computation that produces aggregated rewards before any post-processing.
 
         Args:
-            sample_ctx: Sample context containing trajectory information.
-            return_breakdown: When True, returns `(total, breakdown)`; when None, uses config default.
-            log: When True/False, force logging on/off; when None, uses config default.
-            step: Optional logging step override (defaults to manager step).
-        Returns:
-            Either `total` or `(total, breakdown)` depending on `return_breakdown`.
-        """
-        output = self.compute_output(sample_ctx, log=log, step=step)
-        want_breakdown = self._config.output.return_breakdown_default if return_breakdown is None else return_breakdown
-        if not want_breakdown:
-            return output.total
-        breakdown: dict[str, float] = dict(output.weighted_terms)
-        if self._config.output.return_raw_breakdown and output.raw_terms is not None:
-            for term_name, value in output.raw_terms.items():
-                breakdown[f"raw/{term_name}"] = value
-        return output.total, breakdown
+            sample_ctx: Sample context containing the prompt, full model output, and sample data.
 
-    def compute_output(
+        Returns:
+            A structured reward output before verbosity scaling.
+
+        Raises:
+            ValueError: If no reward terms are enabled, or if `sample_ctx.parsed` is None
+                but one or more enabled terms have `require_parsed=True`.
+        """
+        active_specs = [spec for spec in self._config.terms if spec.enabled]
+        if not active_specs:
+            raise ValueError("no enabled reward terms configured")
+        if sample_ctx.parsed is None:
+            required_terms = [spec.name for spec in active_specs if spec.require_parsed]
+            if required_terms:
+                raise ValueError(
+                    f"sample_ctx.parsed is None but these terms require parsed outputs: {required_terms}; "
+                    "use build_sample_context() to create contexts with automatic parsing"
+                )
+        values: dict[str, float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
+        for spec in active_specs:
+            term = self._terms_by_name[spec.name]
+            result = term(sample_ctx)
+            self._validate_term_result(spec.name, result)
+            values[spec.name] = float(result.value)
+            for metric_name, metric_value in result.metrics.items():
+                metrics[f"{spec.name}/{metric_name}"] = metric_value
+        total, weighted_terms, raw_terms = self._aggregator.aggregate(
+            values=values,
+            weights=self._weights_by_name,
+        )
+        return reward_types.RewardOutput(
+            total=total,
+            weighted_terms=weighted_terms,
+            raw_terms=raw_terms if self._config.aggregation.return_raw_breakdown else None,
+            metrics=metrics,
+        )
+
+    def compute(
         self,
         sample_ctx: reward_types.SampleContext,
         *,
         log: bool | None = None,
         step: int | None = None,
     ) -> reward_types.RewardOutput:
-        """Compute a full reward output (total + breakdown + metrics).
+        """Compute reward for a single sample.
 
-        This is the most explicit API: it always returns a structured `RewardOutput`.
+        Convenience wrapper around compute_batch() for single-sample use cases.
 
         Args:
             sample_ctx: Sample context containing the prompt, full model output, and sample data.
@@ -703,51 +515,20 @@ class RewardManager:
             ValueError: If no reward terms are enabled, or if `sample_ctx.parsed` is None
                 but one or more enabled terms have `require_parsed=True`.
         """
-        active_specs = [spec for spec in self._config.terms if spec.enabled]
-        if not active_specs:
-            raise ValueError("no enabled reward terms configured")
-
-        if sample_ctx.parsed is None:
-            required_terms = [spec.name for spec in active_specs if spec.require_parsed]
-            if required_terms:
-                raise ValueError(
-                    f"sample_ctx.parsed is None but these terms require parsed outputs: {required_terms}; "
-                    "use build_sample_context() to create contexts with automatic parsing"
-                )
-
-        values: dict[str, float] = {}
-        metrics: dict[str, reward_types.MetricValue] = {}
-        for spec in active_specs:
-            term = self._terms_by_name[spec.name]
-            result = term(sample_ctx)
-            self._validate_term_result(spec.name, result)
-            values[spec.name] = float(result.value)
-            for metric_name, metric_value in result.metrics.items():
-                metrics[f"{spec.name}/{metric_name}"] = metric_value
-
-        total, weighted_terms, raw_terms = self._aggregator.aggregate(
-            values=values,
-            weights=self._weights_by_name,
-        )
-        output = reward_types.RewardOutput(
-            total=total,
-            weighted_terms=weighted_terms,
-            raw_terms=raw_terms if self._config.output.return_raw_breakdown else None,
-            metrics=metrics,
-        )
-
-        self._update_running_stats(sample_ctx, output)
-        self._maybe_log_sample(output, sample_ctx, log=log, step=step)
-        return output
+        return self.compute_batch([sample_ctx], log=log, step=step)[0]
 
     def compute_batch(
         self,
-        sample_ctxs: list[reward_types.SampleContext],
+        sample_ctxs: collections.abc.Sequence[reward_types.SampleContext],
         *,
         log: bool | None = None,
         step: int | None = None,
     ) -> list[reward_types.RewardOutput]:
         """Compute rewards for multiple samples in a stable order.
+
+        For relative mode verbosity scaling, samples are automatically grouped by their
+        sample identifier (from `sample_ctx.sample_data.identifier`). Samples with the
+        same identifier are normalized together.
 
         Args:
             sample_ctxs: Sample contexts to evaluate.
@@ -757,7 +538,75 @@ class RewardManager:
         Returns:
             Reward outputs in the same order as inputs.
         """
-        return [self.compute_output(sample_ctx, log=log, step=step) for sample_ctx in sample_ctxs]
+        if not sample_ctxs:
+            return []
+        # first pass: compute core rewards and populate token count caches
+        core_results: list[reward_types.RewardOutput] = []
+        caches: list[reward_types.TokenCountCache | None] = []
+        for sample_ctx in sample_ctxs:
+            core_results.append(self._compute_core(sample_ctx))
+            caches.append(self._populate_token_count_cache(sample_ctx))
+        if self._verbosity_scaler is None or not self._verbosity_scaler.is_relative_mode:
+            # absolute mode or no scaling: process individually
+            outputs: list[reward_types.RewardOutput] = []
+            for result, cache in zip(core_results, caches, strict=True):
+                if self._verbosity_scaler is not None:
+                    assert cache is not None, "should have been enabled for verbosity scaling?"
+                    scaled_total, scaled_terms, v_metrics = self._verbosity_scaler.apply_absolute(
+                        aggregated_reward=result.total,
+                        weighted_terms=result.weighted_terms,
+                        cache=cache,
+                    )
+                    metrics = dict(result.metrics)
+                    metrics.update(v_metrics)
+                    output = reward_types.RewardOutput(
+                        total=scaled_total,
+                        weighted_terms=scaled_terms,
+                        raw_terms=result.raw_terms,
+                        metrics=metrics,
+                    )
+                else:
+                    output = result
+                outputs.append(output)
+        else:
+            # relative mode: group by sample_data.identifier, apply scaling per group
+            grouped_indices: dict[typing.Hashable, list[int]] = {}
+            for sample_idx, sample_ctx in enumerate(sample_ctxs):
+                sample_gid = sample_ctx.sample_data.identifier
+                grouped_indices.setdefault(sample_gid, []).append(sample_idx)
+            outputs_by_idx: list[reward_types.RewardOutput | None] = [None] * len(sample_ctxs)
+            for _sample_gid, sample_indices in grouped_indices.items():
+                group_totals = [core_results[idx].total for idx in sample_indices]
+                group_terms = [core_results[idx].weighted_terms for idx in sample_indices]
+                group_caches: list[reward_types.TokenCountCache] = []
+                for idx in sample_indices:
+                    cache = caches[idx]
+                    assert cache is not None, "token cache should have been enabled for verbosity scaling"
+                    group_caches.append(cache)
+                scaled_totals, scaled_terms, v_metrics = self._verbosity_scaler.apply_to_group(
+                    aggregated_rewards=group_totals,
+                    all_weighted_terms=group_terms,
+                    caches=group_caches,
+                )
+                for local_sample_idx, global_sample_idx in enumerate(sample_indices):
+                    result = core_results[global_sample_idx]
+                    metrics = dict(result.metrics)
+                    metrics.update(v_metrics[local_sample_idx])
+                    outputs_by_idx[global_sample_idx] = reward_types.RewardOutput(
+                        total=scaled_totals[local_sample_idx],
+                        weighted_terms=scaled_terms[local_sample_idx],
+                        raw_terms=result.raw_terms,
+                        metrics=metrics,
+                    )
+            # all entries should be filled since we iterate over all trace_ids
+            assert all(o is not None for o in outputs_by_idx), "some samples were not processed?"
+            outputs = typing.cast("list[reward_types.RewardOutput]", outputs_by_idx)
+        # set cache, update stats, and then log (in the correct order, important!)
+        for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+            self._token_count_cache = caches[idx]
+            self._update_running_stats(sample_ctx, output)
+            self._maybe_log_sample(output, sample_ctx, log=log, step=step)
+        return outputs
 
     def finalize_run(
         self,
@@ -785,7 +634,7 @@ class RewardManager:
         """
         # barrier BEFORE any early returns to avoid distributed deadlock
         # (must happen before logger checks since non-main ranks may not have a logger)
-        if self._config.logging.barrier_before_finalize and self._is_distributed():
+        if self._config.logging.barrier_before_finalize and pyine.utils.distrib.is_distributed():
             pyine.utils.distrib.barrier()
         # determine if we should log (check logger availability, config, and log flag)
         should_log = log and self._config.logging.enabled and self._logger is not None
@@ -798,13 +647,13 @@ class RewardManager:
             # create empty summaries for gathering (all ranks must participate)
             summaries = reward_types.RunSummaries()
         # gather distributed summaries if configured (all ranks must participate)
-        if self._config.logging.gather_distributed_summaries and self._is_distributed():
+        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
             summaries = self._gather_run_summaries(summaries)
         # return early if not logging or no stats
         if not should_log or not has_stats:
             return
         # return early if only main process should log and this is not main
-        if self._config.logging.main_process_only and not self._is_main_process():
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             return
         scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
             self._scope_reward_run_fields(
@@ -826,15 +675,6 @@ class RewardManager:
             step=step_to_use,
         )
 
-    def term_config(
-        self,
-        name: str,
-    ) -> reward_configs.RewardTermSpec:
-        """Return the `RewardTermSpec` for a term by name."""
-        if name not in self._specs_by_name:
-            raise KeyError(f"unknown term: {name}")
-        return self._specs_by_name[name]
-
     def _resolve_parser(
         self,
         parser: reward_types.OutputParser | None,
@@ -847,21 +687,6 @@ class RewardManager:
         if self._config.parsing.mode == "tags":
             return reward_parser.TagsOutputParser(self._config.parsing)
         raise ValueError(f"unsupported parsing mode: {self._config.parsing.mode}")
-
-    @staticmethod
-    def _validate_factory_signature(
-        *,
-        factory: reward_types.RewardTermFactory,
-        spec: reward_configs.RewardTermSpec,
-    ) -> None:
-        """Validate that a factory can be called with `(spec, parser=...)`."""
-        signature = inspect.signature(factory)
-        try:
-            signature.bind(spec, parser=None)
-        except TypeError as exc:
-            raise TypeError(
-                f"invalid term factory signature for name={spec.name} type={spec.type}: {signature}"
-            ) from exc
 
     def maybe_parse(
         self,
@@ -897,7 +722,7 @@ class RewardManager:
 
         This is the recommended way to create `SampleContext` objects for use with this manager.
         It ensures parsing is performed using the manager's configured parser (if any), producing
-        a context that's ready for `compute()` or `compute_output()`.
+        a context that's ready for `compute()` or `compute_batch()`.
 
         Args:
             prompt: Prompt text shown to the model.
@@ -917,7 +742,8 @@ class RewardManager:
                 model_output="<reasoning>Simple addition</reasoning><final>4</final>",
                 sample_data=sample_data,
             )
-            reward = manager.compute(ctx)
+            output = manager.compute(ctx)
+            reward = output.total
             ```
         """
         parsed = self.maybe_parse(prompt, model_output)
@@ -973,7 +799,7 @@ class RewardManager:
         if self._parsing_stats is not None:
             payload["parsing"] = self._parsing_stats.as_state()
         gathered = pyine.utils.distrib.all_gather_objects(payload)
-        if not self._is_main_process():
+        if not pyine.utils.distrib.is_main_process():
             return summaries
         merged_total = stats_utils.RunningStats()
         merged_terms: dict[str, stats_utils.RunningStats] = {
@@ -1074,113 +900,45 @@ class RewardManager:
                 self._category_stats[category].update(total_reward)
         self._update_parsing_stats(sample_ctx)
 
-    @staticmethod
-    def _is_malformed(
-        parsed: reward_types.ParsedOutput,
-    ) -> bool:
-        """Check if output has any malformed tag structure.
+    def _populate_token_count_cache(
+        self,
+        sample_ctx: reward_types.SampleContext,
+    ) -> reward_types.TokenCountCache | None:
+        """Compute and cache token counts for a sample.
 
-        Returns False if diagnostics are not captured (capture_diagnostics=False in config).
+        Call this before verbosity scaling to ensure token counts are available. The cache is also
+        used by _update_parsing_stats to avoid recomputation.
         """
-        return parsed.fields.get("is_malformed", "false") == "true"
+        self._token_count_cache = None  # clear cache from previous sample
+        if self._token_counter is None:
+            return None
+        # always compute model_output token count from sample_ctx.model_output (doesn't require parsing)
+        self._token_count_cache = reward_types.TokenCountCache()
+        output_len_tokens = self._token_counter(sample_ctx.model_output)
+        self._token_count_cache.set(reward_types.LengthSource.model_output, output_len_tokens)
+        # compute parsed field token counts if parsing result is available
+        if sample_ctx.parsed is not None:
+            parsed = sample_ctx.parsed
+            if parsed.reasoning is not None:
+                reasoning_len_tokens = self._token_counter(parsed.reasoning)
+                self._token_count_cache.set(reward_types.LengthSource.parsed_reasoning, reasoning_len_tokens)
+            if parsed.final_answer is not None:
+                answer_len_tokens = self._token_counter(parsed.final_answer)
+                self._token_count_cache.set(reward_types.LengthSource.parsed_final_answer, answer_len_tokens)
+        return self._token_count_cache
 
     def _update_parsing_stats(
         self,
         sample_ctx: reward_types.SampleContext,
     ) -> None:
         """Update parsing-related run stats if parsing is configured."""
-        self._cached_token_lengths = None  # clear cache from previous sample
         if self._parsing_stats is None or sample_ctx.parsed is None:
             return
-        parsed = sample_ctx.parsed
-        output_len_chars = len(parsed.raw)
-        has_reasoning = parsed.reasoning is not None
-        has_answer = parsed.final_answer is not None
-        is_malformed = self._is_malformed(parsed)
-        reasoning_len_chars = len(parsed.reasoning) if has_reasoning else None  # type: ignore[arg-type]
-        answer_len_chars = len(parsed.final_answer) if has_answer else None  # type: ignore[arg-type]
-        # compute token lengths if enabled (and cache for potential use in per-sample logging)
-        output_len_tokens: int | None = None
-        reasoning_len_tokens: int | None = None
-        answer_len_tokens: int | None = None
-        if self._token_counter is not None:
-            output_len_tokens = self._token_counter(parsed.raw)
-            if has_reasoning:
-                reasoning_len_tokens = self._token_counter(parsed.reasoning)  # type: ignore[arg-type]
-            if has_answer:
-                answer_len_tokens = self._token_counter(parsed.final_answer)  # type: ignore[arg-type]
-            self._cached_token_lengths = (output_len_tokens, reasoning_len_tokens, answer_len_tokens)
-        # update global character length stats
-        self._parsing_stats.output_length_chars.update(float(output_len_chars))
-        if reasoning_len_chars is not None:
-            self._parsing_stats.reasoning_length_chars.update(float(reasoning_len_chars))
-        if answer_len_chars is not None:
-            self._parsing_stats.answer_length_chars.update(float(answer_len_chars))
-        # update global token length stats
-        if output_len_tokens is not None:
-            self._parsing_stats.output_length_tokens.update(float(output_len_tokens))
-        if reasoning_len_tokens is not None:
-            self._parsing_stats.reasoning_length_tokens.update(float(reasoning_len_tokens))
-        if answer_len_tokens is not None:
-            self._parsing_stats.answer_length_tokens.update(float(answer_len_tokens))
-        # update global format counts
-        self._parsing_stats.total_count += 1
-        if not has_reasoning:
-            self._parsing_stats.missing_reasoning_count += 1
-        if not has_answer:
-            self._parsing_stats.missing_answer_count += 1
-        if is_malformed:
-            self._parsing_stats.malformed_count += 1
-        # update category-wise stats if category extractor configured
+        categories: list[str] | None = None
         if self._category_extractor is not None:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
-            for category in categories:
-                # output length (chars)
-                if category not in self._parsing_stats.category_output_length_chars:
-                    self._parsing_stats.category_output_length_chars[category] = stats_utils.RunningStats()
-                self._parsing_stats.category_output_length_chars[category].update(float(output_len_chars))
-                # reasoning length (chars)
-                if reasoning_len_chars is not None:
-                    if category not in self._parsing_stats.category_reasoning_length_chars:
-                        self._parsing_stats.category_reasoning_length_chars[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_reasoning_length_chars[category].update(float(reasoning_len_chars))
-                # answer length (chars)
-                if answer_len_chars is not None:
-                    if category not in self._parsing_stats.category_answer_length_chars:
-                        self._parsing_stats.category_answer_length_chars[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_answer_length_chars[category].update(float(answer_len_chars))
-                # output length (tokens)
-                if output_len_tokens is not None:
-                    if category not in self._parsing_stats.category_output_length_tokens:
-                        self._parsing_stats.category_output_length_tokens[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_output_length_tokens[category].update(float(output_len_tokens))
-                # reasoning length (tokens)
-                if reasoning_len_tokens is not None:
-                    if category not in self._parsing_stats.category_reasoning_length_tokens:
-                        self._parsing_stats.category_reasoning_length_tokens[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_reasoning_length_tokens[category].update(float(reasoning_len_tokens))
-                # answer length (tokens)
-                if answer_len_tokens is not None:
-                    if category not in self._parsing_stats.category_answer_length_tokens:
-                        self._parsing_stats.category_answer_length_tokens[category] = stats_utils.RunningStats()
-                    self._parsing_stats.category_answer_length_tokens[category].update(float(answer_len_tokens))
-                # category counts
-                self._parsing_stats.category_total_count[category] = (
-                    self._parsing_stats.category_total_count.get(category, 0) + 1
-                )
-                if not has_reasoning:
-                    self._parsing_stats.category_missing_reasoning_count[category] = (
-                        self._parsing_stats.category_missing_reasoning_count.get(category, 0) + 1
-                    )
-                if not has_answer:
-                    self._parsing_stats.category_missing_answer_count[category] = (
-                        self._parsing_stats.category_missing_answer_count.get(category, 0) + 1
-                    )
-                if is_malformed:
-                    self._parsing_stats.category_malformed_count[category] = (
-                        self._parsing_stats.category_malformed_count.get(category, 0) + 1
-                    )
+        self._parsing_stats.update(sample_ctx.parsed, self._token_count_cache, categories)
 
     def _compute_sample_parsing_metrics(
         self,
@@ -1199,30 +957,36 @@ class RewardManager:
         reasoning_enabled = enabled_fields in ("both", "reasoning_only")
         answer_enabled = enabled_fields in ("both", "final_only")
         # use cached token lengths (computed in _update_parsing_stats)
-        cached = self._cached_token_lengths
+        cache = self._token_count_cache
         metrics: dict[str, reward_types.MetricValue] = {
             "parsing/output_length_chars": len(parsed.raw),
         }
         # add token length if token tracking is enabled
-        if cached is not None:
-            metrics["parsing/output_length_tokens"] = cached[0]  # type: ignore[arg-type]
+        if cache is not None:
+            output_tokens = cache.get(reward_types.LengthSource.model_output)
+            if output_tokens is not None:
+                metrics["parsing/output_length_tokens"] = output_tokens
         # is_malformed only meaningful when capture_diagnostics is enabled
         if self._config.parsing and self._config.parsing.capture_diagnostics:
-            metrics["parsing/is_malformed"] = self._is_malformed(parsed)
+            metrics["parsing/is_malformed"] = parsed.fields.get("is_malformed", "false") == "true"
         if reasoning_enabled:
             has_reasoning = parsed.reasoning is not None
             metrics["parsing/has_reasoning"] = has_reasoning
             if has_reasoning:
                 metrics["parsing/reasoning_length_chars"] = len(parsed.reasoning)  # type: ignore[arg-type]
-                if cached is not None:
-                    metrics["parsing/reasoning_length_tokens"] = cached[1]  # type: ignore[arg-type]
+                if cache is not None:
+                    reasoning_tokens = cache.get(reward_types.LengthSource.parsed_reasoning)
+                    if reasoning_tokens is not None:
+                        metrics["parsing/reasoning_length_tokens"] = reasoning_tokens
         if answer_enabled:
             has_answer = parsed.final_answer is not None
             metrics["parsing/has_answer"] = has_answer
             if has_answer:
                 metrics["parsing/answer_length_chars"] = len(parsed.final_answer)  # type: ignore[arg-type]
-                if cached is not None:
-                    metrics["parsing/answer_length_tokens"] = cached[2]  # type: ignore[arg-type]
+                if cache is not None:
+                    answer_tokens = cache.get(reward_types.LengthSource.parsed_final_answer)
+                    if answer_tokens is not None:
+                        metrics["parsing/answer_length_tokens"] = answer_tokens
         return metrics
 
     def _maybe_log_sample(
@@ -1237,7 +1001,7 @@ class RewardManager:
         should_log = self._config.logging.enabled if log is None else log
         if not should_log:
             return
-        if self._config.logging.main_process_only and not self._is_main_process():
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             return
         if self._logger is None:
             raise ValueError("logging is enabled but no logger is configured")
@@ -1264,6 +1028,12 @@ class RewardManager:
             if categories:
                 for category in categories:
                     scoped_metrics[f"categories/{category}"] = True
+        # extract reasoning and final_answer from parsed output for table logging
+        reasoning: str | None = None
+        final_answer: str | None = None
+        if sample_ctx.parsed is not None:
+            reasoning = sample_ctx.parsed.reasoning
+            final_answer = sample_ctx.parsed.final_answer
         self._logger.log(
             sample_id,
             total=total_to_log,
@@ -1272,19 +1042,11 @@ class RewardManager:
             step=step_to_use,
             prompt=sample_ctx.prompt,
             model_output=sample_ctx.model_output,
+            reasoning=reasoning,
+            final_answer=final_answer,
             categories=categories,
             tags=sample_ctx.tags or None,
         )
-
-    @staticmethod
-    def _is_main_process() -> bool:
-        """Return whether this process is the main distributed rank (or non-distributed)."""
-        return pyine.utils.distrib.is_main_process()
-
-    @staticmethod
-    def _is_distributed() -> bool:
-        """Return whether this run appears to be distributed."""
-        return pyine.utils.distrib.is_distributed()
 
     def _scope_reward_sample_fields(
         self,

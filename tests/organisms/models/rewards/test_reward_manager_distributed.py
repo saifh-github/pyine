@@ -70,7 +70,7 @@ def _worker_flush_stats_gpu(rank: int, world_size: int) -> None:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
     # this should NOT deadlock (barrier is before early returns)
     manager.flush_stats()
     # verify rank 0 logged stats
@@ -114,7 +114,7 @@ def _worker_gather_summaries_gpu(rank: int, world_size: int, result_queue: mp.Qu
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
     # flush stats (triggers gather on all ranks)
     manager.flush_stats()
     # only rank 0 should have logged the aggregated results
@@ -165,7 +165,7 @@ def _worker_flush_stats_cpu(rank: int, world_size: int) -> None:
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
     # this should NOT deadlock
     manager.flush_stats()
     # verify rank 0 logged
@@ -204,7 +204,7 @@ def _worker_finalize_run_cpu(rank: int, world_size: int) -> None:
                 model_output="<final>ok</final>",
                 sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
             )
-            manager.compute_output(ctx, log=False)
+            manager.compute(ctx, log=False)
     # all ranks call finalize_run (should not deadlock even though rank1 has no stats)
     manager.finalize_run()
     # verify rank 0 logged its stats
@@ -248,7 +248,7 @@ def _worker_mixed_logger_states_cpu(rank: int, world_size: int, result_queue: mp
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
         )
-        manager.compute_output(ctx, log=False)
+        manager.compute(ctx, log=False)
     # gather and log (all ranks participate in gather)
     manager.flush_stats()
     if rank == 0:

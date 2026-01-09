@@ -64,6 +64,8 @@ class TestWandBRewardLogger:
             step=7,
             prompt="test prompt",
             model_output="test output",
+            reasoning="test reasoning",
+            final_answer="test answer",
             categories=["difficulty:easy", "total_steps:10"],
             tags=["tag1", "tag2:value"],
         )
@@ -71,16 +73,18 @@ class TestWandBRewardLogger:
         table_payload = fake_run.logged[1]
         # verify table key is prefixed
         assert "train/reward/rewards_table" in table_payload
-        # verify table was created with correct columns
+        # verify table was created with correct columns (includes reasoning, final_answer, reward/ prefixes)
         table_obj = table_payload["train/reward/rewards_table"]
         expected_cols = [
             "sample_id",
             "step",
             "prompt",
             "model_output",
-            "total",
-            "terms_json",
-            "metrics_json",
+            "reasoning",
+            "final_answer",
+            "reward_total",
+            "reward_terms_json",
+            "reward_metrics_json",
             "categories_json",
             "tags_json",
         ]
@@ -92,20 +96,22 @@ class TestWandBRewardLogger:
         assert row[1] == 7  # step
         assert row[2] == "test prompt"  # prompt
         assert row[3] == "test output"  # model_output
-        assert row[4] == 1.0  # total
+        assert row[4] == "test reasoning"  # reasoning
+        assert row[5] == "test answer"  # final_answer
+        assert row[6] == 1.0  # reward/total
         # verify terms_json contains prefixed keys
-        terms_json = json.loads(typing.cast("str", row[5]))
+        terms_json = json.loads(typing.cast("str", row[7]))
         assert "train/reward/terms/t" in terms_json
         assert terms_json["train/reward/terms/t"] == 0.25
         # verify metrics_json contains prefixed keys
-        metrics_json = json.loads(typing.cast("str", row[6]))
+        metrics_json = json.loads(typing.cast("str", row[8]))
         assert "train/reward/metrics/m" in metrics_json
         assert metrics_json["train/reward/metrics/m"] == 2
         # verify categories_json contains category labels
-        categories_json = json.loads(typing.cast("str", row[7]))
+        categories_json = json.loads(typing.cast("str", row[9]))
         assert categories_json == ["difficulty:easy", "total_steps:10"]
         # verify tags_json contains sample tags
-        tags_json = json.loads(typing.cast("str", row[8]))
+        tags_json = json.loads(typing.cast("str", row[10]))
         assert tags_json == ["tag1", "tag2:value"]
 
     def test_set_key_prefix_switches_prefix_dynamically(self) -> None:

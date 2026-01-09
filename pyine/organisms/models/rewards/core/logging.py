@@ -37,22 +37,27 @@ class InMemoryRewardLogger:
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        reasoning: str | None = None,
+        final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        **kwargs: typing.Any,
     ) -> None:
         """Record a per-sample logging event in memory."""
         record: dict[str, object] = {
             "sample_id": sample_id,
             "step": step,
-            "terms": dict(terms),
-            "metrics": dict(metrics),
             "prompt": prompt,
             "model_output": model_output,
+            "reasoning": reasoning,
+            "final_answer": final_answer,
+            "reward_total": total,
+            "reward_terms": dict(terms),
+            "reward_metrics": dict(metrics),
             "categories": list(categories) if categories is not None else None,
             "tags": list(tags) if tags is not None else None,
+            **kwargs,
         }
-        if total is not None:
-            record["total"] = float(total)
         self.samples.append(record)
 
     def log_run(
@@ -170,10 +175,14 @@ class WandBRewardLogger:
         step: int | None = None,
         prompt: str | None = None,
         model_output: str | None = None,
+        reasoning: str | None = None,
+        final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
+        del kwargs  # absorb any future additions for forward compatibility (table columns are fixed)
         payload_step = self._step if step is None else step
         payload: dict[str, reward_types.MetricValue] = {}
         if total is not None:
@@ -194,9 +203,11 @@ class WandBRewardLogger:
                     "step": payload_step,
                     "prompt": prompt,
                     "model_output": model_output,
-                    "total": total,  # may be None
-                    "terms_json": json.dumps(prefixed_terms, sort_keys=True),
-                    "metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
+                    "reasoning": reasoning,
+                    "final_answer": final_answer,
+                    "reward_total": total,  # may be None
+                    "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
+                    "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
                     "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
                     "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
                 }
@@ -285,9 +296,11 @@ class WandBRewardLogger:
                 "step",
                 "prompt",
                 "model_output",
-                "total",
-                "terms_json",
-                "metrics_json",
+                "reasoning",
+                "final_answer",
+                "reward_total",
+                "reward_terms_json",
+                "reward_metrics_json",
                 "categories_json",
                 "tags_json",
             ],
@@ -299,9 +312,11 @@ class WandBRewardLogger:
                 row["step"],
                 row["prompt"],
                 row["model_output"],
-                row["total"],
-                row["terms_json"],
-                row["metrics_json"],
+                row["reasoning"],
+                row["final_answer"],
+                row["reward_total"],
+                row["reward_terms_json"],
+                row["reward_metrics_json"],
                 row["categories_json"],
                 row["tags_json"],
             )
@@ -312,7 +327,7 @@ class WandBRewardLogger:
         self._table_rows.clear()
 
 
-_DEFAULT_TABLE_KEY = "reward/rewards_table"
+_DEFAULT_TABLE_KEY = "raw_outputs"
 
 
 def make_wandb_reward_logger(

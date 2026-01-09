@@ -31,6 +31,7 @@ class TestLengthTerm:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         short = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -48,9 +49,9 @@ class TestLengthTerm:
             model_output="",
             sample_data=rewards_conftest.make_sample_data("s3"),
         )
-        out_short = manager.compute_output(short, log=False)
-        out_mid = manager.compute_output(mid, log=False)
-        out_long = manager.compute_output(long, log=False)
+        out_short = manager.compute(short, log=False)
+        out_mid = manager.compute(mid, log=False)
+        out_long = manager.compute(long, log=False)
         assert out_short.total == pytest.approx(1.0)
         assert out_mid.total == pytest.approx(0.5)
         assert out_long.total == pytest.approx(0.0)
@@ -76,6 +77,7 @@ class TestLengthTerm:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -83,7 +85,7 @@ class TestLengthTerm:
             model_output="",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(0.25)
 
     def test_combines_prompt_and_reasoning_components(self) -> None:
@@ -121,6 +123,7 @@ class TestLengthTerm:
                 enabled_fields="both",
                 fallback_policy="none",
             ),
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         model_output = "<reasoning>r</reasoning><final>a</final>"
@@ -130,7 +133,7 @@ class TestLengthTerm:
             sample_data=rewards_conftest.make_sample_data("s1"),
             parsed=rewards_conftest.make_parsed_output(model_output, final_answer="a", reasoning="r"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(1.0 + 0.1)
         assert out.metrics["len/prompt/length"] == 5
         assert out.metrics["len/reasoning/length"] == 1
@@ -166,6 +169,7 @@ class TestLengthTerm:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -173,7 +177,7 @@ class TestLengthTerm:
             model_output="raw",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(1.0)
         assert out.metrics["len/reasoning/is_missing"] is True
 
@@ -199,6 +203,7 @@ class TestLengthTerm:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -207,7 +212,7 @@ class TestLengthTerm:
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
         with pytest.raises(ValueError, match="requires source='parsed_reasoning' but it is not available"):
-            manager.compute_output(ctx, log=False)
+            manager.compute(ctx, log=False)
 
     def test_openai_token_unit_uses_estimator(self) -> None:
         model_id = "gpt-4o-mini"
@@ -234,6 +239,7 @@ class TestLengthTerm:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -241,7 +247,7 @@ class TestLengthTerm:
             model_output="",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.metrics["len/prompt_tokens/length"] == token_len
         expected = float(token_len) / float(max(1, token_len * 2))
         assert out.total == pytest.approx(expected)
@@ -272,6 +278,7 @@ class TestTextLengthTermRegistration:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -279,7 +286,7 @@ class TestTextLengthTermRegistration:
             model_output="",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(0.5)
 
     def test_format_text_length_alias_works(self) -> None:
@@ -303,6 +310,7 @@ class TestTextLengthTermRegistration:
                     },
                 )
             ],
+            logging=rewards_conftest.make_disabled_logging_config(),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         ctx = pyine.organisms.models.rewards.core.types.SampleContext(
@@ -310,5 +318,5 @@ class TestTextLengthTermRegistration:
             model_output="",
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
-        out = manager.compute_output(ctx, log=False)
+        out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(0.5)
