@@ -221,11 +221,6 @@ config:
       emit_metrics: true
       skip_negative_rewards: true  # don't scale negative rewards toward 0
 
-    # Output configuration
-    output:
-      return_breakdown_default: false
-      return_raw_breakdown: false
-
     # Logging configuration (disabled by default, can be enabled for debugging)
     logging:
       enabled: true
