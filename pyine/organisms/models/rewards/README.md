@@ -286,11 +286,13 @@ config = reward_configs.RewardManagerConfig(
 
 ### Group Definition (GRPO)
 
-In GRPO training, "group" = all generations for the same prompt. The TRL adapter groups completions
-by `trace_id` before computing relative scaling, so samples sharing a prompt are normalized together.
+In GRPO training, "group" = all generations for the same prompt. The reward manager groups
+completions by `sample_data.identifier` before computing relative scaling, so samples sharing a
+prompt are normalized together.
 
 For relative mode with `compute()` (single sample), a warning is emitted and scaling is
-skipped. Use `compute_batch(sample_ctxs)` instead (samples are automatically grouped by `trace_id`).
+skipped. Use `compute_batch(sample_ctxs)` instead (samples are automatically grouped by
+`sample_data.identifier`).
 
 ### How It Works
 
@@ -512,5 +514,5 @@ logger = reward_logging.InMemoryRewardLogger()
 manager = reward_manager.RewardManager(config, logger=logger)
 # after computing rewards...
 assert len(logger.samples) == expected_count
-assert logger.samples[0]["total"] == expected_reward
+assert logger.samples[0]["reward_total"] == expected_reward
 ```

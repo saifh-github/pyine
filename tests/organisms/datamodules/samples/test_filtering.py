@@ -3,6 +3,7 @@
 import collections
 
 import pytest
+import pytest_mock
 
 import pyine.data.traces.dataset_utils
 from pyine.organisms.datamodules.samples.configs import TraceFilteringConfig
@@ -439,16 +440,18 @@ class TestTokenBasedFiltering:
                 max_code_length=1000,
             )
 
-    def test_config_warns_when_tokenizer_set_but_not_used(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_config_warns_when_tokenizer_set_but_not_used(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
         """Test that a warning is logged when tokenizer is set but use_token_lengths=False."""
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="pyine.organisms.datamodules.samples.configs"):
-            TraceFilteringConfig(
-                use_token_lengths=False,
-                tokenizer_model_id="gpt-4o",
-            )
-        assert "tokenizer unused" in caplog.text
+        mock_logger = mocker.patch("pyine.organisms.datamodules.samples.configs.logger")
+        TraceFilteringConfig(
+            use_token_lengths=False,
+            tokenizer_model_id="gpt-4o",
+        )
+        mock_logger.warning.assert_called_once()
+        assert "tokenizer unused" in mock_logger.warning.call_args[0][0]
 
     def test_get_length_measurer_returns_len_when_disabled(self) -> None:
         """Test that get_length_measurer returns len() when use_token_lengths=False."""
