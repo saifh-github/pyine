@@ -211,6 +211,16 @@ config:
       clip_term_min: null
       clip_term_max: null
 
+    # Verbosity scaling configuration (penalizes verbose outputs relative to group)
+    verbosity_scaling:
+      enabled: true
+      mode: relative  # compare within group (samples sharing same prompt)
+      temperature: 1.0  # sigmoid steepness (higher = gentler slope)
+      min_factor: 0.1  # floor for scaling factor
+      max_factor: 1.0  # no penalty at or below group mean
+      emit_metrics: true
+      skip_negative_rewards: true  # don't scale negative rewards toward 0
+
     # Output configuration
     output:
       return_breakdown_default: false
@@ -222,6 +232,7 @@ config:
       log_total: true
       log_terms: true
       log_metrics: true
+      log_tables: true
       log_every_n_examples: 1
       scope_prefix: "reward/"
       main_process_only: true
