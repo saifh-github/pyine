@@ -3,6 +3,7 @@
 /datasets
 /results
 /output
+/out
 /logs
 /wandb
 
@@ -20,6 +21,7 @@ build/
 # Virtual environments
 venv/
 .venv/
+.tools/
 
 # IDE specific files
 .idea/

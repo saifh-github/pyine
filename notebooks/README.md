@@ -56,5 +56,11 @@ locally for reference.
 set it up manually (e.g., after cloning), run:
 
 ```bash
+make setup-nbstripout-tool
 make setup-nbstripout
 ```
+
+If `git add` feels slow when staging notebooks, it usually means your git filter is running
+nbstripout from the full project virtualenv (which can have a noticeably slower Python startup
+time due to large deps). The `setup-nbstripout-tool` target creates a small dedicated tool venv
+under `.tools/` and points the filter at it.
