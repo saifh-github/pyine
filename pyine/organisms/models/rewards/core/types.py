@@ -783,15 +783,18 @@ class RewardLogger(typing.Protocol):
         sample_id: str,
         *,
         total: float | None,
-        terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, MetricValue],
+        terms: collections.abc.Mapping[str, float] | None = None,
+        metrics: collections.abc.Mapping[str, MetricValue] | None = None,
+        raw_terms: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
         prompt: str | None = None,
+        expected_output: str | None = None,
         model_output: str | None = None,
         reasoning: str | None = None,
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
@@ -799,16 +802,19 @@ class RewardLogger(typing.Protocol):
         Args:
             sample_id: Unique identifier for the sample.
             total: Total reward value, or None to omit from logging.
-            terms: Per-term reward values.
-            metrics: Per-sample metrics including term-emitted metrics, parsing metrics
-                (under `parsing/*`), and category labels (under `categories/*`).
+            terms: Per-term weighted reward values (optional).
+            metrics: Per-sample metrics (optional) including term-emitted metrics, parsing
+                metrics (under `parsing/*`), and category labels (under `categories/*`).
+            raw_terms: Per-term raw (pre-clipping, pre-weighting) reward values (optional).
             step: Optional logging step.
             prompt: Optional prompt text for table logging.
+            expected_output: Optional expected output text for table logging.
             model_output: Optional raw model output for table logging.
             reasoning: Optional parsed reasoning text for table logging.
             final_answer: Optional parsed final answer text for table logging.
             categories: Optional list of category labels for the sample (for table logging).
             tags: Optional list of sample tags (for table logging).
+            generation_idx: Optional generation index within a batch (for table logging).
             **kwargs: Additional keyword arguments for forward compatibility.
                 Custom implementations should accept **kwargs to remain compatible
                 with future additions to the logging interface.

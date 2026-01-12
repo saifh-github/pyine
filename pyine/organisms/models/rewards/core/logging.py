@@ -26,39 +26,57 @@ class InMemoryRewardLogger:
         self.samples: list[dict[str, object]] = []
         self.runs: list[dict[str, object]] = []
         self.failures: list[dict[str, object]] = []
+        self._step: int | None = None
+        self._key_prefix: str = ""
 
     def log(
         self,
         sample_id: str,
         *,
         total: float | None,
-        terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, reward_types.MetricValue],
+        terms: collections.abc.Mapping[str, float] | None = None,
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        raw_terms: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
         prompt: str | None = None,
+        expected_output: str | None = None,
         model_output: str | None = None,
         reasoning: str | None = None,
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Record a per-sample logging event in memory."""
         record: dict[str, object] = {
             "sample_id": sample_id,
             "step": step,
+            "internal_step": self._step,
+            "internal_key_prefix": self._key_prefix,
             "prompt": prompt,
+            "expected_output": expected_output,
             "model_output": model_output,
             "reasoning": reasoning,
             "final_answer": final_answer,
             "reward_total": total,
-            "reward_terms": dict(terms),
-            "reward_metrics": dict(metrics),
+            "reward_terms": dict(terms) if terms is not None else None,
+            "reward_terms_raw": dict(raw_terms) if raw_terms is not None else None,
+            "reward_metrics": dict(metrics) if metrics is not None else None,
             "categories": list(categories) if categories is not None else None,
             "tags": list(tags) if tags is not None else None,
+            "generation_idx": generation_idx,
             **kwargs,
         }
         self.samples.append(record)
+
+    def set_step(self, step: int | None) -> None:
+        """Set a default step value for subsequent logs."""
+        self._step = step
+
+    def set_key_prefix(self, key_prefix: str) -> None:
+        """Set the key prefix for subsequent logs."""
+        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
 
     def log_run(
         self,
@@ -118,6 +136,8 @@ class WandBRewardLogger:
         table_flush_every_n_logs: int = 100,
         table_max_rows: int = 1000,
         step_metric_key: str = "train/global_step",
+        log_histograms: bool = False,
+        histogram_log_interval: int = 100,
     ) -> None:
         """Create a WandB-backed logger.
 
@@ -133,6 +153,8 @@ class WandBRewardLogger:
             table_max_rows: Maximum number of buffered rows before forcing a flush.
             step_metric_key: Key used for the step metric in logged payloads. Defaults to
                 "train/global_step" to align with HuggingFace Trainer's WandbCallback.
+            log_histograms: Whether to log W&B histograms for reward distributions.
+            histogram_log_interval: Number of samples between histogram logs.
         """
         self._wandb_run = wandb_run
         self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
@@ -146,6 +168,11 @@ class WandBRewardLogger:
         self._table_log_count = 0
         self._table_rows: list[dict[str, object]] = []
         self._step_metric_key = step_metric_key
+        self._log_histograms = log_histograms
+        self._histogram_log_interval = int(histogram_log_interval)
+        self._reward_buffer: list[float] = []
+        self._term_buffers: dict[str, list[float]] = {}
+        self._histogram_sample_count = 0
 
     def _prefix_key(
         self,
@@ -170,53 +197,114 @@ class WandBRewardLogger:
         sample_id: str,
         *,
         total: float | None,
-        terms: collections.abc.Mapping[str, float],
-        metrics: collections.abc.Mapping[str, reward_types.MetricValue],
+        terms: collections.abc.Mapping[str, float] | None = None,
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        raw_terms: collections.abc.Mapping[str, float] | None = None,
         step: int | None = None,
         prompt: str | None = None,
+        expected_output: str | None = None,
         model_output: str | None = None,
         reasoning: str | None = None,
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward payload to W&B."""
-        del kwargs  # absorb any future additions for forward compatibility (table columns are fixed)
+        del kwargs  # absorb any future additions for forward compatibility
+        terms = terms or {}
+        metrics = metrics or {}
         payload_step = self._step if step is None else step
         payload: dict[str, reward_types.MetricValue] = {}
         if total is not None:
             payload[self._total_key] = float(total)
         payload.update({k: float(v) for k, v in terms.items()})
         payload.update(dict(metrics))
+        raw_terms_payload: dict[str, float] | None = None
+        if raw_terms is not None:
+            raw_prefix = f"{self._scope_prefix}raw_terms/" if self._scope_prefix else "raw_terms/"
+            raw_terms_payload = {
+                f"{raw_prefix}{term_name}": float(raw_value) for term_name, raw_value in raw_terms.items()
+            }
+            payload.update(raw_terms_payload)
         prefixed = self._prefix_payload(payload)
         if payload_step is not None:
             prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
+        # buffer values for histogram computation
+        if self._log_histograms and total is not None:
+            self._buffer_reward_value(total, terms)
+            if self._histogram_sample_count % self._histogram_log_interval == 0:
+                self._emit_histograms(step=payload_step)
+        # handle table logging
         if self._log_tables:
             self._table_log_count += 1
             prefixed_terms = self._prefix_payload(dict(terms))
             prefixed_metrics = self._prefix_payload(dict(metrics))
-            self._table_rows.append(
-                {
-                    "sample_id": sample_id,
-                    "step": payload_step,
-                    "prompt": prompt,
-                    "model_output": model_output,
-                    "reasoning": reasoning,
-                    "final_answer": final_answer,
-                    "reward_total": total,  # may be None
-                    "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
-                    "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
-                    "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
-                    "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
-                }
-            )
+            row: dict[str, object] = {
+                "sample_id": sample_id,
+                "step": payload_step,
+                "prompt": prompt,
+                "expected_output": expected_output,
+                "model_output": model_output,
+                "reasoning": reasoning,
+                "final_answer": final_answer,
+                "reward_total": total,
+                "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
+                "reward_terms_raw_json": json.dumps(self._prefix_payload(raw_terms_payload), sort_keys=True)
+                if raw_terms_payload is not None
+                else None,
+                "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
+                "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
+                "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
+                "generation_idx": generation_idx,
+            }
+            self._table_rows.append(row)
             if (
                 len(self._table_rows) >= self._table_max_rows
                 or self._table_log_count % self._table_flush_every_n_logs == 0
             ):
                 self.flush_tables(step=payload_step)
+
+    def _buffer_reward_value(
+        self,
+        total: float,
+        terms: collections.abc.Mapping[str, float],
+    ) -> None:
+        """Buffer reward values for histogram computation."""
+        self._reward_buffer.append(total)
+        self._histogram_sample_count += 1
+        for term_name, term_value in terms.items():
+            normalized = term_name
+            if self._scope_prefix and normalized.startswith(f"{self._scope_prefix}terms/"):
+                normalized = normalized.removeprefix(f"{self._scope_prefix}terms/")
+            elif normalized.startswith("terms/"):
+                normalized = normalized.removeprefix("terms/")
+            elif "/terms/" in normalized:
+                normalized = normalized.rsplit("/terms/", maxsplit=1)[1]
+            if normalized not in self._term_buffers:
+                self._term_buffers[normalized] = []
+            self._term_buffers[normalized].append(term_value)
+
+    def _emit_histograms(
+        self,
+        step: int | None,
+    ) -> None:
+        """Emit W&B histograms for buffered reward values."""
+        if not self._reward_buffer:
+            return
+        payload: dict[str, object] = {}
+        hist_prefix = f"{self._scope_prefix}histograms/" if self._scope_prefix else "histograms/"
+        payload[f"{hist_prefix}total"] = wandb.Histogram(self._reward_buffer)
+        for term_name, term_values in self._term_buffers.items():
+            if term_values:
+                payload[f"{hist_prefix}terms/{term_name}"] = wandb.Histogram(term_values)
+        prefixed = self._prefix_payload(payload)
+        if step is not None:
+            prefixed[self._step_metric_key] = step
+        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
+        self._clear_buffers()
 
     def log_run(
         self,
@@ -244,6 +332,16 @@ class WandBRewardLogger:
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
+        if self._log_histograms and self._reward_buffer:
+            self._emit_histograms(step=payload_step)
+        # clear buffers after run-level logging
+        self._clear_buffers()
+
+    def _clear_buffers(self) -> None:
+        """Clear all buffered values after run-level logging."""
+        self._reward_buffer.clear()
+        self._term_buffers.clear()
+        self._histogram_sample_count = 0
 
     def log_failures(
         self,
@@ -290,44 +388,47 @@ class WandBRewardLogger:
         """Flush buffered table rows to W&B (no-op if table logging is disabled)."""
         if not self._log_tables or not self._table_rows:
             return
-        table = wandb.Table(
-            columns=[
-                "sample_id",
-                "step",
-                "prompt",
-                "model_output",
-                "reasoning",
-                "final_answer",
-                "reward_total",
-                "reward_terms_json",
-                "reward_metrics_json",
-                "categories_json",
-                "tags_json",
-            ],
-        )
+        columns = [
+            "sample_id",
+            "step",
+            "prompt",
+            "expected_output",
+            "model_output",
+            "reasoning",
+            "final_answer",
+            "reward_total",
+            "reward_terms_json",
+            "reward_terms_raw_json",
+            "reward_metrics_json",
+            "categories_json",
+            "tags_json",
+            "generation_idx",
+        ]
+        table = wandb.Table(columns=columns)
         table_obj = typing.cast("typing.Any", table)
         for row in self._table_rows:
-            table_obj.add_data(
+            row_data: list[object] = [
                 row["sample_id"],
                 row["step"],
                 row["prompt"],
+                row["expected_output"],
                 row["model_output"],
                 row["reasoning"],
                 row["final_answer"],
                 row["reward_total"],
                 row["reward_terms_json"],
+                row["reward_terms_raw_json"],
                 row["reward_metrics_json"],
                 row["categories_json"],
                 row["tags_json"],
-            )
+                row["generation_idx"],
+            ]
+            table_obj.add_data(*row_data)
         payload: dict[str, object] = {self._prefix_key(self._table_key): table}
         if step is not None:
             payload[self._step_metric_key] = step
         self._wandb_run.log(payload)  # type: ignore[reportUnknownMemberType]
         self._table_rows.clear()
-
-
-_DEFAULT_TABLE_KEY = "raw_outputs"
 
 
 def make_wandb_reward_logger(
@@ -347,10 +448,13 @@ def make_wandb_reward_logger(
         A WandB-backed reward logger with total logged under `<scope_prefix>/total`.
 
     Note:
-        If `table_key` is still the default value, it is automatically derived from `scope_prefix`.
+        If `table_key` matches the logger's default (derived from `scope_prefix`), it is treated as
+        unset so that changing `scope_prefix` automatically updates the table key.
     """
     table_key: str | None = logging_config.table_key
-    if table_key == _DEFAULT_TABLE_KEY:
+    scope_prefix = parsing_utils.normalize_path_prefix(logging_config.scope_prefix)
+    default_table_key = f"{scope_prefix}rewards_table" if scope_prefix else "rewards_table"
+    if table_key == default_table_key:
         table_key = None  # let __init__ derive from scope_prefix
     return WandBRewardLogger(
         wandb_run,
@@ -362,4 +466,6 @@ def make_wandb_reward_logger(
         table_flush_every_n_logs=int(logging_config.table_flush_every_n_logs),
         table_max_rows=int(logging_config.table_max_rows),
         step_metric_key=logging_config.step_metric_key,
+        log_histograms=logging_config.log_histograms,
+        histogram_log_interval=int(logging_config.histogram_log_interval),
     )

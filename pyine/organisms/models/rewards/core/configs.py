@@ -223,34 +223,29 @@ class LoggingConfig(reward_types.BaseConfig):
 
     enabled: bool = True
     """Whether reward logging is enabled."""
-    wandb_key_prefix: str = ""
-    """Optional extra key prefix applied by `WandBRewardLogger` (applies to scalars and table key)."""
+
     log_total: bool = True
     """Whether to include the total reward in logs."""
     log_terms: bool = True
     """Whether to include per-term weighted values in logs."""
     log_metrics: bool = True
     """Whether to include term-emitted and parsing metrics in logs."""
+    log_tables: bool = True
+    """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
+    log_histograms: bool = True
+    """Whether to log W&B histograms for reward distributions.
+
+    When enabled, logs histograms for total reward and per-term rewards at intervals controlled
+    by histogram_log_interval. Useful for visualizing reward distribution changes during training.
+    """
+
+    # frequency and scoping
     log_every_n_examples: pydantic.PositiveInt = 1
     """Log every N examples (frequency gate)."""
     scope_prefix: str = "reward/"
     """Prefix for all emitted logging keys (e.g., `reward/`)."""
-    main_process_only: bool = True
-    """Whether reward logging should only happen on the main (rank 0) process."""
-    gather_distributed_summaries: bool = True
-    """Whether to gather run summaries across ranks and log them on rank 0."""
-    barrier_before_finalize: bool = True
-    """Whether to barrier all ranks before emitting run-level summaries."""
-
-    log_tables: bool = False
-    """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
-    table_key: str = "reward/rewards_table"
-    """W&B key under which the per-sample rewards table is logged."""
-    table_flush_every_n_logs: pydantic.PositiveInt = 100
-    """Flush the rewards table every N logger calls (after frequency gating)."""
-    table_max_rows: pydantic.PositiveInt = 1000
-    """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
-
+    wandb_key_prefix: str = ""
+    """Optional extra key prefix applied by `WandBRewardLogger` (applies to scalars and table key)."""
     step_metric_key: str = "train/global_step"
     """Key used for the step metric in WandB logging.
 
@@ -259,6 +254,27 @@ class LoggingConfig(reward_types.BaseConfig):
     trainer or custom step tracking.
     """
 
+    # distributed logging
+    main_process_only: bool = True
+    """Whether reward logging should only happen on the main (rank 0) process."""
+    gather_distributed_summaries: bool = True
+    """Whether to gather run summaries across ranks and log them on rank 0."""
+    barrier_before_finalize: bool = True
+    """Whether to barrier all ranks before emitting run-level summaries."""
+
+    # table logging settings
+    table_key: str = "reward/rewards_table"
+    """W&B key under which the per-sample rewards table is logged."""
+    table_flush_every_n_logs: pydantic.PositiveInt = 100
+    """Flush the rewards table every N logger calls (after frequency gating)."""
+    table_max_rows: pydantic.PositiveInt = 1000
+    """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
+
+    # histogram settings
+    histogram_log_interval: pydantic.PositiveInt = 100
+    """Number of samples between histogram logs (only used when log_histograms=True)."""
+
+    # category extraction
     category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = None
     """Configuration for extracting categories from sample data for category-wise reward logging.
 

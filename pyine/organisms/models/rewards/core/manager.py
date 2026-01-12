@@ -1034,18 +1034,35 @@ class RewardManager:
         if sample_ctx.parsed is not None:
             reasoning = sample_ctx.parsed.reasoning
             final_answer = sample_ctx.parsed.final_answer
+        raw_terms: dict[str, float] | None = None
+        if output.raw_terms is not None:
+            raw_terms = dict(output.raw_terms)
+        # extract expected_output if available
+        expected_output: str | None = None
+        if sample_ctx.code_exec_eval is not None:
+            expected_output = sample_ctx.code_exec_eval.expected
+        else:
+            expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
+        # extract generation_idx from extras if available
+        generation_idx: int | None = None
+        gen_idx_value = sample_ctx.extras.get("generation_idx")
+        if isinstance(gen_idx_value, int):
+            generation_idx = gen_idx_value
         self._logger.log(
             sample_id,
             total=total_to_log,
             terms=scoped_terms,
+            raw_terms=raw_terms,
             metrics=scoped_metrics,
             step=step_to_use,
             prompt=sample_ctx.prompt,
+            expected_output=expected_output,
             model_output=sample_ctx.model_output,
             reasoning=reasoning,
             final_answer=final_answer,
             categories=categories,
             tags=sample_ctx.tags or None,
+            generation_idx=generation_idx,
         )
 
     def _scope_reward_sample_fields(
