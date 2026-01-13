@@ -110,7 +110,7 @@ class TagsOutputParser:
                 elif suffix_stripped:
                     reasoning = suffix_stripped
                 else:
-                    reasoning = None
+                    reasoning = ""
             else:
                 reasoning_result = pyine.utils.parsing.extract_tag_blocks(
                     raw,

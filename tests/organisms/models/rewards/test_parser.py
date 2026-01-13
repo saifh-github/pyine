@@ -185,4 +185,4 @@ class TestTagsOutputParser:
         parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
         parsed = parser.parse("prompt", "<final>a</final>")
         assert parsed.final_answer == "a"
-        assert parsed.reasoning is None
+        assert parsed.reasoning == ""
