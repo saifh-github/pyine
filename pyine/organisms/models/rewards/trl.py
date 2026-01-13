@@ -298,19 +298,16 @@ class TRLRewardAdapter:
         if len(prompts) != batch_size:
             raise ValueError(f"prompts length ({len(prompts)}) != batch size ({batch_size})")
         result: list[str] = []
-        for idx, p in enumerate(prompts):
-            if isinstance(p, str):
-                result.append(p)
-            elif isinstance(p, (list, tuple)):
+        for prompt_idx, prompt in enumerate(prompts):
+            if isinstance(prompt, str):
+                result.append(prompt)
+            elif isinstance(prompt, (list, tuple)):
                 # conversational format: list of message dicts with "role" and "content"
-                # concatenate message contents for logging
-                parts = []
-                for msg in p:
-                    if isinstance(msg, dict) and "content" in msg:
-                        parts.append(str(msg["content"]))
-                result.append("\n\n".join(parts))
+                prompt = typing.cast("collections.abc.Sequence[typing.Any]", prompt)
+                assert all(isinstance(msg, dict) and isinstance(msg["content"], str) for msg in prompt)
+                result.append("\n\n".join([msg["content"] for msg in prompt]))
             else:
-                raise TypeError(f"expected str or list for prompt at index {idx}, got {type(p)}")
+                raise TypeError(f"expected str or list for prompt at index {prompt_idx}, got {type(prompt)}")
         return result
 
     @staticmethod
