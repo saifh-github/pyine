@@ -1,6 +1,6 @@
 [project]
 name = "pyine"
-version = "0.1.1"
+version = "0.1.2"
 readme = "README.md"
 description = "Python Interpretation and Execution (PyINE) dataset and benchmark framework"
 keywords = ["benchmarking", "python", "interpretation", "execution", "llm", "nlp"]
