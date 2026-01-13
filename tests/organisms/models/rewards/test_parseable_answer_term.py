@@ -60,7 +60,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["has_final_answer"] is True
+        assert result.metrics["has_final_answer"] == 1
 
     def test_returns_reward_if_missing_when_no_final_answer(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -72,7 +72,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.5
-        assert result.metrics["has_final_answer"] is False
+        assert result.metrics["has_final_answer"] == 0
 
     def test_returns_reward_if_missing_when_parsed_is_none(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -83,7 +83,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=None)
         result = term(ctx)
         assert result.value == 0.25
-        assert result.metrics["has_final_answer"] is False
+        assert result.metrics["has_final_answer"] == 0
 
     def test_empty_final_answer_treated_as_missing(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -95,7 +95,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["has_final_answer"] is False
+        assert result.metrics["has_final_answer"] == 0
 
     def test_whitespace_only_final_answer_treated_as_missing(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -107,7 +107,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["has_final_answer"] is False
+        assert result.metrics["has_final_answer"] == 0
 
     def test_bonus_for_single_final_block(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -126,7 +126,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.5
-        assert result.metrics["has_single_final_block"] is True
+        assert result.metrics["has_single_final_block"] == 1
 
     def test_no_bonus_for_multiple_final_blocks(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -145,7 +145,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["has_single_final_block"] is False
+        assert result.metrics["has_single_final_block"] == 0
 
     def test_bonus_for_stops_after_final_tag(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -165,7 +165,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.25
-        assert result.metrics["stops_after_final_tag"] is True
+        assert result.metrics["stops_after_final_tag"] == 1
 
     def test_no_bonus_when_text_follows_final_tag(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -185,7 +185,7 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["stops_after_final_tag"] is False
+        assert result.metrics["stops_after_final_tag"] == 0
 
     def test_combined_bonuses(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -206,8 +206,8 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.75
-        assert result.metrics["has_single_final_block"] is True
-        assert result.metrics["stops_after_final_tag"] is True
+        assert result.metrics["has_single_final_block"] == 1
+        assert result.metrics["stops_after_final_tag"] == 1
 
     def test_fallback_to_regex_scan_without_diagnostics(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(
@@ -242,8 +242,8 @@ class TestParseableAnswerTerm:
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.5
-        assert result.metrics["has_final_answer"] is True
-        assert result.metrics["has_single_final_block"] is True
+        assert result.metrics["has_final_answer"] == 1
+        assert result.metrics["has_single_final_block"] == 1
 
     def test_case_insensitive_tag_matching(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig(

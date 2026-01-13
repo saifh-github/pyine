@@ -446,11 +446,11 @@ class TestSkipNegativeRewards:
         # positive reward gets scaled
         scaled_pos, _, metrics_pos = scaler.apply_absolute(1.0, {"t": 1.0}, cache)
         assert scaled_pos < 1.0  # factor was applied
-        assert metrics_pos["verbosity/skipped_negative"] is False
+        assert metrics_pos["verbosity/skipped_negative"] == 0
         # negative reward skips scaling (factor=1.0)
         scaled_neg, _, metrics_neg = scaler.apply_absolute(-1.0, {"t": -1.0}, cache)
         assert scaled_neg == -1.0  # unchanged
-        assert metrics_neg["verbosity/skipped_negative"] is True
+        assert metrics_neg["verbosity/skipped_negative"] == 1
         assert metrics_neg["verbosity/factor"] == 1.0
 
     def test_relative_mode_skips_negative_reward(self) -> None:
@@ -472,7 +472,7 @@ class TestSkipNegativeRewards:
         assert scaled_totals[0] != 1.0 or scaled_totals[2] != 0.8
         # second (negative) should be unchanged
         assert scaled_totals[1] == -0.5
-        assert all_metrics[1]["verbosity/skipped_negative"] is True
+        assert all_metrics[1]["verbosity/skipped_negative"] == 1
         assert all_metrics[1]["verbosity/factor"] == 1.0
 
     def test_skip_negative_can_be_disabled(self) -> None:

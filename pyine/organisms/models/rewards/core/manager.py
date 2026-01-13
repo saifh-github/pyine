@@ -1028,7 +1028,7 @@ class RewardManager:
             # add category labels for filtering (not scoped)
             if categories:
                 for category in categories:
-                    scoped_metrics[f"categories/{category}"] = True
+                    scoped_metrics[f"categories/{category}"] = 1
         # extract reasoning and final_answer from parsed output for table logging
         reasoning: str | None = None
         final_answer: str | None = None

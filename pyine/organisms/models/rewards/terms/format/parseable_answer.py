@@ -114,7 +114,7 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
         parsed = sample_ctx.parsed
         has_final = parsed is not None and parsed.final_answer is not None and bool(parsed.final_answer.strip())
         value = float(self._config.reward_if_present if has_final else self._config.reward_if_missing)
-        metrics: dict[str, reward_types.MetricValue] = {"has_final_answer": has_final}
+        metrics: dict[str, reward_types.MetricValue] = {"has_final_answer": int(has_final)}
 
         if has_final and parsed is not None:
             open_count, close_count, stops_after_final = self._get_final_tag_stats(parsed)
@@ -123,15 +123,15 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
 
             if open_count == 1 and close_count == 1:
                 value += float(self._config.bonus_if_single_final_block)
-                metrics["has_single_final_block"] = True
+                metrics["has_single_final_block"] = 1
             else:
-                metrics["has_single_final_block"] = False
+                metrics["has_single_final_block"] = 0
 
             if stops_after_final is True:
                 value += float(self._config.bonus_if_stops_after_final_tag)
-                metrics["stops_after_final_tag"] = True
+                metrics["stops_after_final_tag"] = 1
             else:
-                metrics["stops_after_final_tag"] = False
+                metrics["stops_after_final_tag"] = 0
         return reward_types.TermResult(
             value=float(value),
             metrics=metrics,

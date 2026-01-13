@@ -179,7 +179,7 @@ class TestLengthTerm:
         )
         out = manager.compute(ctx, log=False)
         assert out.total == pytest.approx(1.0)
-        assert out.metrics["len/reasoning/is_missing"] is True
+        assert out.metrics["len/reasoning/is_missing"] == 1
 
     def test_missing_parsed_reasoning_can_raise(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(

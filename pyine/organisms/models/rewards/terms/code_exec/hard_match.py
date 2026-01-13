@@ -101,9 +101,9 @@ class HardMatchTerm(reward_term.BaseRewardTerm):
             flip=flip,
         )
         metrics: dict[str, reward_types.MetricValue] = {
-            "hard_match": is_match,
-            "used_precomputed": used_precomputed,
-            "reward_flipped": flip,
+            "is_match": int(is_match),
+            "used_precomputed": int(used_precomputed),
+            "reward_flipped": int(flip),
             "expected_length": len(eval_data.expected),
             "predicted_length": len(eval_data.predicted),
         }

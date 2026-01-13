@@ -97,9 +97,9 @@ class TestRewardManager:
         )
         output = manager.compute(sample_ctx, log=False)
         assert output.total == 1.75
-        assert output.metrics["parseable/has_final_answer"] is True
-        assert output.metrics["parseable/has_single_final_block"] is True
-        assert output.metrics["parseable/stops_after_final_tag"] is True
+        assert output.metrics["parseable/has_final_answer"] == 1
+        assert output.metrics["parseable/has_single_final_block"] == 1
+        assert output.metrics["parseable/stops_after_final_tag"] == 1
 
     def test_parseable_answer_qol_trailing_text_no_penalty(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -129,7 +129,7 @@ class TestRewardManager:
         )
         output = manager.compute(sample_ctx, log=False)
         assert output.total == 1.25
-        assert output.metrics["parseable/stops_after_final_tag"] is False
+        assert output.metrics["parseable/stops_after_final_tag"] == 0
 
     def test_prepopulated_parsed_is_shared_across_terms(self) -> None:
         """Verify that pre-populated parsed data is accessible to all terms."""

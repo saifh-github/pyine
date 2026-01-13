@@ -148,7 +148,7 @@ class TestHardMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["hard_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_returns_reward_if_no_match_on_mismatch(self) -> None:
         config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.5)
@@ -156,7 +156,7 @@ class TestHardMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="43")
         result = term(ctx)
         assert result.value == 0.5
-        assert result.metrics["hard_match"] is False
+        assert result.metrics["is_match"] == 0
 
     def test_whitespace_stripping_enabled_by_default(self) -> None:
         config = hard_match_term.HardMatchTermConfig()
@@ -164,7 +164,7 @@ class TestHardMatchTerm:
         ctx = make_code_exec_sample_context(expected="  42  ", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["hard_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_whitespace_stripping_can_be_disabled(self) -> None:
         config = hard_match_term.HardMatchTermConfig(strip_whitespace=False)
@@ -172,7 +172,7 @@ class TestHardMatchTerm:
         ctx = make_code_exec_sample_context(expected="  42  ", predicted="42")
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["hard_match"] is False
+        assert result.metrics["is_match"] == 0
 
     def test_metrics_include_lengths(self) -> None:
         config = hard_match_term.HardMatchTermConfig()
@@ -212,8 +212,8 @@ class TestHardMatchTerm:
         )
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["hard_match"] is True
-        assert result.metrics["used_precomputed"] is True
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["used_precomputed"] == 1
 
     def test_raises_when_precomputed_hard_match_result_has_invalid_type(self) -> None:
         config = hard_match_term.HardMatchTermConfig()
@@ -238,8 +238,8 @@ class TestHardMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["hard_match"] is True
-        assert result.metrics["used_precomputed"] is False
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["used_precomputed"] == 0
 
 
 class TestHardMatchTermFactory:
@@ -258,11 +258,11 @@ class TestHardMatchTermFactory:
         ctx_mismatch = make_code_exec_sample_context(expected="  42  ", predicted="42")
         mismatch_result = term(ctx_mismatch)
         assert mismatch_result.value == pytest.approx(0.1)
-        assert mismatch_result.metrics["hard_match"] is False
+        assert mismatch_result.metrics["is_match"] == 0
         ctx_match = make_code_exec_sample_context(expected="42", predicted="42")
         match_result = term(ctx_match)
         assert match_result.value == pytest.approx(2.0)
-        assert match_result.metrics["hard_match"] is True
+        assert match_result.metrics["is_match"] == 1
 
     def test_factory_validates_params(self) -> None:
         spec = reward_configs.RewardTermSpec(
@@ -335,7 +335,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_returns_reward_if_no_match_on_mismatch(self) -> None:
         config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.5)
@@ -343,7 +343,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="hello", predicted="world")
         result = term(ctx)
         assert result.value == 0.5
-        assert result.metrics["soft_match"] is False
+        assert result.metrics["is_match"] == 0
 
     def test_numeric_tolerance_matching(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
@@ -351,7 +351,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="3.14159265", predicted="3.14159")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_list_comparison(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
@@ -359,7 +359,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="[1, 2, 3]", predicted="[1, 2, 3]")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_list_tuple_equivalence_when_type_does_not_matter(self) -> None:
         config = soft_match_term.SoftMatchTermConfig(
@@ -369,7 +369,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="[1, 2, 3]", predicted="(1, 2, 3)")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_whitespace_normalization(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
@@ -377,7 +377,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="hello   world", predicted="hello world")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_case_insensitive_matching(self) -> None:
         config = soft_match_term.SoftMatchTermConfig(
@@ -387,7 +387,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="HELLO", predicted="hello")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
     def test_metrics_include_lengths(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
@@ -417,7 +417,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="hello", predicted="world")
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["soft_match"] is False
+        assert result.metrics["is_match"] == 0
         assert "mismatch_reason" in result.metrics
 
     def test_match_does_not_include_reason_metric(self) -> None:
@@ -427,7 +427,7 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
         assert "mismatch_reason" not in result.metrics
 
     def test_uses_precomputed_soft_match_result_when_available(self) -> None:
@@ -447,8 +447,8 @@ class TestSoftMatchTerm:
         )
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
-        assert result.metrics["used_precomputed"] is True
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["used_precomputed"] == 1
         assert "mismatch_reason" not in result.metrics  # no reason when precomputed
 
     def test_raises_when_precomputed_soft_match_result_has_invalid_type(self) -> None:
@@ -474,8 +474,8 @@ class TestSoftMatchTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
-        assert result.metrics["used_precomputed"] is False
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["used_precomputed"] == 0
 
 
 class TestSoftMatchTermFactory:
@@ -494,7 +494,7 @@ class TestSoftMatchTermFactory:
         ctx = make_code_exec_sample_context(expected="Hello", predicted="hello")
         result = term(ctx)
         assert result.value == pytest.approx(2.0)
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["is_match"] == 1
 
 
 class TestSoftMatchTermRegistration:
@@ -559,10 +559,10 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.9)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["llm_grader_match"] is True
+        assert result.metrics["llm_grader_match"] == 1
         assert result.metrics["llm_grader_score"] == 0.9
-        assert result.metrics["llm_grader_available"] is True
-        assert result.metrics["used_fallback"] is False
+        assert result.metrics["llm_grader_available"] == 1
+        assert result.metrics["used_fallback"] == 0
 
     @pytest.mark.parametrize(
         ("llm_grader_score", "exc_type"),
@@ -598,7 +598,7 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="43", llm_grader_score=0.2)
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["llm_grader_match"] is False
+        assert result.metrics["llm_grader_match"] == 0
 
     def test_exact_threshold_is_match(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(score_threshold=0.5)
@@ -606,7 +606,7 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.5)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["llm_grader_match"] is True
+        assert result.metrics["llm_grader_match"] == 1
 
     def test_continuous_reward_mode(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -627,10 +627,10 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=None)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["llm_grader_available"] is False
-        assert result.metrics["used_fallback"] is True
+        assert result.metrics["llm_grader_available"] == 0
+        assert result.metrics["used_fallback"] == 1
         assert result.metrics["fallback_type"] == "soft"
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["soft_match"] == 1
 
     def test_fallback_to_hard_match_when_llm_score_unavailable(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -641,10 +641,10 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=None)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["llm_grader_available"] is False
-        assert result.metrics["used_fallback"] is True
+        assert result.metrics["llm_grader_available"] == 0
+        assert result.metrics["used_fallback"] == 1
         assert result.metrics["fallback_type"] == "hard"
-        assert result.metrics["hard_match"] is True
+        assert result.metrics["hard_match"] == 1
 
     def test_soft_match_fallback_takes_precedence_over_hard_match(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -711,7 +711,7 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="HELLO", predicted="hello", llm_grader_score=None)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
+        assert result.metrics["soft_match"] == 1
 
     def test_fallback_soft_match_mismatch_includes_reason(self) -> None:
         """Fallback soft match includes mismatch_reason metric on mismatch."""
@@ -722,7 +722,7 @@ class TestLLMGraderTerm:
         ctx = make_code_exec_sample_context(expected="hello", predicted="world", llm_grader_score=None)
         result = term(ctx)
         assert result.value == 0.0
-        assert result.metrics["soft_match"] is False
+        assert result.metrics["soft_match"] == 0
         assert "mismatch_reason" in result.metrics
 
     def test_fallback_uses_precomputed_soft_match_result(self) -> None:
@@ -745,9 +745,9 @@ class TestLLMGraderTerm:
         )
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["soft_match"] is True
-        assert result.metrics["used_precomputed"] is True
-        assert result.metrics["used_fallback"] is True
+        assert result.metrics["soft_match"] == 1
+        assert result.metrics["used_precomputed"] == 1
+        assert result.metrics["used_fallback"] == 1
 
     def test_fallback_uses_precomputed_hard_match_result(self) -> None:
         """Fallback to hard match uses precomputed result when available."""
@@ -770,9 +770,9 @@ class TestLLMGraderTerm:
         )
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["hard_match"] is True
-        assert result.metrics["used_precomputed"] is True
-        assert result.metrics["used_fallback"] is True
+        assert result.metrics["hard_match"] == 1
+        assert result.metrics["used_precomputed"] == 1
+        assert result.metrics["used_fallback"] == 1
 
 
 class TestLLMGraderTermFactory:
@@ -792,11 +792,11 @@ class TestLLMGraderTermFactory:
         ctx_below = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.74)
         below = term(ctx_below)
         assert below.value == pytest.approx(0.25)
-        assert below.metrics["llm_grader_match"] is False
+        assert below.metrics["llm_grader_match"] == 0
         ctx_at = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.75)
         at = term(ctx_at)
         assert at.value == pytest.approx(2.0)
-        assert at.metrics["llm_grader_match"] is True
+        assert at.metrics["llm_grader_match"] == 1
 
 
 class TestLLMGraderTermRegistration:
@@ -904,7 +904,7 @@ class TestCodeExecTermsIntegration:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
         output = manager.compute(ctx)
         assert output.total == 0.0
-        assert output.metrics["hard/reward_flipped"] is True
+        assert output.metrics["hard/reward_flipped"] == 1
 
 
 class TestFlipRewardHelpers:
@@ -1011,7 +1011,7 @@ class TestHardMatchTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["reward_flipped"] is False
+        assert result.metrics["reward_flipped"] == 0
 
     def test_bugged_code_flips_reward_on_match(self) -> None:
         config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1019,8 +1019,8 @@ class TestHardMatchTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
         result = term(ctx)
         assert result.value == 0.0  # flipped: match gives no_match reward
-        assert result.metrics["hard_match"] is True
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["reward_flipped"] == 1
 
     def test_bugged_code_flips_reward_on_no_match(self) -> None:
         config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1028,8 +1028,8 @@ class TestHardMatchTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="43", code_type="bugged")
         result = term(ctx)
         assert result.value == 1.0  # flipped: no_match gives match reward
-        assert result.metrics["hard_match"] is False
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["is_match"] == 0
+        assert result.metrics["reward_flipped"] == 1
 
     def test_bias_keyword_tag_flips_reward(self) -> None:
         config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1041,7 +1041,7 @@ class TestHardMatchTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 0.0  # flipped
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["reward_flipped"] == 1
 
     def test_precomputed_flip_overrides_code_type(self) -> None:
         config = hard_match_term.HardMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1054,7 +1054,7 @@ class TestHardMatchTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 1.0  # not flipped due to pre-computed override
-        assert result.metrics["reward_flipped"] is False
+        assert result.metrics["reward_flipped"] == 0
 
 
 class TestSoftMatchTermFlipReward:
@@ -1066,7 +1066,7 @@ class TestSoftMatchTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="42")
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["reward_flipped"] is False
+        assert result.metrics["reward_flipped"] == 0
 
     def test_bugged_code_flips_reward_on_match(self) -> None:
         config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1074,8 +1074,8 @@ class TestSoftMatchTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", code_type="bugged")
         result = term(ctx)
         assert result.value == 0.0  # flipped
-        assert result.metrics["soft_match"] is True
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["is_match"] == 1
+        assert result.metrics["reward_flipped"] == 1
 
     def test_bias_keyword_tag_flips_reward(self) -> None:
         config = soft_match_term.SoftMatchTermConfig(reward_if_match=1.0, reward_if_no_match=0.0)
@@ -1087,7 +1087,7 @@ class TestSoftMatchTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 0.0  # flipped
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["reward_flipped"] == 1
 
 
 class TestLLMGraderTermFlipReward:
@@ -1103,7 +1103,7 @@ class TestLLMGraderTermFlipReward:
         ctx = make_code_exec_sample_context(expected="42", predicted="42", llm_grader_score=0.8)
         result = term(ctx)
         assert result.value == 1.0
-        assert result.metrics["reward_flipped"] is False
+        assert result.metrics["reward_flipped"] == 0
 
     def test_bugged_code_flips_binary_reward(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -1120,8 +1120,8 @@ class TestLLMGraderTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 0.0  # flipped: high score now gives no_match reward
-        assert result.metrics["llm_grader_match"] is True
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["llm_grader_match"] == 1
+        assert result.metrics["reward_flipped"] == 1
 
     def test_bugged_code_flips_continuous_reward(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -1137,7 +1137,7 @@ class TestLLMGraderTermFlipReward:
         )
         result = term(ctx)
         assert result.value == pytest.approx(0.2)  # flipped: 1.0 * (1.0 - 0.8) = 0.2
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["reward_flipped"] == 1
 
     def test_fallback_soft_match_respects_flip(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -1154,9 +1154,9 @@ class TestLLMGraderTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 0.0  # flipped: match gives no_match reward
-        assert result.metrics["soft_match"] is True
-        assert result.metrics["used_fallback"] is True
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["soft_match"] == 1
+        assert result.metrics["used_fallback"] == 1
+        assert result.metrics["reward_flipped"] == 1
 
     def test_fallback_hard_match_respects_flip(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig(
@@ -1174,6 +1174,6 @@ class TestLLMGraderTermFlipReward:
         )
         result = term(ctx)
         assert result.value == 0.0  # flipped
-        assert result.metrics["hard_match"] is True
-        assert result.metrics["used_fallback"] is True
-        assert result.metrics["reward_flipped"] is True
+        assert result.metrics["hard_match"] == 1
+        assert result.metrics["used_fallback"] == 1
+        assert result.metrics["reward_flipped"] == 1

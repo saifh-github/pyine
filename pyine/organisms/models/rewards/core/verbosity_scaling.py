@@ -210,7 +210,7 @@ class VerbosityScaler:
             metrics["verbosity/pre_scaling_reward"] = aggregated_reward
             metrics["verbosity/post_scaling_reward"] = scaled_total
             if self._config.skip_negative_rewards:
-                metrics["verbosity/skipped_negative"] = skipped
+                metrics["verbosity/skipped_negative"] = int(skipped)
         return scaled_total, scaled_terms, metrics
 
     def apply_to_group(
@@ -300,6 +300,6 @@ class VerbosityScaler:
                 metrics["verbosity/pre_scaling_reward"] = reward
                 metrics["verbosity/post_scaling_reward"] = scaled_total
                 if self._config.skip_negative_rewards:
-                    metrics["verbosity/skipped_negative"] = skipped
+                    metrics["verbosity/skipped_negative"] = int(skipped)
             all_metrics.append(metrics)
         return scaled_totals, scaled_terms_list, all_metrics

@@ -118,7 +118,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         metrics: dict[str, reward_types.MetricValue] = {
             "expected_length": len(eval_data.expected),
             "predicted_length": len(eval_data.predicted),
-            "reward_flipped": flip,
+            "reward_flipped": int(flip),
         }
         llm_score = eval_data.llm_grader_score
         if llm_score is not None:
@@ -152,12 +152,12 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
             TermResult with value based on LLM score.
         """
         metrics["llm_grader_score"] = llm_score
-        metrics["llm_grader_available"] = True
-        metrics["used_fallback"] = False
+        metrics["llm_grader_available"] = 1
+        metrics["used_fallback"] = 0
         if self._config.use_continuous_reward:
             effective_score = (1.0 - llm_score) if flip else llm_score
             value = float(effective_score * self._config.reward_if_match)
-            metrics["llm_grader_match"] = llm_score >= self._config.score_threshold
+            metrics["llm_grader_match"] = int(llm_score >= self._config.score_threshold)
         else:
             is_match = llm_score >= self._config.score_threshold
             value = code_exec_utils.compute_flipped_reward(
@@ -166,7 +166,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                 reward_if_no_match=self._config.reward_if_no_match,
                 flip=flip,
             )
-            metrics["llm_grader_match"] = is_match
+            metrics["llm_grader_match"] = int(is_match)
         return reward_types.TermResult(value=value, metrics=metrics)
 
     def _compute_fallback(
@@ -188,8 +188,8 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
         Raises:
             ValueError: If no fallback is configured.
         """
-        metrics["llm_grader_available"] = False
-        metrics["used_fallback"] = True
+        metrics["llm_grader_available"] = 0
+        metrics["used_fallback"] = 1
         if self._config.fallback_to_soft_match:
             # use pre-computed result if available
             if eval_data.soft_match_result is not None:
@@ -199,7 +199,7 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                         f"got: {type(eval_data.soft_match_result)}"
                     )
                 is_match = eval_data.soft_match_result
-                metrics["used_precomputed"] = True
+                metrics["used_precomputed"] = 1
             else:
                 compare_result = code_exec_utils.compute_soft_match(
                     expected=eval_data.expected,
@@ -207,11 +207,11 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                     options=self._config.fallback_soft_match_options,
                 )
                 is_match = compare_result.equal
-                metrics["used_precomputed"] = False
+                metrics["used_precomputed"] = 0
                 if not is_match and compare_result.reason:
                     metrics["mismatch_reason"] = compare_result.reason[:200]
             metrics["fallback_type"] = "soft"
-            metrics["soft_match"] = is_match
+            metrics["soft_match"] = int(is_match)
         elif self._config.fallback_to_hard_match:
             # use pre-computed result if available
             if eval_data.hard_match_result is not None:
@@ -221,16 +221,16 @@ class LLMGraderTerm(reward_term.BaseRewardTerm):
                         f"got: {type(eval_data.hard_match_result)}"
                     )
                 is_match = eval_data.hard_match_result
-                metrics["used_precomputed"] = True
+                metrics["used_precomputed"] = 1
             else:
                 is_match = code_exec_utils.compute_hard_match(
                     expected=eval_data.expected,
                     predicted=eval_data.predicted,
                     strip_whitespace=self._config.strip_whitespace,
                 )
-                metrics["used_precomputed"] = False
+                metrics["used_precomputed"] = 0
             metrics["fallback_type"] = "hard"
-            metrics["hard_match"] = is_match
+            metrics["hard_match"] = int(is_match)
         else:
             raise ValueError(
                 "LLMGraderTerm: LLM grader score unavailable and no fallback configured. "

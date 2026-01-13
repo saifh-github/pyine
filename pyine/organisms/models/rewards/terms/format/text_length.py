@@ -235,7 +235,7 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
                     )
                 if component.missing_text_policy == MissingTextPolicy.SKIP:
                     if component.emit_metrics:
-                        metrics[f"{component.name}/is_missing"] = True
+                        metrics[f"{component.name}/is_missing"] = 1
                     continue
                 if component.missing_text_policy == MissingTextPolicy.EMPTY:
                     raw_text = ""
@@ -259,7 +259,7 @@ class TextLengthTerm(reward_term.BaseRewardTerm):
             )
             reward = float(component.weight) * float(reward)
             if component.emit_metrics:
-                metrics[f"{component.name}/is_missing"] = False
+                metrics[f"{component.name}/is_missing"] = 0
                 metrics[f"{component.name}/length"] = int(length)
                 metrics[f"{component.name}/length_with_offset"] = int(length_with_offset)
                 metrics[f"{component.name}/reward"] = float(reward)
