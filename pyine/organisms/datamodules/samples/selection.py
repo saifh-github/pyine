@@ -249,12 +249,6 @@ def select_samples_from_trace_families(
                 got_selection = True
             if not got_selection:
                 failed_selections += 1
-                # warn if fallback was requested but parent trace is missing (possibly filtered out)
-                if selection_config.fallback_to_orig and parent_id not in trace_data.trace_metadata_lut:
-                    logger.debug(
-                        f"parent trace {parent_id} not in metadata (possibly filtered); "
-                        f"cannot fallback to original for family with {len(family_trace_data)} augmented traces"
-                    )
 
     return SampleSelectionResults(
         orig_trace_data=trace_data,
