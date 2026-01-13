@@ -971,7 +971,7 @@ class RewardManager:
         if self._config.parsing and self._config.parsing.capture_diagnostics:
             metrics["parsing/is_malformed"] = int(parsed.fields.get("is_malformed", "false") == "true")
         if reasoning_enabled:
-            has_reasoning = parsed.reasoning is not None
+            has_reasoning = bool(parsed.reasoning)  # treat empty string as missing
             metrics["parsing/has_reasoning"] = int(has_reasoning)
             if has_reasoning:
                 metrics["parsing/reasoning_length_chars"] = len(parsed.reasoning)  # type: ignore[arg-type]
@@ -980,7 +980,7 @@ class RewardManager:
                     if reasoning_tokens is not None:
                         metrics["parsing/reasoning_length_tokens"] = reasoning_tokens
         if answer_enabled:
-            has_answer = parsed.final_answer is not None
+            has_answer = bool(parsed.final_answer)  # treat empty string as missing
             metrics["parsing/has_answer"] = int(has_answer)
             if has_answer:
                 metrics["parsing/answer_length_chars"] = len(parsed.final_answer)  # type: ignore[arg-type]

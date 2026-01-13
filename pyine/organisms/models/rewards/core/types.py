@@ -533,8 +533,8 @@ class ParsingStatsAccumulator:
             categories: List of categories for this sample (if category extraction enabled).
         """
         output_len_chars = len(parsed.raw)
-        has_reasoning = parsed.reasoning is not None
-        has_answer = parsed.final_answer is not None
+        has_reasoning = bool(parsed.reasoning)  # treat empty string as missing
+        has_answer = bool(parsed.final_answer)  # treat empty string as missing
         is_malformed = parsed.fields.get("is_malformed", "false") == "true"
         reasoning_len_chars = len(parsed.reasoning) if has_reasoning else None  # type: ignore[arg-type]
         answer_len_chars = len(parsed.final_answer) if has_answer else None  # type: ignore[arg-type]
