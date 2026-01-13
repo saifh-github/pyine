@@ -98,6 +98,7 @@ class TagsOutputParser:
 
         if want_reasoning:
             if self._config.reasoning_from_outside_final and final_selected_open_start is not None:
+                # found final tags, extract text around them
                 prefix = raw[:final_selected_open_start]
                 suffix = raw[final_selected_close_end:] if final_selected_close_end is not None else ""
                 # combine text before and after final block (separated by newline if both non-empty)
@@ -131,7 +132,9 @@ class TagsOutputParser:
                     reasoning_result, policy=self._config.multi_tag_policy
                 )
                 if reasoning_selection:
-                    reasoning = reasoning_selection[0].strip() or None  # empty string -> None
+                    reasoning = reasoning_selection[0].strip()
+                elif want_reasoning:
+                    reasoning = ""
                 if self._config.capture_diagnostics:
                     fields.update(self._format_diagnostics(reasoning_result, raw))
 
