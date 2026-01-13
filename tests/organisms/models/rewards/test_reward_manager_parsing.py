@@ -325,8 +325,8 @@ class TestParsingStatsLogging:
         assert "parsing/output_length_chars" in metrics
         assert "parsing/has_reasoning" in metrics
         assert "parsing/has_answer" in metrics
-        assert metrics["parsing/has_reasoning"] is True
-        assert metrics["parsing/has_answer"] is True
+        assert metrics["parsing/has_reasoning"]
+        assert metrics["parsing/has_answer"]
 
     def test_per_sample_parsing_metrics_respect_log_every_n_examples(self) -> None:
         """Verify per-sample metrics follow log_every_n_examples frequency."""
@@ -439,13 +439,13 @@ class TestParsingStatsIntegration:
         assert "parsing/output_length_chars" in sample1_metrics
         assert "parsing/has_reasoning" in sample1_metrics
         assert "parsing/has_answer" in sample1_metrics
-        assert sample1_metrics["parsing/has_reasoning"] is True
-        assert sample1_metrics["parsing/has_answer"] is True
+        assert sample1_metrics["parsing/has_reasoning"]
+        assert sample1_metrics["parsing/has_answer"]
         sample2_metrics = logger_obj.samples[1]["reward_metrics"]
-        assert sample2_metrics["parsing/has_reasoning"] is False
-        assert sample2_metrics["parsing/has_answer"] is True
+        assert not sample2_metrics["parsing/has_reasoning"]
+        assert sample2_metrics["parsing/has_answer"]
         sample3_metrics = logger_obj.samples[2]["reward_metrics"]
-        assert sample3_metrics["parsing/has_answer"] is False
+        assert not sample3_metrics["parsing/has_answer"]
         # verify run-level parsing metrics before flush
         parsing_metrics = manager.get_parsing_metrics()
         assert parsing_metrics["sample_count"] == 3.0
