@@ -44,7 +44,7 @@ Convenience imports for common use cases:
         print(f"{term_info.canonical_type}: {term_info.aliases}")
 
     # TRL integration
-    adapter = rewards.TRLRewardAdapter(manager, prompt_key="prompt")
+    adapter = rewards.TRLRewardAdapter(manager)
     # use with GRPOTrainer: trainer = GRPOTrainer(..., reward_funcs=[adapter])
     ```
 """

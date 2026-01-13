@@ -7,14 +7,16 @@ signature to our SampleContext-based reward computation.
 TRL reward function signature (as used by GRPOTrainer):
     ```python
     def reward_fn(
+        prompts: list[str] | list[list[dict[str, str]]],
         completions: list[list[dict[str, str]]],
         **kwargs,
     ) -> list[float | None]: ...
     ```
 
 Where:
+- `prompts` is a list of prompts (strings for standard format, message lists for conversational);
 - `completions[i]` is a list of messages (dicts with "role" and "content" keys) for sample `i`;
-- `kwargs` contains batch-level data (e.g., prompts, solutions, any extra columns from the dataset);
+- `kwargs` contains other dataset columns (e.g., sample_data, ground_truth);
 - the returned output is a list of rewards (or None to skip a sample).
 
 Usage:
@@ -34,7 +36,6 @@ Usage:
     # create a TRL-compatible reward adapter
     adapter = rewards_trl.TRLRewardAdapter(
         manager=manager,
-        prompt_key="prompt",
         sample_data_key="sample_data",
     )
 
@@ -124,7 +125,7 @@ class TRLRewardAdapter:
     handling the conversion between TRL's batch-based format and our SampleContext objects.
 
     The adapter can be customized via:
-    - `prompt_key`: the kwarg key containing prompts (list of strings);
+    - `prompt_key`: the kwarg key containing prompts (default "prompts", as passed by TRL);
     - `sample_data_key`: the kwarg key containing SampleData objects;
     - `context_builder`: a custom callable to build SampleContext objects.
 
@@ -132,12 +133,11 @@ class TRLRewardAdapter:
         ```python
         adapter = TRLRewardAdapter(
             manager=reward_manager,
-            prompt_key="prompt",
             sample_data_key="sample_data",
         )
 
-        # use as TRL reward function
-        rewards = adapter(completions, prompt=prompts, sample_data=sample_data_list)
+        # use as TRL reward function (TRL passes prompts automatically)
+        rewards = adapter(completions, prompts=prompts, sample_data=sample_data_list)
         ```
     """
 
@@ -145,7 +145,7 @@ class TRLRewardAdapter:
         self,
         manager: "reward_manager.RewardManager",
         *,
-        prompt_key: str = "prompt",
+        prompt_key: str = "prompts",
         sample_data_key: str = "sample_data",
         context_builder: SampleContextBuilder | None = None,
         assistant_role: str = "assistant",
@@ -157,7 +157,7 @@ class TRLRewardAdapter:
 
         Args:
             manager: The RewardManager instance to use for reward computation.
-            prompt_key: Kwarg key for the list of prompts (default "prompt").
+            prompt_key: Kwarg key for the list of prompts (default "prompts", as passed by TRL).
             sample_data_key: Kwarg key for SampleData objects (default "sample_data").
                 Required unless a custom context_builder is provided.
             context_builder: Optional custom callable to build SampleContext objects.
@@ -281,7 +281,14 @@ class TRLRewardAdapter:
         batch_size: int,
         kwargs: collections.abc.Mapping[str, typing.Any],
     ) -> list[str] | None:
-        """Extract prompts from kwargs."""
+        """Extract prompts from kwargs.
+
+        TRL passes prompts in different formats depending on the dataset:
+        - Standard format: list of strings;
+        - Conversational format: list of message lists (each message is a dict with "role" and "content").
+
+        This method normalizes both formats to a list of strings for logging purposes.
+        """
         prompts: typing.Any = kwargs.get(self._prompt_key)
         if prompts is None:
             return None
@@ -290,10 +297,21 @@ class TRLRewardAdapter:
         prompts = typing.cast("collections.abc.Sequence[typing.Any]", prompts)
         if len(prompts) != batch_size:
             raise ValueError(f"prompts length ({len(prompts)}) != batch size ({batch_size})")
+        result: list[str] = []
         for idx, p in enumerate(prompts):
-            if not isinstance(p, str):
-                raise TypeError(f"expected str for prompt at index {idx}, got {type(p)}")
-        return list(prompts)
+            if isinstance(p, str):
+                result.append(p)
+            elif isinstance(p, (list, tuple)):
+                # conversational format: list of message dicts with "role" and "content"
+                # concatenate message contents for logging
+                parts = []
+                for msg in p:
+                    if isinstance(msg, dict) and "content" in msg:
+                        parts.append(str(msg["content"]))
+                result.append("\n\n".join(parts))
+            else:
+                raise TypeError(f"expected str or list for prompt at index {idx}, got {type(p)}")
+        return result
 
     @staticmethod
     def _fix_sample_data_dict(data: dict[str, typing.Any]) -> dict[str, typing.Any]:

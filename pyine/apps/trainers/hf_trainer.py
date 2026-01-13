@@ -219,7 +219,7 @@ def rl_train(
     )
     reward_adapter = pyine.organisms.models.rewards.trl.TRLRewardAdapter(
         manager=reward_manager,
-        prompt_key="prompt",
+        prompt_key="prompts",  # TRL passes prompts (plural) to reward functions
         sample_data_key="sample_data",
         skip_on_error=True,
     )
