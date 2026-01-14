@@ -293,36 +293,29 @@ def discover_metric_keys(
         "reward/metrics/parsing/",
     )
     parsing_keys = [k for k in all_keys if any(k.startswith(p) for p in parsing_prefixes)]
-    excluded_prefixes = (
-        "reward/",
-        "train/reward/",
-        "eval/reward/",
-        "parsing/",
-        "train/parsing/",
-        "eval/parsing/",
-        "completions/",
-        "_",
+    trl_keys = _list_by_patterns(
+        # TRL metrics: kl, entropy, clip_ratio, completions/, rewards/
+        # note: kl/entropy may be prefixed (train/kl, eval/kl) or bare
+        ["completions/", "rewards/", "clip_ratio", "/kl", "/entropy"],
+        exact=["kl", "entropy", "reward", "reward_std"],
     )
+    step_keys = [k for k in all_keys if k in ["_step", "global_step", "train/global_step"]]
+    # build set of all categorized keys to exclude from "other"
+    categorized_keys = set(
+        reward_total_keys + reward_term_keys + reward_metric_keys + parsing_keys + trl_keys + step_keys
+    )
+    excluded_prefixes = ("completions/", "_")
+    other_keys = [
+        k for k in all_keys if k not in categorized_keys and not any(k.startswith(p) for p in excluded_prefixes)
+    ]
     return {
         "reward_total": sorted(reward_total_keys),
         "reward_terms": sorted(reward_term_keys),
         "reward_metrics": sorted(reward_metric_keys),
         "parsing": sorted(parsing_keys),
-        "trl": sorted(
-            _list_by_patterns(
-                # TRL metrics: kl, entropy, clip_ratio, completions/, rewards/
-                # note: kl/entropy may be prefixed (train/kl, eval/kl) or bare
-                ["completions/", "rewards/", "clip_ratio", "/kl", "/entropy"],
-                exact=["kl", "entropy", "reward", "reward_std"],
-            )
-        ),
-        "step_keys": sorted(k for k in all_keys if k in ["_step", "global_step", "train/global_step"]),
-        "other": sorted(
-            k
-            for k in all_keys
-            if not any(k.startswith(p) for p in excluded_prefixes)
-            and k not in ["kl", "entropy", "reward", "reward_std"]
-        ),
+        "trl": sorted(trl_keys),
+        "step_keys": sorted(step_keys),
+        "other": sorted(other_keys),
     }
 
 
