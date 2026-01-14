@@ -203,7 +203,6 @@ config:
         params:
           reward_if_match: 1.0
           reward_if_no_match: 0.0
-          strip_whitespace: true
 
     # Aggregation configuration
     aggregation:
