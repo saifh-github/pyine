@@ -310,7 +310,9 @@ def discover_metric_keys(
         "parsing": sorted(parsing_keys),
         "trl": sorted(
             _list_by_patterns(
-                ["completions/", "rewards/", "clip_ratio"],
+                # TRL metrics: kl, entropy, clip_ratio, completions/, rewards/
+                # note: kl/entropy may be prefixed (train/kl, eval/kl) or bare
+                ["completions/", "rewards/", "clip_ratio", "/kl", "/entropy"],
                 exact=["kl", "entropy", "reward", "reward_std"],
             )
         ),
