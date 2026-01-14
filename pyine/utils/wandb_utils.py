@@ -1,0 +1,484 @@
+"""Centralized utilities for interacting with Weights & Biases (W&B).
+
+This module provides functions for:
+- Fetching and querying W&B runs
+- Downloading run history and metrics
+- Fetching logged tables with their true step information
+- Discovering available metric keys in a run
+
+These utilities are designed to be lightweight and reusable across notebooks, analysis scripts,
+and other tools that need to interact with W&B data.
+"""
+
+import json
+import pathlib
+import re
+import tempfile
+import typing
+
+import pandas as pd
+import wandb
+import wandb.apis.public
+
+# =============================================================================
+# URL and Run Helpers
+# =============================================================================
+
+
+def parse_wandb_url(url: str) -> tuple[str, str, str]:
+    """Parse a W&B URL to extract entity, project, and run_id.
+
+    Handles URLs in the format: https://wandb.ai/entity/project/runs/run_id
+
+    Args:
+        url: The W&B run URL.
+
+    Returns:
+        Tuple of (entity, project, run_id).
+
+    Raises:
+        ValueError: If the URL format is not recognized.
+
+    Example:
+        >>> entity, project, run_id = parse_wandb_url("https://wandb.ai/my-team/my-project/runs/abc123")
+        >>> print(f"{entity}/{project}/{run_id}")
+        my-team/my-project/abc123
+    """
+    pattern = r"wandb\.ai/([^/]+)/([^/]+)/runs/([^/?]+)"
+    match = re.search(pattern, url)
+    if not match:
+        raise ValueError(f"could not parse wandb URL: {url}")
+    return match.group(1), match.group(2), match.group(3)
+
+
+@typing.no_type_check  # wandb has poor typing
+def get_wandb_run(
+    run_url: str = "",
+    run_id: str = "",
+    project: str = "",
+    entity: str | None = None,
+    timeout: int = 60,
+) -> wandb.apis.public.Run:
+    """Fetch a W&B run by URL or ID.
+
+    Provide either `run_url` (which will be parsed to extract entity/project/run_id) or provide
+    `run_id` along with `project` (and optionally `entity`).
+
+    Args:
+        run_url: Full W&B run URL (e.g., "https://wandb.ai/entity/project/runs/abc123").
+        run_id: Run ID (e.g., "abc123"). Required if run_url is not provided.
+        project: W&B project name. Used when run_url is not provided.
+        entity: W&B entity (team or user). Optional.
+        timeout: Timeout in seconds for W&B API requests. Default is 60.
+
+    Returns:
+        The wandb Run object.
+
+    Raises:
+        ValueError: If neither run_url nor run_id is provided.
+
+    Example:
+        >>> run = get_wandb_run(run_url="https://wandb.ai/my-team/my-project/runs/abc123")
+        >>> print(f"Run: {run.name}")
+    """
+    api = wandb.Api(timeout=timeout)
+    if run_url:
+        entity, project, run_id = parse_wandb_url(run_url)
+    if not run_id:
+        raise ValueError("must provide either run_url or run_id")
+    path = f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
+    return api.run(path)
+
+
+@typing.no_type_check  # wandb has poor typing
+def fetch_runs(
+    project: str,
+    entity: str | None = None,
+    filters: dict[str, typing.Any] | None = None,
+    order: str = "-created_at",
+    per_page: int = 50,
+    timeout: int = 120,
+) -> list[wandb.apis.public.Run]:
+    """Fetch runs from a W&B project matching the given filters.
+
+    Args:
+        project: The W&B project name.
+        entity: The W&B entity (team or user). If None, uses the default entity.
+        filters: Optional filters dict (e.g., {"config.model_name": "gpt-4o"}).
+        order: Sort order for runs. Use "-field" for descending, "+field" or "field" for
+            ascending. Common fields: "created_at", "updated_at", "name".
+            Default is "-created_at" (newest first).
+        per_page: Number of runs to fetch per page.
+        timeout: Timeout in seconds for W&B API requests. Default is 120.
+
+    Returns:
+        List of wandb Run objects, sorted according to `order`.
+
+    Example:
+        >>> runs = fetch_runs("my-project", filters={"state": "finished"})
+        >>> print(f"Found {len(runs)} finished runs")
+    """
+    api = wandb.Api(timeout=timeout)
+    path = f"{entity}/{project}" if entity else project
+    return list(api.runs(path=path, filters=filters, order=order, per_page=per_page))
+
+
+# =============================================================================
+# History and Metrics Helpers
+# =============================================================================
+
+
+def resolve_step_key(df: pd.DataFrame) -> str:
+    """Find the best step key in a W&B history DataFrame.
+
+    Prefers explicit global_step variants over W&B's internal _step.
+
+    Args:
+        df: DataFrame from W&B history.
+
+    Returns:
+        The name of the step column to use.
+
+    Raises:
+        ValueError: If no step key is found.
+
+    Example:
+        >>> history_df = run.history(samples=100)
+        >>> step_key = resolve_step_key(history_df)
+        >>> print(f"Using step key: {step_key}")
+    """
+    for key in ["global_step", "train/global_step", "_step"]:
+        if key in df.columns:
+            return key
+    raise ValueError("no step key found in history DataFrame")
+
+
+def resolve_time_key(df: pd.DataFrame) -> str | None:
+    """Find a wall-clock time key in a W&B history DataFrame.
+
+    Args:
+        df: DataFrame from W&B history.
+
+    Returns:
+        The name of the time column, or None if not found.
+
+    Example:
+        >>> history_df = run.history(samples=100)
+        >>> time_key = resolve_time_key(history_df)
+        >>> if time_key:
+        ...     print(f"Time key available: {time_key}")
+    """
+    for key in ["_timestamp", "_runtime"]:
+        if key in df.columns:
+            return key
+    return None
+
+
+@typing.no_type_check  # wandb has poor typing
+def fetch_history_df(
+    run: wandb.apis.public.Run,
+    keys: list[str] | None = None,
+    cache_path: str | pathlib.Path | None = None,
+    samples: int = 500,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """Fetch W&B run history as a DataFrame with optional caching.
+
+    For specific keys, uses `scan_history` for full fidelity (no downsampling), then filters to
+    requested columns. For discovery mode (keys=None), uses `history(samples=N)` which may
+    downsample. W&B internal keys (`_step`, `_timestamp`, `_runtime`) are always included.
+
+    Note:
+        When keys are specified, we fetch all history first then filter columns. This is because
+        W&B's `scan_history(keys=[...])` only returns rows where ALL keys are present, which
+        fails when metrics are logged at different steps/intervals.
+
+    Args:
+        run: The W&B Run object.
+        keys: Specific keys to fetch. If None, fetches all with sampling.
+        cache_path: Optional path to cache results as parquet (useful for large runs).
+        samples: Number of samples when keys=None (discovery mode).
+        verbose: Whether to print progress messages.
+
+    Returns:
+        DataFrame with the run history. Internal keys (`_step`, `_timestamp`, `_runtime`) are
+        always included when available.
+
+    Example:
+        >>> run = get_wandb_run(run_id="abc123", project="my-project")
+        >>> df = fetch_history_df(run, keys=["reward/total"])
+        >>> print(f"Fetched {len(df)} rows")
+    """
+    if cache_path is not None:
+        cache_path = pathlib.Path(cache_path)
+        if cache_path.exists():
+            if verbose:
+                print(f"Loading history from cache: {cache_path}")
+            return pd.read_parquet(cache_path)
+    if keys:
+        if verbose:
+            print(f"Fetching full history with scan_history (will filter to {len(keys)} keys)...")
+        history = list(run.scan_history())
+        df = pd.DataFrame(history)
+        internal_keys = ["_step", "_timestamp", "_runtime"]
+        keys_with_internal = internal_keys + [k for k in keys if k not in internal_keys]
+        existing_keys = [k for k in keys_with_internal if k in df.columns]
+        df = df[existing_keys]
+    else:
+        if verbose:
+            print(f"Fetching sampled history ({samples} samples)...")
+        df = run.history(samples=samples)
+    if cache_path:
+        df.to_parquet(cache_path)
+        if verbose:
+            print(f"Cached history to: {cache_path}")
+    return df
+
+
+@typing.no_type_check  # wandb has poor typing
+def discover_metric_keys(
+    run: wandb.apis.public.Run,
+    samples: int = 10,
+) -> dict[str, list[str]]:
+    """Discover available metric keys in a W&B run, grouped by category.
+
+    Samples a small portion of the run history to discover what metrics are logged.
+
+    Args:
+        run: The W&B Run object.
+        samples: Number of history samples to fetch for discovery.
+
+    Returns:
+        Dict mapping category names to lists of metric keys. Categories include:
+        "reward_total", "reward_terms", "reward_metrics", "parsing", "trl",
+        "step_keys", and "other".
+
+    Example:
+        >>> run = get_wandb_run(run_id="abc123", project="my-project")
+        >>> keys = discover_metric_keys(run)
+        >>> print(f"Found {len(keys['reward_terms'])} reward term keys")
+    """
+    sample_df = run.history(samples=samples)
+    all_keys: list[str] = list(sample_df.columns)
+
+    def _list_by_prefix(prefix: str) -> list[str]:
+        return [k for k in all_keys if k.startswith(prefix)]
+
+    def _list_by_patterns(
+        patterns: list[str],
+        exact: list[str] | None = None,
+    ) -> list[str]:
+        result: list[str] = []
+        for k in all_keys:
+            if any(p in k for p in patterns) or exact and k in exact:
+                result.append(k)
+        return result
+
+    # handle unprefixed, train/-, and eval/-prefixed metrics
+    reward_total_keys = [k for k in all_keys if k in ("reward/total", "train/reward/total", "eval/reward/total")]
+    reward_term_keys = (
+        _list_by_prefix("reward/terms/")
+        + _list_by_prefix("train/reward/terms/")
+        + _list_by_prefix("eval/reward/terms/")
+    )
+    reward_metric_keys = (
+        _list_by_prefix("reward/metrics/")
+        + _list_by_prefix("train/reward/metrics/")
+        + _list_by_prefix("eval/reward/metrics/")
+    )
+    parsing_prefixes = (
+        "parsing/",
+        "train/parsing/",
+        "eval/parsing/",
+        "reward/metrics/parsing/",
+    )
+    parsing_keys = [k for k in all_keys if any(k.startswith(p) for p in parsing_prefixes)]
+    excluded_prefixes = (
+        "reward/",
+        "train/reward/",
+        "eval/reward/",
+        "parsing/",
+        "train/parsing/",
+        "eval/parsing/",
+        "completions/",
+        "_",
+    )
+    return {
+        "reward_total": sorted(reward_total_keys),
+        "reward_terms": sorted(reward_term_keys),
+        "reward_metrics": sorted(reward_metric_keys),
+        "parsing": sorted(parsing_keys),
+        "trl": sorted(
+            _list_by_patterns(
+                ["completions/", "rewards/", "clip_ratio"],
+                exact=["kl", "entropy", "reward", "reward_std"],
+            )
+        ),
+        "step_keys": sorted(k for k in all_keys if k in ["_step", "global_step", "train/global_step"]),
+        "other": sorted(
+            k
+            for k in all_keys
+            if not any(k.startswith(p) for p in excluded_prefixes)
+            and k not in ["kl", "entropy", "reward", "reward_std"]
+        ),
+    }
+
+
+# =============================================================================
+# Table Helpers
+# =============================================================================
+
+
+@typing.no_type_check  # wandb has poor typing
+def _download_file(
+    file: typing.Any,
+    *,
+    root: str | pathlib.Path,
+) -> pathlib.Path:
+    """Download a W&B file and return the local path.
+
+    Properly handles closing the file handle to avoid ResourceWarning.
+    """
+    downloaded = file.download(root=str(root), replace=True)
+    if hasattr(downloaded, "close"):
+        downloaded.close()
+    if isinstance(downloaded, pathlib.Path):
+        return downloaded
+    if hasattr(downloaded, "name"):
+        return pathlib.Path(str(downloaded.name))
+    return pathlib.Path(str(downloaded))
+
+
+@typing.no_type_check  # wandb has poor typing
+def fetch_table(
+    run: wandb.apis.public.Run,
+    table_key: str,
+    *,
+    verbose: bool = False,
+) -> pd.DataFrame | None:
+    """Fetch a W&B table artifact as a DataFrame.
+
+    Tables logged via `wandb.log({key: wandb.Table(...)})` are stored as JSON files in the run's
+    media/table directory. This function finds and parses them.
+
+    Args:
+        run: The W&B Run object.
+        table_key: The key used when logging the table (e.g., "reward/rewards_table").
+        verbose: Whether to print errors.
+
+    Returns:
+        DataFrame with the table data, or None if not found.
+
+    Example:
+        >>> run = get_wandb_run(run_id="abc123", project="my-project")
+        >>> rewards_df = fetch_table(run, "reward/rewards_table")
+        >>> if rewards_df is not None:
+        ...     print(f"Loaded {len(rewards_df)} rows")
+    """
+    try:
+        for file in run.files():
+            file_name = file.name
+            if not file_name.endswith(".table.json"):
+                continue
+            # table files use underscores instead of slashes in the key
+            if table_key.replace("/", "_") not in file_name and table_key not in file_name:
+                continue
+            with tempfile.TemporaryDirectory() as tmpdir:
+                downloaded_path = _download_file(file, root=tmpdir)
+                with open(downloaded_path, encoding="utf-8") as f:
+                    table_data = json.load(f)
+            columns = table_data.get("columns", [])
+            data = table_data.get("data", [])
+            if columns and data:
+                return pd.DataFrame(data=data, columns=columns)
+    except Exception as exc:
+        if verbose:
+            print(f"Error fetching table '{table_key}': {exc}")
+    return None
+
+
+@typing.no_type_check  # wandb has poor typing
+def fetch_tables_with_steps(
+    run: wandb.apis.public.Run,
+    table_key: str,
+    *,
+    verbose: bool = True,
+) -> pd.DataFrame | None:
+    """Fetch W&B tables with their true logged steps from the run history.
+
+    When tables are logged via `wandb.log({key: table}, step=X)`, the step is stored in the
+    history, not in the table data itself. This function scans the history to find all log
+    entries for the given table key and returns a combined DataFrame with a `_logged_step`
+    column indicating the true step at which each table was logged.
+
+    Args:
+        run: The W&B Run object.
+        table_key: The key used when logging the table (e.g., "reward/rewards_table").
+        verbose: Whether to print progress information.
+
+    Returns:
+        DataFrame with combined table data and `_logged_step` column, or None if not found.
+
+    Example:
+        >>> run = get_wandb_run(run_id="abc123", project="my-project")
+        >>> rewards_df = fetch_tables_with_steps(run, "reward/rewards_table")
+        >>> if rewards_df is not None:
+        ...     print(f"Loaded {len(rewards_df)} rows from {rewards_df['_logged_step'].nunique()} steps")
+    """
+    table_entries: list[tuple[int, str]] = []  # (step, artifact_path)
+    if verbose:
+        print(f"Scanning history for '{table_key}' table entries...")
+    for row in run.scan_history(keys=[table_key, "_step"]):
+        table_ref = row.get(table_key)
+        step = row.get("_step")
+        if table_ref is None or step is None:
+            continue
+        if isinstance(table_ref, dict):
+            artifact_path = table_ref.get("path") or table_ref.get("artifact_path")
+            if artifact_path:
+                table_entries.append((step, artifact_path))
+    if not table_entries:
+        if verbose:
+            print(f"No table entries found for '{table_key}' in history")
+        return fetch_table(run, table_key, verbose=verbose)
+    if verbose:
+        print(f"Found {len(table_entries)} table log entries")
+    path_to_step: dict[str, int] = {}
+    for step, path in table_entries:
+        filename = pathlib.Path(path).name
+        path_to_step[filename] = step
+    all_tables: list[pd.DataFrame] = []
+    try:
+        for file in run.files():
+            file_name = file.name
+            if not file_name.endswith(".table.json"):
+                continue
+            key_pattern = table_key.replace("/", "_")
+            if key_pattern not in file_name and table_key not in file_name:
+                continue
+            filename = pathlib.Path(file_name).name
+            logged_step = path_to_step.get(filename)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                downloaded_path = _download_file(file, root=tmpdir)
+                with open(downloaded_path, encoding="utf-8") as f:
+                    table_data = json.load(f)
+            columns = table_data.get("columns", [])
+            data = table_data.get("data", [])
+            if columns and data:
+                df = pd.DataFrame(data=data, columns=columns)
+                df["_logged_step"] = logged_step
+                all_tables.append(df)
+                if verbose:
+                    print(f"  Loaded table from step {logged_step}: {len(df)} rows")
+    except Exception as exc:
+        if verbose:
+            print(f"Error fetching tables for '{table_key}': {exc}")
+        return None
+    if not all_tables:
+        if verbose:
+            print(f"No table files found for '{table_key}'")
+        return None
+    combined = pd.concat(all_tables, ignore_index=True)
+    if verbose:
+        print(f"Combined {len(all_tables)} tables: {len(combined)} total rows")
+    return combined

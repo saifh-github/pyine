@@ -10,9 +10,7 @@ This module provides functions to:
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
 
 import datetime
-import json
 import re
-import tempfile
 import typing
 
 import matplotlib.axes
@@ -30,6 +28,7 @@ from numpy.typing import NDArray
 import pyine.evals.code_exec.utils
 import pyine.evals.constants
 import pyine.utils.code.complexity_metrics
+import pyine.utils.wandb_utils
 
 AGGREGATION_STAT_NAMES = pyine.evals.constants.AGGREGATION_STAT_NAMES
 """Alias for shared aggregation statistic names used in metrics logging."""
@@ -169,29 +168,8 @@ def _get_sample_count_from_summary(summary: EvalRunSummary) -> int | None:
     return None
 
 
-def fetch_runs(
-    project: str,
-    entity: str | None = None,
-    filters: dict[str, typing.Any] | None = None,
-    order: str = "-created_at",
-    per_page: int = 50,
-) -> list[wandb.apis.public.Run]:
-    """Fetches runs from a wandb project matching the given filters.
-
-    Args:
-        project: The wandb project name.
-        entity: The wandb entity (team or user). If None, uses the default entity.
-        filters: Optional filters dict (e.g., {"config.model_name": "gpt-4o"}).
-        order: Sort order for runs. Use "-field" for descending, "+field" or "field" for ascending.
-            Common fields: "created_at", "updated_at", "name". Default is "-created_at" (newest first).
-        per_page: Number of runs to fetch per page.
-
-    Returns:
-        List of wandb Run objects, sorted according to `order`.
-    """
-    api = wandb.Api()
-    path = f"{entity}/{project}" if entity else project
-    return list(api.runs(path=path, filters=filters, order=order, per_page=per_page))
+# re-export from centralized wandb utilities
+fetch_runs = pyine.utils.wandb_utils.fetch_runs
 
 
 def extract_run_metrics(
@@ -406,27 +384,9 @@ def fetch_sample_metrics_table(
     """
     if table_key is None:
         table_key = f"predict/{subset_name}/sample_metrics"
-    # tables logged via wandb.log() are stored as json files in the run's media/table directory
-    # the file path pattern is: media/table/{table_key}_{hash}.table.json
-    try:
-        # look for table files in run's files
-        for file in run.files():
-            file_name = file.name
-            if not file_name.endswith(".table.json"):
-                continue
-            if table_key not in file_name:
-                continue
-            # download and parse the table file
-            with tempfile.TemporaryDirectory() as tmpdir:
-                downloaded = file.download(root=tmpdir, replace=True)
-                with open(downloaded.name, encoding="utf-8") as f:
-                    table_data = json.load(f)
-                columns = table_data.get("columns", [])
-                data = table_data.get("data", [])
-                if columns and data:
-                    return pd.DataFrame(data=data, columns=columns)
-    except (wandb.errors.CommError, ValueError, KeyError, AttributeError, OSError):
-        pass
+    result = pyine.utils.wandb_utils.fetch_table(run, table_key)
+    if result is not None:
+        return result
     # fallback: try to get table reference from run summary
     try:
         summary = run.summary
@@ -964,15 +924,15 @@ def filter_samples_dataframe(
     df: pd.DataFrame,
     code_type: str | None = None,
     predict_type: str | None = None,
-    has_keyword: bool | None = None,
+    has_bias_keyword: bool | None = None,
 ) -> pd.DataFrame:
-    """Filters a samples DataFrame by code_type and/or predict_type.
+    """Filters a samples DataFrame by code_type, predict_type, and/or keyword presence.
 
     Args:
         df: DataFrame with sample data (from eval_result_to_dataframe).
         code_type: Filter to samples with this code_type (e.g., "original").
         predict_type: Filter to samples with this predict_type (e.g., "program_output").
-        has_keyword: Filter to samples with keyword presence (True/False).
+        has_bias_keyword: Filter to samples with bias keyword presence (True/False).
 
     Returns:
         Filtered DataFrame.
@@ -982,8 +942,8 @@ def filter_samples_dataframe(
         mask = mask & (df["code_type"] == code_type)
     if predict_type is not None:
         mask = mask & (df["predict_type"] == predict_type)
-    if has_keyword is not None:
-        mask = mask & (df["has_keyword"] == has_keyword)
+    if has_bias_keyword is not None:
+        mask = mask & (df["has_bias_keyword"] == has_bias_keyword)
     return df[mask].copy()  # type: ignore[reportReturnType]
 
 

@@ -385,6 +385,9 @@ class MockWandBFile:
             self.name = file_path
         return self
 
+    def close(self) -> None:
+        pass  # no-op for mock
+
 
 class MockWandBRunWithFiles(MockWandBRun):
     """Mock wandb Run with file support for testing fetch_sample_metrics_table."""

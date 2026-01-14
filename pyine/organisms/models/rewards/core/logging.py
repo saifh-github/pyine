@@ -134,7 +134,7 @@ class WandBRewardLogger:
         log_tables: bool = False,
         table_key: str | None = None,
         table_flush_every_n_logs: int = 100,
-        table_max_rows: int = 1000,
+        table_max_rows: int = 20,
         step_metric_key: str = "train/global_step",
         log_histograms: bool = False,
         histogram_log_interval: int = 100,
