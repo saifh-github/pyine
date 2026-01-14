@@ -60,9 +60,16 @@ class TagsOutputParser:
         fields: dict[str, str] = {}
         want_final = self._config.enabled_fields in ("both", "final_only")
         want_reasoning = self._config.enabled_fields in ("both", "reasoning_only")
-        need_final_scan_for_reasoning = bool(self._config.reasoning_from_outside_final and want_reasoning)
+        need_final_scan_for_reasoning = bool(
+            want_reasoning
+            and (
+                self._config.reasoning_from_outside_final
+                or self._config.reasoning_from_entire_output_when_no_final_answer
+            )
+        )
         final_selected_open_start: int | None = None
         final_selected_close_end: int | None = None
+        final_block_answer: str | None = None
 
         has_malformed_structure = False
         if want_final or need_final_scan_for_reasoning:
@@ -85,6 +92,7 @@ class TagsOutputParser:
             if final_selection:
                 selected_final, final_idx = final_selection
                 selected_final = selected_final.strip() or None  # empty string -> None
+                final_block_answer = selected_final
                 if want_final:
                     final_answer = selected_final
                 if 0 <= final_idx < len(final_result.block_start_offsets):
@@ -137,6 +145,13 @@ class TagsOutputParser:
                     reasoning = ""
                 if self._config.capture_diagnostics:
                     fields.update(self._format_diagnostics(reasoning_result, raw))
+
+            if self._config.reasoning_from_entire_output_when_no_final_answer:
+                answer_present_for_policy = final_answer is not None if want_final else final_block_answer is not None
+                if not answer_present_for_policy and (reasoning is None or reasoning.strip() == ""):
+                    stripped_raw = raw.strip()
+                    if stripped_raw:
+                        reasoning = stripped_raw
 
         if self._config.capture_diagnostics:
             fields["is_malformed"] = str(has_malformed_structure).lower()

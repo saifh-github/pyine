@@ -164,6 +164,13 @@ class ParsingConfig(reward_types.BaseConfig):
     """Tag name used to extract the final answer when using `mode=\"tags\"`."""
     reasoning_from_outside_final: bool = False
     """If True, set reasoning to all text outside the selected `<final_tag>` block (before and/or after)."""
+    reasoning_from_entire_output_when_no_final_answer: bool = False
+    """If True and no final answer is present, treat the entire model output as reasoning.
+
+    This is useful when the model fails to provide an answer field at all (e.g., no `<final_tag>`
+    block and no `fallback_policy` match). When enabled, and the parser would otherwise produce an
+    empty reasoning string, it will use the full output instead.
+    """
     reasoning_tag: str = "reasoning"
     """Tag name used to extract reasoning when using `mode=\"tags\"`."""
     fallback_policy: typing.Literal["none", "last_line", "entire_output"] = "none"

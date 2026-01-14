@@ -187,6 +187,7 @@ config:
       enabled_fields: both  # parse both reasoning and final answer
       final_tag: final  # look for <final>...</final> tags (as used in the targeted code exec prompt)
       reasoning_from_outside_final: true  # consider any output outside the final answer as reasoning
+      reasoning_from_entire_output_when_no_final_answer: true  # treat full output as reasoning if needed
       fallback_policy: none  # no fallback if tags are missing
       multi_tag_policy: last  # use last occurrence if multiple tags present
       strict: false  # allow partial matches without raising an exception

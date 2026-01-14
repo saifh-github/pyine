@@ -186,3 +186,47 @@ class TestTagsOutputParser:
         parsed = parser.parse("prompt", "<final>a</final>")
         assert parsed.final_answer == "a"
         assert parsed.reasoning == ""
+
+    def test_reasoning_from_entire_output_when_no_final_answer_uses_full_output(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_entire_output_when_no_final_answer=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "Just some output with no tags")
+        assert parsed.final_answer is None
+        assert parsed.reasoning == "Just some output with no tags"
+
+    def test_reasoning_from_entire_output_when_no_final_answer_does_not_override_reasoning_tag(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_entire_output_when_no_final_answer=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "<reasoning>r</reasoning>")
+        assert parsed.final_answer is None
+        assert parsed.reasoning == "r"
+
+    def test_reasoning_from_entire_output_when_no_final_answer_skips_when_answer_present(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="both",
+            reasoning_from_entire_output_when_no_final_answer=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "<final>a</final>")
+        assert parsed.final_answer == "a"
+        assert parsed.reasoning == ""
+
+    def test_reasoning_from_entire_output_when_no_final_answer_respects_reasoning_only_mode(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.ParsingConfig(
+            enabled_fields="reasoning_only",
+            reasoning_from_entire_output_when_no_final_answer=True,
+            fallback_policy="none",
+        )
+        parser = pyine.organisms.models.rewards.core.parser.TagsOutputParser(config)
+        parsed = parser.parse("prompt", "<final>a</final>")
+        assert parsed.final_answer is None
+        assert parsed.reasoning == ""
