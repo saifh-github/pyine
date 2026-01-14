@@ -151,10 +151,17 @@ def test_find_dotenv_file(
     assert fs.find_dotenv_file(start=sub) == proj_env.resolve()
 
     # 4) no .env anywhere: return None
+    # note: this test only works if there's no real .env above tmp_path (e.g. the project's .env)
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.chdir(empty)
-    assert fs.find_dotenv_file(start=empty) is None
+    real_env_above = any((p / ".env").is_file() for p in tmp_path.parents)
+    if real_env_above:
+        # can't test "no .env found" case when running from within a project with .env
+        result = fs.find_dotenv_file(start=empty)
+        assert result is not None  # will find the real project's .env
+    else:
+        assert fs.find_dotenv_file(start=empty) is None
 
 
 def test_get_relative_path_to_root(
