@@ -213,16 +213,19 @@ config:
       clip_term_min: null
       clip_term_max: null
 
-    # Verbosity scaling configuration (penalizes verbose outputs relative to group)
+    # verbosity scaling configuration (penalizes verbose outputs relative to group)
     verbosity_scaling:
       enabled: true
       length_source: parsed_reasoning
-      mode: relative  # compare within group (samples sharing same prompt)
-      temperature: 1.0  # sigmoid steepness (higher = gentler slope)
-      min_factor: 0.1  # floor for scaling factor
-      max_factor: 1.0  # no penalty at or below group mean
+      mode: absolute
+      decay_type: linear
+      threshold_tokens: 0
+      end_tokens: ${config.grpo_config.max_completion_length}
+      temperature: 1.0
+      min_factor: 0.1
+      max_factor: 1.0
       emit_metrics: true
-      skip_negative_rewards: true  # don't scale negative rewards toward 0
+      skip_negative_rewards: true
 
     # Logging configuration (disabled by default, can be enabled for debugging)
     logging:
