@@ -381,6 +381,13 @@ def entrypoint_setup(
         pyine.utils.logging.ensure_distributed_rank_filter_attached()
         logging.captureWarnings(True)
         warnings.simplefilter("default")
+        # silence wandb's internal sentry deprecation warning (from their analytics code)
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*Scope\.user.*deprecated.*",
+            category=DeprecationWarning,
+            module=r"wandb\.analytics\.sentry",
+        )
         if disable_http_logging_info_msgs:
             for pkg_name in ("httpx", "httpcore"):
                 # fix for the 'noisy' HTTP request POST messages in info level logs when using llm providers
