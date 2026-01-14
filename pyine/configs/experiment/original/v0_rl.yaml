@@ -183,18 +183,20 @@ config:
   reward_manager_config:
     # Parsing configuration for extracting final answers from model output
     parsing:
-      mode: tags
-      final_tag: final  # Extract answers from <final>...</final> tags
-      reasoning_tag: reasoning
-      fallback_policy: none  # No fallback if tags are missing
-      multi_tag_policy: last  # Use last tag if multiple are present
-      strict: false
-      capture_diagnostics: true
+      mode: tags  # extract content from XML-style tags
+      enabled_fields: both  # parse both reasoning and final answer
+      final_tag: final  # look for <final>...</final> tags (as used in the targeted code exec prompt)
+      reasoning_from_outside_final: true  # consider any output outside the final answer as reasoning
+      fallback_policy: none  # no fallback if tags are missing
+      multi_tag_policy: last  # use last occurrence if multiple tags present
+      strict: false  # allow partial matches without raising an exception
+      capture_diagnostics: true  # log parsing diagnostics for debugging
+      track_token_lengths: true  # log token counts for generated/parsed outputs
 
     # Reward terms to evaluate
     terms:
-      - name: hard_match
-        type: hard_match  # or "code_exec/hard_match"
+      - name: soft_match
+        type: soft_match  # or "code_exec/soft_match"
         weight: 1.0
         enabled: true
         require_parsed: true  # Requires parsed output
@@ -214,6 +216,7 @@ config:
     # Verbosity scaling configuration (penalizes verbose outputs relative to group)
     verbosity_scaling:
       enabled: true
+      length_source: parsed_reasoning
       mode: relative  # compare within group (samples sharing same prompt)
       temperature: 1.0  # sigmoid steepness (higher = gentler slope)
       min_factor: 0.1  # floor for scaling factor
