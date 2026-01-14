@@ -133,8 +133,9 @@ class WandBRewardLogger:
         step: int | None = None,
         log_tables: bool = False,
         table_key: str | None = None,
-        table_flush_every_n_logs: int = 100,
-        table_max_rows: int = 20,
+        table_sample_every_n_logs: int = 60,
+        table_flush_every_n_logs: int = 800,
+        table_max_rows: int = 1000,
         step_metric_key: str = "train/global_step",
         log_histograms: bool = False,
         histogram_log_interval: int = 100,
@@ -149,7 +150,8 @@ class WandBRewardLogger:
             step: Optional step value logged under `step_metric_key` (not WandB internal step).
             log_tables: Whether to log a W&B table with per-sample reward breakdowns.
             table_key: W&B key for the rewards table (defaults to `<scope_prefix>rewards_table`).
-            table_flush_every_n_logs: Flush the table every N logger calls.
+            table_sample_every_n_logs: Add a sample to the table buffer every N logger calls.
+            table_flush_every_n_logs: Flush the table every N logger calls (fallback trigger).
             table_max_rows: Maximum number of buffered rows before forcing a flush.
             step_metric_key: Key used for the step metric in logged payloads. Defaults to
                 "train/global_step" to align with HuggingFace Trainer's WandbCallback.
@@ -163,6 +165,7 @@ class WandBRewardLogger:
         self._step = step
         self._log_tables = log_tables
         self._table_key = table_key if table_key is not None else f"{self._scope_prefix}rewards_table"
+        self._table_sample_every_n_logs = int(table_sample_every_n_logs)
         self._table_flush_every_n_logs = int(table_flush_every_n_logs)
         self._table_max_rows = int(table_max_rows)
         self._table_log_count = 0
@@ -237,30 +240,33 @@ class WandBRewardLogger:
             self._buffer_reward_value(total, terms)
             if self._histogram_sample_count % self._histogram_log_interval == 0:
                 self._emit_histograms(step=payload_step)
-        # handle table logging
+        # handle table logging (sample gating + flush triggers)
         if self._log_tables:
             self._table_log_count += 1
-            prefixed_terms = self._prefix_payload(dict(terms))
-            prefixed_metrics = self._prefix_payload(dict(metrics))
-            row: dict[str, object] = {
-                "sample_id": sample_id,
-                "step": payload_step,
-                "prompt": prompt,
-                "expected_output": expected_output,
-                "model_output": model_output,
-                "reasoning": reasoning,
-                "final_answer": final_answer,
-                "reward_total": total,
-                "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
-                "reward_terms_raw_json": json.dumps(self._prefix_payload(raw_terms_payload), sort_keys=True)
-                if raw_terms_payload is not None
-                else None,
-                "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
-                "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
-                "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
-                "generation_idx": generation_idx,
-            }
-            self._table_rows.append(row)
+            # only add sample to buffer every N logs (independent of scalar logging frequency)
+            if self._table_log_count % self._table_sample_every_n_logs == 0:
+                prefixed_terms = self._prefix_payload(dict(terms))
+                prefixed_metrics = self._prefix_payload(dict(metrics))
+                row: dict[str, object] = {
+                    "sample_id": sample_id,
+                    "step": payload_step,
+                    "prompt": prompt,
+                    "expected_output": expected_output,
+                    "model_output": model_output,
+                    "reasoning": reasoning,
+                    "final_answer": final_answer,
+                    "reward_total": total,
+                    "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
+                    "reward_terms_raw_json": json.dumps(self._prefix_payload(raw_terms_payload), sort_keys=True)
+                    if raw_terms_payload is not None
+                    else None,
+                    "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
+                    "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
+                    "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
+                    "generation_idx": generation_idx,
+                }
+                self._table_rows.append(row)
+            # flush when buffer is full or periodic fallback trigger
             if (
                 len(self._table_rows) >= self._table_max_rows
                 or self._table_log_count % self._table_flush_every_n_logs == 0
@@ -463,6 +469,7 @@ def make_wandb_reward_logger(
         step=step,
         log_tables=logging_config.log_tables,
         table_key=table_key,
+        table_sample_every_n_logs=int(logging_config.table_sample_every_n_logs),
         table_flush_every_n_logs=int(logging_config.table_flush_every_n_logs),
         table_max_rows=int(logging_config.table_max_rows),
         step_metric_key=logging_config.step_metric_key,

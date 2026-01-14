@@ -241,7 +241,7 @@ class LoggingConfig(reward_types.BaseConfig):
 
     # frequency and scoping
     log_every_n_examples: pydantic.PositiveInt = 1
-    """Log every N examples (frequency gate)."""
+    """Log every N examples (frequency gate for scalar metrics)."""
     scope_prefix: str = "reward/"
     """Prefix for all emitted logging keys (e.g., `reward/`)."""
     wandb_key_prefix: str = ""
@@ -265,8 +265,13 @@ class LoggingConfig(reward_types.BaseConfig):
     # table logging settings
     table_key: str = "reward/rewards_table"
     """W&B key under which the per-sample rewards table is logged."""
-    table_flush_every_n_logs: pydantic.PositiveInt = 100
-    """Flush the rewards table every N logger calls (after frequency gating)."""
+    table_sample_every_n_logs: pydantic.PositiveInt = 60
+    """Add a sample to the table buffer every N logger calls.
+
+    This gates which samples are included in the table, independent of scalar metric logging.
+    """
+    table_flush_every_n_logs: pydantic.PositiveInt = 1000
+    """Flush the rewards table every N logger calls (fallback if table_max_rows not reached)."""
     table_max_rows: pydantic.PositiveInt = 1000
     """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
 

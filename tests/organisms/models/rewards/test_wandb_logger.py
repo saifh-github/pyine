@@ -54,6 +54,7 @@ class TestWandBRewardLogger:
             key_prefix="train/",
             log_tables=True,
             table_key="reward/rewards_table",
+            table_sample_every_n_logs=1,  # sample every log call for test
             table_flush_every_n_logs=1,
         )
         logger.log(
@@ -137,6 +138,7 @@ class TestWandBRewardLogger:
             key_prefix="train/",
             log_tables=True,
             table_key="reward/rewards_table",
+            table_sample_every_n_logs=1,  # sample every log call for test
             table_flush_every_n_logs=1,
         )
         logger.log(

@@ -178,6 +178,7 @@ class TestRewardManagerWandBIntegration:
             scope_prefix="reward/",
             log_every_n_examples=1,
             log_tables=True,
+            table_sample_every_n_logs=1,  # sample every log call for test
             table_flush_every_n_logs=2,  # flush after every 2 samples
         )
         term_spec = reward_configs.RewardTermSpec(
