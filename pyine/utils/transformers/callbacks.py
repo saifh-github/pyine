@@ -355,8 +355,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     - Flush accumulated reward statistics at phase transitions and train end
 
     The prefix switching enables differentiation of reward logs during training vs evaluation:
-    - Training steps: logs to "{base_prefix}{train_prefix}/reward/..."
-    - Evaluation steps: logs to "{base_prefix}{eval_prefix}/reward/..."
+    - Training steps: logs to "{train_prefix}/..."
+    - Evaluation steps: logs to "{eval_prefix}/..."
 
     Example usage:
         ```python
@@ -371,7 +371,6 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         reward_manager: typing.Any,
         *,
         reward_adapter: typing.Any | None = None,
-        base_prefix: str = "",
         train_prefix: str = "train",
         eval_prefix: str = "eval",
         resume_from_checkpoint: str | pathlib.Path | None = None,
@@ -384,7 +383,6 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             reward_adapter: Optional TRLRewardAdapter instance for failure tracking and state
                 persistence. Should have `get_failure_stats`, `reset_failure_stats`, `get_state`,
                 and `load_state` methods.
-            base_prefix: Static prefix prepended to phase prefixes (e.g., from wandb_key_prefix).
             train_prefix: Prefix to use for training phase logs (default: "train").
             eval_prefix: Prefix to use for evaluation phase logs (default: "eval").
             resume_from_checkpoint: Path to checkpoint directory to resume from. When provided,
@@ -405,20 +403,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             assert callable(reward_adapter.load_state)
         self.reward_manager = reward_manager
         self.reward_adapter = reward_adapter
-        self.base_prefix = base_prefix
         self.train_prefix = train_prefix
         self.eval_prefix = eval_prefix
         self.resume_from_checkpoint = pathlib.Path(resume_from_checkpoint) if resume_from_checkpoint else None
         self._in_eval: bool | None = None
         self._saw_eval_prediction_step: bool = False
-
-    def _make_prefix(self, phase: str) -> str:
-        """Combine base_prefix with phase prefix."""
-        if not self.base_prefix:
-            return phase
-        # ensure base_prefix ends with / for clean joining
-        base = self.base_prefix if self.base_prefix.endswith("/") else f"{self.base_prefix}/"
-        return f"{base}{phase}"
 
     def _log_failure_stats(self, step: int | None) -> None:
         """Log failure statistics from reward adapter if available."""
@@ -457,8 +446,9 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         """
         if self._in_eval:
             return
+        self._log_failure_stats(step=step)
         self.reward_manager.flush_stats(step=step)
-        self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
+        self.reward_manager.set_key_prefix(self.eval_prefix)
         self.reward_manager.set_step(None)  # clear step for eval
         self._in_eval = True
         self._saw_eval_prediction_step = False  # reset for new eval phase
@@ -473,7 +463,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Set train prefix and logging step at the start of each training step."""
         if self._in_eval is not False:
-            self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
+            self.reward_manager.set_key_prefix(self.train_prefix)
             self._in_eval = False
         self.reward_manager.set_step(state.global_step)
 
@@ -513,8 +503,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         We only set the prefix (no flush) to ensure subsequent batches log correctly.
         """
         if self._in_eval is not True:
-            # woops... don't call _switch_to_eval(); no flush, just set prefix.
-            self.reward_manager.set_key_prefix(self._make_prefix(self.eval_prefix))
+            # woops... unexpected; don't call _switch_to_eval(); no flush, just set prefix.
+            self.reward_manager.set_key_prefix(self.eval_prefix)
             self._in_eval = True
         self._saw_eval_prediction_step = True  # mark that we processed at least one eval batch
         # clear step for per-sample eval logs; global_step doesn't change during eval, so logging
@@ -554,7 +544,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             self._log_failure_stats(step=state.global_step)
             self.reward_manager.flush_stats(step=state.global_step)
         self._saw_eval_prediction_step = False  # reset for next eval
-        self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
+        self.reward_manager.set_key_prefix(self.train_prefix)
         self._in_eval = False  # evaluation done, switch back right away
 
     @typing.override
@@ -585,7 +575,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                 )
             self._load_reward_state(reward_state_path)
         # 2. always start in train mode (prefix + state)
-        self.reward_manager.set_key_prefix(self._make_prefix(self.train_prefix))
+        self.reward_manager.set_key_prefix(self.train_prefix)
         self._in_eval = False
         # 3. if eval_on_start, transition train→eval properly (flush under train prefix, then switch)
         if getattr(args, "eval_on_start", False):

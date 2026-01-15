@@ -1,7 +1,7 @@
 """Reward logging helpers.
 
-The reward system exposes a small `RewardLogger` protocol. The manager controls logging frequency
-and key scoping; loggers simply emit scalar payloads to their backend.
+The reward system exposes a small `RewardLogger` protocol. The logger controls logging frequency
+via generation_count gating; the manager handles key scoping and orchestration.
 """
 
 import collections.abc
@@ -19,20 +19,57 @@ class InMemoryRewardLogger:
     """RewardLogger implementation for tests and debugging.
 
     Stores structured events in memory instead of writing to an external backend.
+    Supports optional frequency gating for consistency with WandBRewardLogger.
     """
 
-    def __init__(self) -> None:
-        """Create an in-memory logger with empty buffers."""
+    def __init__(
+        self,
+        *,
+        scalar_log_every_n_generations: int = 1,
+        log_tables: bool = False,
+        table_row_every_n_generations: int = 1,
+    ) -> None:
+        """Create an in-memory logger with empty buffers.
+
+        Args:
+            scalar_log_every_n_generations: Record samples every N generations (default 1 = log all).
+            log_tables: Whether to record table row events (default False).
+            table_row_every_n_generations: Record table rows every N generations (default 1 = log all).
+        """
         self.samples: list[dict[str, object]] = []
+        self.table_rows: list[dict[str, object]] = []
         self.runs: list[dict[str, object]] = []
         self.failures: list[dict[str, object]] = []
+        self.batch_stats: list[dict[str, object]] = []
         self._step: int | None = None
         self._key_prefix: str = ""
+        self._scalar_log_every_n_generations = int(scalar_log_every_n_generations)
+        self._log_tables = log_tables
+        self._table_row_every_n_generations = int(table_row_every_n_generations)
+        if self._scalar_log_every_n_generations < 1:
+            raise ValueError("scalar_log_every_n_generations must be >= 1")
+        if self._table_row_every_n_generations < 1:
+            raise ValueError("table_row_every_n_generations must be >= 1")
+
+    def should_log_scalars(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if scalars should be logged for this generation_count."""
+        return generation_count % self._scalar_log_every_n_generations == 0
+
+    def should_add_table_row(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if a table row should be added for this generation_count."""
+        return self._log_tables and generation_count % self._table_row_every_n_generations == 0
 
     def log(
         self,
         sample_id: str,
         *,
+        generation_count: int | None = None,
         total: float | None,
         terms: collections.abc.Mapping[str, float] | None = None,
         metrics: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
@@ -48,9 +85,33 @@ class InMemoryRewardLogger:
         generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        """Record a per-sample logging event in memory."""
+        """Record a per-sample logging event in memory.
+
+        Args:
+            sample_id: Unique identifier for the sample.
+            generation_count: 1-indexed count of generations seen. If None, frequency gating is skipped.
+            total: Total reward value for the sample.
+            terms: Per-term weighted reward values.
+            metrics: Additional metrics emitted by reward terms.
+            raw_terms: Pre-clipping, pre-weighting term values.
+            step: Optional step value.
+            prompt: The input prompt.
+            expected_output: Ground truth output.
+            model_output: Model-generated output.
+            reasoning: Parsed reasoning text.
+            final_answer: Parsed final answer text.
+            categories: Sample categories for grouping.
+            tags: Additional sample tags.
+            generation_idx: Index of this generation within its prompt group.
+            **kwargs: Additional fields to store.
+        """
+        should_emit_scalars = generation_count is None or self.should_log_scalars(generation_count)
+        should_add_row = self._log_tables and (generation_count is None or self.should_add_table_row(generation_count))
+        if not should_emit_scalars and not should_add_row:
+            return
         record: dict[str, object] = {
             "sample_id": sample_id,
+            "generation_count": generation_count,
             "step": step,
             "internal_step": self._step,
             "internal_key_prefix": self._key_prefix,
@@ -68,7 +129,10 @@ class InMemoryRewardLogger:
             "generation_idx": generation_idx,
             **kwargs,
         }
-        self.samples.append(record)
+        if should_emit_scalars:
+            self.samples.append(dict(record))
+        if should_add_row:
+            self.table_rows.append(dict(record))
 
     def set_step(self, step: int | None) -> None:
         """Set a default step value for subsequent logs."""
@@ -117,6 +181,30 @@ class InMemoryRewardLogger:
             }
         )
 
+    def log_batch_stats(
+        self,
+        *,
+        batch_mean: float,
+        batch_std: float,
+        batch_mean_rolling_mean: float,
+        batch_mean_rolling_std: float,
+        batch_std_rolling_mean: float,
+        batch_std_rolling_std: float,
+        step: int | None = None,
+    ) -> None:
+        """Record batch-level reward statistics in memory."""
+        self.batch_stats.append(
+            {
+                "step": step,
+                "batch_mean": batch_mean,
+                "batch_std": batch_std,
+                "batch_mean_rolling_mean": batch_mean_rolling_mean,
+                "batch_mean_rolling_std": batch_mean_rolling_std,
+                "batch_std_rolling_mean": batch_std_rolling_mean,
+                "batch_std_rolling_std": batch_std_rolling_std,
+            }
+        )
+
 
 class WandBRewardLogger:
     """RewardLogger implementation backed by a W&B run.
@@ -128,54 +216,45 @@ class WandBRewardLogger:
         self,
         wandb_run: object,
         *,
-        scope_prefix: str = "reward/",
-        key_prefix: str = "",
         step: int | None = None,
         log_tables: bool = False,
-        table_key: str | None = None,
-        table_sample_every_n_logs: int = 60,
-        table_flush_every_n_logs: int = 800,
         table_max_rows: int = 1000,
         step_metric_key: str = "train/global_step",
-        log_histograms: bool = False,
-        histogram_log_interval: int = 100,
+        scalar_log_every_n_generations: int = 1,
+        table_row_every_n_generations: int = 60,
+        table_flush_every_n_generations: int = 1000,
     ) -> None:
         """Create a WandB-backed logger.
 
         Args:
             wandb_run: A `wandb.Run`-like object that supports `.log(...)`.
-            scope_prefix: Normalized prefix for reward keys (e.g., "reward/"); used to derive
-                total_key and table_key.
-            key_prefix: Optional extra prefix applied to all keys emitted to W&B.
             step: Optional step value logged under `step_metric_key` (not WandB internal step).
-            log_tables: Whether to log a W&B table with per-sample reward breakdowns.
-            table_key: W&B key for the rewards table (defaults to `<scope_prefix>rewards_table`).
-            table_sample_every_n_logs: Add a sample to the table buffer every N logger calls.
-            table_flush_every_n_logs: Flush the table every N logger calls (fallback trigger).
+            log_tables: Whether to log a W&B table with per-generation details.
             table_max_rows: Maximum number of buffered rows before forcing a flush.
             step_metric_key: Key used for the step metric in logged payloads. Defaults to
                 "train/global_step" to align with HuggingFace Trainer's WandbCallback.
-            log_histograms: Whether to log W&B histograms for reward distributions.
-            histogram_log_interval: Number of samples between histogram logs.
+            scalar_log_every_n_generations: Emit scalar metrics every N generations (1-indexed).
+            table_row_every_n_generations: Add a row to the table buffer every N generations (1-indexed).
+            table_flush_every_n_generations: Flush the table buffer every N generations.
         """
         self._wandb_run = wandb_run
-        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
-        self._scope_prefix = parsing_utils.normalize_path_prefix(scope_prefix)
-        self._total_key = f"{self._scope_prefix}total" if self._scope_prefix else "total"
+        self._key_prefix = ""
         self._step = step
         self._log_tables = log_tables
-        self._table_key = table_key if table_key is not None else f"{self._scope_prefix}rewards_table"
-        self._table_sample_every_n_logs = int(table_sample_every_n_logs)
-        self._table_flush_every_n_logs = int(table_flush_every_n_logs)
+        self._table_key = "generation_details"
         self._table_max_rows = int(table_max_rows)
-        self._table_log_count = 0
         self._table_rows: list[dict[str, object]] = []
         self._step_metric_key = step_metric_key
-        self._log_histograms = log_histograms
-        self._histogram_log_interval = int(histogram_log_interval)
-        self._reward_buffer: list[float] = []
-        self._term_buffers: dict[str, list[float]] = {}
-        self._histogram_sample_count = 0
+        self._scalar_log_every_n_generations = int(scalar_log_every_n_generations)
+        self._table_row_every_n_generations = int(table_row_every_n_generations)
+        self._table_flush_every_n_generations = int(table_flush_every_n_generations)
+        self._last_flush_generation_count: int | None = None  # for cooldown logic
+        if self._scalar_log_every_n_generations < 1:
+            raise ValueError("scalar_log_every_n_generations must be >= 1")
+        if self._table_row_every_n_generations < 1:
+            raise ValueError("table_row_every_n_generations must be >= 1")
+        if self._table_flush_every_n_generations < 1:
+            raise ValueError("table_flush_every_n_generations must be >= 1")
 
     def _prefix_key(
         self,
@@ -195,10 +274,37 @@ class WandBRewardLogger:
         """Prefix all keys in a payload dict for W&B emission."""
         return {self._prefix_key(str(key)): value for key, value in payload.items()}
 
+    def should_log_scalars(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if scalars should be logged for this generation_count."""
+        return generation_count % self._scalar_log_every_n_generations == 0
+
+    def should_add_table_row(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if a table row should be added for this generation_count."""
+        return self._log_tables and generation_count % self._table_row_every_n_generations == 0
+
+    def _is_within_flush_cooldown(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if we recently flushed and should skip periodic flush.
+
+        Uses the full flush interval as cooldown to maintain consistent flush spacing.
+        """
+        if self._last_flush_generation_count is None:
+            return False
+        return (generation_count - self._last_flush_generation_count) < self._table_flush_every_n_generations
+
     def log(
         self,
         sample_id: str,
         *,
+        generation_count: int | None = None,
         total: float | None,
         terms: collections.abc.Mapping[str, float] | None = None,
         metrics: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
@@ -214,103 +320,141 @@ class WandBRewardLogger:
         generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        """Log a per-sample reward payload to W&B."""
+        """Log a per-sample reward payload to W&B.
+
+        Args:
+            sample_id: Unique identifier for the sample.
+            generation_count: 1-indexed count of generations seen so far. If None, frequency gating
+                is skipped (always logs). Useful for tests that call log() directly.
+            total: Total reward value for the sample.
+            terms: Per-term weighted reward values.
+            metrics: Additional metrics emitted by reward terms.
+            raw_terms: Pre-clipping, pre-weighting term values.
+            step: Optional step value (overrides logger's default step).
+            prompt: The input prompt.
+            expected_output: Ground truth output.
+            model_output: Model-generated output.
+            reasoning: Parsed reasoning text.
+            final_answer: Parsed final answer text.
+            categories: Sample categories for grouping.
+            tags: Additional sample tags.
+            generation_idx: Index of this generation within its prompt group (0..k-1).
+            **kwargs: Absorbed for forward compatibility.
+        """
         del kwargs  # absorb any future additions for forward compatibility
+        # determine which outputs to emit based on frequency gating
+        should_emit_scalars = generation_count is None or self.should_log_scalars(generation_count)
+        should_add_row = self._log_tables and (generation_count is None or self.should_add_table_row(generation_count))
+        if not should_emit_scalars and not should_add_row:
+            # allow periodic flush even when this call doesn't emit scalars or add a row
+            if self._log_tables and self._table_rows:
+                is_max_rows_trigger = len(self._table_rows) >= self._table_max_rows
+                is_periodic_trigger = (
+                    generation_count is not None
+                    and generation_count % self._table_flush_every_n_generations == 0
+                    and not self._is_within_flush_cooldown(generation_count)
+                )
+                if is_max_rows_trigger or is_periodic_trigger:
+                    payload_step = self._step if step is None else step
+                    self.flush_tables(step=payload_step)
+                    if generation_count is not None:
+                        self._last_flush_generation_count = generation_count
+            return
         terms = terms or {}
         metrics = metrics or {}
         payload_step = self._step if step is None else step
-        payload: dict[str, reward_types.MetricValue] = {}
-        if total is not None:
-            payload[self._total_key] = float(total)
-        payload.update({k: float(v) for k, v in terms.items()})
-        payload.update(dict(metrics))
-        raw_terms_payload: dict[str, float] | None = None
-        if raw_terms is not None:
-            raw_prefix = f"{self._scope_prefix}raw_terms/" if self._scope_prefix else "raw_terms/"
-            raw_terms_payload = {
-                f"{raw_prefix}{term_name}": float(raw_value) for term_name, raw_value in raw_terms.items()
-            }
-            payload.update(raw_terms_payload)
-        prefixed = self._prefix_payload(payload)
-        if payload_step is not None:
-            prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
-        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
-        # buffer values for histogram computation
-        if self._log_histograms and total is not None:
-            self._buffer_reward_value(total, terms)
-            if self._histogram_sample_count % self._histogram_log_interval == 0:
-                self._emit_histograms(step=payload_step)
-        # handle table logging (sample gating + flush triggers)
-        if self._log_tables:
-            self._table_log_count += 1
-            # only add sample to buffer every N logs (independent of scalar logging frequency)
-            if self._table_log_count % self._table_sample_every_n_logs == 0:
-                prefixed_terms = self._prefix_payload(dict(terms))
-                prefixed_metrics = self._prefix_payload(dict(metrics))
-                row: dict[str, object] = {
-                    "sample_id": sample_id,
-                    "step": payload_step,
-                    "prompt": prompt,
-                    "expected_output": expected_output,
-                    "model_output": model_output,
-                    "reasoning": reasoning,
-                    "final_answer": final_answer,
-                    "reward_total": total,
-                    "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
-                    "reward_terms_raw_json": json.dumps(self._prefix_payload(raw_terms_payload), sort_keys=True)
-                    if raw_terms_payload is not None
-                    else None,
-                    "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
-                    "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
-                    "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
-                    "generation_idx": generation_idx,
+        # build and emit scalar payload (gated)
+        if should_emit_scalars:
+            payload: dict[str, reward_types.MetricValue] = {}
+            if total is not None:
+                payload["reward/total"] = float(total)
+            payload.update({k: float(v) for k, v in terms.items()})
+            payload.update(dict(metrics))
+            if raw_terms is not None:
+                for term_name, raw_value in raw_terms.items():
+                    payload[f"reward/raw_terms/{term_name}"] = float(raw_value)
+            if payload:  # avoid empty wandb.log() calls
+                prefixed = self._prefix_payload(payload)
+                if payload_step is not None:
+                    prefixed[self._step_metric_key] = payload_step
+                self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
+        # build and buffer table row (gated independently)
+        if should_add_row:
+            prefixed_terms = self._prefix_payload(dict(terms))
+            prefixed_metrics = self._prefix_payload(dict(metrics))
+            raw_terms_payload: dict[str, float] | None = None
+            if raw_terms is not None:
+                raw_terms_payload = {
+                    f"reward/raw_terms/{term_name}": float(raw_value) for term_name, raw_value in raw_terms.items()
                 }
-                self._table_rows.append(row)
-            # flush when buffer is full or periodic fallback trigger
-            if (
-                len(self._table_rows) >= self._table_max_rows
-                or self._table_log_count % self._table_flush_every_n_logs == 0
-            ):
+            row: dict[str, object] = {
+                "sample_id": sample_id,
+                "generation_count": generation_count,
+                "step": payload_step,
+                "prompt": prompt,
+                "expected_output": expected_output,
+                "model_output": model_output,
+                "reasoning": reasoning,
+                "final_answer": final_answer,
+                "reward_total": total,
+                "reward_terms_json": json.dumps(prefixed_terms, sort_keys=True),
+                "reward_terms_raw_json": json.dumps(self._prefix_payload(raw_terms_payload), sort_keys=True)
+                if raw_terms_payload is not None
+                else None,
+                "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
+                "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
+                "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
+                "generation_idx": generation_idx,
+            }
+            self._table_rows.append(row)
+        # flush table when buffer is full or periodic fallback trigger (independent of row-add gate)
+        if self._log_tables and self._table_rows:
+            is_max_rows_trigger = len(self._table_rows) >= self._table_max_rows
+            is_periodic_trigger = (
+                generation_count is not None
+                and generation_count % self._table_flush_every_n_generations == 0
+                and not self._is_within_flush_cooldown(generation_count)
+            )
+            if is_max_rows_trigger or is_periodic_trigger:
                 self.flush_tables(step=payload_step)
+                if generation_count is not None:
+                    self._last_flush_generation_count = generation_count
 
-    def _buffer_reward_value(
+    def log_batch_stats(
         self,
-        total: float,
-        terms: collections.abc.Mapping[str, float],
+        *,
+        batch_mean: float,
+        batch_std: float,
+        batch_mean_rolling_mean: float,
+        batch_mean_rolling_std: float,
+        batch_std_rolling_mean: float,
+        batch_std_rolling_std: float,
+        step: int | None = None,
     ) -> None:
-        """Buffer reward values for histogram computation."""
-        self._reward_buffer.append(total)
-        self._histogram_sample_count += 1
-        for term_name, term_value in terms.items():
-            normalized = term_name
-            if self._scope_prefix and normalized.startswith(f"{self._scope_prefix}terms/"):
-                normalized = normalized.removeprefix(f"{self._scope_prefix}terms/")
-            elif normalized.startswith("terms/"):
-                normalized = normalized.removeprefix("terms/")
-            elif "/terms/" in normalized:
-                normalized = normalized.rsplit("/terms/", maxsplit=1)[1]
-            if normalized not in self._term_buffers:
-                self._term_buffers[normalized] = []
-            self._term_buffers[normalized].append(term_value)
+        """Log batch-level reward statistics to W&B.
 
-    def _emit_histograms(
-        self,
-        step: int | None,
-    ) -> None:
-        """Emit W&B histograms for buffered reward values."""
-        if not self._reward_buffer:
-            return
-        payload: dict[str, object] = {}
-        hist_prefix = f"{self._scope_prefix}histograms/" if self._scope_prefix else "histograms/"
-        payload[f"{hist_prefix}total"] = wandb.Histogram(self._reward_buffer)
-        for term_name, term_values in self._term_buffers.items():
-            if term_values:
-                payload[f"{hist_prefix}terms/{term_name}"] = wandb.Histogram(term_values)
-        prefixed = self._prefix_payload(payload)
-        if step is not None:
-            prefixed[self._step_metric_key] = step
+        Args:
+            batch_mean: Mean reward for the current batch.
+            batch_std: Std dev of rewards for the current batch.
+            batch_mean_rolling_mean: Rolling mean of batch means.
+            batch_mean_rolling_std: Rolling std of batch means.
+            batch_std_rolling_mean: Rolling mean of batch std devs.
+            batch_std_rolling_std: Rolling std of batch std devs.
+            step: Optional step value (overrides logger's default step).
+        """
+        payload_step = self._step if step is None else step
+        payload: dict[str, float] = {
+            "reward/batch/mean": batch_mean,
+            "reward/batch/std": batch_std,
+            "reward/batch/mean_rolling/mean": batch_mean_rolling_mean,
+            "reward/batch/mean_rolling/std": batch_mean_rolling_std,
+            "reward/batch/std_rolling/mean": batch_std_rolling_mean,
+            "reward/batch/std_rolling/std": batch_std_rolling_std,
+        }
+        prefixed: dict[str, object] = self._prefix_payload(payload)
+        if payload_step is not None:
+            prefixed[self._step_metric_key] = payload_step
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
-        self._clear_buffers()
 
     def log_run(
         self,
@@ -338,16 +482,6 @@ class WandBRewardLogger:
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
-        if self._log_histograms and self._reward_buffer:
-            self._emit_histograms(step=payload_step)
-        # clear buffers after run-level logging
-        self._clear_buffers()
-
-    def _clear_buffers(self) -> None:
-        """Clear all buffered values after run-level logging."""
-        self._reward_buffer.clear()
-        self._term_buffers.clear()
-        self._histogram_sample_count = 0
 
     def log_failures(
         self,
@@ -396,6 +530,7 @@ class WandBRewardLogger:
             return
         columns = [
             "sample_id",
+            "generation_count",
             "step",
             "prompt",
             "expected_output",
@@ -415,6 +550,7 @@ class WandBRewardLogger:
         for row in self._table_rows:
             row_data: list[object] = [
                 row["sample_id"],
+                row["generation_count"],
                 row["step"],
                 row["prompt"],
                 row["expected_output"],
@@ -443,36 +579,23 @@ def make_wandb_reward_logger(
     *,
     step: int | None = None,
 ) -> WandBRewardLogger:
-    """Create a `WandBRewardLogger` that matches a `LoggingConfig` scope prefix.
+    """Create a `WandBRewardLogger` from a `LoggingConfig`.
 
     Args:
         wandb_run: A `wandb.Run`-like object that supports `.log(...)`.
-        logging_config: Reward logging configuration (notably `scope_prefix` and `wandb_key_prefix`).
+        logging_config: Reward logging configuration.
         step: Optional step value logged under `step_metric_key` (not WandB internal step).
 
     Returns:
-        A WandB-backed reward logger with total logged under `<scope_prefix>/total`.
-
-    Note:
-        If `table_key` matches the logger's default (derived from `scope_prefix`), it is treated as
-        unset so that changing `scope_prefix` automatically updates the table key.
+        A WandB-backed reward logger with total logged under "reward/total".
     """
-    table_key: str | None = logging_config.table_key
-    scope_prefix = parsing_utils.normalize_path_prefix(logging_config.scope_prefix)
-    default_table_key = f"{scope_prefix}rewards_table" if scope_prefix else "rewards_table"
-    if table_key == default_table_key:
-        table_key = None  # let __init__ derive from scope_prefix
     return WandBRewardLogger(
         wandb_run,
-        scope_prefix=logging_config.scope_prefix,
-        key_prefix=logging_config.wandb_key_prefix,
         step=step,
         log_tables=logging_config.log_tables,
-        table_key=table_key,
-        table_sample_every_n_logs=int(logging_config.table_sample_every_n_logs),
-        table_flush_every_n_logs=int(logging_config.table_flush_every_n_logs),
         table_max_rows=int(logging_config.table_max_rows),
         step_metric_key=logging_config.step_metric_key,
-        log_histograms=logging_config.log_histograms,
-        histogram_log_interval=int(logging_config.histogram_log_interval),
+        scalar_log_every_n_generations=int(logging_config.scalar_log_every_n_generations),
+        table_row_every_n_generations=int(logging_config.table_row_every_n_generations),
+        table_flush_every_n_generations=int(logging_config.table_flush_every_n_generations),
     )

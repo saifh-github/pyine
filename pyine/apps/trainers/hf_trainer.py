@@ -255,7 +255,6 @@ def rl_train(
     reward_logging_callback = pyine.utils.transformers.RewardLoggingCallback(
         reward_manager=reward_manager,
         reward_adapter=reward_adapter,
-        base_prefix=config.reward_manager_config.logging.wandb_key_prefix,
         resume_from_checkpoint=resume_artifacts.checkpoint_path if resume_artifacts else None,
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)

@@ -234,8 +234,9 @@ config:
       log_terms: true
       log_metrics: true
       log_tables: true
-      log_every_n_examples: 1
-      scope_prefix: "reward/"
+      scalar_log_every_n_generations: 30  # log scalars every 30 generations
+      table_row_every_n_generations: 60  # add a detailed output table row every 60 generations
+      table_flush_every_n_generations: 1000  # flush table every 1000 generations
       main_process_only: true
       gather_distributed_summaries: true
       barrier_before_finalize: true

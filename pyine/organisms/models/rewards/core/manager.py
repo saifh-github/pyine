@@ -16,7 +16,6 @@ import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.core.verbosity_scaling as verbosity_scaling
 import pyine.utils.distrib
-import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
 import pyine.utils.tokenizers
 
@@ -124,15 +123,18 @@ class RewardManager:
                 raise ValueError(f"failed to instantiate reward term name={spec.name} type={spec.type}") from exc
 
         self._step: int | None = None
-        self._total_stats = stats_utils.RunningStats()
-        self._term_stats: dict[str, stats_utils.RunningStats] = {
+        self._monotonic_generation_count: int = 0  # never resets, used for frequency gating
+        self._reward_total_stats = stats_utils.RunningStats()
+        self._reward_term_stats: dict[str, stats_utils.RunningStats] = {
             spec.name: stats_utils.RunningStats() for spec in config.terms if spec.enabled
         }
+        self._batch_reward_mean_stats = stats_utils.RunningStats()  # rolling stats on batch mean rewards
+        self._batch_reward_std_stats = stats_utils.RunningStats()  # rolling stats on batch std rewards
         category_config = config.logging.category_extraction_config
         self._category_extractor: pyine.evals.utils.SampleCategoryExtractor | None = (
             pyine.evals.utils.SampleCategoryExtractor(category_config) if category_config is not None else None
         )
-        self._category_stats: dict[str, stats_utils.RunningStats] = {}
+        self._reward_category_stats: dict[str, stats_utils.RunningStats] = {}
         self._parsing_stats: reward_types.ParsingStatsAccumulator | None = (
             reward_types.ParsingStatsAccumulator.new() if config.parsing is not None else None
         )
@@ -237,6 +239,7 @@ class RewardManager:
         for term in self._terms_by_name.values():
             term.reset(run_init_ctx)
         self._step = None
+        self._monotonic_generation_count = 0
         self.reset_accumulators()
 
     @property
@@ -287,15 +290,15 @@ class RewardManager:
 
         Keys are bare (e.g., `mean`, `std`) - callers should add appropriate prefixes.
         """
-        if self._total_stats.count == 0:
+        if self._reward_total_stats.count == 0:
             return {}
-        assert self._total_stats.min is not None and self._total_stats.max is not None
+        assert self._reward_total_stats.min is not None and self._reward_total_stats.max is not None
         return {
-            "mean": self._total_stats.mean(),
-            "std": self._total_stats.std(),
-            "min": float(self._total_stats.min),
-            "max": float(self._total_stats.max),
-            "sample_count": float(self._total_stats.count),
+            "mean": self._reward_total_stats.mean(),
+            "std": self._reward_total_stats.std(),
+            "min": float(self._reward_total_stats.min),
+            "max": float(self._reward_total_stats.max),
+            "sample_count": float(self._reward_total_stats.count),
         }
 
     def get_reward_term_metrics(self) -> dict[str, float]:
@@ -304,7 +307,7 @@ class RewardManager:
         Keys are `{term}/mean`, `{term}/std`, etc. - callers should add appropriate prefixes.
         """
         metrics: dict[str, float] = {}
-        for term, stats in sorted(self._term_stats.items()):
+        for term, stats in sorted(self._reward_term_stats.items()):
             if stats.count == 0:
                 continue
             assert stats.min is not None and stats.max is not None
@@ -321,7 +324,7 @@ class RewardManager:
         Keys are `{category}/mean`, etc. - callers should add appropriate prefixes.
         """
         metrics: dict[str, float] = {}
-        for category, stats in sorted(self._category_stats.items()):
+        for category, stats in sorted(self._reward_category_stats.items()):
             if stats.count == 0:
                 continue
             assert stats.min is not None and stats.max is not None
@@ -365,17 +368,63 @@ class RewardManager:
     def reset_accumulators(
         self,
     ) -> None:
-        """Reset all statistics accumulators (reward totals/terms/categories, and parsing).
+        """Reset all statistics accumulators (reward totals/terms/categories, batch, and parsing).
 
         This resets only the running statistics, not term state. Use `reset()` to also reset term
         state for a new run.
         """
-        self._total_stats = stats_utils.RunningStats()
-        for key in self._term_stats:
-            self._term_stats[key] = stats_utils.RunningStats()
-        self._category_stats.clear()
+        self._reward_total_stats = stats_utils.RunningStats()
+        for key in self._reward_term_stats:
+            self._reward_term_stats[key] = stats_utils.RunningStats()
+        self._reward_category_stats.clear()
+        self._batch_reward_mean_stats = stats_utils.RunningStats()
+        self._batch_reward_std_stats = stats_utils.RunningStats()
         if self._parsing_stats is not None:
             self._parsing_stats.reset()
+
+    def _prepare_run_summaries_for_finalize(
+        self,
+    ) -> tuple[reward_types.RunSummaries, bool]:
+        """Compute local run summaries and optionally gather/merge across ranks.
+
+        Returns:
+            Tuple of (summaries, has_stats). `has_stats` indicates whether any local samples were
+            processed (i.e., total reward stats count > 0).
+        """
+        has_stats = self._reward_total_stats.count > 0
+        summaries = self._get_run_summaries() if has_stats else reward_types.RunSummaries()
+        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
+            summaries = self._gather_run_summaries(summaries)
+        return summaries, has_stats
+
+    def _emit_run_summaries(
+        self,
+        summaries: reward_types.RunSummaries,
+        *,
+        step: int | None,
+    ) -> None:
+        """Emit run summaries to the configured logger (assumes logging preconditions checked)."""
+        if self._logger is None:
+            raise ValueError("logging is enabled but no logger is configured")
+        scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
+            self._scope_reward_run_fields(
+                summaries.reward_totals,
+                summaries.reward_term_summaries,
+                summaries.reward_category_summaries,
+            )
+        )
+        scoped_parsing, scoped_parsing_category = self._scope_parsing_fields(
+            summaries.parsing_summaries,
+            summaries.parsing_category_summaries,
+        )
+        self._logger.log_run(
+            reward_totals=scoped_reward_totals,
+            reward_term_summaries=scoped_reward_term_summaries,
+            reward_category_summaries=scoped_reward_category_summaries,
+            parsing_summaries=scoped_parsing,
+            parsing_category_summaries=scoped_parsing_category,
+            step=step,
+        )
 
     def flush_stats(
         self,
@@ -405,16 +454,7 @@ class RewardManager:
         # determine if we should log (check logger availability and config)
         should_log = self._logger is not None and self._config.logging.enabled
         log_step = step if step is not None else self._step
-        has_stats = self._total_stats.count > 0
-        # get summaries if we have stats (needed for gather even if not logging locally)
-        if has_stats:
-            summaries = self._get_run_summaries()
-        else:
-            # create empty summaries for gathering (all ranks must participate)
-            summaries = reward_types.RunSummaries()
-        # gather distributed summaries if configured (all ranks must participate)
-        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
-            summaries = self._gather_run_summaries(summaries)
+        summaries, has_stats = self._prepare_run_summaries_for_finalize()
         # reset accumulators and return early if not logging
         if not should_log or not has_stats:
             self.reset_accumulators()
@@ -423,25 +463,7 @@ class RewardManager:
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             self.reset_accumulators()
             return
-        scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
-            self._scope_reward_run_fields(
-                summaries.reward_totals,
-                summaries.reward_term_summaries,
-                summaries.reward_category_summaries,
-            )
-        )
-        scoped_parsing, scoped_parsing_category = self._scope_parsing_fields(
-            summaries.parsing_summaries,
-            summaries.parsing_category_summaries,
-        )
-        self._logger.log_run(
-            reward_totals=scoped_reward_totals,
-            reward_term_summaries=scoped_reward_term_summaries,
-            reward_category_summaries=scoped_reward_category_summaries,
-            parsing_summaries=scoped_parsing,
-            parsing_category_summaries=scoped_parsing_category,
-            step=log_step,
-        )
+        self._emit_run_summaries(summaries, step=log_step)
         self.reset_accumulators()
 
     def _compute_core(
@@ -601,11 +623,20 @@ class RewardManager:
             # all entries should be filled since we iterate over all trace_ids
             assert all(o is not None for o in outputs_by_idx), "some samples were not processed?"
             outputs = typing.cast("list[reward_types.RewardOutput]", outputs_by_idx)
+        # build per-identifier generation indices (0..k-1 for each prompt's generations)
+        identifier_counts: dict[typing.Hashable, int] = {}
+        generation_indices: list[int] = []
+        for sample_ctx in sample_ctxs:
+            gen_idx = identifier_counts.get(sample_ctx.sample_data.identifier, 0)
+            generation_indices.append(gen_idx)
+            identifier_counts[sample_ctx.sample_data.identifier] = gen_idx + 1
         # set cache, update stats, and then log (in the correct order, important!)
         for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
             self._token_count_cache = caches[idx]
             self._update_running_stats(sample_ctx, output)
-            self._maybe_log_sample(output, sample_ctx, log=log, step=step)
+            self._maybe_log_sample(output, sample_ctx, log=log, step=step, generation_idx=generation_indices[idx])
+        # compute and log batch-level stats
+        self._maybe_log_batch_stats(outputs, log=log, step=step)
         return outputs
 
     def finalize_run(
@@ -639,41 +670,14 @@ class RewardManager:
         # determine if we should log (check logger availability, config, and log flag)
         should_log = log and self._config.logging.enabled and self._logger is not None
         step_to_use = self._step if step is None else step
-        has_stats = self._total_stats.count > 0
-        # get summaries if we have stats (needed for gather even if not logging locally)
-        if has_stats:
-            summaries = self._get_run_summaries()
-        else:
-            # create empty summaries for gathering (all ranks must participate)
-            summaries = reward_types.RunSummaries()
-        # gather distributed summaries if configured (all ranks must participate)
-        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
-            summaries = self._gather_run_summaries(summaries)
+        summaries, has_stats = self._prepare_run_summaries_for_finalize()
         # return early if not logging or no stats
         if not should_log or not has_stats:
             return
         # return early if only main process should log and this is not main
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             return
-        scoped_reward_totals, scoped_reward_term_summaries, scoped_reward_category_summaries = (
-            self._scope_reward_run_fields(
-                summaries.reward_totals,
-                summaries.reward_term_summaries,
-                summaries.reward_category_summaries,
-            )
-        )
-        scoped_parsing, scoped_parsing_category = self._scope_parsing_fields(
-            summaries.parsing_summaries,
-            summaries.parsing_category_summaries,
-        )
-        self._logger.log_run(
-            reward_totals=scoped_reward_totals,
-            reward_term_summaries=scoped_reward_term_summaries,
-            reward_category_summaries=scoped_reward_category_summaries,
-            parsing_summaries=scoped_parsing,
-            parsing_category_summaries=scoped_parsing_category,
-            step=step_to_use,
-        )
+        self._emit_run_summaries(summaries, step=step_to_use)
 
     def _resolve_parser(
         self,
@@ -761,7 +765,7 @@ class RewardManager:
 
         Returns a RunSummaries dataclass with all aggregated metrics.
         """
-        if self._total_stats.count == 0:
+        if self._reward_total_stats.count == 0:
             return reward_types.RunSummaries()
         reward_totals = self.get_reward_total_metrics()
         reward_term_summaries = self.get_reward_term_metrics()
@@ -792,9 +796,9 @@ class RewardManager:
         Returns RunSummaries with merged stats on rank 0, original summaries on other ranks.
         """
         payload: dict[str, typing.Any] = {
-            "total": self._total_stats.as_state(),
-            "terms": {name: stats.as_state() for name, stats in self._term_stats.items()},
-            "categories": {name: stats.as_state() for name, stats in self._category_stats.items()},
+            "total": self._reward_total_stats.as_state(),
+            "terms": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
+            "categories": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
         }
         if self._parsing_stats is not None:
             payload["parsing"] = self._parsing_stats.as_state()
@@ -803,7 +807,7 @@ class RewardManager:
             return summaries
         merged_total = stats_utils.RunningStats()
         merged_terms: dict[str, stats_utils.RunningStats] = {
-            name: stats_utils.RunningStats() for name in self._term_stats
+            name: stats_utils.RunningStats() for name in self._reward_term_stats
         }
         merged_categories: dict[str, stats_utils.RunningStats] = {}
         merged_parsing: reward_types.ParsingStatsAccumulator | None = (
@@ -830,9 +834,9 @@ class RewardManager:
             if merged_parsing is not None and "parsing" in item:
                 parsing_state = typing.cast("dict[str, typing.Any]", item["parsing"])
                 merged_parsing.merge(reward_types.ParsingStatsAccumulator.from_state(parsing_state))
-        self._total_stats = merged_total
-        self._term_stats = merged_terms
-        self._category_stats = merged_categories
+        self._reward_total_stats = merged_total
+        self._reward_term_stats = merged_terms
+        self._reward_category_stats = merged_categories
         if merged_parsing is not None:
             self._parsing_stats = merged_parsing
         return self._get_run_summaries()
@@ -886,18 +890,19 @@ class RewardManager:
         Note: Per-term stats track weighted values (after per-term clipping and weight
         multiplication), not raw term values. This matches what contributes to the total.
         """
+        self._monotonic_generation_count += 1  # increment before stats update (1-indexed)
         total_reward = float(output.total)
-        self._total_stats.update(total_reward)
+        self._reward_total_stats.update(total_reward)
         for term_name, term_reward in output.weighted_terms.items():
-            assert term_name in self._term_stats
-            self._term_stats[term_name].update(float(term_reward))
+            assert term_name in self._reward_term_stats
+            self._reward_term_stats[term_name].update(float(term_reward))
         if self._category_extractor is not None:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
             for category in categories:
-                if category not in self._category_stats:
-                    self._category_stats[category] = stats_utils.RunningStats()
-                self._category_stats[category].update(total_reward)
+                if category not in self._reward_category_stats:
+                    self._reward_category_stats[category] = stats_utils.RunningStats()
+                self._reward_category_stats[category].update(total_reward)
         self._update_parsing_stats(sample_ctx)
 
     def _populate_token_count_cache(
@@ -997,8 +1002,17 @@ class RewardManager:
         *,
         log: bool | None,
         step: int | None,
+        generation_idx: int | None,
     ) -> None:
-        """Log a per-sample event if logging is enabled and the frequency gate passes."""
+        """Log a per-sample event if logging is enabled and the frequency gate passes.
+
+        Args:
+            output: Computed reward output.
+            sample_ctx: Sample context.
+            log: Force logging on/off; when None, uses config default.
+            step: Logging step override.
+            generation_idx: Index of this generation within its prompt group (0..k-1).
+        """
         should_log = self._config.logging.enabled if log is None else log
         if not should_log:
             return
@@ -1006,33 +1020,45 @@ class RewardManager:
             return
         if self._logger is None:
             raise ValueError("logging is enabled but no logger is configured")
-        if self._total_stats.count % int(self._config.logging.log_every_n_examples) != 0:
-            return
+        generation_count = self._monotonic_generation_count
+        # query logger to see if we need to do any work at all
+        will_log_scalars = self._logger.should_log_scalars(generation_count)
+        will_add_row = self._config.logging.log_tables and self._logger.should_add_table_row(generation_count)
+        if not will_log_scalars and not will_add_row:
+            return  # skip all expensive metric/category/parsing extraction
         step_to_use = self._step if step is None else step
         sample_id = sample_ctx.sample_id
-        terms: dict[str, float] = dict(output.weighted_terms) if self._config.logging.log_terms else {}
-        metrics: dict[str, reward_types.MetricValue] = dict(output.metrics) if self._config.logging.log_metrics else {}
-        total_to_log: float | None = float(output.total) if self._config.logging.log_total else None
-        # apply scope prefix to reward terms/metrics first
-        scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
-        # extract categories for table logging and scalar filtering labels
+        # branch extraction by purpose: scalars need terms/metrics, tables need more fields
+        terms: dict[str, float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
+        total_to_log: float | None = None
+        scoped_terms: dict[str, float] = {}
+        scoped_metrics: dict[str, reward_types.MetricValue] = {}
+        if will_log_scalars or will_add_row:
+            terms = dict(output.weighted_terms) if self._config.logging.log_terms else {}
+            metrics = dict(output.metrics) if self._config.logging.log_metrics else {}
+            total_to_log = float(output.total) if self._config.logging.log_total else None
+            scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
+        # extract categories (needed for both scalars and tables)
         categories: list[str] | None = None
-        if self._category_extractor is not None:
+        should_extract_categories = self._category_extractor is not None and (
+            will_add_row or (will_log_scalars and self._config.logging.log_metrics)
+        )
+        if should_extract_categories:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
-        # add parsing metrics after scoping (fixed parsing/ prefix, not scoped)
-        if self._config.logging.log_metrics:
+        # add parsing metrics after scoping (for scalars and/or table rows)
+        if (will_log_scalars or will_add_row) and self._config.logging.log_metrics:
             if self._config.parsing is not None and sample_ctx.parsed is not None:
                 parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
                 scoped_metrics.update(parsing_metrics)
-            # add category labels for filtering (not scoped)
             if categories:
                 for category in categories:
                     scoped_metrics[f"categories/{category}"] = 1
-        # extract reasoning and final_answer from parsed output for table logging
+        # extract expensive table fields only when adding a row
         reasoning: str | None = None
         final_answer: str | None = None
-        if sample_ctx.parsed is not None:
+        if will_add_row and sample_ctx.parsed is not None:
             reasoning = sample_ctx.parsed.reasoning
             final_answer = sample_ctx.parsed.final_answer
         raw_terms: dict[str, float] | None = None
@@ -1044,13 +1070,9 @@ class RewardManager:
             expected_output = sample_ctx.code_exec_eval.expected
         else:
             expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
-        # extract generation_idx from extras if available
-        generation_idx: int | None = None
-        gen_idx_value = sample_ctx.extras.get("generation_idx")
-        if isinstance(gen_idx_value, int):
-            generation_idx = gen_idx_value
         self._logger.log(
             sample_id,
+            generation_count=generation_count,
             total=total_to_log,
             terms=scoped_terms,
             raw_terms=raw_terms,
@@ -1071,13 +1093,10 @@ class RewardManager:
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
     ) -> tuple[dict[str, float], dict[str, reward_types.MetricValue]]:
-        """Apply the configured scope prefix to per-sample reward term/metric keys."""
-        prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
-        if not prefix_norm:
-            return dict(terms), dict(metrics)
+        """Apply the 'reward/' prefix to per-sample reward term/metric keys."""
         return (
-            {f"{prefix_norm}terms/{k}": float(v) for k, v in terms.items()},
-            {f"{prefix_norm}metrics/{k}": v for k, v in metrics.items()},
+            {f"reward/terms/{k}": float(v) for k, v in terms.items()},
+            {f"reward/metrics/{k}": v for k, v in metrics.items()},
         )
 
     def _scope_reward_run_fields(
@@ -1086,14 +1105,11 @@ class RewardManager:
         reward_term_summaries: collections.abc.Mapping[str, float],
         reward_category_summaries: collections.abc.Mapping[str, float],
     ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        """Apply the configured scope prefix to run-level reward summary keys."""
-        prefix_norm = parsing_utils.normalize_path_prefix(self._config.logging.scope_prefix)
-        if not prefix_norm:
-            return dict(reward_totals), dict(reward_term_summaries), dict(reward_category_summaries)
+        """Apply the 'reward/' prefix to run-level reward summary keys."""
         return (
-            {f"{prefix_norm}run/{k}": float(v) for k, v in reward_totals.items()},
-            {f"{prefix_norm}run/terms/{k}": float(v) for k, v in reward_term_summaries.items()},
-            {f"{prefix_norm}run/categories/{k}": float(v) for k, v in reward_category_summaries.items()},
+            {f"reward/run/total/{k}": float(v) for k, v in reward_totals.items()},
+            {f"reward/run/terms/{k}": float(v) for k, v in reward_term_summaries.items()},
+            {f"reward/run/categories/{k}": float(v) for k, v in reward_category_summaries.items()},
         )
 
     def _scope_parsing_fields(
@@ -1101,11 +1117,7 @@ class RewardManager:
         parsing_summaries: dict[str, float] | None,
         parsing_category_summaries: dict[str, float] | None,
     ) -> tuple[dict[str, float] | None, dict[str, float] | None]:
-        """Apply fixed 'parsing/' prefix to parsing summary keys.
-
-        Unlike reward metrics which use the configurable scope_prefix, parsing
-        metrics always use a fixed 'parsing/' prefix for clarity.
-        """
+        """Apply 'parsing/' prefix to parsing summary keys."""
         if parsing_summaries is None and parsing_category_summaries is None:
             return None, None
         scoped_parsing = {f"parsing/{k}": float(v) for k, v in parsing_summaries.items()} if parsing_summaries else None
@@ -1116,6 +1128,64 @@ class RewardManager:
         )
         return scoped_parsing, scoped_parsing_category
 
+    def _maybe_log_batch_stats(
+        self,
+        outputs: collections.abc.Sequence[reward_types.RewardOutput],
+        *,
+        log: bool | None,
+        step: int | None,
+    ) -> None:
+        """Compute and log batch-level reward statistics.
+
+        Computes mean/std of rewards in this batch and updates rolling stats.
+        Logs both current batch stats and rolling aggregates.
+
+        Args:
+            outputs: Reward outputs for all samples in the batch.
+            log: Force logging on/off; when None, uses config default.
+            step: Logging step override.
+        """
+        should_log = self._config.logging.enabled if log is None else log
+        if not should_log:
+            return
+        should_gather = self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed()
+        # compute batch stats (use population std to match RunningStats convention)
+        batch_stats = stats_utils.RunningStats()
+        for output in outputs:
+            batch_stats.update(float(output.total))
+        if should_gather:
+            # all ranks must participate in the gather to avoid deadlock, even when main_process_only=True
+            gathered = pyine.utils.distrib.all_gather_objects(batch_stats.as_state())
+            if not pyine.utils.distrib.is_main_process():
+                return
+            merged = stats_utils.RunningStats()
+            for item in gathered:
+                state = typing.cast("collections.abc.Mapping[str, int | float]", item)
+                merged.merge(stats_utils.RunningStats.from_state(state))
+            batch_stats = merged
+        else:
+            if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
+                return
+        if batch_stats.count == 0:
+            return
+        batch_mean = batch_stats.mean()
+        batch_std = batch_stats.std()
+        if self._logger is None:
+            raise ValueError("logging is enabled but no logger is configured")
+        # update rolling stats
+        self._batch_reward_mean_stats.update(batch_mean)
+        self._batch_reward_std_stats.update(batch_std)
+        step_to_use = self._step if step is None else step
+        self._logger.log_batch_stats(
+            batch_mean=batch_mean,
+            batch_std=batch_std,
+            batch_mean_rolling_mean=self._batch_reward_mean_stats.mean(),
+            batch_mean_rolling_std=self._batch_reward_mean_stats.std(),
+            batch_std_rolling_mean=self._batch_reward_std_stats.mean(),
+            batch_std_rolling_std=self._batch_reward_std_stats.std(),
+            step=step_to_use,
+        )
+
     def get_state(
         self,
     ) -> dict[str, typing.Any]:
@@ -1123,17 +1193,23 @@ class RewardManager:
 
         Returns:
             Dictionary containing:
-            - total_stats: serialized RunningStats for total rewards;
-            - term_stats: dict of serialized RunningStats per term;
-            - category_stats: dict of serialized RunningStats per category;
+            - reward_total_stats: serialized RunningStats for total rewards;
+            - reward_term_stats: dict of serialized RunningStats per term;
+            - reward_category_stats: dict of serialized RunningStats per category;
             - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled);
-            - step: current step counter (or None).
+            - step: current step counter (or None);
+            - monotonic_generation_count: 1-indexed generation counter used for logging frequency gating;
+            - batch_reward_mean_stats: serialized RunningStats for batch means;
+            - batch_reward_std_stats: serialized RunningStats for batch std devs.
         """
         state: dict[str, typing.Any] = {
-            "total_stats": self._total_stats.as_state(),
-            "term_stats": {name: stats.as_state() for name, stats in self._term_stats.items()},
-            "category_stats": {name: stats.as_state() for name, stats in self._category_stats.items()},
+            "reward_total_stats": self._reward_total_stats.as_state(),
+            "reward_term_stats": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
+            "reward_category_stats": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
             "step": self._step,
+            "monotonic_generation_count": self._monotonic_generation_count,
+            "batch_reward_mean_stats": self._batch_reward_mean_stats.as_state(),
+            "batch_reward_std_stats": self._batch_reward_std_stats.as_state(),
         }
         if self._parsing_stats is not None:
             state["parsing_stats"] = self._parsing_stats.as_state()
@@ -1146,21 +1222,25 @@ class RewardManager:
         """Restore state from checkpoint.
 
         Args:
-            state: Dictionary with keys: total_stats, term_stats, category_stats, step,
+            state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
+                step, monotonic_generation_count, batch_reward_mean_stats, batch_reward_std_stats,
                 and optionally parsing_stats.
 
         Raises:
             KeyError: If required keys are missing from state.
         """
-        self._total_stats = stats_utils.RunningStats.from_state(state["total_stats"])
-        for name, term_state in state["term_stats"].items():
-            if name not in self._term_stats:
+        self._reward_total_stats = stats_utils.RunningStats.from_state(state["reward_total_stats"])
+        for name, term_state in state["reward_term_stats"].items():
+            if name not in self._reward_term_stats:
                 raise KeyError(f"term '{name}' in checkpoint state not found in current config")
-            self._term_stats[name] = stats_utils.RunningStats.from_state(term_state)
-        self._category_stats.clear()
-        for name, cat_state in state["category_stats"].items():
-            self._category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
+            self._reward_term_stats[name] = stats_utils.RunningStats.from_state(term_state)
+        self._reward_category_stats.clear()
+        for name, cat_state in state["reward_category_stats"].items():
+            self._reward_category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
         self._step = state["step"]
+        self._monotonic_generation_count = int(state["monotonic_generation_count"])
+        self._batch_reward_mean_stats = stats_utils.RunningStats.from_state(state["batch_reward_mean_stats"])
+        self._batch_reward_std_stats = stats_utils.RunningStats.from_state(state["batch_reward_std_stats"])
         # restore parsing stats if present and parsing is enabled
         if self._parsing_stats is not None and "parsing_stats" in state:
             self._parsing_stats = reward_types.ParsingStatsAccumulator.from_state(state["parsing_stats"])

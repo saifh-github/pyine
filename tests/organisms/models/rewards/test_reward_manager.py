@@ -164,7 +164,13 @@ class TestRewardManager:
         assert output.total == 2.0
 
     def test_logging_frequency_and_scoping(self) -> None:
-        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,
+            scalar_log_every_n_generations=2,
+        )
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            scalar_log_every_n_generations=2,
+        )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
@@ -173,11 +179,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
-            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
-                enabled=True,
-                log_every_n_examples=2,
-                scope_prefix="reward",
-            ),
+            logging=logging_config,
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
         sample1 = manager.build_sample_context(
@@ -200,6 +202,193 @@ class TestRewardManager:
         manager.finalize_run()
         assert len(logger_obj.runs) == 1
 
+    def test_generation_idx_is_computed_per_identifier_group(self) -> None:
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                scalar_log_every_n_generations=1,
+                log_tables=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        sample_ctxs = [
+            rewards_conftest.make_sample_context(
+                identifier="prompt_a",
+                model_output="<final>a0</final>",
+                parsed=rewards_conftest.make_parsed_output("<final>a0</final>", final_answer="a0"),
+            ),
+            rewards_conftest.make_sample_context(
+                identifier="prompt_a",
+                model_output="<final>a1</final>",
+                parsed=rewards_conftest.make_parsed_output("<final>a1</final>", final_answer="a1"),
+            ),
+            rewards_conftest.make_sample_context(
+                identifier="prompt_b",
+                model_output="<final>b0</final>",
+                parsed=rewards_conftest.make_parsed_output("<final>b0</final>", final_answer="b0"),
+            ),
+            rewards_conftest.make_sample_context(
+                identifier="prompt_a",
+                model_output="<final>a2</final>",
+                parsed=rewards_conftest.make_parsed_output("<final>a2</final>", final_answer="a2"),
+            ),
+        ]
+        manager.compute_batch(sample_ctxs)
+        assert [e["generation_idx"] for e in logger_obj.samples] == [0, 1, 0, 2]
+
+    def test_batch_stats_are_computed_and_logged(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _SampleIdSuffixAsFloatTerm()
+
+        registry.register_term("test_sample_id_suffix_for_batch_stats", factory)
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="id",
+                    type="test_sample_id_suffix_for_batch_stats",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                scalar_log_every_n_generations=1,
+                log_tables=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            config,
+            logger=logger_obj,
+            registry=registry,
+        )
+        manager.set_step(10)
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s1"),
+                rewards_conftest.make_sample_context(identifier="s2"),
+            ]
+        )
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s3"),
+                rewards_conftest.make_sample_context(identifier="s4"),
+            ]
+        )
+        assert len(logger_obj.batch_stats) == 2
+        first = logger_obj.batch_stats[0]
+        assert first["step"] == 10
+        assert first["batch_mean"] == pytest.approx(1.5)
+        assert first["batch_std"] == pytest.approx(0.5)
+        assert first["batch_mean_rolling_mean"] == pytest.approx(1.5)
+        assert first["batch_mean_rolling_std"] == pytest.approx(0.0)
+        assert first["batch_std_rolling_mean"] == pytest.approx(0.5)
+        assert first["batch_std_rolling_std"] == pytest.approx(0.0)
+
+        second = logger_obj.batch_stats[1]
+        assert second["step"] == 10
+        assert second["batch_mean"] == pytest.approx(3.5)
+        assert second["batch_std"] == pytest.approx(0.5)
+        assert second["batch_mean_rolling_mean"] == pytest.approx(2.5)
+        assert second["batch_mean_rolling_std"] == pytest.approx(1.0)
+        assert second["batch_std_rolling_mean"] == pytest.approx(0.5)
+        assert second["batch_std_rolling_std"] == pytest.approx(0.0)
+
+    def test_state_includes_monotonic_and_batch_stats(self) -> None:
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec
+            del parser
+            return _SampleIdSuffixAsFloatTerm()
+
+        registry.register_term("test_sample_id_suffix_for_state", factory)
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="id",
+                    type="test_sample_id_suffix_for_state",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                scalar_log_every_n_generations=1,
+                log_tables=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            config,
+            logger=logger_obj,
+            registry=registry,
+        )
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s1"),
+                rewards_conftest.make_sample_context(identifier="s2"),
+            ]
+        )
+        state = manager.get_state()
+        assert state["monotonic_generation_count"] == 2
+        assert state["batch_reward_mean_stats"]["count"] == 1
+        assert state["batch_reward_std_stats"]["count"] == 1
+
+    def test_table_rows_include_reward_breakdown_when_scalars_gated_off(self) -> None:
+        logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,
+            scalar_log_every_n_generations=9999,  # scalars should be skipped
+            log_tables=True,
+            table_row_every_n_generations=1,  # row should be added for the sample
+        )
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            scalar_log_every_n_generations=9999,
+            log_tables=True,
+            table_row_every_n_generations=1,
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=logging_config,
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        manager.compute(ctx)
+        assert logger_obj.samples == []
+        assert len(logger_obj.table_rows) == 1
+        row = logger_obj.table_rows[0]
+        assert row["reward_total"] == pytest.approx(1.0)
+        terms = row["reward_terms"]
+        assert isinstance(terms, dict)
+        assert "reward/terms/parseable" in terms
+
     def test_step_is_propagated_to_logger(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -212,8 +401,7 @@ class TestRewardManager:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                log_every_n_examples=1,
-                scope_prefix="reward",
+                scalar_log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -430,8 +618,7 @@ class TestRewardManager:
             terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="test_metrics")],
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                log_every_n_examples=1,
-                scope_prefix="",
+                scalar_log_every_n_generations=1,
                 log_total=False,
                 log_terms=False,
                 log_metrics=False,
@@ -457,8 +644,7 @@ class TestRewardManager:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                log_every_n_examples=9999,
-                scope_prefix="reward",
+                scalar_log_every_n_generations=9999,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -475,9 +661,9 @@ class TestRewardManager:
         reward_term_summaries = run_entry["reward_term_summaries"]
         assert isinstance(reward_totals, dict)
         assert isinstance(reward_term_summaries, dict)
-        # scoped totals: {scope_prefix}/run/{metric_key}
-        assert "reward/run/mean" in reward_totals
-        # scoped terms: {scope_prefix}/run/terms/{metric_key}
+        # totals: reward/run/total/{metric_key}
+        assert "reward/run/total/mean" in reward_totals
+        # terms: reward/run/terms/{metric_key}
         assert "reward/run/terms/parseable/mean" in reward_term_summaries
 
     def test_invalid_term_factory_signature_raises(self) -> None:
@@ -829,7 +1015,7 @@ class TestCategoryWiseRewardTracking:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                log_every_n_examples=1,
+                scalar_log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)

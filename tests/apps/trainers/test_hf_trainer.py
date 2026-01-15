@@ -1347,7 +1347,6 @@ def test_rl_train_uses_resume_artifacts_correctly(
         logging=types.SimpleNamespace(
             enabled=False,
             main_process_only=True,
-            wandb_key_prefix="reward",
         ),
     )
 

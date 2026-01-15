@@ -132,7 +132,7 @@ def rl_training_config(
         ),
         logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
             enabled=True,  # enable wandb logging for reward metrics
-            log_every_n_examples=1,  # log every sample for testing
+            scalar_log_every_n_generations=1,  # log every sample for testing
             category_extraction_config=pyine.evals.utils.SampleCategoryExtractionConfig(
                 enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
             ),

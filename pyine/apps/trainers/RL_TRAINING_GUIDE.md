@@ -592,7 +592,11 @@ reward_manager_config:
 
   # Logging (optional, enable for reward tracking in WandB)
   logging:
-    enabled: false  # set to true to enable reward aggregate logging
+    enabled: false  # set to true to enable per-sample and run-level reward logging
+    scalar_log_every_n_generations: 30  # per-sample logging frequency (default: 30)
+    table_row_every_n_generations: 60  # add a table row every N generations (default: 60)
+    table_flush_every_n_generations: 1000  # flush table every N generations (default: 1000)
+    table_max_rows: 1000  # flush table when buffer reaches N rows (default: 1000)
     category_extraction_config:  # optional, for category-wise tracking
       enabled_fields: [code_type]  # Track rewards by code_type category
 ```
@@ -606,18 +610,23 @@ training and evaluation phases. Aggregate statistics are logged at phase transit
 - **At eval end**: Eval-phase stats are flushed with `eval/` prefix
 - **At train end**: Any remaining stats are flushed (handles `do_eval=False` case)
 
-Metrics logged include:
+Run-level metrics logged include:
 
-- `{prefix}/reward/mean`, `{prefix}/reward/std`, `{prefix}/reward/min`, `{prefix}/reward/max` - Total reward stats
-- `{prefix}/reward/{term}/mean`, etc. - Per-term reward stats
-- `{prefix}/reward/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
+- `{prefix}/reward/run/total/mean`, `std`, `min`, `max`, `sample_count` - Total reward stats
+- `{prefix}/reward/run/terms/{term}/mean`, etc. - Per-term reward stats
+- `{prefix}/reward/run/categories/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
 
-Where `{prefix}` is `train` or `eval`. If `wandb_key_prefix` is set in the logging config, it is
-prepended to the phase prefix, e.g., `{wandb_key_prefix}/{phase}/reward/...`. Note that
-`wandb_key_prefix` is intended for high-level metrics grouping (e.g., `"exp1/"`), not for phase
-names—avoid setting it to `"train"` or `"eval"` to prevent confusing keys like `train/train/reward/...`.
+Per-sample metrics (when `scalar_log_every_n_generations` triggers):
 
-Note: Per-sample logging is disabled in RL training for performance. Only aggregate metrics are logged.
+- `{prefix}/reward/total` - Sample reward total
+- `{prefix}/reward/terms/{term}` - Per-term weighted values
+- `{prefix}/reward/metrics/{term}/{metric}` - Per-term emitted metrics
+- `{prefix}/parsing/{metric}` - Parsing metrics (when parsing is enabled)
+- `{prefix}/categories/{category}` - Category indicators (when `category_extraction_config` is set)
+
+Where `{prefix}` is `train` or `eval`.
+
+Note: Per-sample scalar logging frequency is controlled by `scalar_log_every_n_generations` (default: 30). Set to 1 to log every sample, or higher values for less frequent logging.
 
 **Category-Wise Reward Tracking:**
 
@@ -633,11 +642,11 @@ logging:
 
 This produces metrics like:
 
-- `eval/reward/code_type/original/mean` - Mean reward for `code_type=original` samples
-- `eval/reward/code_type/original/std` - Std deviation of rewards for `code_type=original` samples
-- `eval/reward/code_type/original/min` - Min reward for `code_type=original` samples
-- `eval/reward/code_type/original/max` - Max reward for `code_type=original` samples
-- `eval/reward/code_type/original/sample_count` - Number of samples in category
+- `eval/reward/run/categories/code_type/original/mean` - Mean reward for `code_type=original` samples
+- `eval/reward/run/categories/code_type/original/std` - Std deviation
+- `eval/reward/run/categories/code_type/original/min` - Min reward
+- `eval/reward/run/categories/code_type/original/max` - Max reward
+- `eval/reward/run/categories/code_type/original/sample_count` - Number of samples in category
 
 For details on available reward terms and configuration options, see `pyine/organisms/models/rewards/README.md`.
 

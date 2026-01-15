@@ -73,13 +73,11 @@ class TestRewardManagerWandBIntegration:
         """Verify that RewardManager logs per-sample and run-level metrics to WandB with correct steps."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scope_prefix="reward/",
-            wandb_key_prefix="train/",
-            log_every_n_examples=1,
+            scalar_log_every_n_generations=1,
             log_terms=True,
             log_metrics=True,
             log_tables=True,
-            table_flush_every_n_logs=5,
+            table_flush_every_n_generations=5,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -92,6 +90,7 @@ class TestRewardManagerWandBIntegration:
         )
         logger = reward_logging.make_wandb_reward_logger(wandb_run, logging_config)
         manager = reward_manager.RewardManager(config=config, logger=logger)
+        manager.set_key_prefix("train")
         # simulate training steps
         for step_idx in range(3):
             manager.set_step(step_idx * 10)
@@ -121,9 +120,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that key prefix switching works correctly for train/eval phases."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scope_prefix="reward/",
-            wandb_key_prefix="",  # no base prefix, will be set dynamically
-            log_every_n_examples=1,
+            scalar_log_every_n_generations=1,
             log_terms=True,
             log_metrics=True,
         )
@@ -175,11 +172,10 @@ class TestRewardManagerWandBIntegration:
         """Verify that reward tables are flushed to WandB."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scope_prefix="reward/",
-            log_every_n_examples=1,
+            scalar_log_every_n_generations=1,
             log_tables=True,
-            table_sample_every_n_logs=1,  # sample every log call for test
-            table_flush_every_n_logs=2,  # flush after every 2 samples
+            table_row_every_n_generations=1,  # add row every sample for test
+            table_flush_every_n_generations=2,  # flush after every 2 samples
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -204,5 +200,5 @@ class TestRewardManagerWandBIntegration:
         manager.flush_stats()
         # verify table was logged (check summary for table entries)
         summary = dict(wandb_run.summary)  # type: ignore[reportUnknownArgumentType]
-        table_keys = [k for k in summary if "rewards_table" in k]
+        table_keys = [k for k in summary if "generation_details" in k]
         assert len(table_keys) > 0, f"expected table key in logged data, got keys: {sorted(summary.keys())}"

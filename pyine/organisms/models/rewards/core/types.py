@@ -775,13 +775,15 @@ class OutputParser(typing.Protocol):
 class RewardLogger(typing.Protocol):
     """Protocol for logging reward outputs and aggregated summaries.
 
-    The manager performs all logging orchestration. Terms must never log directly.
+    The logger controls frequency gating for scalars and table rows based on generation_count.
+    The manager handles key scoping and orchestration. Terms must never log directly.
     """
 
     def log(
         self,
         sample_id: str,
         *,
+        generation_count: int | None = None,
         total: float | None,
         terms: collections.abc.Mapping[str, float] | None = None,
         metrics: collections.abc.Mapping[str, MetricValue] | None = None,
@@ -801,6 +803,8 @@ class RewardLogger(typing.Protocol):
 
         Args:
             sample_id: Unique identifier for the sample.
+            generation_count: Total generations processed so far (1-indexed). Used by the logger
+                for frequency gating. If None, frequency gating is skipped (always log).
             total: Total reward value, or None to omit from logging.
             terms: Per-term weighted reward values (optional).
             metrics: Per-sample metrics (optional) including term-emitted metrics, parsing
@@ -814,7 +818,8 @@ class RewardLogger(typing.Protocol):
             final_answer: Optional parsed final answer text for table logging.
             categories: Optional list of category labels for the sample (for table logging).
             tags: Optional list of sample tags (for table logging).
-            generation_idx: Optional generation index within a batch (for table logging).
+            generation_idx: Generation index within a prompt's completions (0-indexed,
+                computed per sample_data.identifier group). Used for GRPO/multi-generation analysis.
             **kwargs: Additional keyword arguments for forward compatibility.
                 Custom implementations should accept **kwargs to remain compatible
                 with future additions to the logging interface.
@@ -858,6 +863,63 @@ class RewardLogger(typing.Protocol):
         Args:
             failure_ratio: Ratio of failed samples to total samples.
             failure_count: Total number of failed samples.
+            step: Optional logging step.
+        """
+        ...
+
+    def should_log_scalars(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if scalars should be logged for this generation_count.
+
+        Used by the manager to skip expensive metric extraction when the logger will drop the data.
+
+        Args:
+            generation_count: Total generations processed so far (1-indexed).
+
+        Returns:
+            True if scalars should be emitted for this generation count.
+        """
+        ...
+
+    def should_add_table_row(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if a table row should be added for this generation_count.
+
+        Used by the manager to skip expensive table field extraction when the logger will drop
+        the row.
+
+        Args:
+            generation_count: Total generations processed so far (1-indexed).
+
+        Returns:
+            True if a table row should be added for this generation count.
+        """
+        ...
+
+    def log_batch_stats(
+        self,
+        *,
+        batch_mean: float,
+        batch_std: float,
+        batch_mean_rolling_mean: float,
+        batch_mean_rolling_std: float,
+        batch_std_rolling_mean: float,
+        batch_std_rolling_std: float,
+        step: int | None = None,
+    ) -> None:
+        """Log batch-level reward statistics (per-batch and rolling).
+
+        Args:
+            batch_mean: Mean reward across all samples in the current batch.
+            batch_std: Population std of rewards in the current batch.
+            batch_mean_rolling_mean: Rolling mean of batch means over time.
+            batch_mean_rolling_std: Rolling std of batch means over time.
+            batch_std_rolling_mean: Rolling mean of batch stds over time.
+            batch_std_rolling_std: Rolling std of batch stds over time.
             step: Optional logging step.
         """
         ...

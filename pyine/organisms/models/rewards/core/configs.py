@@ -222,8 +222,8 @@ class ParsingConfig(reward_types.BaseConfig):
 class LoggingConfig(reward_types.BaseConfig):
     """Configuration for reward logging.
 
-    Logging is intentionally term-agnostic: terms emit scalar metrics; the manager decides what
-    gets logged, how often, and with what key scoping.
+    Logging is intentionally term-agnostic: terms emit scalar metrics; the logger decides what
+    gets logged and how often based on frequency settings. The manager handles key scoping.
 
     Note: When enabled=True, a logger must be passed to RewardManager() or a ValueError is raised.
     """
@@ -239,20 +239,18 @@ class LoggingConfig(reward_types.BaseConfig):
     """Whether to include term-emitted and parsing metrics in logs."""
     log_tables: bool = True
     """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
-    log_histograms: bool = True
-    """Whether to log W&B histograms for reward distributions.
 
-    When enabled, logs histograms for total reward and per-term rewards at intervals controlled
-    by histogram_log_interval. Useful for visualizing reward distribution changes during training.
-    """
+    # frequency settings (controlled by logger, not manager)
+    scalar_log_every_n_generations: pydantic.PositiveInt = 30
+    """Emit scalar metrics to wandb every N generations (1-indexed). Logger gates emission internally."""
+    table_row_every_n_generations: pydantic.PositiveInt = 60
+    """Add a row to the table buffer every N generations (1-indexed). Logger gates rows internally."""
+    table_flush_every_n_generations: pydantic.PositiveInt = 1000
+    """Flush the table buffer every N generations (fallback if table_max_rows not reached)."""
+    table_max_rows: pydantic.PositiveInt = 1000
+    """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
 
-    # frequency and scoping
-    log_every_n_examples: pydantic.PositiveInt = 1
-    """Log every N examples (frequency gate for scalar metrics)."""
-    scope_prefix: str = "reward/"
-    """Prefix for all emitted logging keys (e.g., `reward/`)."""
-    wandb_key_prefix: str = ""
-    """Optional extra key prefix applied by `WandBRewardLogger` (applies to scalars and table key)."""
+    # metric names
     step_metric_key: str = "train/global_step"
     """Key used for the step metric in WandB logging.
 
@@ -268,23 +266,6 @@ class LoggingConfig(reward_types.BaseConfig):
     """Whether to gather run summaries across ranks and log them on rank 0."""
     barrier_before_finalize: bool = True
     """Whether to barrier all ranks before emitting run-level summaries."""
-
-    # table logging settings
-    table_key: str = "reward/rewards_table"
-    """W&B key under which the per-sample rewards table is logged."""
-    table_sample_every_n_logs: pydantic.PositiveInt = 60
-    """Add a sample to the table buffer every N logger calls.
-
-    This gates which samples are included in the table, independent of scalar metric logging.
-    """
-    table_flush_every_n_logs: pydantic.PositiveInt = 1000
-    """Flush the rewards table every N logger calls (fallback if table_max_rows not reached)."""
-    table_max_rows: pydantic.PositiveInt = 1000
-    """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
-
-    # histogram settings
-    histogram_log_interval: pydantic.PositiveInt = 100
-    """Number of samples between histogram logs (only used when log_histograms=True)."""
 
     # category extraction
     category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = None

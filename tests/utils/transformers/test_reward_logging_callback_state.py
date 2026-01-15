@@ -21,9 +21,9 @@ class TestRewardLoggingCallbackState:
         mock_reward_manager.flush_stats = mocker.MagicMock()
         mock_reward_manager.get_state = mocker.MagicMock(
             return_value={
-                "total_stats": {"count": 10, "sum": 5.0, "sumsq": 2.5, "min": 0.1, "max": 0.9},
-                "term_stats": {"accuracy": {"count": 10, "sum": 8.0, "sumsq": 6.4, "min": 0.5, "max": 1.0}},
-                "category_stats": {},
+                "reward_total_stats": {"count": 10, "sum": 5.0, "sumsq": 2.5, "min": 0.1, "max": 0.9},
+                "reward_term_stats": {"accuracy": {"count": 10, "sum": 8.0, "sumsq": 6.4, "min": 0.5, "max": 1.0}},
+                "reward_category_stats": {},
                 "step": 5,
             }
         )

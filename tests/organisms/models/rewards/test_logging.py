@@ -100,36 +100,23 @@ class TestInMemoryRewardLogger:
 
 
 class TestMakeWandBRewardLogger:
-    def test_creates_logger_with_scope_prefix(self) -> None:
+    def test_creates_logger_from_config(self) -> None:
         class MockWandBRun:
             pass
 
         mock_run = MockWandBRun()
         logging_config = reward_configs.LoggingConfig(
-            scope_prefix="reward/",
-            wandb_key_prefix="exp1/",
             log_tables=True,
-            table_key="reward/table",
-            table_flush_every_n_logs=50,
+            table_flush_every_n_generations=50,
             table_max_rows=500,
         )
         logger = reward_logging.make_wandb_reward_logger(mock_run, logging_config, step=100)
         assert isinstance(logger, reward_logging.WandBRewardLogger)
-        assert logger._total_key == "reward/total"
-        assert logger._key_prefix == "exp1/"
         assert logger._step == 100
         assert logger._log_tables is True
-        assert logger._table_flush_every_n_logs == 50
+        assert logger._table_flush_every_n_generations == 50
         assert logger._table_max_rows == 500
-
-    def test_creates_logger_without_scope_prefix(self) -> None:
-        class MockWandBRun:
-            pass
-
-        mock_run = MockWandBRun()
-        logging_config = reward_configs.LoggingConfig(scope_prefix="")
-        logger = reward_logging.make_wandb_reward_logger(mock_run, logging_config)
-        assert logger._total_key == "total"
+        assert logger._table_key == "generation_details"
 
 
 class TestWandBRewardLogger:
@@ -141,7 +128,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run)  # default scope_prefix="reward/"
+        logger = reward_logging.WandBRewardLogger(mock_run)
         logger.log(
             "s1",
             total=1.5,
@@ -164,10 +151,8 @@ class TestWandBRewardLogger:
                 logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(
-            mock_run,
-            key_prefix="exp/",
-        )
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        logger.set_key_prefix("exp/")
         logger.log("s1", total=1.0, terms={"t1": 0.5}, metrics={}, step=1)
         payload = logged_payloads[0]
         assert "exp/reward/total" in payload
@@ -204,7 +189,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="")
+        logger = reward_logging.WandBRewardLogger(mock_run)
         logger.set_step(42)
         logger.log("s1", total=1.0, terms={}, metrics={})
         assert logged_payloads[0]["train/global_step"] == 42
@@ -217,7 +202,7 @@ class TestWandBRewardLogger:
                 logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, scope_prefix="", step=100)
+        logger = reward_logging.WandBRewardLogger(mock_run, step=100)
         logger.log("s1", total=1.0, terms={}, metrics={}, step=200)
         assert logged_payloads[0]["train/global_step"] == 200  # explicit step overrides default
 
@@ -245,7 +230,8 @@ class TestWandBRewardLogger:
                 logged_payloads.append(dict(payload))
 
         mock_run = MockWandBRun()
-        logger = reward_logging.WandBRewardLogger(mock_run, key_prefix="train/")
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        logger.set_key_prefix("train/")
         logger.log_failures(failure_ratio=0.1, failure_count=2, step=5)
         payload = logged_payloads[0]
         assert "train/failures/failure_ratio" in payload

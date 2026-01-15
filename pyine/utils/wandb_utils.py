@@ -22,11 +22,12 @@ import wandb
 import wandb.apis.public
 
 # exceptions that indicate transient network issues worth retrying
-_RETRYABLE_EXCEPTIONS = (
-    ConnectionError,
-    TimeoutError,
-    wandb.errors.CommError,
-)
+_retryable_exceptions: list[type[Exception]] = [ConnectionError, TimeoutError]
+wandb_errors = getattr(wandb, "errors", None)
+wandb_comm_error = getattr(wandb_errors, "CommError", None) if wandb_errors is not None else None
+if isinstance(wandb_comm_error, type) and issubclass(wandb_comm_error, Exception):
+    _retryable_exceptions.append(wandb_comm_error)
+_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = tuple(_retryable_exceptions)
 
 
 def _retry_on_failure(
@@ -66,7 +67,8 @@ def _retry_on_failure(
                 if verbose:
                     print(f"  All {max_retries + 1} attempts failed.")
                 raise
-    raise last_exception  # should not reach here, but satisfies type checker
+    assert last_exception is not None  # should not reach here with last_exception=None
+    raise last_exception
 
 
 # =============================================================================
@@ -425,7 +427,7 @@ def fetch_table(
 
     Args:
         run: The W&B Run object.
-        table_key: The key used when logging the table (e.g., "reward/rewards_table").
+        table_key: The key used when logging the table (e.g., "train/generation_details").
         verbose: Whether to print errors.
         max_retries: Maximum number of retry attempts on network failures (default: 3).
 
@@ -434,9 +436,9 @@ def fetch_table(
 
     Example:
         >>> run = get_wandb_run(run_id="abc123", project="my-project")
-        >>> rewards_df = fetch_table(run, "reward/rewards_table")
-        >>> if rewards_df is not None:
-        ...     print(f"Loaded {len(rewards_df)} rows")
+        >>> details_df = fetch_table(run, "train/generation_details")
+        >>> if details_df is not None:
+        ...     print(f"Loaded {len(details_df)} rows")
     """
     try:
         files = _retry_on_failure(lambda: list(run.files()), max_retries=max_retries, verbose=verbose)
@@ -482,7 +484,7 @@ def fetch_tables_with_steps(
 
     Args:
         run: The W&B Run object.
-        table_key: The key used when logging the table (e.g., "reward/rewards_table").
+        table_key: The key used when logging the table (e.g., "train/generation_details").
         verbose: Whether to print progress information.
         max_retries: Maximum number of retry attempts on network failures (default: 3).
 
@@ -491,9 +493,9 @@ def fetch_tables_with_steps(
 
     Example:
         >>> run = get_wandb_run(run_id="abc123", project="my-project")
-        >>> rewards_df = fetch_tables_with_steps(run, "reward/rewards_table")
-        >>> if rewards_df is not None:
-        ...     print(f"Loaded {len(rewards_df)} rows from {rewards_df['_logged_step'].nunique()} steps")
+        >>> details_df = fetch_tables_with_steps(run, "train/generation_details")
+        >>> if details_df is not None:
+        ...     print(f"Loaded {len(details_df)} rows from {details_df['_logged_step'].nunique()} steps")
     """
     table_entries: list[tuple[int, str]] = []  # (step, artifact_path)
     if verbose:
