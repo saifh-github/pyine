@@ -14,11 +14,60 @@ import json
 import pathlib
 import re
 import tempfile
+import time
 import typing
 
 import pandas as pd
 import wandb
 import wandb.apis.public
+
+# exceptions that indicate transient network issues worth retrying
+_RETRYABLE_EXCEPTIONS = (
+    ConnectionError,
+    TimeoutError,
+    wandb.errors.CommError,
+)
+
+
+def _retry_on_failure(
+    func: typing.Callable[[], typing.Any],
+    max_retries: int = 3,
+    base_delay: float = 10.0,
+    max_delay: float = 60.0,
+    verbose: bool = True,
+) -> typing.Any:
+    """Retry a function with exponential backoff on transient failures.
+
+    Args:
+        func: Zero-argument callable to execute.
+        max_retries: Maximum number of retry attempts (0 = no retries).
+        base_delay: Initial delay in seconds between retries.
+        max_delay: Maximum delay in seconds between retries.
+        verbose: Whether to print retry messages.
+
+    Returns:
+        The result of the function call.
+
+    Raises:
+        The last exception if all retries are exhausted.
+    """
+    last_exception: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except _RETRYABLE_EXCEPTIONS as exc:
+            last_exception = exc
+            if attempt < max_retries:
+                delay = min(base_delay * (2**attempt), max_delay)
+                if verbose:
+                    print(f"  Attempt {attempt + 1} failed ({type(exc).__name__}), retrying in {delay:.1f}s...")
+                time.sleep(delay)
+            else:
+                if verbose:
+                    print(f"  All {max_retries + 1} attempts failed.")
+                raise
+    raise last_exception  # should not reach here, but satisfies type checker
+
 
 # =============================================================================
 # URL and Run Helpers
@@ -181,6 +230,7 @@ def fetch_history_df(
     cache_path: str | pathlib.Path | None = None,
     samples: int = 500,
     verbose: bool = True,
+    max_retries: int = 3,
 ) -> pd.DataFrame:
     """Fetch W&B run history as a DataFrame with optional caching.
 
@@ -199,6 +249,7 @@ def fetch_history_df(
         cache_path: Optional path to cache results as parquet (useful for large runs).
         samples: Number of samples when keys=None (discovery mode).
         verbose: Whether to print progress messages.
+        max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
         DataFrame with the run history. Internal keys (`_step`, `_timestamp`, `_runtime`) are
@@ -218,7 +269,11 @@ def fetch_history_df(
     if keys:
         if verbose:
             print(f"Fetching full history with scan_history (will filter to {len(keys)} keys)...")
-        history = list(run.scan_history())
+        history = _retry_on_failure(
+            lambda: list(run.scan_history()),
+            max_retries=max_retries,
+            verbose=verbose,
+        )
         df = pd.DataFrame(history)
         internal_keys = ["_step", "_timestamp", "_runtime"]
         keys_with_internal = internal_keys + [k for k in keys if k not in internal_keys]
@@ -227,8 +282,13 @@ def fetch_history_df(
     else:
         if verbose:
             print(f"Fetching sampled history ({samples} samples)...")
-        df = run.history(samples=samples)
+        df = _retry_on_failure(
+            lambda: run.history(samples=samples),
+            max_retries=max_retries,
+            verbose=verbose,
+        )
     if cache_path:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(cache_path)
         if verbose:
             print(f"Cached history to: {cache_path}")
@@ -239,6 +299,7 @@ def fetch_history_df(
 def discover_metric_keys(
     run: wandb.apis.public.Run,
     samples: int = 10,
+    max_retries: int = 3,
 ) -> dict[str, list[str]]:
     """Discover available metric keys in a W&B run, grouped by category.
 
@@ -247,6 +308,7 @@ def discover_metric_keys(
     Args:
         run: The W&B Run object.
         samples: Number of history samples to fetch for discovery.
+        max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
         Dict mapping category names to lists of metric keys. Categories include:
@@ -258,7 +320,11 @@ def discover_metric_keys(
         >>> keys = discover_metric_keys(run)
         >>> print(f"Found {len(keys['reward_terms'])} reward term keys")
     """
-    sample_df = run.history(samples=samples)
+    sample_df = _retry_on_failure(
+        lambda: run.history(samples=samples),
+        max_retries=max_retries,
+        verbose=False,
+    )
     all_keys: list[str] = list(sample_df.columns)
 
     def _list_by_prefix(prefix: str) -> list[str]:
@@ -350,6 +416,7 @@ def fetch_table(
     table_key: str,
     *,
     verbose: bool = False,
+    max_retries: int = 3,
 ) -> pd.DataFrame | None:
     """Fetch a W&B table artifact as a DataFrame.
 
@@ -360,6 +427,7 @@ def fetch_table(
         run: The W&B Run object.
         table_key: The key used when logging the table (e.g., "reward/rewards_table").
         verbose: Whether to print errors.
+        max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
         DataFrame with the table data, or None if not found.
@@ -371,7 +439,8 @@ def fetch_table(
         ...     print(f"Loaded {len(rewards_df)} rows")
     """
     try:
-        for file in run.files():
+        files = _retry_on_failure(lambda: list(run.files()), max_retries=max_retries, verbose=verbose)
+        for file in files:
             file_name = file.name
             if not file_name.endswith(".table.json"):
                 continue
@@ -379,7 +448,11 @@ def fetch_table(
             if table_key.replace("/", "_") not in file_name and table_key not in file_name:
                 continue
             with tempfile.TemporaryDirectory() as tmpdir:
-                downloaded_path = _download_file(file, root=tmpdir)
+                downloaded_path = _retry_on_failure(
+                    lambda f=file, t=tmpdir: _download_file(f, root=t),
+                    max_retries=max_retries,
+                    verbose=verbose,
+                )
                 with open(downloaded_path, encoding="utf-8") as f:
                     table_data = json.load(f)
             columns = table_data.get("columns", [])
@@ -398,6 +471,7 @@ def fetch_tables_with_steps(
     table_key: str,
     *,
     verbose: bool = True,
+    max_retries: int = 3,
 ) -> pd.DataFrame | None:
     """Fetch W&B tables with their true logged steps from the run history.
 
@@ -410,6 +484,7 @@ def fetch_tables_with_steps(
         run: The W&B Run object.
         table_key: The key used when logging the table (e.g., "reward/rewards_table").
         verbose: Whether to print progress information.
+        max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
         DataFrame with combined table data and `_logged_step` column, or None if not found.
@@ -423,7 +498,12 @@ def fetch_tables_with_steps(
     table_entries: list[tuple[int, str]] = []  # (step, artifact_path)
     if verbose:
         print(f"Scanning history for '{table_key}' table entries...")
-    for row in run.scan_history(keys=[table_key, "_step"]):
+    history_rows = _retry_on_failure(
+        lambda: list(run.scan_history(keys=[table_key, "_step"])),
+        max_retries=max_retries,
+        verbose=verbose,
+    )
+    for row in history_rows:
         table_ref = row.get(table_key)
         step = row.get("_step")
         if table_ref is None or step is None:
@@ -435,7 +515,7 @@ def fetch_tables_with_steps(
     if not table_entries:
         if verbose:
             print(f"No table entries found for '{table_key}' in history")
-        return fetch_table(run, table_key, verbose=verbose)
+        return fetch_table(run, table_key, verbose=verbose, max_retries=max_retries)
     if verbose:
         print(f"Found {len(table_entries)} table log entries")
     path_to_step: dict[str, int] = {}
@@ -444,7 +524,8 @@ def fetch_tables_with_steps(
         path_to_step[filename] = step
     all_tables: list[pd.DataFrame] = []
     try:
-        for file in run.files():
+        files = _retry_on_failure(lambda: list(run.files()), max_retries=max_retries, verbose=verbose)
+        for file in files:
             file_name = file.name
             if not file_name.endswith(".table.json"):
                 continue
@@ -454,7 +535,11 @@ def fetch_tables_with_steps(
             filename = pathlib.Path(file_name).name
             logged_step = path_to_step.get(filename)
             with tempfile.TemporaryDirectory() as tmpdir:
-                downloaded_path = _download_file(file, root=tmpdir)
+                downloaded_path = _retry_on_failure(
+                    lambda f=file, t=tmpdir: _download_file(f, root=t),
+                    max_retries=max_retries,
+                    verbose=verbose,
+                )
                 with open(downloaded_path, encoding="utf-8") as f:
                     table_data = json.load(f)
             columns = table_data.get("columns", [])
