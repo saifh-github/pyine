@@ -76,7 +76,7 @@ config:
           max_traces_per_solution: 3  # limit number of traces per solution (for smaller dataset)
           max_code_line_count: 250  # limit code line count (for smaller+easier dataset)
           max_code_line_length: 250  # limit code line length (for smaller+easier dataset)
-          max_code_length: 4000  # limit total code length (for smaller+easier dataset)
+          max_code_length: 2500  # limit total code length (for smaller+easier dataset)
           max_args_length: 500  # limit inputs/outputs max length (for smaller+easier dataset)
         selection_config:
           code_type_prob_map:  # Must explicitly set all types to sum to 1.0
@@ -94,7 +94,7 @@ config:
         filtering_config:
           max_code_line_count: 250  # limit code line count (for smaller+easier dataset)
           max_code_line_length: 250  # limit code line length (for smaller+easier dataset)
-          max_code_length: 4000  # limit total code length (for smaller+easier dataset)
+          max_code_length: 2500  # limit total code length (for smaller+easier dataset)
           max_args_length: 500  # limit inputs/outputs max length (for smaller+easier dataset)
         selection_config:
           code_type_prob_map:  # Must explicitly set all types to sum to 1.0
@@ -162,7 +162,7 @@ config:
     num_generations: 8  # Generate 8 samples per prompt for exploration
     num_generations_eval: 1  # Use fewer generations during eval to save compute
     max_completion_length: 2048  # Allow longer completions for complex code execution
-    max_prompt_length: 5000  # truncate prompts beyond this length (last-resort)
+    max_prompt_length: 3000  # truncate prompts beyond this length (last-resort)
     temperature: 0.7
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient
