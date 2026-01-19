@@ -415,7 +415,13 @@ class _FakeRewardManager:
     def set_step(self, step: int | None) -> None:
         self.step = step
 
-    def flush_stats(self, step: int | None = None) -> None:
+    def flush_stats(
+        self,
+        step: int | None = None,
+        *,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
+    ) -> None:
         self.flush_calls.append(step)
 
     def get_state(self) -> dict[str, typing.Any]:
