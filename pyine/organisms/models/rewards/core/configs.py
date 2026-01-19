@@ -225,6 +225,24 @@ class LoggingConfig(reward_types.BaseConfig):
     Logging is intentionally term-agnostic: terms emit scalar metrics; the logger decides what
     gets logged and how often based on frequency settings. The manager handles key scoping.
 
+    Metric Indexing:
+        Different metric types are indexed to different x-axes in WandB:
+
+        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*, categories/*) are
+          indexed to `{prefix}/generation_count`. This ensures each logged generation has a unique
+          x-coordinate, avoiding aggregation issues when multiple generations are logged within
+          the same trainer step (e.g., with gradient accumulation or multiple generations per
+          prompt in GRPO).
+
+        - **Batch-level metrics** (reward/batch/*) are indexed to `{prefix}/batch_count`. This
+          ensures each logged batch has a unique x-coordinate, avoiding aggregation issues when
+          multiple batches are processed within the same trainer step (e.g., gradient accumulation).
+
+        - **Run-level summaries** (reward/run/*) are indexed to `step_metric_key` (default:
+          "train/global_step"), which should be an optimizer-step-related index.
+
+        The logger automatically configures these step metrics via `wandb.define_metric()`.
+
     Note: When enabled=True, a logger must be passed to RewardManager() or a ValueError is raised.
     """
 
@@ -242,7 +260,10 @@ class LoggingConfig(reward_types.BaseConfig):
 
     # frequency settings (controlled by logger, not manager)
     scalar_log_every_n_generations: pydantic.PositiveInt = 30
-    """Emit scalar metrics to wandb every N generations (1-indexed). Logger gates emission internally."""
+    """Emit per-generation scalar metrics every N generations (1-indexed).
+
+    These metrics are indexed to `{prefix}/generation_count` in WandB, not `step_metric_key`.
+    """
     table_row_every_n_generations: pydantic.PositiveInt = 60
     """Add a row to the table buffer every N generations (1-indexed). Logger gates rows internally."""
     table_flush_every_n_generations: pydantic.PositiveInt = 1000
@@ -252,11 +273,14 @@ class LoggingConfig(reward_types.BaseConfig):
 
     # metric names
     step_metric_key: str = "train/global_step"
-    """Key used for the step metric in WandB logging.
+    """Key used as the x-axis for run-level summaries (reward/run/*) in WandB.
 
-    Defaults to "train/global_step" to align with HuggingFace Trainer's WandbCallback, which calls
-    `wandb.define_metric("*", step_metric="train/global_step")`. Change this if using a different
-    trainer or custom step tracking.
+    Defaults to "train/global_step" to align with HuggingFace Trainer's WandbCallback; should
+    generally correspond to an index linked with optimizer steps.
+
+    Note: Per-generation metrics use `{prefix}/generation_count` and batch-level metrics
+    use `{prefix}/batch_count` as their x-axes. These are configured automatically via
+    `wandb.define_metric()` to ensure unique x-coordinates.
     """
 
     # distributed logging

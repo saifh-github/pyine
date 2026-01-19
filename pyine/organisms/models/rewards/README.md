@@ -238,10 +238,10 @@ based on output length. This encourages concise responses by penalizing verbose 
 
 Verbosity scaling requires token counting. You have two options:
 
-1. **Provide a HuggingFace tokenizer** to `RewardManager(tokenizer=tokenizer)` - this is the
+1. **Provide a HuggingFace tokenizer** to `RewardManager(tokenizer=tokenizer)`: this is the
    recommended approach when you already have a tokenizer loaded for your model.
 
-2. **Configure a tiktoken tokenizer** via `parsing.openai_tokenizer_model` - note that this
+2. **Configure a tiktoken tokenizer** via `parsing.openai_tokenizer_model`: note that this
    requires a `ParsingConfig` to be defined as well.
 
 ### Modes
@@ -465,6 +465,43 @@ manager = reward_manager.RewardManager(config, logger=logger)
 manager.set_step(global_step)  # if needed, for subsequent steps
 output = manager.compute(ctx)  # rewards are automatically logged according to LoggingConfig
 ```
+
+### Metric Indexing in WandB
+
+When using WandBRewardLogger, metrics are indexed to different x-axes depending on their type:
+
+**Per-generation metrics** (indexed to `{prefix}/generation_count`): These metrics are logged for
+individual generations (completions) and use generation_count as the x-axis. This ensures each
+logged generation has a unique x-coordinate, avoiding WandB aggregation issues when multiple
+generations are logged within the same trainer step (e.g. with gradient accumulation or multiple
+generations per prompt in GRPO).
+
+- `{prefix}/reward/total`: total reward for the generation;
+- `{prefix}/reward/terms/*`: per-term weighted reward values;
+- `{prefix}/reward/metrics/*`: term-emitted metrics (containing other useful information);
+- `{prefix}/reward/raw_terms/*`: pre-clipping, pre-weighting reward term values;
+- `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer);
+- `{prefix}/categories/*`: category-wise metrics (if a category extractor is configured).
+
+**Batch-level metrics** (indexed to `{prefix}/batch_count`): These metrics are logged once per
+compute_batch call and use batch_count as the x-axis. This ensures each logged batch has a unique
+x-coordinate, avoiding WandB aggregation issues when multiple batches are processed within the same
+trainer step (e.g. gradient accumulation).
+
+- `{prefix}/reward/batch/mean`: mean reward across the batch;
+- `{prefix}/reward/batch/std`: standard deviation of rewards in the batch;
+- `{prefix}/reward/batch/mean_rolling/*`: rolling statistics of batch means;
+- `{prefix}/reward/batch/std_rolling/*`: rolling statistics of batch std devs.
+
+**Run-level summaries** (indexed to `step_metric_key`, default `train/global_step`): These metrics
+are logged when flush_stats() is called (e.g. at phase transitions).
+
+- `{prefix}/reward/run/mean`, `{prefix}/reward/run/std`: accumulated reward statistics;
+- `{prefix}/reward/run/count`: number of generations processed;
+- `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
+- `{prefix}/failures/failure_count`: count of failed generations in the phase.
+
+Where `{prefix}` is typically "train" or "eval" depending on the training phase.
 
 ## Distributed Training
 

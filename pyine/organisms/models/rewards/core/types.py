@@ -834,6 +834,8 @@ class RewardLogger(typing.Protocol):
         reward_category_summaries: collections.abc.Mapping[str, float],
         parsing_summaries: collections.abc.Mapping[str, float] | None = None,
         parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
         step: int | None = None,
     ) -> None:
         """Log run-level summary metrics.
@@ -844,25 +846,8 @@ class RewardLogger(typing.Protocol):
             reward_category_summaries: Per-category aggregated reward stats.
             parsing_summaries: Global parsing stats (optional).
             parsing_category_summaries: Per-category parsing stats (optional).
-            step: Optional logging step.
-        """
-        ...
-
-    def log_failures(
-        self,
-        *,
-        failure_ratio: float,
-        failure_count: int,
-        step: int | None = None,
-    ) -> None:
-        """Log failure statistics from reward computation.
-
-        Failures include samples that were skipped or errored during reward computation.
-        External logging backends (e.g., WandB) emit these under a `failures/` prefix.
-
-        Args:
-            failure_ratio: Ratio of failed samples to total samples.
-            failure_count: Total number of failed samples.
+            failure_ratio: Ratio of failed samples to total samples (optional).
+            failure_count: Total number of failed samples (optional).
             step: Optional logging step.
         """
         ...
@@ -909,7 +894,7 @@ class RewardLogger(typing.Protocol):
         batch_mean_rolling_std: float,
         batch_std_rolling_mean: float,
         batch_std_rolling_std: float,
-        step: int | None = None,
+        batch_count: int | None = None,
     ) -> None:
         """Log batch-level reward statistics (per-batch and rolling).
 
@@ -920,7 +905,31 @@ class RewardLogger(typing.Protocol):
             batch_mean_rolling_std: Rolling std of batch means over time.
             batch_std_rolling_mean: Rolling mean of batch stds over time.
             batch_std_rolling_std: Rolling std of batch stds over time.
-            step: Optional logging step.
+            batch_count: Monotonic batch counter (1-indexed) used as x-axis for batch metrics in WandB.
+        """
+        ...
+
+    def set_step(
+        self,
+        step: int | None,
+    ) -> None:
+        """Set a default step value for subsequent logs.
+
+        Args:
+            step: Default step value to use when step is not explicitly provided.
+        """
+        ...
+
+    def set_key_prefix(
+        self,
+        key_prefix: str,
+    ) -> None:
+        """Set the key prefix for subsequent logs.
+
+        Used to differentiate train vs eval logs (e.g., "train/" vs "eval/").
+
+        Args:
+            key_prefix: Prefix to prepend to all logged keys.
         """
         ...
 

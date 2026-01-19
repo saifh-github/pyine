@@ -409,30 +409,28 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self._in_eval: bool | None = None
         self._saw_eval_prediction_step: bool = False
 
-    def _log_failure_stats(self, step: int | None) -> None:
-        """Log failure statistics from reward adapter if available."""
+    def _get_and_reset_failure_stats(self) -> tuple[float | None, int | None]:
+        """Get failure statistics from reward adapter and reset them.
+
+        Returns:
+            Tuple of (failure_ratio, failure_count), or (None, None) if unavailable.
+        """
         if self.reward_adapter is None:
-            return
+            return None, None
         if not hasattr(self.reward_adapter, "get_failure_stats") or not hasattr(
             self.reward_adapter, "reset_failure_stats"
         ):
-            return
+            return None, None
         stats = self.reward_adapter.get_failure_stats()
         total_count = stats["total_count"]
         if total_count == 0:
-            return
+            return None, None
         skip_count = stats["skip_count"]
         error_count = stats["error_count"]
         failure_count = skip_count + error_count
         failure_ratio = failure_count / total_count
-        logger = getattr(self.reward_manager, "_logger", None)
-        if logger is not None and hasattr(logger, "log_failures"):
-            logger.log_failures(
-                failure_ratio=failure_ratio,
-                failure_count=failure_count,
-                step=step,
-            )
         self.reward_adapter.reset_failure_stats()
+        return failure_ratio, failure_count
 
     def _switch_to_eval(self, step: int | None = None) -> None:
         """Switch to eval prefix, flush train stats, and clear step.
@@ -446,8 +444,12 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         """
         if self._in_eval:
             return
-        self._log_failure_stats(step=step)
-        self.reward_manager.flush_stats(step=step)
+        failure_ratio, failure_count = self._get_and_reset_failure_stats()
+        self.reward_manager.flush_stats(
+            step=step,
+            failure_ratio=failure_ratio,
+            failure_count=failure_count,
+        )
         self.reward_manager.set_key_prefix(self.eval_prefix)
         self.reward_manager.set_step(None)  # clear step for eval
         self._in_eval = True
@@ -541,8 +543,12 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         # if eval had zero samples, skip flushing to avoid logging stale stats under eval prefix
         if self._saw_eval_prediction_step:
             # anchor eval summary at current global_step so it aligns with training metrics
-            self._log_failure_stats(step=state.global_step)
-            self.reward_manager.flush_stats(step=state.global_step)
+            failure_ratio, failure_count = self._get_and_reset_failure_stats()
+            self.reward_manager.flush_stats(
+                step=state.global_step,
+                failure_ratio=failure_ratio,
+                failure_count=failure_count,
+            )
         self._saw_eval_prediction_step = False  # reset for next eval
         self.reward_manager.set_key_prefix(self.train_prefix)
         self._in_eval = False  # evaluation done, switch back right away
@@ -619,8 +625,12 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         """Flush any remaining stats at the end of training."""
-        self._log_failure_stats(step=None)
-        self.reward_manager.flush_stats(step=None)
+        failure_ratio, failure_count = self._get_and_reset_failure_stats()
+        self.reward_manager.flush_stats(
+            step=None,
+            failure_ratio=failure_ratio,
+            failure_count=failure_count,
+        )
 
     def _load_reward_state(
         self,

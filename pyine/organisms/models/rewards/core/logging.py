@@ -2,6 +2,43 @@
 
 The reward system exposes a small `RewardLogger` protocol. The logger controls logging frequency
 via generation_count gating; the manager handles key scoping and orchestration.
+
+Metric Indexing
+---------------
+When using WandBRewardLogger, metrics are indexed to different x-axes depending on their type:
+
+**Per-generation metrics** (indexed to `{prefix}/generation_count`):
+    These metrics are logged for individual generations (completions) and use generation_count
+    as the x-axis. This ensures each logged generation has a unique x-coordinate, avoiding WandB
+    aggregation issues when multiple generations are logged within the same trainer step (e.g.,
+    with gradient accumulation or multiple generations per prompt in GRPO).
+
+    - `{prefix}/reward/total`: total reward for the generation;
+    - `{prefix}/reward/terms/*`: per-term weighted reward values;
+    - `{prefix}/reward/metrics/*`: term-emitted metrics (containing other useful information);
+    - `{prefix}/reward/raw_terms/*`: pre-clipping, pre-weighting reward term values;
+    - `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer);
+    - `{prefix}/categories/*`: category-wise metrics (if a category extractor is configured).
+
+**Batch-level metrics** (indexed to `{prefix}/batch_count`):
+    These metrics are logged once per compute_batch call and use batch_count as the x-axis.
+    This ensures each logged batch has a unique x-coordinate, avoiding WandB aggregation issues
+    when multiple batches are processed within the same trainer step (e.g., gradient accumulation).
+
+    - `{prefix}/reward/batch/mean`: mean reward across the batch;
+    - `{prefix}/reward/batch/std`: standard deviation of rewards in the batch;
+    - `{prefix}/reward/batch/mean_rolling/*`: rolling statistics of batch means;
+    - `{prefix}/reward/batch/std_rolling/*`: rolling statistics of batch std devs.
+
+**Run-level summaries** (indexed to `step_metric_key`, default `train/global_step`):
+    These metrics are logged when flush_stats() is called (e.g., at phase transitions).
+
+    - `{prefix}/reward/run/mean`, `{prefix}/reward/run/std`: accumulated reward statistics;
+    - `{prefix}/reward/run/count`: number of generations processed;
+    - `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
+    - `{prefix}/failures/failure_count`: count of failed generations in the phase.
+
+Where `{prefix}` is typically "train" or "eval" depending on the training phase.
 """
 
 import collections.abc
@@ -39,7 +76,6 @@ class InMemoryRewardLogger:
         self.samples: list[dict[str, object]] = []
         self.table_rows: list[dict[str, object]] = []
         self.runs: list[dict[str, object]] = []
-        self.failures: list[dict[str, object]] = []
         self.batch_stats: list[dict[str, object]] = []
         self._step: int | None = None
         self._key_prefix: str = ""
@@ -150,6 +186,8 @@ class InMemoryRewardLogger:
         reward_category_summaries: collections.abc.Mapping[str, float],
         parsing_summaries: collections.abc.Mapping[str, float] | None = None,
         parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
         step: int | None = None,
     ) -> None:
         """Record a run-level logging event in memory."""
@@ -163,23 +201,11 @@ class InMemoryRewardLogger:
             record["parsing_summaries"] = dict(parsing_summaries)
         if parsing_category_summaries is not None:
             record["parsing_category_summaries"] = dict(parsing_category_summaries)
+        if failure_ratio is not None:
+            record["failure_ratio"] = failure_ratio
+        if failure_count is not None:
+            record["failure_count"] = failure_count
         self.runs.append(record)
-
-    def log_failures(
-        self,
-        *,
-        failure_ratio: float,
-        failure_count: int,
-        step: int | None = None,
-    ) -> None:
-        """Record a failure stats logging event in memory."""
-        self.failures.append(
-            {
-                "step": step,
-                "failure_ratio": failure_ratio,
-                "failure_count": failure_count,
-            }
-        )
 
     def log_batch_stats(
         self,
@@ -190,12 +216,12 @@ class InMemoryRewardLogger:
         batch_mean_rolling_std: float,
         batch_std_rolling_mean: float,
         batch_std_rolling_std: float,
-        step: int | None = None,
+        batch_count: int | None = None,
     ) -> None:
         """Record batch-level reward statistics in memory."""
         self.batch_stats.append(
             {
-                "step": step,
+                "batch_count": batch_count,
                 "batch_mean": batch_mean,
                 "batch_std": batch_std,
                 "batch_mean_rolling_mean": batch_mean_rolling_mean,
@@ -210,6 +236,29 @@ class WandBRewardLogger:
     """RewardLogger implementation backed by a W&B run.
 
     Expects a `wandb.Run`-like object with a `.log(dict)` method.
+
+    Metric Indexing:
+        This logger configures WandB to use different x-axes for different metric types:
+
+        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*, etc.) are indexed
+          to `{prefix}/generation_count`, ensuring each logged generation has a unique x-coordinate.
+
+        - **Batch-level metrics** (reward/batch/*) are indexed to `{prefix}/batch_count`, ensuring
+          each logged batch has a unique x-coordinate.
+
+        - **Run-level summaries** (reward/run/*) are indexed to `step_metric_key` (default:
+          "train/global_step").
+
+        This separation prevents WandB from aggregating values when multiple generations or batches
+        are logged within the same trainer step (e.g., with gradient accumulation or multiple
+        generations per prompt in GRPO).
+
+    Integration with HuggingFace Trainer:
+        The `wandb.define_metric()` calls that configure the step metrics are **deferred until
+        the first log() call**, not called in `__init__`. This is intentional: HuggingFace's
+        `WandbCallback` calls `wandb.define_metric("*", step_metric="train/global_step")` in
+        `on_train_begin`, and our more specific patterns must be defined AFTER that wildcard
+        to take precedence.
     """
 
     def __init__(
@@ -228,11 +277,14 @@ class WandBRewardLogger:
 
         Args:
             wandb_run: A `wandb.Run`-like object that supports `.log(...)`.
-            step: Optional step value logged under `step_metric_key` (not WandB internal step).
+            step: Optional default step value (not WandB internal step). Used as a fallback for
+                run-level summaries and table flushing when step is not explicitly provided. Also
+                stored as "internal_step" in table rows.
             log_tables: Whether to log a W&B table with per-generation details.
             table_max_rows: Maximum number of buffered rows before forcing a flush.
-            step_metric_key: Key used for the step metric in logged payloads. Defaults to
-                "train/global_step" to align with HuggingFace Trainer's WandbCallback.
+            step_metric_key: Key used as x-axis for run-level summaries. Defaults to
+                "train/global_step" to align with HuggingFace Trainer's WandbCallback. Per-generation
+                metrics use `{prefix}/generation_count` and batch metrics use `{prefix}/batch_count`.
             scalar_log_every_n_generations: Emit scalar metrics every N generations (1-indexed).
             table_row_every_n_generations: Add a row to the table buffer every N generations (1-indexed).
             table_flush_every_n_generations: Flush the table buffer every N generations.
@@ -249,12 +301,129 @@ class WandBRewardLogger:
         self._table_row_every_n_generations = int(table_row_every_n_generations)
         self._table_flush_every_n_generations = int(table_flush_every_n_generations)
         self._last_flush_generation_count: int | None = None  # for cooldown logic
+        # track which prefixes have had wandb.define_metric called (called lazily per-prefix)
+        self._generation_metrics_defined_prefixes: set[str] = set()
+        self._batch_metrics_defined_prefixes: set[str] = set()
+        self._run_metrics_defined_prefixes: set[str] = set()
         if self._scalar_log_every_n_generations < 1:
             raise ValueError("scalar_log_every_n_generations must be >= 1")
         if self._table_row_every_n_generations < 1:
             raise ValueError("table_row_every_n_generations must be >= 1")
         if self._table_flush_every_n_generations < 1:
             raise ValueError("table_flush_every_n_generations must be >= 1")
+        # NOTE: we do NOT call _define_*_step_metrics() here because HuggingFace's
+        # WandbCallback calls `wandb.define_metric("*", step_metric="train/global_step")`
+        # in on_train_begin, which would override our definitions if we called them earlier.
+        # instead, we defer our define_metric calls to the first log() call, ensuring they
+        # happen AFTER any trainer setup and thus take precedence.
+
+    def _define_generation_step_metrics(self) -> None:
+        """Define WandB step metrics and summaries for per-generation reward logging.
+
+        This configures WandB to use `generation_count` as the x-axis for per-generation
+        reward and parsing metrics, instead of the default `train/global_step`. This prevents
+        WandB from aggregating values when multiple generations are logged within the same
+        trainer step (e.g., with gradient accumulation or multiple generations per prompt).
+
+        Also configures summary types for each metric pattern (how they appear in the run
+        summary at the end of training).
+
+        This method is called lazily on each log() call, NOT in __init__. This ensures
+        our definitions happen AFTER HuggingFace's WandbCallback calls
+        `wandb.define_metric("*", step_metric="train/global_step")` in on_train_begin,
+        so our more specific patterns take precedence over the wildcard.
+
+        Metrics are defined per-prefix (e.g., "train", "eval") as prefixes are encountered,
+        rather than hardcoding specific prefixes upfront. This makes the logger future-proof
+        for any prefix naming convention.
+
+        Metrics covered:
+        - {prefix}/reward/total, {prefix}/reward/terms/*, {prefix}/reward/metrics/* -> mean
+        - {prefix}/parsing/* -> mean
+        - {prefix}/categories/* -> mean
+
+        Batch-level metrics (reward/batch/*) and run-level summaries (reward/run/*) are
+        handled by separate define methods.
+        """
+        # derive prefix without trailing slash (e.g., "train/" -> "train", "" -> "")
+        prefix = self._key_prefix.rstrip("/")
+        if not prefix or prefix in self._generation_metrics_defined_prefixes:
+            return  # already defined for this prefix (or no prefix set)
+        self._generation_metrics_defined_prefixes.add(prefix)
+        # check if wandb is actually initialized (not just a mock object) before defining metrics
+        # wandb.define_metric requires an active run; when using mock runs in tests, this check
+        # prevents the call from failing
+        if wandb.run is None:
+            return
+        # per-sample metric suffixes with summary type (all use "mean" for run-level average)
+        metric_suffixes: list[tuple[str, str]] = [
+            ("reward/total", "mean"),
+            ("reward/terms/*", "mean"),
+            ("reward/metrics/*", "mean"),
+            ("reward/raw_terms/*", "mean"),
+            ("parsing/*", "mean"),
+            ("categories/*", "mean"),
+        ]
+        step_metric_key = f"{prefix}/generation_count"
+        for suffix, summary in metric_suffixes:
+            pattern = f"{prefix}/{suffix}"
+            wandb.define_metric(pattern, step_metric=step_metric_key, summary=summary)
+
+    def _define_batch_step_metrics(self) -> None:
+        """Define WandB step metrics and summaries for batch-level reward logging.
+
+        This configures WandB to use `batch_count` as the x-axis for batch-level metrics,
+        instead of the default `train/global_step`. This prevents WandB from aggregating
+        values when multiple batches are logged within the same trainer step (e.g., with
+        gradient accumulation where multiple batches are processed per optimizer step).
+
+        Also configures summary types for each metric pattern.
+
+        This method is called lazily on each log_batch_stats() call, NOT in __init__.
+        This ensures our definitions happen AFTER HuggingFace's WandbCallback calls
+        `wandb.define_metric("*", step_metric="train/global_step")` in on_train_begin,
+        so our more specific patterns take precedence over the wildcard.
+
+        Metrics are defined per-prefix as prefixes are encountered.
+
+        Metrics covered:
+        - {prefix}/reward/batch/* -> mean
+        """
+        prefix = self._key_prefix.rstrip("/")
+        if not prefix or prefix in self._batch_metrics_defined_prefixes:
+            return  # already defined for this prefix (or no prefix set)
+        self._batch_metrics_defined_prefixes.add(prefix)
+        if wandb.run is None:
+            return
+        step_metric_key = f"{prefix}/batch_count"
+        wandb.define_metric(f"{prefix}/reward/batch/*", step_metric=step_metric_key, summary="mean")
+
+    def _define_run_step_metrics(self) -> None:
+        """Define WandB step metrics and summaries for run-level reward logging.
+
+        This configures summary types for run-level metrics (reward/run/*, failures/*).
+        These metrics use the default step_metric_key (train/global_step) as their x-axis
+        since they are logged once per training phase.
+
+        This method is called lazily on each log_run() call, NOT in __init__.
+
+        Metrics are defined per-prefix as prefixes are encountered.
+
+        Metrics covered:
+        - {prefix}/reward/run/* -> last (already summaries, keep final value)
+        - {prefix}/failures/* -> last (per-phase failure stats, keep final value)
+        """
+        prefix = self._key_prefix.rstrip("/")
+        if not prefix or prefix in self._run_metrics_defined_prefixes:
+            return  # already defined for this prefix (or no prefix set)
+        self._run_metrics_defined_prefixes.add(prefix)
+        if wandb.run is None:
+            return
+        # run-level metric suffixes (use "last" since they're already aggregated summaries)
+        metric_suffixes = ["reward/run/*", "failures/*"]
+        for suffix in metric_suffixes:
+            pattern = f"{prefix}/{suffix}"
+            wandb.define_metric(pattern, step_metric=self._step_metric_key, summary="last")
 
     def _prefix_key(
         self,
@@ -342,6 +511,8 @@ class WandBRewardLogger:
             **kwargs: Absorbed for forward compatibility.
         """
         del kwargs  # absorb any future additions for forward compatibility
+        # lazily define step metrics on first log call (after trainer setup)
+        self._define_generation_step_metrics()
         # determine which outputs to emit based on frequency gating
         should_emit_scalars = generation_count is None or self.should_log_scalars(generation_count)
         should_add_row = self._log_tables and (generation_count is None or self.should_add_table_row(generation_count))
@@ -375,8 +546,13 @@ class WandBRewardLogger:
                     payload[f"reward/raw_terms/{term_name}"] = float(raw_value)
             if payload:  # avoid empty wandb.log() calls
                 prefixed = self._prefix_payload(payload)
-                if payload_step is not None:
-                    prefixed[self._step_metric_key] = payload_step
+                # always log generation_count for per-generation metrics; this provides a unique x-axis
+                # value for each logged sample, avoiding aggregation issues when multiple samples
+                # are logged within the same trainer step (e.g., with gradient accumulation).
+                # note: step is intentionally NOT included here; per-generation metrics use
+                # generation_count as the x-axis, not step. step is only used for run-level summaries.
+                if generation_count is not None:
+                    prefixed[self._prefix_key("generation_count")] = generation_count
                 self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         # build and buffer table row (gated independently)
         if should_add_row:
@@ -429,9 +605,12 @@ class WandBRewardLogger:
         batch_mean_rolling_std: float,
         batch_std_rolling_mean: float,
         batch_std_rolling_std: float,
-        step: int | None = None,
+        batch_count: int | None = None,
     ) -> None:
         """Log batch-level reward statistics to W&B.
+
+        Batch-level metrics are indexed to `{prefix}/batch_count` to avoid aggregation issues
+        when multiple batches (e.g., for gradient accumulation) are processed at the same step.
 
         Args:
             batch_mean: Mean reward for the current batch.
@@ -440,9 +619,9 @@ class WandBRewardLogger:
             batch_mean_rolling_std: Rolling std of batch means.
             batch_std_rolling_mean: Rolling mean of batch std devs.
             batch_std_rolling_std: Rolling std of batch std devs.
-            step: Optional step value (overrides logger's default step).
+            batch_count: Monotonic batch counter (1-indexed) used as x-axis for batch metrics.
         """
-        payload_step = self._step if step is None else step
+        self._define_batch_step_metrics()  # deferred initialization
         payload: dict[str, float] = {
             "reward/batch/mean": batch_mean,
             "reward/batch/std": batch_std,
@@ -452,8 +631,8 @@ class WandBRewardLogger:
             "reward/batch/std_rolling/std": batch_std_rolling_std,
         }
         prefixed: dict[str, object] = self._prefix_payload(payload)
-        if payload_step is not None:
-            prefixed[self._step_metric_key] = payload_step
+        if batch_count is not None:
+            prefixed[self._prefix_key("batch_count")] = batch_count
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
 
     def log_run(
@@ -464,9 +643,12 @@ class WandBRewardLogger:
         reward_category_summaries: collections.abc.Mapping[str, float],
         parsing_summaries: collections.abc.Mapping[str, float] | None = None,
         parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
         step: int | None = None,
     ) -> None:
         """Log a run-level summary payload to W&B."""
+        self._define_run_step_metrics()  # deferred initialization
         payload_step = self._step if step is None else step
         payload: dict[str, float] = {}
         payload.update({k: float(v) for k, v in reward_totals.items()})
@@ -476,30 +658,16 @@ class WandBRewardLogger:
             payload.update({k: float(v) for k, v in parsing_summaries.items()})
         if parsing_category_summaries:
             payload.update({k: float(v) for k, v in parsing_category_summaries.items()})
+        if failure_ratio is not None:
+            payload["failures/failure_ratio"] = failure_ratio
+        if failure_count is not None:
+            payload["failures/failure_count"] = float(failure_count)
         prefixed: dict[str, object] = self._prefix_payload(payload)
         if payload_step is not None:
             prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
-
-    def log_failures(
-        self,
-        *,
-        failure_ratio: float,
-        failure_count: int,
-        step: int | None = None,
-    ) -> None:
-        """Log failure statistics to W&B under the failures/ prefix."""
-        payload_step = self._step if step is None else step
-        payload: dict[str, float] = {
-            "failures/failure_ratio": failure_ratio,
-            "failures/failure_count": float(failure_count),
-        }
-        prefixed: dict[str, object] = self._prefix_payload(payload)
-        if payload_step is not None:
-            prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
-        self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
 
     def set_step(
         self,

@@ -79,24 +79,32 @@ class TestInMemoryRewardLogger:
         assert logger.samples[0]["reward_terms"] == {"a": 1.0}  # logger has copy
         assert logger.samples[0]["reward_metrics"] == {"b": 2}
 
-    def test_log_failures_records_to_failures_list(self) -> None:
+    def test_log_run_with_failure_stats(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
-        logger.log_failures(failure_ratio=0.25, failure_count=5, step=10)
-        assert len(logger.failures) == 1
-        assert logger.runs == []  # not mixed into runs
-        entry = logger.failures[0]
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            failure_ratio=0.25,
+            failure_count=5,
+            step=10,
+        )
+        assert len(logger.runs) == 1
+        entry = logger.runs[0]
         assert entry["failure_ratio"] == 0.25
         assert entry["failure_count"] == 5
         assert entry["step"] == 10
 
-    def test_log_failures_without_step(self) -> None:
+    def test_log_run_without_failure_stats(self) -> None:
         logger = reward_logging.InMemoryRewardLogger()
-        logger.log_failures(failure_ratio=0.1, failure_count=2)
-        assert logger.failures[0]["step"] is None
-
-    def test_failures_list_is_initially_empty(self) -> None:
-        logger = reward_logging.InMemoryRewardLogger()
-        assert logger.failures == []
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+        )
+        entry = logger.runs[0]
+        assert "failure_ratio" not in entry
+        assert "failure_count" not in entry
 
 
 class TestMakeWandBRewardLogger:
@@ -134,11 +142,13 @@ class TestWandBRewardLogger:
             total=1.5,
             terms={"t1": 1.0},
             metrics={"m1": True},
-            step=10,
+            generation_count=1,
         )
         assert len(logged_payloads) == 1
         payload = logged_payloads[0]
-        assert payload["train/global_step"] == 10
+        # step is NOT included in per-generation payloads (uses generation_count as x-axis)
+        assert "train/global_step" not in payload
+        assert payload["generation_count"] == 1
         assert payload["reward/total"] == 1.5
         assert payload["t1"] == 1.0
         assert payload["m1"] is True
@@ -181,7 +191,8 @@ class TestWandBRewardLogger:
         assert payload["t1"] == 0.3
         assert payload["cat1"] == 0.8
 
-    def test_set_step_updates_default_step(self) -> None:
+    def test_set_step_updates_default_step_for_log_run(self) -> None:
+        """Verify set_step affects log_run (step is only used for run-level summaries, not per-generation)."""
         logged_payloads: list[dict] = []
 
         class MockWandBRun:
@@ -191,10 +202,11 @@ class TestWandBRewardLogger:
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
         logger.set_step(42)
-        logger.log("s1", total=1.0, terms={}, metrics={})
+        logger.log_run(reward_totals={"mean": 0.5}, reward_term_summaries={}, reward_category_summaries={})
         assert logged_payloads[0]["train/global_step"] == 42
 
-    def test_explicit_step_overrides_default(self) -> None:
+    def test_explicit_step_overrides_default_for_log_run(self) -> None:
+        """Verify explicit step parameter overrides set_step for log_run."""
         logged_payloads: list[dict] = []
 
         class MockWandBRun:
@@ -203,10 +215,11 @@ class TestWandBRewardLogger:
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run, step=100)
-        logger.log("s1", total=1.0, terms={}, metrics={}, step=200)
+        logger.log_run(reward_totals={"mean": 0.5}, reward_term_summaries={}, reward_category_summaries={}, step=200)
         assert logged_payloads[0]["train/global_step"] == 200  # explicit step overrides default
 
-    def test_log_failures_calls_wandb_run_log(self) -> None:
+    def test_per_generation_log_does_not_include_step(self) -> None:
+        """Verify per-generation log() does not include step (uses generation_count as x-axis instead)."""
         logged_payloads: list[dict] = []
 
         class MockWandBRun:
@@ -215,14 +228,36 @@ class TestWandBRewardLogger:
 
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
-        logger.log_failures(failure_ratio=0.25, failure_count=5, step=10)
+        logger.set_step(42)
+        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        assert "train/global_step" not in logged_payloads[0]
+        assert logged_payloads[0]["generation_count"] == 1
+
+    def test_log_run_with_failure_stats_calls_wandb_run_log(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            failure_ratio=0.25,
+            failure_count=5,
+            step=10,
+        )
         assert len(logged_payloads) == 1
         payload = logged_payloads[0]
         assert payload["train/global_step"] == 10
         assert payload["failures/failure_ratio"] == 0.25
         assert payload["failures/failure_count"] == 5.0
+        assert payload["mean"] == 0.5
 
-    def test_log_failures_with_key_prefix(self) -> None:
+    def test_log_run_failure_stats_with_key_prefix(self) -> None:
         logged_payloads: list[dict] = []
 
         class MockWandBRun:
@@ -232,7 +267,14 @@ class TestWandBRewardLogger:
         mock_run = MockWandBRun()
         logger = reward_logging.WandBRewardLogger(mock_run)
         logger.set_key_prefix("train/")
-        logger.log_failures(failure_ratio=0.1, failure_count=2, step=5)
+        logger.log_run(
+            reward_totals={},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            failure_ratio=0.1,
+            failure_count=2,
+            step=5,
+        )
         payload = logged_payloads[0]
         assert "train/failures/failure_ratio" in payload
         assert "train/failures/failure_count" in payload

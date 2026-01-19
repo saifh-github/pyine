@@ -25,11 +25,13 @@ class TestWandBRewardLogger:
             total=1.0,
             terms={"reward/terms/t": 0.25},
             metrics={"reward/metrics/m": 2},
-            step=7,
+            generation_count=7,
         )
         assert len(fake_run.logged) == 1
         payload = fake_run.logged[0]
-        assert payload["train/global_step"] == 7
+        # step is NOT included in per-generation payloads (uses generation_count as x-axis)
+        assert "train/global_step" not in payload
+        assert payload["train/generation_count"] == 7
         assert payload["train/reward/total"] == pytest.approx(1.0)
         assert payload["train/reward/terms/t"] == pytest.approx(0.25)
         assert payload["train/reward/metrics/m"] == 2
@@ -241,7 +243,6 @@ class TestWandBRewardLogger:
             total=1.0,
             terms={},
             metrics={},
-            step=1,
         )
         logger.log(
             "s2",
@@ -249,11 +250,12 @@ class TestWandBRewardLogger:
             total=2.0,
             terms={},
             metrics={},
-            step=2,
         )
         assert len(fake_run.logged) == 1
         payload = typing.cast("dict[str, object]", fake_run.logged[0])
-        assert payload["train/global_step"] == 2
+        # step is NOT included in per-generation payloads (uses generation_count as x-axis)
+        assert "train/global_step" not in payload
+        assert payload["generation_count"] == 2
         assert payload["reward/total"] == pytest.approx(2.0)
 
     def test_table_row_frequency_gating(self, mocker: pytest_mock.MockerFixture) -> None:
@@ -348,3 +350,338 @@ class TestWandBRewardLogger:
         assert len(scalar_payloads) == 3  # 2, 4, 6
         assert len(table_payloads) == 2  # 3, 6
         assert len(added_rows) == 2  # rows added at sample_count 3 and 6
+
+
+class TestWandBDefineMetric:
+    """Tests for wandb.define_metric calls that configure x-axes for metrics."""
+
+    def test_generation_step_metrics_defined_on_first_log(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for generation_count is called lazily on first log()."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        # mock wandb.run to be non-None so define_metric is actually called
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        # define_metric should NOT be called yet (deferred until first log)
+        mock_define_metric.assert_not_called()
+        # first log call should trigger define_metric for "train" prefix
+        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        # verify define_metric was called for generation_count patterns
+        calls = mock_define_metric.call_args_list
+        assert len(calls) > 0, "define_metric should be called on first log()"
+        # check that generation_count is used as step_metric for per-generation patterns
+        generation_patterns_found = []
+        for call in calls:
+            pattern = call[0][0]
+            step_metric = call[1].get("step_metric", "")
+            if "generation_count" in step_metric:
+                generation_patterns_found.append(pattern)
+        expected_patterns = [
+            "train/reward/total",
+            "train/reward/terms/*",
+            "train/reward/metrics/*",
+            "train/parsing/*",
+        ]
+        for expected in expected_patterns:
+            assert any(expected in p for p in generation_patterns_found), (
+                f"expected pattern '{expected}' to use generation_count as step_metric"
+            )
+
+    def test_generation_step_metrics_only_defined_once(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for generation_count is only called once per prefix."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        # multiple log calls with the same prefix
+        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        first_call_count = mock_define_metric.call_count
+        logger.log("s2", total=2.0, terms={}, metrics={}, step=2)
+        logger.log("s3", total=3.0, terms={}, metrics={}, step=3)
+        # call count should not increase after first log for same prefix
+        assert mock_define_metric.call_count == first_call_count, (
+            "define_metric should only be called once per prefix, not on every log()"
+        )
+
+    def test_batch_step_metrics_defined_on_first_log_batch_stats(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for batch_count is called lazily on first log_batch_stats()."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        # define_metric should NOT be called yet
+        mock_define_metric.assert_not_called()
+        # first log_batch_stats call should trigger define_metric for batch patterns
+        logger.log_batch_stats(
+            batch_mean=1.0,
+            batch_std=0.1,
+            batch_mean_rolling_mean=1.0,
+            batch_mean_rolling_std=0.05,
+            batch_std_rolling_mean=0.1,
+            batch_std_rolling_std=0.01,
+            batch_count=1,
+        )
+        calls = mock_define_metric.call_args_list
+        assert len(calls) > 0, "define_metric should be called on first log_batch_stats()"
+        # check that batch_count is used as step_metric for batch patterns
+        batch_patterns_found = []
+        for call in calls:
+            pattern = call[0][0]
+            step_metric = call[1].get("step_metric", "")
+            if "batch_count" in step_metric:
+                batch_patterns_found.append(pattern)
+        assert any("reward/batch" in p for p in batch_patterns_found), (
+            "expected reward/batch/* patterns to use batch_count as step_metric"
+        )
+
+    def test_batch_step_metrics_only_defined_once(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for batch_count is only called once per prefix."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        logger.log_batch_stats(
+            batch_mean=1.0,
+            batch_std=0.1,
+            batch_mean_rolling_mean=1.0,
+            batch_mean_rolling_std=0.05,
+            batch_std_rolling_mean=0.1,
+            batch_std_rolling_std=0.01,
+            batch_count=1,
+        )
+        first_call_count = mock_define_metric.call_count
+        # additional calls with same prefix should not trigger define_metric again
+        logger.log_batch_stats(
+            batch_mean=2.0,
+            batch_std=0.2,
+            batch_mean_rolling_mean=1.5,
+            batch_mean_rolling_std=0.1,
+            batch_std_rolling_mean=0.15,
+            batch_std_rolling_std=0.02,
+            batch_count=2,
+        )
+        assert mock_define_metric.call_count == first_call_count, (
+            "define_metric should only be called once per prefix for batch metrics"
+        )
+
+    def test_generation_and_batch_metrics_defined_independently(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that generation and batch define_metric calls are independent."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        # call log_batch_stats first (should only define batch metrics for "train")
+        logger.log_batch_stats(
+            batch_mean=1.0,
+            batch_std=0.1,
+            batch_mean_rolling_mean=1.0,
+            batch_mean_rolling_std=0.05,
+            batch_std_rolling_mean=0.1,
+            batch_std_rolling_std=0.01,
+            batch_count=1,
+        )
+        batch_call_count = mock_define_metric.call_count
+        # then call log (should define generation metrics for "train")
+        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        total_call_count = mock_define_metric.call_count
+        # both should have triggered define_metric calls
+        assert total_call_count > batch_call_count, (
+            "log() should trigger additional define_metric calls for generation metrics"
+        )
+
+    def test_batch_count_logged_in_payload(self) -> None:
+        """Verify that batch_count is included in the logged payload."""
+        fake_run = _FakeWandBRun()
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")
+        logger.log_batch_stats(
+            batch_mean=1.5,
+            batch_std=0.2,
+            batch_mean_rolling_mean=1.4,
+            batch_mean_rolling_std=0.1,
+            batch_std_rolling_mean=0.18,
+            batch_std_rolling_std=0.02,
+            batch_count=42,
+        )
+        assert len(fake_run.logged) == 1
+        payload = fake_run.logged[0]
+        assert payload["train/batch_count"] == 42
+        assert payload["train/reward/batch/mean"] == pytest.approx(1.5)
+        assert payload["train/reward/batch/std"] == pytest.approx(0.2)
+
+    def test_generation_count_logged_in_payload(self) -> None:
+        """Verify that generation_count is included in the logged payload."""
+        fake_run = _FakeWandBRun()
+        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger.set_key_prefix("train")
+        logger.log(
+            "sample_1",
+            generation_count=99,
+            total=2.5,
+            terms={},
+            metrics={},
+            step=10,
+        )
+        assert len(fake_run.logged) == 1
+        payload = fake_run.logged[0]
+        assert payload["train/generation_count"] == 99
+        assert payload["train/reward/total"] == pytest.approx(2.5)
+
+    def test_run_step_metrics_defined_on_first_log_run(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for run-level metrics is called lazily on first log_run()."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        mock_define_metric.assert_not_called()
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            failure_ratio=0.1,
+            failure_count=5,
+            step=100,
+        )
+        calls = mock_define_metric.call_args_list
+        assert len(calls) > 0, "define_metric should be called on first log_run()"
+        # verify run-level patterns are defined with "last" summary
+        patterns_defined = [call.args[0] for call in calls]
+        assert any("reward/run" in p or "failures" in p for p in patterns_defined)
+        # verify summary type is "last" for run-level metrics
+        for call in calls:
+            assert call.kwargs.get("summary") == "last"
+
+    def test_run_step_metrics_only_defined_once(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric for run-level metrics is only called once per prefix."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            step=1,
+        )
+        first_call_count = mock_define_metric.call_count
+        logger.log_run(
+            reward_totals={"mean": 0.6},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            step=2,
+        )
+        assert mock_define_metric.call_count == first_call_count, (
+            "define_metric should only be called once per prefix for run metrics"
+        )
+
+    def test_define_metric_includes_summary_types(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that define_metric calls include appropriate summary types."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger.set_key_prefix("train")  # metrics are defined per-prefix
+        # trigger all define_metric calls for "train" prefix
+        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        logger.log_batch_stats(
+            batch_mean=1.0,
+            batch_std=0.1,
+            batch_mean_rolling_mean=1.0,
+            batch_mean_rolling_std=0.05,
+            batch_std_rolling_mean=0.1,
+            batch_std_rolling_std=0.01,
+            batch_count=1,
+        )
+        logger.log_run(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            step=1,
+        )
+        # verify all calls include a summary parameter
+        for call in mock_define_metric.call_args_list:
+            assert "summary" in call.kwargs, f"define_metric call missing summary: {call}"
+
+    def test_new_prefix_triggers_define_metric(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that switching to a new prefix triggers additional define_metric calls."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        # first prefix: "train"
+        logger.set_key_prefix("train")
+        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        train_call_count = mock_define_metric.call_count
+        assert train_call_count > 0, "define_metric should be called for 'train' prefix"
+        # verify patterns are for "train" prefix
+        train_patterns = [call.args[0] for call in mock_define_metric.call_args_list]
+        assert all("train/" in p for p in train_patterns), "all patterns should be for 'train' prefix"
+        # switch to new prefix: "eval"
+        logger.set_key_prefix("eval")
+        logger.log("s2", total=2.0, terms={}, metrics={}, generation_count=2)
+        eval_call_count = mock_define_metric.call_count
+        # new prefix should trigger additional define_metric calls
+        assert eval_call_count > train_call_count, (
+            "switching to new prefix should trigger additional define_metric calls"
+        )
+        # verify new patterns are for "eval" prefix
+        new_patterns = [call.args[0] for call in mock_define_metric.call_args_list[train_call_count:]]
+        assert all("eval/" in p for p in new_patterns), "new patterns should be for 'eval' prefix"
+        # switching back to "train" should NOT trigger more calls (already defined)
+        logger.set_key_prefix("train")
+        logger.log("s3", total=3.0, terms={}, metrics={}, generation_count=3)
+        assert mock_define_metric.call_count == eval_call_count, (
+            "switching back to already-defined prefix should not trigger more define_metric calls"
+        )
+
+    def test_custom_prefix_triggers_define_metric(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verify that any custom prefix (not just train/eval) triggers define_metric."""
+        fake_run = _FakeWandBRun()
+        mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
+        mocker.patch.object(reward_logging.wandb, "run", fake_run)
+        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        # use a custom prefix
+        logger.set_key_prefix("custom_phase")
+        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        calls = mock_define_metric.call_args_list
+        assert len(calls) > 0, "define_metric should be called for custom prefix"
+        # verify patterns use the custom prefix
+        patterns = [call.args[0] for call in calls]
+        assert all("custom_phase/" in p for p in patterns), f"all patterns should use custom prefix, got: {patterns}"

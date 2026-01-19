@@ -43,6 +43,31 @@ class _SampleIdSuffixAsFloatTerm:
         return pyine.organisms.models.rewards.core.types.TermResult(value=float(int(suffix)))
 
 
+class _SampleIndexAsFloatTerm:
+    """Test helper term that extracts the numeric index from sample_id and returns it as reward.
+
+    Expects sample_id format like "sample_123" and returns 123.0.
+    """
+
+    def reset(
+        self,
+        run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+    ) -> None:
+        del run_init_ctx
+
+    def __call__(
+        self,
+        sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+    ) -> pyine.organisms.models.rewards.core.types.TermResult:
+        # extract numeric suffix from "sample_123" -> 123
+        parts = sample_ctx.sample_id.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            value = float(int(parts[1]))
+        else:
+            value = 0.0
+        return pyine.organisms.models.rewards.core.types.TermResult(value=value)
+
+
 class TestRewardManager:
     def test_weighting_and_breakdown(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -291,7 +316,6 @@ class TestRewardManager:
         )
         assert len(logger_obj.batch_stats) == 2
         first = logger_obj.batch_stats[0]
-        assert first["step"] == 10
         assert first["batch_mean"] == pytest.approx(1.5)
         assert first["batch_std"] == pytest.approx(0.5)
         assert first["batch_mean_rolling_mean"] == pytest.approx(1.5)
@@ -300,7 +324,6 @@ class TestRewardManager:
         assert first["batch_std_rolling_std"] == pytest.approx(0.0)
 
         second = logger_obj.batch_stats[1]
-        assert second["step"] == 10
         assert second["batch_mean"] == pytest.approx(3.5)
         assert second["batch_std"] == pytest.approx(0.5)
         assert second["batch_mean_rolling_mean"] == pytest.approx(2.5)
@@ -415,6 +438,128 @@ class TestRewardManager:
         assert logger_obj.samples[0]["step"] == 123
         manager.compute(sample, step=7)
         assert logger_obj.samples[1]["step"] == 7
+
+    def test_grpo_style_batching_logs_unique_values_without_repetition(self) -> None:
+        """Verify that logging frequency gating produces unique values across GRPO-style batches.
+
+        This test simulates the batch pattern used in GRPO training:
+        - Multiple "training steps", each with multiple batches
+        - Each batch has num_generations samples (like GRPO)
+        - Frequency gating should log samples at specific generation counts
+        - Logged values should be UNIQUE (no cyclic repetition)
+
+        This test was added to diagnose an issue where users reported seeing
+        the same values repeat periodically in reward logs.
+        """
+        # use a term that returns unique values based on sample index (sample_123 -> 123.0)
+        registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+        def factory(
+            spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+            *,
+            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+            del spec, parser
+            return _SampleIndexAsFloatTerm()
+
+        registry.register_term("sample_index_term", factory)
+
+        # config similar to real GRPO setup: log every 10 samples for faster testing
+        scalar_log_freq = 10
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            scalar_log_every_n_generations=scalar_log_freq,
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="index",
+                    type="sample_index_term",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                scalar_log_every_n_generations=scalar_log_freq,
+                log_tables=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            config, logger=logger_obj, registry=registry
+        )
+
+        # simulate GRPO-style batching: 10 training steps, 4 batches per step, 8 samples per batch
+        num_training_steps = 10
+        micro_batches_per_step = 4
+        samples_per_micro_batch = 8  # like num_generations in GRPO
+        total_samples = num_training_steps * micro_batches_per_step * samples_per_micro_batch  # 320
+
+        sample_idx = 0
+        for step in range(num_training_steps):
+            manager.set_step(step)
+            for _micro_batch in range(micro_batches_per_step):
+                batch_ctxs = []
+                for _sample in range(samples_per_micro_batch):
+                    # use sample_idx as identifier suffix so reward = sample_idx
+                    ctx = rewards_conftest.make_sample_context(identifier=f"sample_{sample_idx}")
+                    batch_ctxs.append(ctx)
+                    sample_idx += 1
+                manager.compute_batch(batch_ctxs)
+
+        # verify generation count is correct
+        assert manager._monotonic_generation_count == total_samples
+
+        # verify we logged the expected number of samples (every scalar_log_freq-th sample)
+        expected_logged = total_samples // scalar_log_freq
+        assert len(logger_obj.samples) == expected_logged, (
+            f"expected {expected_logged} logged samples, got {len(logger_obj.samples)}"
+        )
+
+        # verify generation counts are correct (10, 20, 30, ...)
+        logged_gen_counts = [s["generation_count"] for s in logger_obj.samples]
+        expected_gen_counts = list(range(scalar_log_freq, total_samples + 1, scalar_log_freq))
+        assert logged_gen_counts == expected_gen_counts, (
+            f"generation counts mismatch: {logged_gen_counts[:10]}... vs {expected_gen_counts[:10]}..."
+        )
+
+        # CRITICAL: verify logged values are NOT repeating in a cyclic pattern
+        logged_rewards = [s["reward_total"] for s in logger_obj.samples]
+
+        # with _SampleIndexAsFloatTerm, each logged sample should have a unique reward
+        # (since each sample_idx is unique and reward = sample_idx)
+        # if there's cyclic repetition, it indicates stale values being logged
+        def has_cyclic_repetition(values: list[float], min_cycle_len: int = 3) -> tuple[bool, int]:
+            """Check if a list has cyclic repetition of a subsequence."""
+            n = len(values)
+            for cycle_len in range(min_cycle_len, n // 2 + 1):
+                is_cyclic = True
+                for i in range(cycle_len, n):
+                    if values[i] != values[i % cycle_len]:
+                        is_cyclic = False
+                        break
+                if is_cyclic:
+                    return True, cycle_len
+            return False, 0
+
+        has_cycle, cycle_len = has_cyclic_repetition(logged_rewards)
+        assert not has_cycle, (
+            f"CRITICAL: logged rewards show cyclic repetition with period {cycle_len}! "
+            f"First {min(20, len(logged_rewards))} values: {logged_rewards[:20]}"
+        )
+
+        # verify that all logged rewards are unique (no duplicates)
+        assert len(set(logged_rewards)) == len(logged_rewards), (
+            f"logged rewards should all be unique, but found duplicates: {logged_rewards[:20]}..."
+        )
+
+        # verify that rewards match expected values based on sample index
+        # sample at generation_count G has index G-1, so reward = G-1
+        for entry in logger_obj.samples:
+            gen_count = entry["generation_count"]
+            sample_index = gen_count - 1  # 0-indexed (generation_count is 1-indexed)
+            expected_reward = float(sample_index)  # _SampleIndexAsFloatTerm returns the full index
+            actual_reward = entry["reward_total"]
+            assert actual_reward == pytest.approx(expected_reward), (
+                f"at gen_count={gen_count}, expected reward {expected_reward}, got {actual_reward}"
+            )
 
     def test_introspection_term_names_and_get_term(self) -> None:
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(

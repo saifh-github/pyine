@@ -122,14 +122,19 @@ class RewardManager:
             except Exception as exc:
                 raise ValueError(f"failed to instantiate reward term name={spec.name} type={spec.type}") from exc
 
+        # logging indices: step (trainer), generation_count (per-generation), batch_count (per-batch)
         self._step: int | None = None
-        self._monotonic_generation_count: int = 0  # never resets, used for frequency gating
+        self._monotonic_generation_count: int = 0  # 1-indexed, for per-generation metric indexing
+        self._monotonic_batch_count: int = 0  # 1-indexed, for batch-level metric indexing
+        # per-generation reward accumulators
         self._reward_total_stats = stats_utils.RunningStats()
         self._reward_term_stats: dict[str, stats_utils.RunningStats] = {
             spec.name: stats_utils.RunningStats() for spec in config.terms if spec.enabled
         }
-        self._batch_reward_mean_stats = stats_utils.RunningStats()  # rolling stats on batch mean rewards
-        self._batch_reward_std_stats = stats_utils.RunningStats()  # rolling stats on batch std rewards
+        # batch-level reward accumulators
+        self._batch_reward_mean_stats = stats_utils.RunningStats()
+        self._batch_reward_std_stats = stats_utils.RunningStats()
+
         category_config = config.logging.category_extraction_config
         self._category_extractor: pyine.evals.utils.SampleCategoryExtractor | None = (
             pyine.evals.utils.SampleCategoryExtractor(category_config) if category_config is not None else None
@@ -240,6 +245,7 @@ class RewardManager:
             term.reset(run_init_ctx)
         self._step = None
         self._monotonic_generation_count = 0
+        self._monotonic_batch_count = 0
         self.reset_accumulators()
 
     @property
@@ -267,8 +273,8 @@ class RewardManager:
     ) -> None:
         """Set a default logging step for subsequent `compute*` calls."""
         self._step = step
-        if self._logger and hasattr(self._logger, "set_step"):
-            self._logger.set_step(step)  # type: ignore[reportUnknownMemberType]
+        if self._logger:
+            self._logger.set_step(step)
 
     def set_key_prefix(
         self,
@@ -282,8 +288,8 @@ class RewardManager:
         Args:
             key_prefix: New prefix to apply to all emitted logger keys.
         """
-        if self._logger and hasattr(self._logger, "set_key_prefix"):
-            self._logger.set_key_prefix(key_prefix)  # type: ignore[reportUnknownMemberType]
+        if self._logger:
+            self._logger.set_key_prefix(key_prefix)
 
     def get_reward_total_metrics(self) -> dict[str, float]:
         """Returns aggregated total reward metrics.
@@ -402,6 +408,8 @@ class RewardManager:
         summaries: reward_types.RunSummaries,
         *,
         step: int | None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
     ) -> None:
         """Emit run summaries to the configured logger (assumes logging preconditions checked)."""
         if self._logger is None:
@@ -423,18 +431,24 @@ class RewardManager:
             reward_category_summaries=scoped_reward_category_summaries,
             parsing_summaries=scoped_parsing,
             parsing_category_summaries=scoped_parsing_category,
+            failure_ratio=failure_ratio,
+            failure_count=failure_count,
             step=step,
         )
 
     def flush_stats(
         self,
         step: int | None = None,
+        *,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
     ) -> None:
         """Log all accumulated statistics and reset accumulators.
 
-        This logs total, per-term, category-wise, and parsing metrics, then resets all accumulators.
-        Use this for periodic logging during training when you need to continue accumulating fresh
-        stats afterward (e.g., after an eval phase completes, before switching to the next phase).
+        This logs total, per-term, category-wise, parsing metrics, and optionally failure stats,
+        then resets all accumulators. Use this for periodic logging during training when you need
+        to continue accumulating fresh stats afterward (e.g., after an eval phase completes,
+        before switching to the next phase).
 
         For end-of-training logging where no more samples will be processed, use `finalize_run()`
         instead, which logs without resetting.
@@ -445,7 +459,9 @@ class RewardManager:
         - main_process_only: only log on rank 0.
 
         Args:
-            step: Optional logging step override (defaults to manager step).
+            step: Optional logging step override.
+            failure_ratio: Ratio of failed samples to total samples (optional).
+            failure_count: Total number of failed samples (optional).
         """
         # barrier BEFORE any early returns to avoid distributed deadlock
         # (must happen before logger checks since non-main ranks may not have a logger)
@@ -463,7 +479,12 @@ class RewardManager:
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             self.reset_accumulators()
             return
-        self._emit_run_summaries(summaries, step=log_step)
+        self._emit_run_summaries(
+            summaries,
+            step=log_step,
+            failure_ratio=failure_ratio,
+            failure_count=failure_count,
+        )
         self.reset_accumulators()
 
     def _compute_core(
@@ -562,6 +583,8 @@ class RewardManager:
         """
         if not sample_ctxs:
             return []
+        # increment batch counter unconditionally for every non-empty batch (1-indexed)
+        self._monotonic_batch_count += 1
         # first pass: compute core rewards and populate token count caches
         core_results: list[reward_types.RewardOutput] = []
         caches: list[reward_types.TokenCountCache | None] = []
@@ -633,10 +656,10 @@ class RewardManager:
         # set cache, update stats, and then log (in the correct order, important!)
         for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
             self._token_count_cache = caches[idx]
-            self._update_running_stats(sample_ctx, output)
+            self._update_running_stats(sample_ctx, output)  # this is where generation count gets updated
             self._maybe_log_sample(output, sample_ctx, log=log, step=step, generation_idx=generation_indices[idx])
         # compute and log batch-level stats
-        self._maybe_log_batch_stats(outputs, log=log, step=step)
+        self._maybe_log_batch_stats(outputs, log=log)
         return outputs
 
     def finalize_run(
@@ -644,6 +667,8 @@ class RewardManager:
         *,
         log: bool = True,
         step: int | None = None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
     ) -> None:
         """Log run-level summaries without resetting accumulators.
 
@@ -661,7 +686,9 @@ class RewardManager:
 
         Args:
             log: If False, suppress run-level logging even if enabled in config.
-            step: Optional logging step override (defaults to manager step).
+            step: Optional logging step override.
+            failure_ratio: Ratio of failed samples to total samples (optional).
+            failure_count: Total number of failed samples (optional).
         """
         # barrier BEFORE any early returns to avoid distributed deadlock
         # (must happen before logger checks since non-main ranks may not have a logger)
@@ -677,7 +704,12 @@ class RewardManager:
         # return early if only main process should log and this is not main
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             return
-        self._emit_run_summaries(summaries, step=step_to_use)
+        self._emit_run_summaries(
+            summaries,
+            step=step_to_use,
+            failure_ratio=failure_ratio,
+            failure_count=failure_count,
+        )
 
     def _resolve_parser(
         self,
@@ -1133,7 +1165,6 @@ class RewardManager:
         outputs: collections.abc.Sequence[reward_types.RewardOutput],
         *,
         log: bool | None,
-        step: int | None,
     ) -> None:
         """Compute and log batch-level reward statistics.
 
@@ -1143,7 +1174,6 @@ class RewardManager:
         Args:
             outputs: Reward outputs for all samples in the batch.
             log: Force logging on/off; when None, uses config default.
-            step: Logging step override.
         """
         should_log = self._config.logging.enabled if log is None else log
         if not should_log:
@@ -1175,7 +1205,6 @@ class RewardManager:
         # update rolling stats
         self._batch_reward_mean_stats.update(batch_mean)
         self._batch_reward_std_stats.update(batch_std)
-        step_to_use = self._step if step is None else step
         self._logger.log_batch_stats(
             batch_mean=batch_mean,
             batch_std=batch_std,
@@ -1183,7 +1212,7 @@ class RewardManager:
             batch_mean_rolling_std=self._batch_reward_mean_stats.std(),
             batch_std_rolling_mean=self._batch_reward_std_stats.mean(),
             batch_std_rolling_std=self._batch_reward_std_stats.std(),
-            step=step_to_use,
+            batch_count=self._monotonic_batch_count,
         )
 
     def get_state(
@@ -1193,21 +1222,26 @@ class RewardManager:
 
         Returns:
             Dictionary containing:
+            - step: current trainer step counter (or None);
+            - monotonic_generation_count: 1-indexed counter for per-generation metric indexing;
+            - monotonic_batch_count: 1-indexed counter for batch-level metric indexing;
             - reward_total_stats: serialized RunningStats for total rewards;
             - reward_term_stats: dict of serialized RunningStats per term;
             - reward_category_stats: dict of serialized RunningStats per category;
-            - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled);
-            - step: current step counter (or None);
-            - monotonic_generation_count: 1-indexed generation counter used for logging frequency gating;
             - batch_reward_mean_stats: serialized RunningStats for batch means;
-            - batch_reward_std_stats: serialized RunningStats for batch std devs.
+            - batch_reward_std_stats: serialized RunningStats for batch std devs;
+            - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled).
         """
         state: dict[str, typing.Any] = {
+            # logging indices
+            "step": self._step,
+            "monotonic_generation_count": self._monotonic_generation_count,
+            "monotonic_batch_count": self._monotonic_batch_count,
+            # per-generation reward accumulators
             "reward_total_stats": self._reward_total_stats.as_state(),
             "reward_term_stats": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
             "reward_category_stats": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
-            "step": self._step,
-            "monotonic_generation_count": self._monotonic_generation_count,
+            # batch-level reward accumulators
             "batch_reward_mean_stats": self._batch_reward_mean_stats.as_state(),
             "batch_reward_std_stats": self._batch_reward_std_stats.as_state(),
         }
@@ -1223,12 +1257,17 @@ class RewardManager:
 
         Args:
             state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
-                step, monotonic_generation_count, batch_reward_mean_stats, batch_reward_std_stats,
-                and optionally parsing_stats.
+                step, monotonic_generation_count, monotonic_batch_count, batch_reward_mean_stats,
+                batch_reward_std_stats, and optionally parsing_stats.
 
         Raises:
             KeyError: If required keys are missing from state.
         """
+        # logging indices
+        self._step = state["step"]
+        self._monotonic_generation_count = int(state["monotonic_generation_count"])
+        self._monotonic_batch_count = int(state["monotonic_batch_count"])
+        # per-generation reward accumulators
         self._reward_total_stats = stats_utils.RunningStats.from_state(state["reward_total_stats"])
         for name, term_state in state["reward_term_stats"].items():
             if name not in self._reward_term_stats:
@@ -1237,10 +1276,9 @@ class RewardManager:
         self._reward_category_stats.clear()
         for name, cat_state in state["reward_category_stats"].items():
             self._reward_category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
-        self._step = state["step"]
-        self._monotonic_generation_count = int(state["monotonic_generation_count"])
+        # batch-level reward accumulators
         self._batch_reward_mean_stats = stats_utils.RunningStats.from_state(state["batch_reward_mean_stats"])
         self._batch_reward_std_stats = stats_utils.RunningStats.from_state(state["batch_reward_std_stats"])
-        # restore parsing stats if present and parsing is enabled
+        # parsing stats (optional)
         if self._parsing_stats is not None and "parsing_stats" in state:
             self._parsing_stats = reward_types.ParsingStatsAccumulator.from_state(state["parsing_stats"])
