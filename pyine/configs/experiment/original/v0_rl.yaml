@@ -131,7 +131,7 @@ config:
     do_train: True
     do_eval: True
     do_predict: False
-    report_to: ["wandb"]
+    # note: report_to is set dynamically by the trainer based on wandb availability
     # ------------
     per_device_train_batch_size: 1  # GRPO typically uses smaller batch sizes
     per_device_eval_batch_size: 24  # Larger eval batch (from prototype train_grpo.py)

@@ -101,6 +101,8 @@ def sft_train(
     training_args_dict["batch_eval_metrics"] = True  # for compat w/ the eval_metrics_callback
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
+    else:
+        training_args_dict["report_to"] = []  # explicitly disable to prevent auto-detection
 
     # note: if we want to support other trainers (e.g. TRL), update config dict+trainer w/ instantiable classes
     training_args = transformers.TrainingArguments(**training_args_dict)
@@ -226,10 +228,12 @@ def rl_train(
 
     # 4. Create TRL trainer
     logger.info("creating GRPO trainer...")
-    # override report_to if wandb is available (similar to SFT trainer logic)
+    # override report_to based on wandb availability (similar to SFT trainer logic)
     grpo_config_dict = config.grpo_config.to_dict()
     if runtime is not None and runtime.wandb_run is not None:
         grpo_config_dict["report_to"] = ["wandb"]
+    else:
+        grpo_config_dict["report_to"] = []  # explicitly disable to prevent auto-detection
     # TRL's __post_init__ auto-computes steps_per_generation from generation_batch_size (or vice versa),
     # but doesn't allow both to be set simultaneously; remove steps_per_generation to avoid conflict
     grpo_config_dict.pop("steps_per_generation", None)
