@@ -407,6 +407,7 @@ class _FakeRewardManager:
     def __init__(self) -> None:
         self.key_prefix: str | None = None
         self.step: int | None = None
+        self.epoch: float | None = None
         self.flush_calls: list[int | None] = []
 
     def set_key_prefix(self, prefix: str) -> None:
@@ -414,6 +415,9 @@ class _FakeRewardManager:
 
     def set_step(self, step: int | None) -> None:
         self.step = step
+
+    def set_epoch(self, epoch: float | None) -> None:
+        self.epoch = epoch
 
     def flush_stats(
         self,
@@ -447,6 +451,7 @@ class TestRewardLoggingCallback:
     def state(self, mocker: pytest_mock.MockerFixture) -> pytest_mock.MockFixture:
         return mocker.MagicMock(
             global_step=100,
+            epoch=1.5,
             is_world_process_zero=True,
         )
 

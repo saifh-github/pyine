@@ -920,6 +920,18 @@ class RewardLogger(typing.Protocol):
         """
         ...
 
+    def set_epoch(
+        self,
+        epoch: float | None,
+    ) -> None:
+        """Set a default epoch value for subsequent logs.
+
+        Args:
+            epoch: Default epoch value to use. This is a float because HuggingFace Trainer
+                reports fractional epochs (e.g., 0.5 = halfway through epoch 1).
+        """
+        ...
+
     def set_key_prefix(
         self,
         key_prefix: str,

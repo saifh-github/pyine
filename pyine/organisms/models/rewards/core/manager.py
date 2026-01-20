@@ -122,8 +122,9 @@ class RewardManager:
             except Exception as exc:
                 raise ValueError(f"failed to instantiate reward term name={spec.name} type={spec.type}") from exc
 
-        # logging indices: step (trainer), generation_count (per-generation), batch_count (per-batch)
+        # logging indices: step (trainer), epoch, generation_count (per-generation), batch_count (per-batch)
         self._step: int | None = None
+        self._epoch: float | None = None
         self._monotonic_generation_count: int = 0  # 1-indexed, for per-generation metric indexing
         self._monotonic_batch_count: int = 0  # 1-indexed, for batch-level metric indexing
         # per-generation reward accumulators
@@ -244,6 +245,7 @@ class RewardManager:
         for term in self._terms_by_name.values():
             term.reset(run_init_ctx)
         self._step = None
+        self._epoch = None
         self._monotonic_generation_count = 0
         self._monotonic_batch_count = 0
         self.reset_accumulators()
@@ -275,6 +277,19 @@ class RewardManager:
         self._step = step
         if self._logger:
             self._logger.set_step(step)
+
+    def set_epoch(
+        self,
+        epoch: float | None,
+    ) -> None:
+        """Set a default logging epoch for subsequent `compute*` calls.
+
+        Args:
+            epoch: Epoch value (float because HuggingFace Trainer reports fractional epochs).
+        """
+        self._epoch = epoch
+        if self._logger:
+            self._logger.set_epoch(epoch)
 
     def set_key_prefix(
         self,
@@ -1223,6 +1238,7 @@ class RewardManager:
         Returns:
             Dictionary containing:
             - step: current trainer step counter (or None);
+            - epoch: current trainer epoch counter (or None);
             - monotonic_generation_count: 1-indexed counter for per-generation metric indexing;
             - monotonic_batch_count: 1-indexed counter for batch-level metric indexing;
             - reward_total_stats: serialized RunningStats for total rewards;
@@ -1235,6 +1251,7 @@ class RewardManager:
         state: dict[str, typing.Any] = {
             # logging indices
             "step": self._step,
+            "epoch": self._epoch,
             "monotonic_generation_count": self._monotonic_generation_count,
             "monotonic_batch_count": self._monotonic_batch_count,
             # per-generation reward accumulators
@@ -1257,7 +1274,7 @@ class RewardManager:
 
         Args:
             state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
-                step, monotonic_generation_count, monotonic_batch_count, batch_reward_mean_stats,
+                step, epoch, monotonic_generation_count, monotonic_batch_count, batch_reward_mean_stats,
                 batch_reward_std_stats, and optionally parsing_stats.
 
         Raises:
@@ -1265,6 +1282,7 @@ class RewardManager:
         """
         # logging indices
         self._step = state["step"]
+        self._epoch = state["epoch"]
         self._monotonic_generation_count = int(state["monotonic_generation_count"])
         self._monotonic_batch_count = int(state["monotonic_batch_count"])
         # per-generation reward accumulators

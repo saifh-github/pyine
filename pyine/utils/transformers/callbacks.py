@@ -464,11 +464,12 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Set train prefix and logging step at the start of each training step."""
+        """Set train prefix, logging step, and epoch at the start of each training step."""
         if self._in_eval is not False:
             self.reward_manager.set_key_prefix(self.train_prefix)
             self._in_eval = False
         self.reward_manager.set_step(state.global_step)
+        self.reward_manager.set_epoch(state.epoch)
 
     @typing.override
     def on_step_end(

@@ -78,6 +78,7 @@ class InMemoryRewardLogger:
         self.runs: list[dict[str, object]] = []
         self.batch_stats: list[dict[str, object]] = []
         self._step: int | None = None
+        self._epoch: float | None = None
         self._key_prefix: str = ""
         self._scalar_log_every_n_generations = int(scalar_log_every_n_generations)
         self._log_tables = log_tables
@@ -150,6 +151,7 @@ class InMemoryRewardLogger:
             "generation_count": generation_count,
             "step": step,
             "internal_step": self._step,
+            "internal_epoch": self._epoch,
             "internal_key_prefix": self._key_prefix,
             "prompt": prompt,
             "expected_output": expected_output,
@@ -173,6 +175,10 @@ class InMemoryRewardLogger:
     def set_step(self, step: int | None) -> None:
         """Set a default step value for subsequent logs."""
         self._step = step
+
+    def set_epoch(self, epoch: float | None) -> None:
+        """Set a default epoch value for subsequent logs."""
+        self._epoch = epoch
 
     def set_key_prefix(self, key_prefix: str) -> None:
         """Set the key prefix for subsequent logs."""
@@ -292,6 +298,7 @@ class WandBRewardLogger:
         self._wandb_run = wandb_run
         self._key_prefix = ""
         self._step = step
+        self._epoch: float | None = None
         self._log_tables = log_tables
         self._table_key = "generation_details"
         self._table_max_rows = int(table_max_rows)
@@ -553,6 +560,8 @@ class WandBRewardLogger:
                 # generation_count as the x-axis, not step. step is only used for run-level summaries.
                 if generation_count is not None:
                     prefixed[self._prefix_key("generation_count")] = generation_count
+                if self._epoch is not None:
+                    prefixed[self._prefix_key("epoch")] = self._epoch
                 self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         # build and buffer table row (gated independently)
         if should_add_row:
@@ -633,6 +642,8 @@ class WandBRewardLogger:
         prefixed: dict[str, object] = self._prefix_payload(payload)
         if batch_count is not None:
             prefixed[self._prefix_key("batch_count")] = batch_count
+        if self._epoch is not None:
+            prefixed[self._prefix_key("epoch")] = self._epoch
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
 
     def log_run(
@@ -665,6 +676,8 @@ class WandBRewardLogger:
         prefixed: dict[str, object] = self._prefix_payload(payload)
         if payload_step is not None:
             prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
+        if self._epoch is not None:
+            prefixed[self._prefix_key("epoch")] = self._epoch
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_tables:
             self.flush_tables(step=payload_step)
@@ -675,6 +688,13 @@ class WandBRewardLogger:
     ) -> None:
         """Set a default step value for subsequent logs (logged under `step_metric_key`)."""
         self._step = step
+
+    def set_epoch(
+        self,
+        epoch: float | None,
+    ) -> None:
+        """Set a default epoch value for subsequent logs."""
+        self._epoch = epoch
 
     def set_key_prefix(
         self,
