@@ -137,7 +137,7 @@ config:
     per_device_eval_batch_size: 24  # Larger eval batch (from prototype train_grpo.py)
     gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8 (from prototype)
     learning_rate: 1e-5  # Lower than SFT (2e-4) for RL stability
-    weight_decay: 0.05
+    weight_decay: 0.0
     lr_scheduler_type: "cosine"
     warmup_ratio: 0.1
     gradient_checkpointing: False

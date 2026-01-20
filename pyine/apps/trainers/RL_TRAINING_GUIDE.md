@@ -149,7 +149,7 @@ config:
     per_device_eval_batch_size: 4
     gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8
     learning_rate: 1e-5  # Lower than SFT for RL stability
-    weight_decay: 0.05
+    weight_decay: 0.0
     lr_scheduler_type: "cosine"
     warmup_ratio: 0.1
     gradient_checkpointing: False
@@ -660,7 +660,7 @@ grpo_config:
   learning_rate: 1e-5       # Lower than SFT (typically 2e-4) for RL stability
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
-  weight_decay: 0.05
+  weight_decay: 0.0
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.1
   optim: "adamw_torch_fused"

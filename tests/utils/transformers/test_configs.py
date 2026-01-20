@@ -85,7 +85,7 @@ class TestTrainingArgsConfig:
             per_device_eval_batch_size=32,
             learning_rate=3e-5,
             warmup_steps=100,
-            weight_decay=0.01,
+            weight_decay=0.0,
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
