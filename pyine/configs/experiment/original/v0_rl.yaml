@@ -139,7 +139,7 @@ config:
     learning_rate: 1e-5  # Lower than SFT (2e-4) for RL stability
     weight_decay: 0.05
     lr_scheduler_type: "cosine"
-    warmup_steps: 100
+    warmup_ratio: 0.1
     gradient_checkpointing: False
     gradient_checkpointing_kwargs:
       use_reentrant: False

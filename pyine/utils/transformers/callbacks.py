@@ -124,7 +124,8 @@ class StdoutMilestones(transformers.TrainerCallback):
                 f"logging_strategy={args.logging_strategy}, logging_steps={args.logging_steps}, "
                 f"eval_strategy={args.eval_strategy}, save_strategy={args.save_strategy}"
             )
-            self.print_fn(f"learning_rate={args.learning_rate}, warmup_steps={args.warmup_steps}")
+            warmup = args.warmup_ratio if args.warmup_ratio else args.warmup_steps
+            self.print_fn(f"learning_rate={args.learning_rate}, warmup={warmup}")
 
     @typing.override
     def on_epoch_begin(
