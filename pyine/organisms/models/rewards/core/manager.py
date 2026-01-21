@@ -612,16 +612,15 @@ class RewardManager:
             for result, cache in zip(core_results, caches, strict=True):
                 if self._verbosity_scaler is not None:
                     assert cache is not None, "should have been enabled for verbosity scaling?"
-                    scaled_total, scaled_terms, v_metrics = self._verbosity_scaler.apply_absolute(
+                    scaled_total, v_metrics = self._verbosity_scaler.apply_absolute(
                         aggregated_reward=result.total,
-                        weighted_terms=result.weighted_terms,
                         cache=cache,
                     )
                     metrics = dict(result.metrics)
                     metrics.update(v_metrics)
                     output = reward_types.RewardOutput(
                         total=scaled_total,
-                        weighted_terms=scaled_terms,
+                        weighted_terms=result.weighted_terms,
                         raw_terms=result.raw_terms,
                         metrics=metrics,
                     )
@@ -637,15 +636,13 @@ class RewardManager:
             outputs_by_idx: list[reward_types.RewardOutput | None] = [None] * len(sample_ctxs)
             for _sample_gid, sample_indices in grouped_indices.items():
                 group_totals = [core_results[idx].total for idx in sample_indices]
-                group_terms = [core_results[idx].weighted_terms for idx in sample_indices]
                 group_caches: list[reward_types.TokenCountCache] = []
                 for idx in sample_indices:
                     cache = caches[idx]
                     assert cache is not None, "token cache should have been enabled for verbosity scaling"
                     group_caches.append(cache)
-                scaled_totals, scaled_terms, v_metrics = self._verbosity_scaler.apply_to_group(
+                scaled_totals, v_metrics = self._verbosity_scaler.apply_relative(
                     aggregated_rewards=group_totals,
-                    all_weighted_terms=group_terms,
                     caches=group_caches,
                 )
                 for local_sample_idx, global_sample_idx in enumerate(sample_indices):
@@ -654,7 +651,7 @@ class RewardManager:
                     metrics.update(v_metrics[local_sample_idx])
                     outputs_by_idx[global_sample_idx] = reward_types.RewardOutput(
                         total=scaled_totals[local_sample_idx],
-                        weighted_terms=scaled_terms[local_sample_idx],
+                        weighted_terms=result.weighted_terms,
                         raw_terms=result.raw_terms,
                         metrics=metrics,
                     )
@@ -935,7 +932,8 @@ class RewardManager:
         """Update run-level summary stats.
 
         Note: Per-term stats track weighted values (after per-term clipping and weight
-        multiplication), not raw term values. This matches what contributes to the total.
+        multiplication), not raw term values. If verbosity scaling is enabled, totals may be
+        post-scaled while per-term stats remain unscaled.
         """
         self._monotonic_generation_count += 1  # increment before stats update (1-indexed)
         total_reward = float(output.total)

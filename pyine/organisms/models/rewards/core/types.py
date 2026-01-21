@@ -244,11 +244,12 @@ class RewardOutput:
 
     Note on terminology:
     - `weighted_terms`: Per-term contributions after per-term clipping and weighting.
+      These values are pre any post-aggregation modifiers (e.g., verbosity scaling).
     - `raw_terms`: Original term values before any clipping or weighting (useful for diagnostics).
     """
 
     total: float
-    """Aggregated scalar reward after per-term clipping, weighting, and total clipping."""
+    """Final scalar reward after aggregation and any post-aggregation modifiers (e.g., verbosity scaling)."""
     weighted_terms: dict[str, float]
     """Per-term contributions after per-term clipping and weighting."""
     raw_terms: dict[str, float] | None = None

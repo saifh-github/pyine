@@ -296,13 +296,18 @@ skipped. Use `compute_batch(sample_ctxs)` instead (samples are automatically gro
 
 ### How It Works
 
-The verbosity factor is applied as a post-aggregation multiplier:
+The verbosity factor is applied as a post-aggregation multiplier to the **total reward only**:
 
 ```
 final_reward = aggregated_reward * verbosity_factor
 ```
 
 Where `verbosity_factor` is in `[min_factor, max_factor]` (typically 0.0 to 1.0).
+
+Note that the weighted_terms (per-term reward breakdown) are **not** scaled; they are preserved
+as-is to show the base contribution from each term before verbosity scaling. This allows you to
+compare `reward/total` (post-scaling) against `reward/terms/*` (pre-scaling) to see the effect
+of verbosity scaling in logged metrics.
 
 ### Metrics
 

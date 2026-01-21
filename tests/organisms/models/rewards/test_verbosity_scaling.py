@@ -223,10 +223,9 @@ class TestRelativeMode:
         # create caches with identical token counts
         caches = [_make_cache(100) for _ in range(3)]
         rewards = [1.0, 1.0, 1.0]
-        terms = [{"t": 1.0}, {"t": 1.0}, {"t": 1.0}]
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            scaled_totals, _, _ = scaler.apply_to_group(rewards, terms, caches)
+            scaled_totals, _ = scaler.apply_relative(rewards, caches)
             # warning should be emitted
             assert len(w) == 1
             assert "std=0" in str(w[0].message)
@@ -235,7 +234,7 @@ class TestRelativeMode:
         # second call should not emit warning again
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            scaler.apply_to_group(rewards, terms, caches)
+            scaler.apply_relative(rewards, caches)
             assert len(w) == 0  # no new warning
 
     def test_single_sample_warns_and_skips(self) -> None:
@@ -250,7 +249,7 @@ class TestRelativeMode:
         cache = _make_cache(100)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            scaled_totals, _, _ = scaler.apply_to_group([1.0], [{"t": 1.0}], [cache])
+            scaled_totals, _ = scaler.apply_relative([1.0], [cache])
             assert len(w) == 1
             assert "< 2 samples" in str(w[0].message)
         assert scaled_totals == [1.0]
@@ -313,10 +312,10 @@ class TestConfigValidation:
 
 
 class TestScalingConsistency:
-    """Tests for breakdown consistency after scaling."""
+    """Tests for scaling behavior consistency."""
 
-    def test_scaled_terms_sum_to_scaled_total_without_clipping(self) -> None:
-        """After scaling (no clip_total), weighted_terms should sum to total."""
+    def test_absolute_mode_scales_total_only(self) -> None:
+        """Absolute mode should only scale the total reward."""
         config = reward_configs.VerbosityScalingConfig(
             enabled=True,
             mode="absolute",
@@ -328,32 +327,29 @@ class TestScalingConsistency:
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
         cache = _make_cache(50)  # 50 tokens, in decay range
-        # pre-scaling values
         aggregated_reward = 2.0
-        weighted_terms = {"term_a": 1.2, "term_b": 0.8}
-        scaled_total, scaled_terms, _ = scaler.apply_absolute(aggregated_reward, weighted_terms, cache)
-        # sum of scaled terms should equal scaled total
-        assert sum(scaled_terms.values()) == pytest.approx(scaled_total)
+        scaled_total, metrics = scaler.apply_absolute(aggregated_reward, cache)
+        # total should be scaled (factor < 1.0 at 50 tokens)
+        assert scaled_total < aggregated_reward
+        # metrics should contain the factor
+        assert "verbosity/factor" in metrics
 
-    def test_raw_terms_unchanged(self) -> None:
-        """raw_terms should remain unscaled (not modified by verbosity scaling)."""
-        # Note: verbosity scaling only modifies total and weighted_terms
-        # raw_terms is passed through unchanged by RewardManager
+    def test_relative_mode_scales_total_only(self) -> None:
+        """Relative mode should only scale the total rewards."""
         config = reward_configs.VerbosityScalingConfig(
             enabled=True,
-            mode="absolute",
-            decay_type="linear",
-            threshold_tokens=10,
-            end_tokens=100,
+            mode="relative",
             max_factor=1.0,
             min_factor=0.5,
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
-        cache = _make_cache(50)
-        original_terms = {"term_a": 1.0, "term_b": 0.5}
-        _, scaled_terms, _ = scaler.apply_absolute(1.5, original_terms, cache)
-        # scaled_terms should be different from original due to scaling
-        assert scaled_terms != original_terms
+        caches = [_make_cache(50), _make_cache(100), _make_cache(150)]
+        rewards = [1.0, 1.0, 1.0]
+        scaled_totals, all_metrics = scaler.apply_relative(rewards, caches)
+        # above-mean samples should be scaled down
+        assert scaled_totals[2] < rewards[2]
+        # metrics should contain group stats
+        assert "verbosity/group_mean" in all_metrics[0]
 
 
 class TestNumericalStability:
@@ -392,7 +388,7 @@ class TestMetricsEmission:
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
         cache = _make_cache(50)
-        _, _, metrics = scaler.apply_absolute(1.0, {"t": 1.0}, cache)
+        _, metrics = scaler.apply_absolute(1.0, cache)
         assert "verbosity/factor" in metrics
         assert "verbosity/token_count" in metrics
         assert "verbosity/pre_scaling_reward" in metrics
@@ -407,7 +403,7 @@ class TestMetricsEmission:
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
         caches = [_make_cache(50), _make_cache(100), _make_cache(150)]
-        _, _, all_metrics = scaler.apply_to_group([1.0, 1.0, 1.0], [{"t": 1.0}] * 3, caches)
+        _, all_metrics = scaler.apply_relative([1.0, 1.0, 1.0], caches)
         for metrics in all_metrics:
             assert "verbosity/group_mean" in metrics
             assert "verbosity/group_std" in metrics
@@ -422,7 +418,7 @@ class TestMetricsEmission:
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
         cache = _make_cache(50)
-        _, _, metrics = scaler.apply_absolute(1.0, {"t": 1.0}, cache)
+        _, metrics = scaler.apply_absolute(1.0, cache)
         assert len(metrics) == 0
 
 
@@ -444,11 +440,11 @@ class TestSkipNegativeRewards:
         scaler = verbosity_scaling.VerbosityScaler(config)
         cache = _make_cache(50)  # would normally get factor < 1.0
         # positive reward gets scaled
-        scaled_pos, _, metrics_pos = scaler.apply_absolute(1.0, {"t": 1.0}, cache)
+        scaled_pos, metrics_pos = scaler.apply_absolute(1.0, cache)
         assert scaled_pos < 1.0  # factor was applied
         assert metrics_pos["verbosity/skipped_negative"] == 0
         # negative reward skips scaling (factor=1.0)
-        scaled_neg, _, metrics_neg = scaler.apply_absolute(-1.0, {"t": -1.0}, cache)
+        scaled_neg, metrics_neg = scaler.apply_absolute(-1.0, cache)
         assert scaled_neg == -1.0  # unchanged
         assert metrics_neg["verbosity/skipped_negative"] == 1
         assert metrics_neg["verbosity/factor"] == 1.0
@@ -466,8 +462,7 @@ class TestSkipNegativeRewards:
         # mix of positive and negative rewards
         caches = [_make_cache(50), _make_cache(100), _make_cache(150)]
         rewards = [1.0, -0.5, 0.8]  # second one is negative
-        terms = [{"t": r} for r in rewards]
-        scaled_totals, _, all_metrics = scaler.apply_to_group(rewards, terms, caches)
+        scaled_totals, all_metrics = scaler.apply_relative(rewards, caches)
         # first and third get scaled normally
         assert scaled_totals[0] != 1.0 or scaled_totals[2] != 0.8
         # second (negative) should be unchanged
@@ -489,7 +484,7 @@ class TestSkipNegativeRewards:
         )
         scaler = verbosity_scaling.VerbosityScaler(config)
         cache = _make_cache(50)
-        scaled, _, metrics = scaler.apply_absolute(-1.0, {"t": -1.0}, cache)
+        scaled, metrics = scaler.apply_absolute(-1.0, cache)
         # negative reward gets scaled (moves toward 0)
         assert scaled > -1.0
         assert "verbosity/skipped_negative" not in metrics
@@ -510,14 +505,14 @@ class TestMissingSource:
         # cache only has MODEL_OUTPUT, not PARSED_REASONING
         cache = _make_cache(100, source=reward_types.LengthSource.model_output)
         with pytest.raises(ValueError, match="requires token count for source"):
-            scaler.apply_absolute(1.0, {"t": 1.0}, cache)
+            scaler.apply_absolute(1.0, cache)
 
 
 class TestManagerIntegration:
     """Integration tests with RewardManager."""
 
-    def test_absolute_mode_scales_total_and_weighted_terms(self) -> None:
-        """Absolute mode should scale total and weighted_terms but preserve raw_terms."""
+    def test_absolute_mode_scales_total_not_weighted_terms(self) -> None:
+        """Absolute mode should scale total but preserve weighted_terms and raw_terms."""
         pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
         config = reward_configs.RewardManagerConfig(
             terms=[
@@ -561,10 +556,10 @@ class TestManagerIntegration:
         # raw_terms should be unscaled (original term value)
         assert output.raw_terms is not None
         assert output.raw_terms["parseable"] == 1.0  # original unscaled value
-        # weighted_terms should be scaled (< raw)
-        assert output.weighted_terms["parseable"] < output.raw_terms["parseable"]
-        # total should be scaled
-        assert output.total < 1.0
+        # weighted_terms should also be unscaled (verbosity only scales total)
+        assert output.weighted_terms["parseable"] == output.raw_terms["parseable"]
+        # total should be scaled (less than sum of weighted_terms)
+        assert output.total < output.weighted_terms["parseable"]
 
     def test_relative_mode_warns_on_compute(self) -> None:
         """Relative mode should warn when using compute (no group context)."""

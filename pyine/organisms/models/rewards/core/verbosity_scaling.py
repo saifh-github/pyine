@@ -9,6 +9,9 @@ rewards based on output length. The scaler supports two modes:
 The verbosity factor is normally in [min_factor, max_factor] and is applied as:
     final_reward = aggregated_reward * verbosity_factor
 
+Note: Only the total reward is scaled. The RewardManager preserves weighted_terms unchanged so
+users can see both the pre-scaling term breakdown and the final scaled total in logged metrics.
+
 Important:
     In relative mode, samples at or below the group mean get factor ~max_factor (not necessarily 1.0).
     If max_factor < 1.0, even "non-verbose" samples will receive some penalty. Set max_factor=1.0
@@ -171,18 +174,16 @@ class VerbosityScaler:
     def apply_absolute(
         self,
         aggregated_reward: float,
-        weighted_terms: dict[str, float],
         cache: reward_types.TokenCountCache,
-    ) -> tuple[float, dict[str, float], dict[str, reward_types.MetricValue]]:
+    ) -> tuple[float, dict[str, reward_types.MetricValue]]:
         """Apply absolute scaling to a single sample.
 
         Args:
             aggregated_reward: Pre-scaling total reward.
-            weighted_terms: Pre-scaling weighted term breakdown.
             cache: Token count cache from parsing stats.
 
         Returns:
-            Tuple of (scaled_total, scaled_weighted_terms, metrics).
+            Tuple of (scaled_total, metrics).
 
         Raises:
             ValueError: If the configured length source is not available in the cache.
@@ -203,7 +204,6 @@ class VerbosityScaler:
             factor = self.compute_absolute_factor(token_count)
             skipped = False
         scaled_total = aggregated_reward * factor
-        scaled_terms = {name: val * factor for name, val in weighted_terms.items()}
         if self._config.emit_metrics:
             metrics["verbosity/token_count"] = token_count
             metrics["verbosity/factor"] = factor
@@ -211,23 +211,21 @@ class VerbosityScaler:
             metrics["verbosity/post_scaling_reward"] = scaled_total
             if self._config.skip_negative_rewards:
                 metrics["verbosity/skipped_negative"] = int(skipped)
-        return scaled_total, scaled_terms, metrics
+        return scaled_total, metrics
 
-    def apply_to_group(
+    def apply_relative(
         self,
         aggregated_rewards: collections.abc.Sequence[float],
-        all_weighted_terms: collections.abc.Sequence[dict[str, float]],
         caches: collections.abc.Sequence[reward_types.TokenCountCache],
-    ) -> tuple[list[float], list[dict[str, float]], list[dict[str, reward_types.MetricValue]]]:
+    ) -> tuple[list[float], list[dict[str, reward_types.MetricValue]]]:
         """Apply relative scaling to a group of samples sharing the same prompt.
 
         Args:
             aggregated_rewards: Pre-scaling total rewards for each sample.
-            all_weighted_terms: Pre-scaling weighted term breakdowns for each sample.
             caches: Token count caches from parsing stats for each sample.
 
         Returns:
-            Tuple of (scaled_totals, scaled_weighted_terms, metrics_per_sample).
+            Tuple of (scaled_totals, metrics_per_sample).
 
         Raises:
             ValueError: If any sample is missing the required token count in its cache.
@@ -271,13 +269,10 @@ class VerbosityScaler:
                 factors: list[float] = []
                 for count in token_counts:
                     factors.append(self.compute_relative_factor(count, group_mean, group_std))
-        # apply scaling
+        # apply scaling to totals
         scaled_totals: list[float] = []
-        scaled_terms_list: list[dict[str, float]] = []
         all_metrics: list[dict[str, reward_types.MetricValue]] = []
-        for reward, terms, factor, count in zip(
-            aggregated_rewards, all_weighted_terms, factors, token_counts, strict=True
-        ):
+        for reward, factor, count in zip(aggregated_rewards, factors, token_counts, strict=True):
             # skip scaling for negative rewards if configured
             if self._config.skip_negative_rewards and reward < 0:
                 effective_factor = 1.0
@@ -286,9 +281,7 @@ class VerbosityScaler:
                 effective_factor = factor
                 skipped = False
             scaled_total = reward * effective_factor
-            scaled_terms = {name: val * effective_factor for name, val in terms.items()}
             scaled_totals.append(scaled_total)
-            scaled_terms_list.append(scaled_terms)
             metrics: dict[str, reward_types.MetricValue] = {}
             if self._config.emit_metrics:
                 metrics["verbosity/token_count"] = count
@@ -302,4 +295,4 @@ class VerbosityScaler:
                 if self._config.skip_negative_rewards:
                     metrics["verbosity/skipped_negative"] = int(skipped)
             all_metrics.append(metrics)
-        return scaled_totals, scaled_terms_list, all_metrics
+        return scaled_totals, all_metrics
