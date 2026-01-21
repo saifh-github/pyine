@@ -138,7 +138,7 @@ def _get_grpo_configs(
             "per_device_eval_batch_size": 2,
             "gradient_accumulation_steps": 4,
             "learning_rate": 1e-5,
-            "warmup_ratio": 0.1,
+            "warmup_ratio": 0.05,
             "logging_steps": 5,
             "save_steps": 500,
             "save_total_limit": 3,

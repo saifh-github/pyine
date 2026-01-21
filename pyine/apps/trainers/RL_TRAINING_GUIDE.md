@@ -151,7 +151,7 @@ config:
     learning_rate: 1e-5  # Lower than SFT for RL stability
     weight_decay: 0.0
     lr_scheduler_type: "cosine"
-    warmup_ratio: 0.1
+    warmup_ratio: 0.05
     gradient_checkpointing: False
     gradient_checkpointing_kwargs:
       use_reentrant: False
@@ -662,7 +662,7 @@ grpo_config:
   gradient_accumulation_steps: 8
   weight_decay: 0.0
   lr_scheduler_type: "cosine"
-  warmup_ratio: 0.1
+  warmup_ratio: 0.05
   optim: "adamw_torch_fused"
   max_grad_norm: 1.0
   num_train_epochs: 3

@@ -76,7 +76,7 @@ config:
     learning_rate: 2e-4  # LoRA likes higher LR
     weight_decay: 0.0
     lr_scheduler_type: "cosine"
-    warmup_ratio: 0.03
+    warmup_ratio: 0.05
     gradient_checkpointing: True
     gradient_checkpointing_kwargs:
       use_reentrant: False
