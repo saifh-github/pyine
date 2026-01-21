@@ -32,7 +32,6 @@ import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
-import pyine.utils.distrib
 import pyine.utils.filesystem
 import pyine.utils.portability
 import pyine.utils.reprod
@@ -518,14 +517,14 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
     def prepare_data(self) -> None:
         """Prepares metadata and pre-filters traces, saving the results to a local tmpdir.
 
-        Remember: this function should NOT be saving any state to the data module object, as it
-        will only run on the main process.
+        Note: This method has NO rank guards. The caller (prepare_datamodule in common.py)
+        is responsible for ensuring only appropriate ranks call this method. If multiple local ranks
+        call the method simultaneously, they may try to overwrite each other's operations.
         """
         lmdb_paths_str = "\n\t".join([str(p) for p in self.config.lmdb_paths])
         cache_name = self._get_cache_subdirectory_name()
-        if self._is_metadata_prepared() or not pyine.utils.distrib.is_main_process():
-            if pyine.utils.distrib.is_main_process():
-                logger.info(f"using cached {cache_name} datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
+        if self._is_metadata_prepared():
+            logger.info(f"using cached {cache_name} datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
             return
         logger.info(f"preparing {cache_name} datamodule metadata for lmdb paths:\n\t{lmdb_paths_str}")
         # first prep step: identify which traces are to be kept based on our base tag filter rule
@@ -590,6 +589,19 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             for stat_key, stat_val in parser.get_stats().items():
                 stats[f"{subset_name}/{stat_key}"] = stat_val
         return stats
+
+    @typing.override
+    def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:
+        """Return inputs for cross-node fingerprint validation.
+
+        Returns the metadata file path as the fingerprint input. The metadata file contains all
+        deterministic information about the prepared dataset.
+
+        Returns:
+            FingerprintInputs with the metadata file path.
+        """
+        metadata_path = self._get_prepared_metadata_file_path()
+        return pyine.utils.reprod.FingerprintInputs(metadata_paths=[metadata_path])
 
     @typing.override
     def get_parser(

@@ -690,7 +690,16 @@ def prepare_datamodule(
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
-    """Prepares the configured datamodule and returns it.
+    """Prepares the configured datamodule with per-node or global-rank-0 preparation.
+
+    When per-node prep is enabled (i.e. when caching on local FS):
+    - Local rank 0 on each node runs prepare_data();
+    - Intra-node barrier synchronizes local ranks;
+    - Cross-node fingerprint validation ensures data integrity.
+
+    Otherwise, when single-node or using a shared filesystem:
+    - Only global rank 0 runs prepare_data();
+    - Standard barrier synchronizes all ranks.
 
     Args:
         config: The application configuration, which should contain the datamodule config.
@@ -701,8 +710,35 @@ def prepare_datamodule(
     """
     logger.info("preparing datamodule and setting up parsers/loaders...")
     dm = config.datamodule_config.instantiate_datamodule(verbose=True)
-    dm.prepare_data()
-    pyine.utils.distrib.barrier()  # wait for all processes to finish preparing data
+    # use synchronized decision-making to prevent cross-node divergence and ensure DDP is
+    # initialized early (before any rank-divergent work like fingerprint computation)
+    use_per_node_prep = pyine.utils.distrib.determine_per_node_prep_mode()
+    if use_per_node_prep:
+        pyine.utils.distrib.validate_node_configuration(use_per_node_prep)
+        if pyine.utils.distrib.is_local_main_process():
+            logger.info(f"node {pyine.utils.distrib.get_node_rank()} preparing data...")
+            dm.prepare_data()
+        pyine.utils.distrib.local_barrier()
+        fingerprint_payload: pyine.utils.distrib.FingerprintPayload | None = None
+        if pyine.utils.distrib.is_local_main_process():
+            try:
+                fingerprint = _compute_datamodule_fingerprint(dm, config)
+                fingerprint_payload = pyine.utils.distrib.FingerprintPayload(
+                    ok=True,
+                    fingerprint=fingerprint,
+                    error=None,
+                )
+            except Exception as exc:
+                fingerprint_payload = pyine.utils.distrib.FingerprintPayload(
+                    ok=False,
+                    fingerprint=None,
+                    error=str(exc),
+                )
+        pyine.utils.distrib.validate_cross_node_fingerprints(fingerprint_payload, "datamodule")
+    else:
+        if pyine.utils.distrib.is_main_process():
+            dm.prepare_data()
+    pyine.utils.distrib.barrier()
     dm.setup()
     if (
         config.use_wandb_logging
@@ -725,6 +761,30 @@ def prepare_datamodule(
                 prefix=f"predict/{eval_subset_name}",
             )
     return dm
+
+
+def _compute_datamodule_fingerprint(
+    dm: pyine.data.datamodule.BaseDataModule[typing.Any],
+    config: AppMainConfig,
+) -> str:
+    """Compute fingerprint of prepared datamodule for cross-node validation.
+
+    Uses the datamodule's get_fingerprint_inputs() interface to ensure
+    each datamodule explicitly provides its deterministic artifacts.
+
+    Args:
+        dm: The prepared datamodule.
+        config: The application configuration.
+
+    Returns:
+        SHA256 hexdigest fingerprint string.
+    """
+    config_hash = pyine.utils.reprod.get_versioned_cache_hash(config.datamodule_config.model_dump())
+    fingerprint_inputs = dm.get_fingerprint_inputs()
+    return pyine.utils.reprod.compute_data_fingerprint(
+        inputs=fingerprint_inputs,
+        config_hash=config_hash,
+    )
 
 
 def _is_deepspeed_enabled() -> bool:

@@ -222,3 +222,69 @@ def test_check_output_path_overwrite_deletes_when_forced(
     (out / "x.txt").write_text("x", encoding="utf-8")
     fs.check_output_path_overwrite(out, force=True)
     assert not out.exists()
+
+
+class TestSharedFilesystemDetection:
+    def test_assumes_shared_on_non_linux(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        # non-Linux should always return True (assume shared)
+        assert fs.is_path_on_shared_filesystem(tmp_path) is True
+
+    def test_assumes_shared_on_proc_mounts_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        # mock _parse_proc_mounts to raise an exception
+        monkeypatch.setattr(fs, "_parse_proc_mounts", lambda: (_ for _ in ()).throw(Exception("test")))
+        assert fs.is_path_on_shared_filesystem(tmp_path) is True
+
+    def test_mount_matching_path_boundary(self) -> None:
+        # /data doesn't match /data2
+        mounts = [("/data", "nfs", "server:/data"), ("/data2", "ext4", "/dev/sda1")]
+        assert fs._find_mount_for_path(pathlib.Path("/data2/foo"), mounts) == "ext4"
+        assert fs._find_mount_for_path(pathlib.Path("/data/foo"), mounts) == "nfs"
+
+    def test_longest_mount_match(self) -> None:
+        mounts = [
+            ("/", "ext4", "/dev/sda1"),
+            ("/home", "nfs", "server:/home"),
+            ("/home/user", "ext4", "/dev/sdb1"),
+        ]
+        # /home/user/foo should match /home/user (most specific)
+        assert fs._find_mount_for_path(pathlib.Path("/home/user/foo"), mounts) == "ext4"
+        # /home/other should match /home
+        assert fs._find_mount_for_path(pathlib.Path("/home/other/bar"), mounts) == "nfs"
+
+    def test_unescape_mount_path(self) -> None:
+        # test octal sequence unescaping (e.g., \040 = space)
+        assert fs._unescape_mount_path("/path\\040with\\040spaces") == "/path with spaces"
+        assert fs._unescape_mount_path("/normal/path") == "/normal/path"
+        assert fs._unescape_mount_path("/tab\\011here") == "/tab\there"
+
+    def test_shared_fs_types_detected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        # mock mounts to return NFS for tmp_path
+        mock_mounts = [(str(tmp_path), "nfs4", "server:/export")]
+        monkeypatch.setattr(fs, "_parse_proc_mounts", lambda: mock_mounts)
+        assert fs.is_path_on_shared_filesystem(tmp_path) is True
+
+    def test_local_fs_types_detected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        # mock mounts to return ext4 for tmp_path
+        mock_mounts = [(str(tmp_path), "ext4", "/dev/sda1")]
+        monkeypatch.setattr(fs, "_parse_proc_mounts", lambda: mock_mounts)
+        assert fs.is_path_on_shared_filesystem(tmp_path) is False

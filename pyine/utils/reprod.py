@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import hashlib
 import importlib
@@ -181,6 +182,78 @@ def get_versioned_cache_hash(
         version = get_framework_version()
         return get_params_hash(version, *args, **kwargs)
     return get_params_hash(*args, **kwargs)
+
+
+@dataclasses.dataclass
+class FingerprintInputs:
+    """Typed container for cross-node fingerprint validation inputs.
+
+    Supports multiple artifact paths (many datamodules won't have exactly one file).
+    """
+
+    metadata_paths: list[pathlib.Path] = dataclasses.field(default_factory=lambda: [])
+    """Paths to metadata/artifact files to include in fingerprint.
+
+    Files with the ``.json`` suffix are hashed in canonical JSON form. All other files are hashed
+    as raw bytes.
+    """
+    dataset_fingerprints: list[str] = dataclasses.field(default_factory=lambda: [])
+    """HuggingFace internal stable dataset fingerprints/IDs."""
+    extra_content: bytes | None = None
+    """Additional deterministic content to include in fingerprint."""
+
+
+def compute_data_fingerprint(
+    inputs: FingerprintInputs,
+    config_hash: str | None = None,
+) -> str:
+    """Compute fingerprint for cross-node validation.
+
+    CRITICAL: Must include actual prepared artifacts, not just config.
+
+    Args:
+        inputs: Typed FingerprintInputs from datamodule.
+        config_hash: Deterministic hash of configuration.
+
+    Returns:
+        SHA256 hexdigest of the combined fingerprint inputs.
+
+    Includes:
+    1. Config hash (deterministic parameters);
+    2. Metadata/artifact file contents (canonical JSON for .json, raw bytes otherwise);
+    3. Dataset fingerprints (HF's internal deterministic IDs);
+    4. Extra content (if provided).
+
+    NOTE: we do NOT include file basenames in the hash, just content with delimiters. This avoids
+    collisions when different paths have the same basename.
+    """
+    hasher = hashlib.sha256()
+    if config_hash:
+        hasher.update(f"config={config_hash}\n".encode())
+    for idx, metadata_path in enumerate(sorted(inputs.metadata_paths)):
+        if metadata_path.exists():
+            hasher.update(f"metadata_{idx}:".encode())
+            if metadata_path.suffix.lower() == ".json":
+                # hash JSON file content in canonical form to avoid whitespace/formatting issues
+                content = json.loads(metadata_path.read_text(encoding="utf-8"))
+                canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+                hasher.update(canonical.encode())
+            else:
+                # hash a file as raw bytes in a streaming fashion
+                chunk_size = 8192
+                with metadata_path.open("rb") as fd:
+                    while True:
+                        chunk = fd.read(chunk_size)
+                        if not chunk:
+                            break
+                        hasher.update(chunk)
+            hasher.update(b"\n")
+    for idx, fp in enumerate(sorted(inputs.dataset_fingerprints)):
+        hasher.update(f"dataset_{idx}={fp}\n".encode())
+    if inputs.extra_content:
+        hasher.update(b"extra:")
+        hasher.update(inputs.extra_content)
+    return hasher.hexdigest()
 
 
 def compute_hash(

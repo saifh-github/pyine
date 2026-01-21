@@ -5,6 +5,7 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import tempfile
 
 import dotenv
@@ -266,3 +267,116 @@ def slugify(text: str) -> str:
     text = text.lower()
     text = re.sub(r"[^\w\s-]", "", text)
     return re.sub(r"[\s_-]+", "-", text).strip("-")
+
+
+_SHARED_FS_TYPES: set[str] = {
+    "nfs",
+    "nfs4",
+    "lustre",
+    "gpfs",
+    "cifs",
+    "smb",
+    "smbfs",
+    "glusterfs",
+    "ceph",
+    "beegfs",
+    "panfs",
+    "pvfs2",
+    "orangefs",
+}
+"""Filesystem types considered shared/network filesystems."""
+
+
+def is_path_on_shared_filesystem(path: pathlib.Path | str) -> bool:
+    """Detect if path is on a shared/network filesystem.
+
+    Uses /proc/mounts on Linux to determine filesystem type. RETURNS TRUE (assume shared) if
+    detection fails or on non-Linux. This is the safe default; accidentally disabling per-node prep
+    is better than accidentally enabling it on shared storage.
+
+    Why no file visibility fallback: a file visibility test (rank 0 writes, others check) would
+    require coordination across ranks. On node-local storage, filesystem-based barriers can't work,
+    risking deadlock or divergent decisions. Users can use PYINE_PER_NODE_PREP=on to override.
+
+    Args:
+        path: Path to check (will be resolved to absolute path).
+
+    Returns:
+        True if path appears to be on a shared filesystem (NFS, Lustre, etc.)
+        or if detection fails (conservative default).
+    """
+    path = pathlib.Path(path).resolve()
+    if sys.platform != "linux":
+        logger.warning(f"shared FS detection not supported on {sys.platform}, assuming shared")
+        return True
+    try:
+        mounts = _parse_proc_mounts()
+        fs_type = _find_mount_for_path(path, mounts)
+        if fs_type is None:
+            logger.warning(f"could not determine filesystem type for {path}, assuming shared")
+            return True
+        is_shared = fs_type.lower() in _SHARED_FS_TYPES
+        logger.debug(f"path {path} is on {fs_type} filesystem (shared={is_shared})")
+        return is_shared
+    except Exception as exc:
+        logger.warning(f"shared FS detection failed: {exc}, assuming shared")
+        return True
+
+
+def _parse_proc_mounts() -> list[tuple[str, str, str]]:
+    """Parse /proc/mounts and return list of (mount_point, fs_type, device).
+
+    Handles escaped characters (e.g., \\040 for space) in mount paths.
+
+    Returns:
+        List of tuples containing (mount_point, fs_type, device).
+    """
+    mounts: list[tuple[str, str, str]] = []
+    with open("/proc/mounts") as fd:
+        for line in fd:
+            parts = line.split()
+            if len(parts) >= 3:
+                device, mount_point, fs_type = parts[0], parts[1], parts[2]
+                mount_point = _unescape_mount_path(mount_point)
+                mounts.append((mount_point, fs_type, device))
+    return mounts
+
+
+def _unescape_mount_path(path: str) -> str:
+    """Unescape octal sequences in mount paths from /proc/mounts.
+
+    Args:
+        path: Mount path that may contain octal escape sequences like \\040.
+
+    Returns:
+        Unescaped path string.
+    """
+
+    def replace_octal(match: re.Match[str]) -> str:
+        return chr(int(match.group(1), 8))
+
+    return re.sub(r"\\([0-7]{3})", replace_octal, path)
+
+
+def _find_mount_for_path(
+    path: pathlib.Path,
+    mounts: list[tuple[str, str, str]],
+) -> str | None:
+    """Find the filesystem type for a path by matching longest mount point prefix.
+
+    Uses path-boundary-safe matching: /data matches /data but not /data2.
+
+    Args:
+        path: Path to find mount point for.
+        mounts: List of (mount_point, fs_type, device) tuples from _parse_proc_mounts.
+
+    Returns:
+        Filesystem type string if found, None otherwise.
+    """
+    path_str = str(path)
+    best_match: tuple[str, str] | None = None  # (mount_point, fs_type)
+    for mount_point, fs_type, _ in mounts:
+        if path_str == mount_point or path_str.startswith(mount_point + "/"):
+            if best_match is None or len(mount_point) > len(best_match[0]):
+                best_match = (mount_point, fs_type)
+    return best_match[1] if best_match else None

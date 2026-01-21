@@ -463,6 +463,19 @@ class BaseDataModule[ConfigType](pl.LightningDataModule):
         """Returns a dictionary of useful-to-log statistics."""
         return {}
 
+    def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:
+        """Return inputs for cross-node fingerprint validation.
+
+        Each datamodule MUST override this to return its deterministic artifacts.
+
+        Returns:
+            Data structure containing paths to metadata files and/or dataset fingerprints.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        raise NotImplementedError(f"{type(self).__name__} missing get_fingerprint_inputs() for cross-node validation")
+
     def get_dataloader(
         self,
         loader_name: LoaderNameType,
