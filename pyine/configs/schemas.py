@@ -48,7 +48,6 @@ class RuntimeConfig(pydantic.BaseModel):
     metadata: dict[str, str] = pydantic.Field(
         default_factory=lambda: pyine.utils.reprod.get_reprod_metadata(
             include_installed_packages=False,  # would be too verbose in dumped dicts
-            with_hydra_info=False,  # available directly via computed props below
         )
     )
     """Reproducibility metadata."""

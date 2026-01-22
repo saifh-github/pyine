@@ -277,7 +277,6 @@ def get_reprod_metadata(
     include_installed_packages: bool = True,
     with_gpu_info: bool = False,
     with_distrib_info: bool = False,
-    with_hydra_info: bool = True,
 ) -> dict[str, str]:
     """Returns a dictionary of metadata that can be used to assess reproducibility."""
     import pyine.utils.filesystem
