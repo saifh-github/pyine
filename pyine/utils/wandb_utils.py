@@ -329,45 +329,53 @@ def discover_metric_keys(
     )
     all_keys: list[str] = list(sample_df.columns)
 
-    def _list_by_prefix(prefix: str) -> list[str]:
-        return [k for k in all_keys if k.startswith(prefix)]
-
     def _list_by_patterns(
         patterns: list[str],
         exact: list[str] | None = None,
     ) -> list[str]:
         result: list[str] = []
         for k in all_keys:
-            if any(p in k for p in patterns) or exact and k in exact:
+            if any(p in k for p in patterns) or (exact and k in exact):
                 result.append(k)
         return result
 
-    # handle unprefixed, train/-, and eval/-prefixed metrics
-    reward_total_keys = [k for k in all_keys if k in ("reward/total", "train/reward/total", "eval/reward/total")]
-    reward_term_keys = (
-        _list_by_prefix("reward/terms/")
-        + _list_by_prefix("train/reward/terms/")
-        + _list_by_prefix("eval/reward/terms/")
-    )
-    reward_metric_keys = (
-        _list_by_prefix("reward/metrics/")
-        + _list_by_prefix("train/reward/metrics/")
-        + _list_by_prefix("eval/reward/metrics/")
-    )
-    parsing_prefixes = (
-        "parsing/",
-        "train/parsing/",
-        "eval/parsing/",
-        "reward/metrics/parsing/",
-    )
-    parsing_keys = [k for k in all_keys if any(k.startswith(p) for p in parsing_prefixes)]
+    known_reward_total_key_parts = ["reward/total", "reward/run/total"]
+    reward_total_keys = _list_by_patterns(patterns=known_reward_total_key_parts)
+    known_reward_term_key_parts = ["reward/terms", "reward/run/terms"]
+    reward_term_keys = _list_by_patterns(patterns=known_reward_term_key_parts)
+    known_reward_metric_key_parts = ["reward/metrics/", "reward/run/metrics/"]
+    reward_metric_keys = _list_by_patterns(patterns=known_reward_metric_key_parts)
+    known_reward_categories_key_parts = ["reward/categories/", "reward/run/categories/"]
+    reward_categories_keys = _list_by_patterns(patterns=known_reward_categories_key_parts)
+    parsing_key_parts = ["/parsing/", "/failures/"]
+    parsing_keys = _list_by_patterns(patterns=parsing_key_parts)
     trl_keys = _list_by_patterns(
-        # TRL metrics: kl, entropy, clip_ratio, completions/, rewards/
-        # note: kl/entropy may be prefixed (train/kl, eval/kl) or bare
-        ["completions/", "rewards/", "clip_ratio", "/kl", "/entropy"],
-        exact=["kl", "entropy", "reward", "reward_std"],
+        patterns=[
+            "/completions/",
+            "/clip_ratio/",
+            "/rewards/",
+            "/sampling/",
+            "/kl",
+            "/entropy",
+            "/loss",
+            "/grad_norm",
+            "/learning_rate",
+            "/num_tokens",
+            "/reward_std",
+            "/frac_reward_zero_std",
+            "/step_time",
+            "/runtime",
+            "/samples_per_second",
+            "/steps_per_second",
+            "profiling/",
+        ],
+        exact=["train/reward", "eval/reward", "epoch"],
     )
-    step_keys = [k for k in all_keys if k in ["_step", "global_step", "train/global_step"]]
+    known_step_key_suffixes = ["/epoch", "/batch_count", "/generation_count", "/global_step"]
+    known_exact_step_keys = ["_step", "_timestamp", "_runtime"]
+    step_keys = [
+        k for k in all_keys if k in known_exact_step_keys or any(k.endswith(s) for s in known_step_key_suffixes)
+    ]
     # build set of all categorized keys to exclude from "other"
     categorized_keys = set(
         reward_total_keys + reward_term_keys + reward_metric_keys + parsing_keys + trl_keys + step_keys
@@ -380,6 +388,7 @@ def discover_metric_keys(
         "reward_total": sorted(reward_total_keys),
         "reward_terms": sorted(reward_term_keys),
         "reward_metrics": sorted(reward_metric_keys),
+        "reward_categories_keys": sorted(reward_categories_keys),
         "parsing": sorted(parsing_keys),
         "trl": sorted(trl_keys),
         "step_keys": sorted(step_keys),
