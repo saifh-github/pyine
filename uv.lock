@@ -3170,6 +3170,9 @@ dev = [
 flash-attn = [
     { name = "flash-attn", marker = "sys_platform == 'linux'" },
 ]
+gpu-monitoring = [
+    { name = "nvidia-ml-py", marker = "sys_platform == 'linux'" },
+]
 liger = [
     { name = "liger-kernel", marker = "sys_platform == 'linux'" },
 ]
@@ -3210,6 +3213,7 @@ requires-dist = [
     { name = "nbstripout", marker = "extra == 'dev'", specifier = ">=0.8.0,<1.0.0" },
     { name = "notebook", marker = "extra == 'dev'", specifier = ">=7.3.0,<8.0.0" },
     { name = "numpy", specifier = "<2.3.0" },
+    { name = "nvidia-ml-py", marker = "sys_platform == 'linux' and extra == 'gpu-monitoring'", specifier = ">=13.590.0" },
     { name = "openai", specifier = ">=1.101.0,<2.0.0" },
     { name = "orjson", specifier = ">=3.11.2,<3.12.0" },
     { name = "pandas", specifier = ">=2.3.2,<3.0.0" },
@@ -3241,7 +3245,7 @@ requires-dist = [
     { name = "wandb", specifier = ">=0.23.1,<1.0.0" },
     { name = "wordcloud", marker = "extra == 'dev'", specifier = ">=1.9.4" },
 ]
-provides-extras = ["dev", "vllm", "flash-attn", "liger"]
+provides-extras = ["dev", "vllm", "flash-attn", "liger", "gpu-monitoring"]
 
 [[package]]
 name = "pyparsing"

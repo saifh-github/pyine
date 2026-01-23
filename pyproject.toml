@@ -83,6 +83,9 @@ flash_attn = [
 liger = [
     "liger-kernel>=0.6.4; sys_platform == 'linux'",  # CUDA-only, Linux
 ]
+gpu_monitoring = [
+    "nvidia-ml-py>=13.590.0; sys_platform == 'linux'",  # NVML bindings for GPU stats
+]
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
