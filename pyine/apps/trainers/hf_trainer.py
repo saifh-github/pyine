@@ -119,6 +119,10 @@ def sft_train(
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback()
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, throughput_callback, eval_metrics_callback]
+    gpu_stats_config = config.gpu_stats_logging
+    if gpu_stats_config is not None:
+        gpu_stats_callback = pyine.utils.transformers.GPUStatsLoggingCallback(config=gpu_stats_config)
+        callbacks.append(gpu_stats_callback)
     train_subset_names = getattr(config.datamodule_config, "train_subset_names", [])
     epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
         train_dataset=train_ds,
@@ -267,7 +271,13 @@ def rl_train(
     throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback()
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, throughput_callback)
 
-    # 8. Train with resume support
+    # 8. Add GPU stats logging callback if configured
+    gpu_stats_config = config.gpu_stats_logging
+    if gpu_stats_config is not None:
+        gpu_stats_callback = pyine.utils.transformers.GPUStatsLoggingCallback(config=gpu_stats_config)
+        pyine.apps.trainers.common.add_callback_to_trainer(trainer, gpu_stats_callback)
+
+    # 9. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
     pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
     pyine.apps.trainers.common.log_shutdown_status(shutdown_manager, training_type="RL training")

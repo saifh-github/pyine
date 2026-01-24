@@ -328,6 +328,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
+        gpu_stats_logging=None,
     )
     collator_calls = _install_collator_stub(config)
 
@@ -451,6 +452,7 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
         ),
         evals_config=types.SimpleNamespace(category_extraction_config=None),
         use_wandb_logging=False,
+        gpu_stats_logging=None,
     )
     _install_collator_stub(config)
     runtime = types.SimpleNamespace(wandb_run=None)
@@ -623,6 +625,7 @@ def test_train_enables_wandb_batch_logging(
         output_dir=str(tmp_path / "artifact"),
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
+        gpu_stats_logging=None,
     )
 
     captured_handlers: list[typing.Callable[[pyine.utils.transformers.CollatorBatchLogRecord], None]] = []
@@ -1137,6 +1140,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             output_dir=str(output_dir),
             get_model=_build_tiny_model,
             get_tokenizer=_SimpleTokenizer,
+            gpu_stats_logging=None,
         )
         _install_collator_stub(config, collator_factory=_build_collator)
         return config
@@ -1358,6 +1362,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
         reward_manager_config=reward_manager_config,
         get_model=mock_get_model,
         get_tokenizer=mock_get_tokenizer,
+        gpu_stats_logging=None,
     )
 
     # test case 1: without resume_artifacts, checkpoint_path should be None
@@ -1401,3 +1406,101 @@ def test_rl_train_uses_resume_artifacts_correctly(
     assert len(train_kwargs_received) == 1
     assert "resume_from_checkpoint" in train_kwargs_received[0]
     assert str(train_kwargs_received[0]["resume_from_checkpoint"]) == str(checkpoint_dir)
+
+
+def test_sft_train_attaches_gpu_stats_callback_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Test that GPUStatsLoggingCallback is attached when gpu_stats_logging is set."""
+
+    class _FakeDataset:
+        def __len__(self) -> int:
+            return 2
+
+        def __getitem__(self, item: int) -> dict[str, list[int]]:
+            return {"input_ids": [1, 2], "attention_mask": [1, 1], "labels": [1, 2]}
+
+        column_names: typing.ClassVar[list[str]] = ["input_ids", "attention_mask", "labels"]
+
+    class _FakeDataModule:
+        def get_hf_tokenized_examples_dataset(self, *_args: typing.Any, **_kwargs: typing.Any) -> _FakeDataset:
+            return _FakeDataset()
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.config = types.SimpleNamespace(use_cache=True)
+
+        def gradient_checkpointing_enable(self) -> None:
+            pass
+
+    class _FakeTokenizer:
+        def save_pretrained(self, output_dir: str) -> None:
+            pass
+
+    captured_callbacks: list[typing.Any] = []
+
+    class _FakeTrainer:
+        def __init__(self, **kwargs: typing.Any) -> None:
+            self.model = kwargs["model"]
+            self.tokenizer = kwargs["processing_class"]
+            captured_callbacks.extend(kwargs.get("callbacks", []))
+
+        def train(self) -> str:
+            return "done"
+
+        def save_model(self, output_dir: str) -> None:
+            pass
+
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.transformers,
+        "infer_effective_max_seq_len",
+        lambda *_a, **_k: 64,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "TrainingArguments",
+        lambda **kwargs: types.SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.transformers,
+        "Trainer",
+        _FakeTrainer,
+    )
+    # mock category extraction to return valid data (not testing that here)
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.evals.utils,
+        "extract_sample_categories_from_dataset",
+        lambda *_a, **_k: ["category1", "category2"],
+    )
+    config = types.SimpleNamespace(
+        training_args_config=types.SimpleNamespace(
+            do_train=True,
+            model_dump=lambda: {"output_dir": "ignored", "per_device_train_batch_size": 2},
+        ),
+        datamodule_config=types.SimpleNamespace(
+            train_subset_names=["train"],
+            valid_subset_names=["valid"],
+        ),
+        evals_config=types.SimpleNamespace(category_extraction_config=None),
+        gradient_checkpointing=False,
+        use_wandb_logging=False,
+        collator_batch_logging=False,
+        output_dir=str(tmp_path / "output"),
+        get_model=_FakeModel,
+        get_tokenizer=_FakeTokenizer,
+        gpu_stats_logging=pyine.utils.transformers.callbacks.GPUStatsLoggingConfig(),
+        get_collator=lambda *_a, **_k: None,
+    )
+    runtime = types.SimpleNamespace(wandb_run=None)
+    pyine.apps.trainers.hf_trainer.sft_train(
+        datamodule=_FakeDataModule(),
+        config=config,
+        runtime=runtime,
+        resume_artifacts=None,
+    )
+    # verify GPUStatsLoggingCallback was added
+    gpu_callbacks = [
+        cb for cb in captured_callbacks if isinstance(cb, pyine.utils.transformers.callbacks.GPUStatsLoggingCallback)
+    ]
+    assert len(gpu_callbacks) == 1, "GPUStatsLoggingCallback should be attached when config is set"

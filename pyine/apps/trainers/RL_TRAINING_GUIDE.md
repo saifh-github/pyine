@@ -712,6 +712,57 @@ grpo_config:
   - `vllm_enable_sleep_mode`: Enable to reduce memory usage at the cost of added latency
 - **Server mode parameters**: Only relevant when `vllm_mode: "server"`. Ensure `vllm_server_port` matches your manually started vLLM server
 
+### GPU Stats Logging
+
+Enable GPU monitoring to track utilization, memory, power, and temperature during training:
+
+```yaml
+config:
+  gpu_stats_logging:
+    require_nvml: false  # Set true to fail if nvidia-ml-py not installed
+    sample_every_n_steps: 1  # Sample every step (cheap, ~1-3ms overhead)
+    gather_train_metrics: "at_phase_end"  # "never", "at_phase_end", or "always"
+    gather_eval_metrics: true  # Aggregate eval stats across ranks
+```
+
+**Installation**: GPU stats require the `nvidia-ml-py` package (Linux + NVIDIA driver required):
+
+```bash
+uv sync --extra gpu-monitoring
+```
+
+(Note: pip/uv normalize extras names, so `gpu-monitoring` and `gpu_monitoring` are equivalent.
+**Requires CUDA**: GPU stats logging is disabled entirely without CUDA. With CUDA but without
+`nvidia-ml-py`, you still get PyTorch CUDA memory stats; NVML-specific metrics like utilization,
+power, and temperature will be unavailable.)
+
+**Logged metrics** (under `train/gpu/*` and `eval/gpu/*`):
+
+- `utilization_gpu_percent/*`: GPU compute utilization (mean/std/min/max)
+- `utilization_mem_controller_percent/*`: Memory controller utilization (mean/std/min/max)
+- `vram_used_percent/*`: VRAM usage percentage
+- `pytorch_allocated_percent/*`: PyTorch memory allocation percentage
+- `pytorch_peak_percent`: Peak memory since last phase (max across devices/ranks, not mean)
+- `power_watts/*`: Power consumption (watts)
+- `temperature_celsius/*`: GPU temperature
+- `total_sample_calls`: Number of sampling calls (total across ranks when gathered)
+
+**Notes**:
+
+- Without `nvidia-ml-py`, only PyTorch memory stats are logged (utilization/power/temperature unavailable)
+- `gather_train_metrics` behavior:
+  - `"at_phase_end"` (default): Accumulates stats throughout training and emits once before eval.
+    **Important**: This requires evaluation to run. If `eval_strategy: "no"`, metrics are logged via
+    `logger.info` at train end only (they will **not** appear in W&B/TensorBoard). Use `"always"`
+    instead if you need metrics in W&B without evaluation.
+  - `"always"`: Emits metrics at every train `on_log` (every `logging_steps`). Works regardless of
+    eval strategy and metrics appear in W&B/TensorBoard under `train/gpu/*`. **Recommended when
+    `eval_strategy: "no"`**.
+  - `"never"`: Emit local metrics at every `on_log` (no distributed gathering). With the default
+    `only_main_process: true`, only rank 0 logs its own local stats (other ranks' stats are not
+    gathered or logged)
+- For distributed training, stats are aggregated across all ranks (unless `gather_train_metrics: "never"`)
+
 ### Prompt Templates
 
 Available in `pyine/prompts/configs/code_execution.yaml`:

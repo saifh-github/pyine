@@ -279,6 +279,8 @@ class AppMainConfig(pydantic.BaseModel):
     kept False (the default). The RewardManager and other logging components are designed to work
     correctly in this setup through conditional logger creation and appropriate validation checks.
     """
+    gpu_stats_logging: pyine.utils.transformers.GPUStatsLoggingConfig | None = None
+    """GPU stats logging configuration. If None, GPU stats logging is disabled."""
 
     # --------------- resume settings ---------------
 
@@ -342,6 +344,7 @@ class AppMainConfig(pydantic.BaseModel):
             data = config.copy()
         data.pop("use_wandb_logging", None)
         data.pop("wandb_init_on_all_ranks", None)
+        data.pop("gpu_stats_logging", None)
         data.pop("resume_from_run_dir", None)
         data.pop("resume_checkpoint_name", None)
         data.pop("resume_wandb_behavior", None)

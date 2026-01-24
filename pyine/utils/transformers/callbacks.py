@@ -1,14 +1,19 @@
 import collections.abc
+import dataclasses
 import json
 import logging
 import pathlib
 import time
 import typing
 
+import pydantic
+import torch
 import transformers
 
 import pyine.utils.distrib
+import pyine.utils.gpu
 import pyine.utils.reprod
+import pyine.utils.stats
 import pyine.utils.transformers.checkpoints
 
 logger = logging.getLogger(__name__)
@@ -18,6 +23,8 @@ __all__ = [
     "EpochAwarenessCallback",
     "RewardLoggingCallback",
     "ThroughputLoggingCallback",
+    "GPUStatsLoggingCallback",
+    "GPUStatsLoggingConfig",
     "create_epoch_awareness_callback",
 ]
 
@@ -339,8 +346,16 @@ def create_epoch_awareness_callback(
         for subset_name in subset_names or []:
             try:
                 parser = datamodule.get_parser(subset_name)
-            except Exception as exc:  # noqa: BLE001
+            except (KeyError, AttributeError) as exc:
+                # expected: subset doesn't exist or parser not available for this subset
                 logger.debug(f"skipping epoch-aware parser hookup for subset {subset_name}: {exc}")
+                continue
+            except Exception as exc:  # noqa: BLE001
+                # unexpected error: warn so bugs aren't silently hidden
+                logger.warning(
+                    f"unexpected error getting parser for subset {subset_name}: {exc!r}; "
+                    "epoch propagation may be disabled for this subset"
+                )
                 continue
             _register_candidate(parser)
     if not epoch_targets:
@@ -365,6 +380,32 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         callback = RewardLoggingCallback(reward_manager=reward_manager)
         trainer.add_callback(callback)
         ```
+
+    Step timing (verified against transformers 4.57 and trl 0.26):
+        This callback sets the RewardManager's step in `on_step_begin` using `state.global_step`.
+        In HuggingFace Trainer, the sequence is:
+        1. `on_step_begin` called with `global_step = N`
+        2. `training_step` executes (forward pass, reward computation happens here)
+           - `global_step` is still N during this phase
+        3. Optimizer step
+        4. `global_step` incremented to `N+1`
+        5. `on_step_end` called with `global_step = N+1`
+
+        Example: First training step has `global_step = 0` at `on_step_begin`, rewards are
+        computed with step=0, then `global_step` becomes 1, and `on_step_end` sees 1.
+
+        By setting step in `on_step_begin`, reward events emitted during `training_step`
+        are correctly attributed to the step being executed. This matches TRL's GRPO
+        integration where the reward function is called inside `training_step` (via
+        `_prepare_inputs` -> `_generate_and_score_completions` -> `_calculate_rewards`).
+
+    Callback ordering dependency:
+        This callback relies on HuggingFace's `DefaultFlowCallback` executing BEFORE this
+        callback in `on_step_end` and `on_epoch_end`, because `DefaultFlowCallback` sets
+        `control.should_evaluate` based on the current step/epoch. This ordering is guaranteed
+        by default since `DefaultFlowCallback` is added first during Trainer initialization.
+        If you remove or reorder `DefaultFlowCallback`, the eval-transition logic will not
+        work correctly.
     """
 
     def __init__(
@@ -507,7 +548,14 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         We only set the prefix (no flush) to ensure subsequent batches log correctly.
         """
         if self._in_eval is not True:
-            # woops... unexpected; don't call _switch_to_eval(); no flush, just set prefix.
+            # unexpected: we should have switched to eval in on_step_end/on_epoch_end
+            # this may indicate HF Trainer callback ordering changed, or eval was triggered
+            # outside the normal flow; we can't safely flush, so just set prefix and warn
+            logger.warning(
+                "on_prediction_step called but _in_eval is not True. This may indicate "
+                "HuggingFace Trainer callback ordering changed unexpectedly. The first eval "
+                "batch may have been logged under the wrong prefix. Please report this issue."
+            )
             self.reward_manager.set_key_prefix(self.eval_prefix)
             self._in_eval = True
         self._saw_eval_prediction_step = True  # mark that we processed at least one eval batch
@@ -582,9 +630,10 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                     "checkpoint may be incomplete or from an older version"
                 )
             self._load_reward_state(reward_state_path)
-        # 2. always start in train mode (prefix + state)
+        # 2. always start in train mode (prefix + state flags)
         self.reward_manager.set_key_prefix(self.train_prefix)
         self._in_eval = False
+        self._saw_eval_prediction_step = False  # reset in case callback instance is reused
         # 3. if eval_on_start, transition train→eval properly (flush under train prefix, then switch)
         if getattr(args, "eval_on_start", False):
             self._switch_to_eval(step=state.global_step)
@@ -763,3 +812,885 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Reset timing after checkpoint save to exclude I/O overhead from throughput."""
         self._last_log_time = time.perf_counter()  # exclude checkpoint I/O from next interval
+
+
+class GPUStatsLoggingConfig(pydantic.BaseModel):
+    """Configuration for GPU stats logging callback.
+
+    To disable GPU stats logging, set `gpu_stats_logging: null` in your config (or don't set it
+    at all). A non-null config means the callback is enabled.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    require_nvml: bool = False
+    """Raise an error if NVML is unavailable. If False, falls back to PyTorch-only stats."""
+    collect_all_visible_devices: bool = False
+    """Whether to collect stats for all visible CUDA devices or just the current one.
+
+    False (default): Collect stats only for torch.cuda.current_device(). Use this for DDP
+    (DistributedDataParallel) where each rank owns exactly one GPU. With gathering enabled,
+    all ranks contribute their single GPU's stats, giving cluster-wide coverage.
+
+    True: Collect stats for all devices (indices 0 to torch.cuda.device_count()-1). Use this
+    for model parallelism (tensor parallel, pipeline parallel) where a single process spans
+    multiple GPUs, or for single-process multi-GPU setups (e.g., DataParallel).
+    """
+    only_main_process: bool = True
+    """If True, only rank 0 logs metrics (after gathering from all ranks)."""
+    gather_eval_metrics: bool = True
+    """If True, gather eval stats from all ranks for aggregated metrics."""
+    gather_train_metrics: typing.Literal["never", "at_phase_end", "always"] = "at_phase_end"
+    """When to gather and emit train metrics.
+
+    Options:
+     - 'never': Emit local metrics at every train on_log (no gathering). With the default
+       only_main_process=True, only rank 0 logs its own local stats; other ranks' stats are
+       NOT gathered or logged.
+     - 'at_phase_end': Accumulate all samples during train phase, then gather and emit once
+       at phase end (before eval). This gives cluster-wide aggregated stats with minimal
+       gathering overhead. **Requires evaluation to run** - if eval_strategy='no', metrics
+       are only logged via logger.info at train end (not to wandb/tensorboard).
+     - 'always': Gather and emit at every train on_log. Higher overhead but works regardless
+       of eval strategy - use this if eval_strategy='no' and you want metrics in wandb.
+    """
+    sample_every_n_steps: int = pydantic.Field(default=1, ge=1)
+    """Sample GPU stats every N training steps.
+
+    Default is 1 (every step). Sampling is cheap (~1-3ms of NVML queries, no GPU sync), so
+    per-step sampling has negligible overhead compared to training step duration.
+
+    Note: 'total_sample_calls' in logged metrics is the total across all ranks (when gathered),
+    not per-device data points.
+    """
+
+
+@dataclasses.dataclass
+class _PhaseAccumulators:
+    """Accumulators for GPU stats during a training or eval phase.
+
+    This dataclass encapsulates all the RunningStats accumulators used to track GPU metrics,
+    along with helper methods for reset, serialization (for distributed gathering), and
+    conversion to the metrics dict format.
+    """
+
+    utilization_gpu: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    utilization_mem_ctrl: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    vram_used_percent: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    pytorch_allocated_percent: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    power_watts: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    temperature_celsius: dict[str, pyine.utils.stats.RunningStats] = dataclasses.field(default_factory=lambda: {})
+    sample_count: int = 0
+
+    def reset(self) -> None:
+        """Clear all accumulators and reset sample count."""
+        self.utilization_gpu.clear()
+        self.utilization_mem_ctrl.clear()
+        self.vram_used_percent.clear()
+        self.pytorch_allocated_percent.clear()
+        self.power_watts.clear()
+        self.temperature_celsius.clear()
+        self.sample_count = 0
+
+    def update(
+        self,
+        device_key: str,
+        *,
+        utilization_gpu: float | None = None,
+        utilization_mem_ctrl: float | None = None,
+        vram_used_percent: float | None = None,
+        pytorch_allocated_percent: float | None = None,
+        power_watts: float | None = None,
+        temperature_celsius: float | None = None,
+    ) -> None:
+        """Update accumulators with stats from a single device.
+
+        Only non-None values are added to the corresponding accumulator.
+        """
+
+        def _update_one(
+            accumulator: dict[str, pyine.utils.stats.RunningStats],
+            value: float | None,
+        ) -> None:
+            if value is None:
+                return
+            if device_key not in accumulator:
+                accumulator[device_key] = pyine.utils.stats.RunningStats()
+            accumulator[device_key].update(value)
+
+        _update_one(self.utilization_gpu, utilization_gpu)
+        _update_one(self.utilization_mem_ctrl, utilization_mem_ctrl)
+        _update_one(self.vram_used_percent, vram_used_percent)
+        _update_one(self.pytorch_allocated_percent, pytorch_allocated_percent)
+        _update_one(self.power_watts, power_watts)
+        _update_one(self.temperature_celsius, temperature_celsius)
+
+    def as_gather_payload(
+        self,
+        peak_percent: float,
+    ) -> dict[str, typing.Any]:
+        """Convert to a dict payload suitable for distributed gathering.
+
+        Args:
+            peak_percent: Peak memory percentage to include in payload.
+
+        Returns:
+            Dict with accumulator states, sample_count, and peak_percent.
+        """
+        return {
+            "utilization_gpu": {k: s.as_state() for k, s in self.utilization_gpu.items()},
+            "utilization_mem_ctrl": {k: s.as_state() for k, s in self.utilization_mem_ctrl.items()},
+            "vram_used_percent": {k: s.as_state() for k, s in self.vram_used_percent.items()},
+            "pytorch_allocated_percent": {k: s.as_state() for k, s in self.pytorch_allocated_percent.items()},
+            "power_watts": {k: s.as_state() for k, s in self.power_watts.items()},
+            "temperature_celsius": {k: s.as_state() for k, s in self.temperature_celsius.items()},
+            "pytorch_peak_percent": peak_percent,
+            "sample_count": self.sample_count,
+        }
+
+    def as_accumulators_dict(self) -> dict[str, dict[str, pyine.utils.stats.RunningStats]]:
+        """Return accumulators as a dict mapping metric name to device stats.
+
+        The metric names match the logged metric prefixes.
+        """
+        return {
+            "utilization_gpu_percent": self.utilization_gpu,
+            "utilization_mem_controller_percent": self.utilization_mem_ctrl,
+            "vram_used_percent": self.vram_used_percent,
+            "pytorch_allocated_percent": self.pytorch_allocated_percent,
+            "power_watts": self.power_watts,
+            "temperature_celsius": self.temperature_celsius,
+        }
+
+
+class GPUStatsLoggingCallback(transformers.TrainerCallback):
+    """Callback that logs GPU utilization and memory statistics during training.
+
+    This callback integrates with HuggingFace/TRL trainers to:
+    - Sample GPU stats at configurable intervals during training;
+    - Track stats separately for train and eval phases;
+    - Aggregate statistics across distributed ranks (configurable for train; always for eval);
+    - Log mean/std/min/max for each metric.
+
+    Metrics logged (when available):
+    - `{prefix}/gpu/utilization_gpu_percent/*`: GPU compute utilization (NVML)
+    - `{prefix}/gpu/utilization_mem_controller_percent/*`: Memory controller utilization (NVML)
+    - `{prefix}/gpu/vram_used_percent/*`: VRAM usage percentage (NVML)
+    - `{prefix}/gpu/pytorch_allocated_percent/*`: PyTorch memory allocation percentage
+    - `{prefix}/gpu/power_watts/*`: Power consumption in watts (NVML)
+    - `{prefix}/gpu/temperature_celsius/*`: GPU temperature (NVML)
+    - `{prefix}/gpu/pytorch_peak_percent`: Peak memory since last reset (max across devices/ranks)
+    - `{prefix}/gpu/total_sample_calls`: Total sampling calls across all ranks (when gathered)
+      or local sampling calls (when not gathered). Not per-device data points.
+
+    Where `{prefix}` is `train` or `eval`.
+
+    Example usage:
+        ```python
+        config = GPUStatsLoggingConfig()  # uses sensible defaults
+        callback = GPUStatsLoggingCallback(config=config)
+        trainer.add_callback(callback)
+        ```
+
+    Distributed training requirements:
+        When using gather_train_metrics or gather_eval_metrics with distributed training, this
+        callback uses `all_gather_object` in certain hooks. This is safe because the HuggingFace
+        Trainer (4.46+) calls these hooks synchronously on ALL ranks:
+
+        - `on_train_begin`: Called once at start on all ranks
+        - `on_step_end`: Called after each training step on all ranks
+        - `on_prediction_step`: Called during eval on all ranks
+        - `on_log`: Called when logging on all ranks (gather happens here)
+        - `on_evaluate`: Called after evaluation on all ranks
+        - `on_train_end`: Called once at end on all ranks (gather happens here)
+
+        The synchronization assumption for `on_log` holds because:
+        1. `should_log` is determined by `state.global_step % args.logging_steps == 0`;
+        2. `state.global_step` is synchronized across all ranks;
+        3. `args.logging_steps` is the same config value on all ranks.
+
+        If you modify Trainer behavior such that ranks become desynchronized on when hooks
+        are called, gathering operations could deadlock. The callback includes a safety check
+        (`_is_gather_safe`) that verifies torch.distributed is initialized before attempting
+        to gather, but does not protect against ranks entering hooks at different times.
+
+    Callback ordering dependency:
+        This callback relies on HuggingFace's `DefaultFlowCallback` executing BEFORE this
+        callback in `on_step_end` and `on_epoch_end`, because `DefaultFlowCallback` sets
+        `control.should_evaluate` and `control.should_log` based on the current step/epoch.
+        This ordering is guaranteed by default since `DefaultFlowCallback` is added first
+        during Trainer initialization. If you remove or reorder `DefaultFlowCallback`, the
+        eval-transition logic in this callback will not work correctly.
+    """
+
+    def __init__(
+        self,
+        config: GPUStatsLoggingConfig | None = None,
+    ) -> None:
+        """Initialize the callback.
+
+        Args:
+            config: Configuration for the callback. If None, uses defaults.
+        """
+        self._config = config if config is not None else GPUStatsLoggingConfig()
+        self._collector: pyine.utils.gpu.GPUStatsCollector | None = None
+        # phase tracking (all flags must be rank-synchronous to avoid deadlocks)
+        self._in_eval: bool = False
+        self._eval_pending: bool = False
+        self._saw_eval_prediction_step: bool = False
+        # tracks whether train phase metrics need flushing (for at_phase_end mode when should_log=False)
+        self._train_phase_needs_flush: bool = False
+        # stashed train peak percent (captured before peak reset when should_log=False)
+        self._stashed_train_peak_percent: float | None = None
+        # train accumulators (reset timing depends on gather_train_metrics setting)
+        self._train = _PhaseAccumulators()
+        # eval accumulators (reset at eval start)
+        self._eval = _PhaseAccumulators()
+
+    def _should_log(self) -> bool:
+        """Check if metrics should be logged on this process."""
+        if not self._config.only_main_process:
+            return True
+        return pyine.utils.distrib.is_main_process()
+
+    def _is_gather_safe(self) -> bool:
+        """Check if distributed gathering is safe (process group initialized).
+
+        Returns True if:
+        - Not in distributed mode (is_distributed() returns False), OR
+        - torch.distributed is initialized (gathering will work).
+
+        Returns False if:
+        - is_distributed() returns True but torch.distributed isn't initialized yet
+          (env vars set but process group not ready; gathering would silently degrade).
+        """
+        if not pyine.utils.distrib.is_distributed():
+            return True  # not distributed, gathering degrades gracefully to local-only
+        # in distributed mode, require process group to be initialized
+        return torch.distributed.is_available() and torch.distributed.is_initialized()
+
+    def _reset_peak_stats(self) -> None:
+        """Reset PyTorch peak memory stats for the appropriate devices.
+
+        When collect_all_visible_devices=True, resets all visible devices. Otherwise, resets only
+        the current device.
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        if self._config.collect_all_visible_devices:
+            device_indices = list(range(torch.cuda.device_count()))
+        else:
+            device_indices = None  # defaults to current device
+        self._collector.reset_pytorch_peak_stats(device_indices)
+
+    def _handle_eval_transition(
+        self,
+        should_log: bool,
+    ) -> None:
+        """Handle transition from train to eval phase.
+
+        This method encapsulates the common eval-transition logic used by both on_step_end and
+        on_epoch_end to avoid code duplication and drift risk.
+
+        Args:
+            should_log: Whether a train log will happen (from control.should_log).
+        """
+        self._eval_pending = True
+        self._eval.reset()
+        # mark that train phase metrics need flushing (for at_phase_end mode)
+        if self._config.gather_train_metrics == "at_phase_end" and self._train.sample_count > 0:
+            self._train_phase_needs_flush = True
+        # if no train log will happen, capture peak and reset now
+        if not should_log:
+            # capture train peak before resetting (for delayed flush in eval on_log)
+            if self._train_phase_needs_flush:
+                self._stashed_train_peak_percent = self._compute_local_peak_percent()
+            self._reset_peak_stats()
+
+    def _sample_stats(
+        self,
+        *,
+        eval_only: bool = False,
+    ) -> None:
+        """Sample GPU stats and update accumulators.
+
+        Args:
+            eval_only: If True, only update eval accumulators. If False, only update train accumulators.
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        if self._config.collect_all_visible_devices:
+            stats_list = self._collector.collect_all_visible_devices()
+        else:
+            current_stats = self._collector.collect_current_device()
+            stats_list = [current_stats] if current_stats is not None else []
+        accumulators = self._eval if eval_only else self._train
+        for stats in stats_list:
+            # compute pytorch allocation percent (needs special handling due to division)
+            pytorch_alloc_pct = (
+                100.0 * stats.pytorch_allocated_bytes / stats.pytorch_total_bytes
+                if stats.pytorch_total_bytes > 0
+                else None
+            )
+            accumulators.update(
+                stats.device_key,
+                utilization_gpu=stats.utilization_gpu_percent,
+                utilization_mem_ctrl=stats.utilization_mem_controller_percent,
+                vram_used_percent=stats.vram_used_percent,
+                pytorch_allocated_percent=pytorch_alloc_pct,
+                power_watts=stats.power_watts,
+                temperature_celsius=stats.temperature_celsius,
+            )
+        accumulators.sample_count += 1
+
+    def _compute_local_peak_percent(self) -> float:
+        """Compute peak memory percent. If multi-device, returns max across devices."""
+        if not torch.cuda.is_available():
+            return 0.0
+        if self._config.collect_all_visible_devices:
+            peaks: list[float] = []
+            for idx in range(torch.cuda.device_count()):
+                max_alloc = torch.cuda.max_memory_allocated(idx)
+                total: int = int(torch.cuda.get_device_properties(idx).total_memory)  # type: ignore[reportUnknownMemberType]
+                peaks.append(100.0 * max_alloc / total if total > 0 else 0.0)
+            return max(peaks) if peaks else 0.0
+        idx = torch.cuda.current_device()
+        max_alloc = torch.cuda.max_memory_allocated(idx)
+        total_mem: int = int(torch.cuda.get_device_properties(idx).total_memory)  # type: ignore[reportUnknownMemberType]
+        return 100.0 * max_alloc / total_mem if total_mem > 0 else 0.0
+
+    def _compute_metrics_from_accumulators(
+        self,
+        accumulators: dict[str, dict[str, pyine.utils.stats.RunningStats]],
+        sample_count: int,
+        peak_percent: float,
+    ) -> dict[str, float | int]:
+        """Compute metrics dict from accumulators.
+
+        Args:
+            accumulators: Dict mapping metric name to dict of device_key -> RunningStats.
+            sample_count: Number of samples taken.
+            peak_percent: Peak memory percentage.
+
+        Returns:
+            Dict of metric_name -> value.
+        """
+        result: dict[str, float | int] = {}
+        for metric_name, device_stats in accumulators.items():
+            # merge all device stats into one
+            merged = pyine.utils.stats.RunningStats()
+            for stats in device_stats.values():
+                merged.merge(stats)
+            if merged.count == 0:
+                continue
+            assert merged.min is not None and merged.max is not None
+            result[f"{metric_name}/mean"] = merged.mean()
+            result[f"{metric_name}/std"] = merged.std()
+            result[f"{metric_name}/min"] = merged.min
+            result[f"{metric_name}/max"] = merged.max
+        if sample_count > 0:
+            result["total_sample_calls"] = sample_count
+        if peak_percent > 0.0:
+            result["pytorch_peak_percent"] = peak_percent
+        return result
+
+    def _compute_train_metrics(
+        self,
+        peak_percent_override: float | None = None,
+    ) -> dict[str, float | int]:
+        """Compute metrics from train accumulators (local only, no gathering).
+
+        Args:
+            peak_percent_override: If provided, use this instead of computing peak from current state.
+                Useful for delayed flushes where peak was captured earlier.
+        """
+        if peak_percent_override is not None:
+            peak_percent = peak_percent_override
+        else:
+            peak_percent = self._compute_local_peak_percent()
+        return self._compute_metrics_from_accumulators(
+            self._train.as_accumulators_dict(),
+            self._train.sample_count,
+            peak_percent,
+        )
+
+    def _gather_and_merge_payloads(
+        self,
+        local_payload: dict[str, typing.Any],
+    ) -> dict[str, float | int]:
+        """Gather payloads from all ranks and merge into aggregated metrics.
+
+        IMPORTANT: All ranks must call this method to avoid deadlocks.
+
+        Args:
+            local_payload: Dict with accumulator states, peak_percent, and sample_count.
+
+        Returns:
+            Aggregated metrics dict on main rank, empty dict on other ranks.
+        """
+        gathered = pyine.utils.distrib.all_gather_objects(local_payload)
+        # only rank 0 computes final metrics
+        if not pyine.utils.distrib.is_main_process():
+            return {}
+        # merge all gathered payloads
+        merged_accumulators: dict[str, dict[str, pyine.utils.stats.RunningStats]] = {
+            "utilization_gpu_percent": {},
+            "utilization_mem_controller_percent": {},
+            "vram_used_percent": {},
+            "pytorch_allocated_percent": {},
+            "power_watts": {},
+            "temperature_celsius": {},
+        }
+        max_peak = 0.0
+        total_sample_count = 0
+        metric_key_map = {
+            "utilization_gpu": "utilization_gpu_percent",
+            "utilization_mem_ctrl": "utilization_mem_controller_percent",
+            "vram_used_percent": "vram_used_percent",
+            "pytorch_allocated_percent": "pytorch_allocated_percent",
+            "power_watts": "power_watts",
+            "temperature_celsius": "temperature_celsius",
+        }
+        for item in gathered:
+            for payload_key, merged_key in metric_key_map.items():
+                device_states = item.get(payload_key, {})
+                for device_key, state in device_states.items():
+                    if device_key not in merged_accumulators[merged_key]:
+                        merged_accumulators[merged_key][device_key] = pyine.utils.stats.RunningStats()
+                    merged_accumulators[merged_key][device_key].merge(pyine.utils.stats.RunningStats.from_state(state))
+            max_peak = max(max_peak, item.get("pytorch_peak_percent", 0.0))
+            total_sample_count += item.get("sample_count", 0)
+        return self._compute_metrics_from_accumulators(merged_accumulators, total_sample_count, max_peak)
+
+    def _gather_and_compute_train_metrics(
+        self,
+        peak_percent_override: float | None = None,
+    ) -> dict[str, float | int]:
+        """Gather train stats from all ranks and compute aggregated metrics.
+
+        IMPORTANT: All ranks must call this method to avoid deadlocks.
+
+        Args:
+            peak_percent_override: If provided, use this instead of computing peak from current state.
+                Useful for delayed flushes where peak was captured earlier.
+        """
+        if not pyine.utils.distrib.is_distributed():
+            return self._compute_train_metrics(peak_percent_override)
+        local_peak = peak_percent_override if peak_percent_override is not None else self._compute_local_peak_percent()
+        return self._gather_and_merge_payloads(self._train.as_gather_payload(local_peak))
+
+    def _compute_eval_metrics(self) -> dict[str, float | int]:
+        """Compute metrics from eval accumulators (local only, no gathering)."""
+        return self._compute_metrics_from_accumulators(
+            self._eval.as_accumulators_dict(),
+            self._eval.sample_count,
+            self._compute_local_peak_percent(),
+        )
+
+    def _gather_and_compute_eval_metrics(self) -> dict[str, float | int]:
+        """Gather eval stats from all ranks and compute aggregated metrics.
+
+        IMPORTANT: All ranks must call this method to avoid deadlocks.
+        """
+        if not self._config.gather_eval_metrics or not pyine.utils.distrib.is_distributed():
+            return self._compute_eval_metrics()
+        return self._gather_and_merge_payloads(self._eval.as_gather_payload(self._compute_local_peak_percent()))
+
+    def _require_gather_safe(
+        self,
+        context: str,
+    ) -> bool:
+        """Check if gathering is wanted and safe; raise RuntimeError if wanted but unsafe.
+
+        Args:
+            context: Description of where the gather would happen (for error message).
+
+        Returns:
+            True if gathering should proceed, False if gathering not wanted.
+
+        Raises:
+            RuntimeError: If gathering is wanted but torch.distributed is not initialized.
+        """
+        wants_gather = pyine.utils.distrib.is_distributed() and self._config.gather_train_metrics != "never"
+        if not wants_gather:
+            return False
+        if not self._is_gather_safe():
+            raise RuntimeError(
+                f"gather_train_metrics enabled but torch.distributed not initialized ({context}). "
+                "This would silently drop stats from non-rank0 processes. Either ensure "
+                "torch.distributed is initialized before training, or set gather_train_metrics='never'."
+            )
+        return True
+
+    @typing.override
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Initialize collector and reset accumulators at training start."""
+        # first: validate config combinations
+        if (
+            self._config.collect_all_visible_devices
+            and self._config.gather_eval_metrics
+            and pyine.utils.distrib.is_distributed()
+            and torch.cuda.is_available()
+            and torch.cuda.device_count() > 1
+        ):
+            raise ValueError(
+                "Cannot use collect_all_visible_devices=True with gather_eval_metrics=True "
+                "when multiple GPUs are visible per rank (would double-count). "
+                "Either set collect_all_visible_devices=False (recommended for DDP) or "
+                "set gather_eval_metrics=False (each rank logs independently)."
+            )
+        if (
+            self._config.collect_all_visible_devices
+            and self._config.gather_train_metrics != "never"
+            and pyine.utils.distrib.is_distributed()
+            and torch.cuda.is_available()
+            and torch.cuda.device_count() > 1
+        ):
+            raise ValueError(
+                "Cannot use collect_all_visible_devices=True with gather_train_metrics!='never' "
+                "when multiple GPUs are visible per rank (would double-count). "
+                "Either set collect_all_visible_devices=False (recommended for DDP) or "
+                "set gather_train_metrics='never' (each rank logs its own stats)."
+            )
+        if (
+            not self._config.only_main_process
+            and self._config.gather_eval_metrics
+            and pyine.utils.distrib.is_distributed()
+        ):
+            raise ValueError(
+                "Cannot use only_main_process=False with gather_eval_metrics=True. "
+                "When gathering stats across nodes, only the main process receives aggregated "
+                "eval metrics. Either set only_main_process=True (recommended) or "
+                "set gather_eval_metrics=False (each rank logs its own stats)."
+            )
+        if (
+            not self._config.only_main_process
+            and self._config.gather_train_metrics != "never"
+            and pyine.utils.distrib.is_distributed()
+        ):
+            raise ValueError(
+                "Cannot use only_main_process=False with gather_train_metrics!='never'. "
+                "When gathering stats across nodes, only the main process receives aggregated "
+                "train metrics. Either set only_main_process=True (recommended) or "
+                "set gather_train_metrics='never' (each rank logs its own stats)."
+            )
+        # initialize collector
+        self._collector = pyine.utils.gpu.GPUStatsCollector(require_nvml=self._config.require_nvml)
+        # in distributed mode with gathering enabled, verify all ranks have same CUDA availability
+        # (prevents deadlock where some ranks call all_gather and others don't)
+        gathering_enabled = self._config.gather_eval_metrics or self._config.gather_train_metrics != "never"
+        if gathering_enabled and self._is_gather_safe():
+            # gather unconditionally to avoid deadlock if is_enabled differs across ranks
+            local_enabled = self._collector.is_enabled()
+            gathered_enabled = pyine.utils.distrib.all_gather_objects(local_enabled)
+            if len(set(gathered_enabled)) > 1:
+                enabled_ranks = [i for i, enabled in enumerate(gathered_enabled) if enabled]
+                disabled_ranks = [i for i, enabled in enumerate(gathered_enabled) if not enabled]
+                raise RuntimeError(
+                    f"CUDA availability mismatch across ranks: ranks {enabled_ranks} have CUDA, "
+                    f"ranks {disabled_ranks} do not. This would cause a distributed deadlock during "
+                    "GPU stats gathering. Ensure all ranks have the same CUDA availability, or set "
+                    "gather_train_metrics='never' and gather_eval_metrics=False to disable gathering."
+                )
+            # now safe to check NVML mismatch (all ranks have CUDA)
+            if self._collector.is_enabled():
+                local_nvml = self._collector.is_nvml_available()
+                gathered_nvml = pyine.utils.distrib.all_gather_objects(local_nvml)
+                if pyine.utils.distrib.is_main_process() and len(set(gathered_nvml)) > 1:
+                    nvml_ranks = [i for i, has_nvml in enumerate(gathered_nvml) if has_nvml]
+                    no_nvml_ranks = [i for i, has_nvml in enumerate(gathered_nvml) if not has_nvml]
+                    logger.warning(
+                        f"NVML availability mismatch across ranks: ranks {nvml_ranks} have NVML, "
+                        f"ranks {no_nvml_ranks} do not. Aggregated utilization/power/temperature metrics "
+                        "will only include data from NVML-enabled ranks, potentially biasing results."
+                    )
+        # warn once (on main process only) when NVML unavailable but callback enabled
+        if (
+            self._collector.is_enabled()
+            and not self._collector.is_nvml_available()
+            and pyine.utils.distrib.is_main_process()
+        ):
+            logger.warning(
+                "GPU stats logging enabled but NVML unavailable (pynvml not installed); "
+                "only PyTorch memory stats will be logged, not utilization/power/temperature. "
+                "Install with: uv sync --extra gpu-monitoring"
+            )
+        # warn if at_phase_end mode is used without evaluation (metrics won't appear in W&B/TensorBoard)
+        eval_strategy_raw = getattr(args, "eval_strategy", getattr(args, "evaluation_strategy", "no"))
+        # handle both string and IntervalStrategy enum (use .value if available, else str and lowercase)
+        eval_strategy = getattr(eval_strategy_raw, "value", str(eval_strategy_raw)).lower()
+        if (
+            self._config.gather_train_metrics == "at_phase_end"
+            and eval_strategy == "no"
+            and pyine.utils.distrib.is_main_process()
+        ):
+            logger.warning(
+                "GPU stats logging: gather_train_metrics='at_phase_end' with eval_strategy='no' means "
+                "train/gpu metrics will only be logged via logger.info at train end (they will NOT appear "
+                "in W&B/TensorBoard). Use gather_train_metrics='always' if you need metrics in W&B."
+            )
+        # reset state (all flags must be rank-synchronous to avoid deadlocks)
+        self._in_eval = False
+        self._eval_pending = False
+        self._saw_eval_prediction_step = False
+        self._train_phase_needs_flush = False
+        self._stashed_train_peak_percent = None
+        self._train.reset()
+        self._eval.reset()
+        if self._collector.is_enabled():
+            self._reset_peak_stats()
+
+    @typing.override
+    def on_step_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Sample stats and handle eval transition.
+
+        Note: This method relies on DefaultFlowCallback having already set control.should_evaluate
+        and control.should_log. See class docstring for callback ordering requirements.
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        # sample every N steps
+        if state.global_step % self._config.sample_every_n_steps == 0:
+            self._sample_stats(eval_only=False)
+        # handle eval transition (if DefaultFlowCallback set should_evaluate=True)
+        if control.should_evaluate:
+            self._handle_eval_transition(should_log=control.should_log)
+
+    @typing.override
+    def on_epoch_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Handle eval transition at epoch end.
+
+        Note: This method relies on DefaultFlowCallback having already set control.should_evaluate
+        and control.should_log. See class docstring for callback ordering requirements.
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        # handle eval transition (if DefaultFlowCallback set should_evaluate=True)
+        if control.should_evaluate:
+            self._handle_eval_transition(should_log=control.should_log)
+
+    @typing.override
+    def on_prediction_step(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Sample stats during evaluation."""
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        self._in_eval = True
+        self._sample_stats(eval_only=True)
+        self._saw_eval_prediction_step = True
+
+    @typing.override
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Cleanup after evaluation completes.
+
+        Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
+        The actual order inside evaluate() is:
+        1. on_prediction_step (multiple times during eval loop) - sets _in_eval=True
+        2. on_log (with eval metrics) - we detect this via _in_eval=True
+        3. on_evaluate (this method) - cleanup
+
+        This method is called AFTER the eval on_log, so eval metrics have already been
+        injected. We just do cleanup here.
+        """
+        # handle edge case: if train metrics weren't flushed by eval on_log (unexpected callback ordering),
+        # log via logger.warning rather than silently dropping
+        if self._train_phase_needs_flush and self._should_log():
+            train_metrics = self._compute_train_metrics(peak_percent_override=self._stashed_train_peak_percent)
+            if train_metrics:
+                logger.warning(
+                    "Train phase GPU stats were not flushed before on_evaluate completed (unexpected callback "
+                    f"ordering). Logging via logger.info instead. train/gpu metrics: {train_metrics}"
+                )
+            self._train.reset()
+        # cleanup phase state on all ranks (must be rank-synchronous)
+        self._saw_eval_prediction_step = False
+        self._eval_pending = False
+        self._train_phase_needs_flush = False  # either flushed above or by on_log
+        self._stashed_train_peak_percent = None  # either used above or by on_log
+        self._in_eval = False  # should already be cleared by on_log, but ensure cleanup for robustness
+        # reset peak stats so eval peaks don't contaminate next train interval
+        self._reset_peak_stats()
+
+    @typing.override
+    def on_log(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        logs: dict[str, typing.Any] | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Inject GPU metrics into logs dict.
+
+        IMPORTANT: All ranks must execute this method and agree on the code path to avoid
+        deadlocks when gathering is enabled. We use _in_eval (set in on_prediction_step,
+        cleared here) to determine eval vs train context in a rank-synchronous way.
+
+        Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
+        - Train log: on_step_end -> on_log (train) -> [if should_evaluate]
+          -> on_prediction_step -> on_log (eval) -> on_evaluate
+        - The _in_eval flag is True after on_prediction_step and before we clear it here
+        - The _eval_pending flag is True from on_step_end until on_evaluate clears it
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        # determine eval vs train context; prefer _in_eval flag but handle edge cases
+        is_eval_context = self._in_eval
+        if logs is not None and not self._in_eval:
+            looks_like_eval = any(key.startswith("eval_") or key.startswith("eval/") for key in logs)
+            if looks_like_eval:
+                if self._eval_pending:
+                    # edge case: eval-like logs but on_prediction_step wasn't called (e.g., empty eval dataloader)
+                    # _eval_pending is rank-synchronous (set in on_step_end/on_epoch_end), so this is safe
+                    is_eval_context = True
+                    if self._should_log():
+                        logger.info(
+                            "on_log received eval-like logs but _in_eval=False (on_prediction_step not called). "
+                            "Treating as eval context based on _eval_pending flag (likely empty eval dataloader)."
+                        )
+                elif self._should_log():
+                    # unexpected: eval-like logs without _eval_pending; warn but treat as train
+                    logger.warning(
+                        "on_log received eval-like logs (keys starting with 'eval_' or 'eval/') but _in_eval=False "
+                        "and _eval_pending=False. This may indicate HuggingFace Trainer callback ordering changed. "
+                        "GPU stats will be classified as train metrics. Please report this issue."
+                    )
+        # use determined context for metric injection
+        if is_eval_context:
+            # EVAL LOG: compute/gather and inject eval metrics directly
+            # IMPORTANT: if gathering, ALL ranks must call gather to avoid deadlock
+            #
+            # ...first, handle any pending train phase metrics that weren't emitted
+            # (happens when should_evaluate=True but should_log=False in at_phase_end mode)
+            if self._train_phase_needs_flush:
+                should_train_gather = self._require_gather_safe("eval on_log with pending train flush")
+                stashed_peak = self._stashed_train_peak_percent
+                if should_train_gather:
+                    train_metrics = self._gather_and_compute_train_metrics(peak_percent_override=stashed_peak)
+                elif self._should_log():
+                    train_metrics = self._compute_train_metrics(peak_percent_override=stashed_peak)
+                else:
+                    train_metrics = {}
+                if self._should_log() and logs is not None:
+                    for key, value in train_metrics.items():
+                        logs[f"train/gpu/{key}"] = value
+                self._train.reset()
+                self._train_phase_needs_flush = False
+                self._stashed_train_peak_percent = None  # clear after use
+            # now handle eval metrics (note: eval gather uses different config than train gather)
+            wants_eval_gather = self._config.gather_eval_metrics and pyine.utils.distrib.is_distributed()
+            if wants_eval_gather and not self._is_gather_safe():
+                raise RuntimeError(
+                    "gather_eval_metrics enabled but torch.distributed not initialized. "
+                    "This would silently drop stats from non-rank0 processes. Either ensure "
+                    "torch.distributed is initialized before training, or set gather_eval_metrics=False."
+                )
+            if wants_eval_gather:
+                # all ranks participate in gather; non-main ranks get empty dict
+                eval_metrics = self._gather_and_compute_eval_metrics()
+            elif self._should_log():
+                # local only mode: only main rank needs to compute (others would just drop results)
+                eval_metrics = self._compute_eval_metrics() if self._saw_eval_prediction_step else {}
+            else:
+                eval_metrics = {}
+            # only main rank injects into logs (if logs is valid)
+            if self._should_log() and logs is not None:
+                for key, value in eval_metrics.items():
+                    logs[f"eval/gpu/{key}"] = value
+            # all ranks reset accumulators to stay in sync
+            self._eval.reset()
+            self._in_eval = False  # clear flag (rank-synchronous)
+        else:
+            # TRAIN LOG: compute/gather and inject train metrics
+            # IMPORTANT: if gathering, ALL ranks must call gather to avoid deadlock
+            #
+            # ...behavior depends on gather_train_metrics setting:
+            # - "never": emit local metrics at every train log
+            # - "at_phase_end": accumulate throughout phase, emit only at phase end (before eval)
+            # - "always": gather and emit at every train log
+            is_phase_end = self._eval_pending
+            at_phase_end_mode = self._config.gather_train_metrics == "at_phase_end"
+            if at_phase_end_mode and not is_phase_end:
+                # "at_phase_end" mode but not at phase end: keep accumulating, don't emit
+                # (no reset, no injection, no gathering)
+                pass
+            else:
+                # either "never", "always", or "at_phase_end" at actual phase end
+                should_gather = self._require_gather_safe("train on_log")
+                if should_gather:
+                    # all ranks participate in gather; non-main ranks get empty dict
+                    train_metrics = self._gather_and_compute_train_metrics()
+                else:
+                    # local only, compute on main rank
+                    train_metrics = self._compute_train_metrics() if self._should_log() else {}
+                # only main rank injects into logs (if logs is valid)
+                if self._should_log() and logs is not None:
+                    for key, value in train_metrics.items():
+                        logs[f"train/gpu/{key}"] = value
+                # all ranks reset accumulators and peak stats to stay in sync
+                self._train.reset()
+                self._reset_peak_stats()
+                self._train_phase_needs_flush = False  # we've emitted
+
+    @typing.override
+    def on_train_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Flush any remaining train metrics at the end of training.
+
+        This handles the case where gather_train_metrics='at_phase_end' but eval never runs
+        (e.g., eval_strategy='no'). Without this, accumulated train metrics would be lost.
+
+        Since on_train_end doesn't receive a logs dict for injection, we log directly
+        using Python logging. The metrics will appear in logs but not in wandb/tensorboard.
+        """
+        if self._collector is None or not self._collector.is_enabled():
+            return
+        # only flush if we have accumulated metrics that weren't emitted
+        if self._train.sample_count == 0:
+            return
+        # compute metrics (gathering if configured and safe)
+        should_gather = self._require_gather_safe("on_train_end")
+        if should_gather:
+            train_metrics = self._gather_and_compute_train_metrics()
+        else:
+            train_metrics = self._compute_train_metrics() if self._should_log() else {}
+        # log directly (can't inject into logs dict at train_end)
+        if self._should_log() and train_metrics:
+            logger.info(f"GPU stats at train_end (not injected into trainer logs): train/gpu metrics: {train_metrics}")
+        # cleanup
+        self._train.reset()
+        self._reset_peak_stats()
