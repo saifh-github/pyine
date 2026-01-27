@@ -55,7 +55,7 @@ class RunInitContext:
 
     datamodule: pyine.organisms.datamodules.base.BiasDataModuleBase[typing.Any] | None = None
     """Reference to the datamodule used for the experiment."""
-    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: dict[str, object]())
+    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: {})
     """Run-level metadata escape hatch."""
 
     @property
@@ -80,7 +80,7 @@ class ParsedOutput:
     """Extracted "final answer" field, if available."""
     reasoning: str | None = None
     """Extracted "reasoning" field, if available."""
-    fields: collections.abc.Mapping[str, str] = dataclasses.field(default_factory=lambda: dict[str, str]())
+    fields: collections.abc.Mapping[str, str] = dataclasses.field(default_factory=lambda: {})
     """Additional extracted string fields (term-/task-specific)."""
 
 
@@ -157,7 +157,7 @@ class SampleContext:
     """Optional cached parse result for `model_output`."""
     code_exec_eval: CodeExecEvalData | None = None
     """Optional code execution evaluation data (expected vs predicted outputs)."""
-    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: dict[str, object]())
+    extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: {})
     """Auxiliary metadata escape hatch (e.g., tool traces)."""
 
     @property
@@ -214,7 +214,7 @@ def get_text_from_source(
 class TokenCountCache:
     """Cache for token counts keyed by source."""
 
-    counts: dict[LengthSource, int] = dataclasses.field(default_factory=lambda: dict[LengthSource, int]())
+    counts: dict[LengthSource, int] = dataclasses.field(default_factory=lambda: {})
     """Token counts keyed by length source."""
 
     def get(self, source: LengthSource) -> int | None:
@@ -232,9 +232,7 @@ class TermResult:
 
     value: float
     """Unweighted scalar reward contribution for the sample."""
-    metrics: collections.abc.Mapping[str, MetricValue] = dataclasses.field(
-        default_factory=lambda: dict[str, MetricValue]()
-    )
+    metrics: collections.abc.Mapping[str, MetricValue] = dataclasses.field(default_factory=lambda: {})
     """Optional scalar metrics emitted by the term."""
 
 
@@ -254,7 +252,7 @@ class RewardOutput:
     """Per-term contributions after per-term clipping and weighting."""
     raw_terms: dict[str, float] | None = None
     """Original per-term values before any clipping or weighting (optional)."""
-    metrics: dict[str, MetricValue] = dataclasses.field(default_factory=lambda: dict[str, MetricValue]())
+    metrics: dict[str, MetricValue] = dataclasses.field(default_factory=lambda: {})
     """Additional scalar metrics (keyed by `term/metric`)."""
 
 
@@ -266,16 +264,18 @@ class RunSummaries:
     and IDE support compared to a tuple.
     """
 
-    reward_totals: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    reward_totals: dict[str, MetricValue] = dataclasses.field(default_factory=lambda: {})
     """Aggregated total reward stats (mean, std, etc.)."""
-    reward_term_summaries: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    reward_term_summaries: dict[str, MetricValue] = dataclasses.field(default_factory=lambda: {})
     """Per-term aggregated reward stats."""
-    reward_category_summaries: dict[str, float] = dataclasses.field(default_factory=lambda: dict[str, float]())
+    reward_category_summaries: dict[str, MetricValue] = dataclasses.field(default_factory=lambda: {})
     """Per-category aggregated reward stats."""
-    parsing_summaries: dict[str, float] | None = None
+    parsing_summaries: dict[str, MetricValue] | None = None
     """Global parsing stats (only when parsing configured)."""
-    parsing_category_summaries: dict[str, float] | None = None
+    parsing_category_summaries: dict[str, MetricValue] | None = None
     """Per-category parsing stats (only when both parsing and category_extractor configured)."""
+    difficulty_summaries: dict[str, MetricValue] | None = None
+    """Aggregated difficulty stats (score distribution, bin edges, per-bin reward stats)."""
 
 
 @dataclasses.dataclass(slots=True)
@@ -314,49 +314,31 @@ class ParsingStatsAccumulator:
     """Count of samples with malformed tag structure."""
 
     # category-wise character length stats
-    category_output_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
-    )
+    category_output_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(default_factory=lambda: {})
     """Per-category running stats for output length (chars)."""
-    category_reasoning_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
-    )
+    category_reasoning_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(default_factory=lambda: {})
     """Per-category running stats for reasoning length (chars)."""
-    category_answer_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
-    )
+    category_answer_length_chars: dict[str, stats_utils.RunningStats] = dataclasses.field(default_factory=lambda: {})
     """Per-category running stats for answer length (chars)."""
 
     # category-wise token length stats (optional)
-    category_output_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
-    )
+    category_output_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(default_factory=lambda: {})
     """Per-category running stats for output length (tokens)."""
     category_reasoning_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
+        default_factory=lambda: {}
     )
     """Per-category running stats for reasoning length (tokens)."""
-    category_answer_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(
-        default_factory=lambda: dict[str, stats_utils.RunningStats](),
-    )
+    category_answer_length_tokens: dict[str, stats_utils.RunningStats] = dataclasses.field(default_factory=lambda: {})
     """Per-category running stats for answer length (tokens)."""
 
     # category-wise format counts
-    category_total_count: dict[str, int] = dataclasses.field(
-        default_factory=lambda: dict[str, int](),
-    )
+    category_total_count: dict[str, int] = dataclasses.field(default_factory=lambda: {})
     """Per-category sample counts."""
-    category_missing_reasoning_count: dict[str, int] = dataclasses.field(
-        default_factory=lambda: dict[str, int](),
-    )
+    category_missing_reasoning_count: dict[str, int] = dataclasses.field(default_factory=lambda: {})
     """Per-category counts of samples without reasoning."""
-    category_missing_answer_count: dict[str, int] = dataclasses.field(
-        default_factory=lambda: dict[str, int](),
-    )
+    category_missing_answer_count: dict[str, int] = dataclasses.field(default_factory=lambda: {})
     """Per-category counts of samples without final answer."""
-    category_malformed_count: dict[str, int] = dataclasses.field(
-        default_factory=lambda: dict[str, int](),
-    )
+    category_malformed_count: dict[str, int] = dataclasses.field(default_factory=lambda: {})
     """Per-category counts of samples with malformed tag structure."""
 
     @classmethod
@@ -637,29 +619,13 @@ class ParsingStatsAccumulator:
         if is_malformed:
             self.category_malformed_count[category] = self.category_malformed_count.get(category, 0) + 1
 
-    @staticmethod
-    def _emit_running_stats(
-        stats: stats_utils.RunningStats,
-        prefix: str,
-    ) -> dict[str, float]:
-        """Emit mean/std/min/max metrics for a RunningStats object."""
-        if stats.count == 0:
-            return {}
-        assert stats.min is not None and stats.max is not None
-        return {
-            f"{prefix}/mean": stats.mean(),
-            f"{prefix}/std": stats.std(),
-            f"{prefix}/min": stats.min,
-            f"{prefix}/max": stats.max,
-        }
-
     def get_metrics(
         self,
         *,
         reasoning_enabled: bool = True,
         answer_enabled: bool = True,
         capture_diagnostics: bool = False,
-    ) -> dict[str, float]:
+    ) -> dict[str, MetricValue]:
         """Return aggregated global parsing metrics.
 
         Args:
@@ -672,27 +638,26 @@ class ParsingStatsAccumulator:
         """
         if self.total_count == 0:
             return {}
-        metrics: dict[str, float] = {}
+        metrics: dict[str, MetricValue] = {}
         # output length stats (always tracked)
-        metrics.update(self._emit_running_stats(self.output_length_chars, "output_length_chars"))
-        metrics.update(self._emit_running_stats(self.output_length_tokens, "output_length_tokens"))
+        metrics.update(self.output_length_chars.to_metrics(prefix="output_length_chars"))
+        metrics.update(self.output_length_tokens.to_metrics(prefix="output_length_tokens"))
         # reasoning length stats (only when enabled)
         if reasoning_enabled:
-            metrics.update(self._emit_running_stats(self.reasoning_length_chars, "reasoning_length_chars"))
-            metrics.update(self._emit_running_stats(self.reasoning_length_tokens, "reasoning_length_tokens"))
+            metrics.update(self.reasoning_length_chars.to_metrics(prefix="reasoning_length_chars"))
+            metrics.update(self.reasoning_length_tokens.to_metrics(prefix="reasoning_length_tokens"))
         # answer length stats (only when enabled)
         if answer_enabled:
-            metrics.update(self._emit_running_stats(self.answer_length_chars, "answer_length_chars"))
-            metrics.update(self._emit_running_stats(self.answer_length_tokens, "answer_length_tokens"))
+            metrics.update(self.answer_length_chars.to_metrics(prefix="answer_length_chars"))
+            metrics.update(self.answer_length_tokens.to_metrics(prefix="answer_length_tokens"))
         # format ratios
-        total = float(self.total_count)
         if reasoning_enabled:
-            metrics["missing_reasoning_ratio"] = self.missing_reasoning_count / total
+            metrics["missing_reasoning_ratio"] = self.missing_reasoning_count / self.total_count
         if answer_enabled:
-            metrics["missing_answer_ratio"] = self.missing_answer_count / total
+            metrics["missing_answer_ratio"] = self.missing_answer_count / self.total_count
         if capture_diagnostics:
-            metrics["malformed_ratio"] = self.malformed_count / total
-        metrics["sample_count"] = total
+            metrics["malformed_ratio"] = self.malformed_count / self.total_count
+        metrics["count"] = self.total_count
         return metrics
 
     def get_category_metrics(
@@ -701,7 +666,7 @@ class ParsingStatsAccumulator:
         reasoning_enabled: bool = True,
         answer_enabled: bool = True,
         capture_diagnostics: bool = False,
-    ) -> dict[str, float]:
+    ) -> dict[str, MetricValue]:
         """Return category-wise parsing metrics.
 
         Args:
@@ -712,47 +677,45 @@ class ParsingStatsAccumulator:
         Returns:
             Dict of metric name to value, empty if no categories.
         """
-        metrics: dict[str, float] = {}
+        metrics: dict[str, MetricValue] = {}
         for category in sorted(self.category_total_count.keys()):
-            total = float(self.category_total_count.get(category, 0))
+            total = self.category_total_count.get(category, 0)
             if total == 0:
                 continue
             # output length
             cat_output_chars = self.category_output_length_chars.get(category)
             if cat_output_chars:
-                metrics.update(self._emit_running_stats(cat_output_chars, f"{category}/output_length_chars"))
+                metrics.update(cat_output_chars.to_metrics(prefix=f"{category}/output_length_chars"))
             cat_output_tokens = self.category_output_length_tokens.get(category)
             if cat_output_tokens:
-                metrics.update(self._emit_running_stats(cat_output_tokens, f"{category}/output_length_tokens"))
+                metrics.update(cat_output_tokens.to_metrics(prefix=f"{category}/output_length_tokens"))
             # reasoning length
             if reasoning_enabled:
                 cat_reasoning_chars = self.category_reasoning_length_chars.get(category)
                 if cat_reasoning_chars:
-                    metrics.update(self._emit_running_stats(cat_reasoning_chars, f"{category}/reasoning_length_chars"))
+                    metrics.update(cat_reasoning_chars.to_metrics(prefix=f"{category}/reasoning_length_chars"))
                 cat_reasoning_tokens = self.category_reasoning_length_tokens.get(category)
                 if cat_reasoning_tokens:
-                    metrics.update(
-                        self._emit_running_stats(cat_reasoning_tokens, f"{category}/reasoning_length_tokens")
-                    )
+                    metrics.update(cat_reasoning_tokens.to_metrics(prefix=f"{category}/reasoning_length_tokens"))
             # answer length
             if answer_enabled:
                 cat_answer_chars = self.category_answer_length_chars.get(category)
                 if cat_answer_chars:
-                    metrics.update(self._emit_running_stats(cat_answer_chars, f"{category}/answer_length_chars"))
+                    metrics.update(cat_answer_chars.to_metrics(prefix=f"{category}/answer_length_chars"))
                 cat_answer_tokens = self.category_answer_length_tokens.get(category)
                 if cat_answer_tokens:
-                    metrics.update(self._emit_running_stats(cat_answer_tokens, f"{category}/answer_length_tokens"))
+                    metrics.update(cat_answer_tokens.to_metrics(prefix=f"{category}/answer_length_tokens"))
             # format ratios
             if reasoning_enabled:
-                missing_reasoning = float(self.category_missing_reasoning_count.get(category, 0))
+                missing_reasoning = self.category_missing_reasoning_count.get(category, 0)
                 metrics[f"{category}/missing_reasoning_ratio"] = missing_reasoning / total
             if answer_enabled:
-                missing_answer = float(self.category_missing_answer_count.get(category, 0))
+                missing_answer = self.category_missing_answer_count.get(category, 0)
                 metrics[f"{category}/missing_answer_ratio"] = missing_answer / total
             if capture_diagnostics:
-                malformed = float(self.category_malformed_count.get(category, 0))
+                malformed = self.category_malformed_count.get(category, 0)
                 metrics[f"{category}/malformed_ratio"] = malformed / total
-            metrics[f"{category}/sample_count"] = total
+            metrics[f"{category}/count"] = total
         return metrics
 
 
@@ -780,7 +743,7 @@ class RewardLogger(typing.Protocol):
     The manager handles key scoping and orchestration. Terms must never log directly.
     """
 
-    def log(
+    def log_sample(
         self,
         sample_id: str,
         *,
@@ -827,19 +790,21 @@ class RewardLogger(typing.Protocol):
         """
         ...
 
-    def log_run(
+    def log_phase_summaries(
         self,
         *,
-        reward_totals: collections.abc.Mapping[str, float],
-        reward_term_summaries: collections.abc.Mapping[str, float],
-        reward_category_summaries: collections.abc.Mapping[str, float],
-        parsing_summaries: collections.abc.Mapping[str, float] | None = None,
-        parsing_category_summaries: collections.abc.Mapping[str, float] | None = None,
+        reward_totals: collections.abc.Mapping[str, MetricValue],
+        reward_term_summaries: collections.abc.Mapping[str, MetricValue],
+        reward_category_summaries: collections.abc.Mapping[str, MetricValue],
+        parsing_summaries: collections.abc.Mapping[str, MetricValue] | None = None,
+        parsing_category_summaries: collections.abc.Mapping[str, MetricValue] | None = None,
+        difficulty_summaries: collections.abc.Mapping[str, MetricValue] | None = None,
         failure_ratio: float | None = None,
         failure_count: int | None = None,
         step: int | None = None,
+        **kwargs: typing.Any,
     ) -> None:
-        """Log run-level summary metrics.
+        """Log phase-level summary metrics (e.g., at end of train/eval phase).
 
         Args:
             reward_totals: Aggregated total reward stats.
@@ -847,17 +812,21 @@ class RewardLogger(typing.Protocol):
             reward_category_summaries: Per-category aggregated reward stats.
             parsing_summaries: Global parsing stats (optional).
             parsing_category_summaries: Per-category parsing stats (optional).
+            difficulty_summaries: Aggregated difficulty stats (optional).
             failure_ratio: Ratio of failed samples to total samples (optional).
             failure_count: Total number of failed samples (optional).
             step: Optional logging step.
+            **kwargs: Additional keyword arguments for forward compatibility.
+                Custom implementations should accept **kwargs to remain compatible
+                with future additions to the logging interface.
         """
         ...
 
-    def should_log_scalars(
+    def should_log_sample_scalars(
         self,
         generation_count: int,
     ) -> bool:
-        """Return True if scalars should be logged for this generation_count.
+        """Return True if sample scalars should be logged for this generation_count.
 
         Used by the manager to skip expensive metric extraction when the logger will drop the data.
 
@@ -869,20 +838,20 @@ class RewardLogger(typing.Protocol):
         """
         ...
 
-    def should_add_table_row(
+    def should_log_sample_table_row(
         self,
         generation_count: int,
     ) -> bool:
-        """Return True if a table row should be added for this generation_count.
+        """Return True if a sample table row should be logged for this generation_count.
 
         Used by the manager to skip expensive table field extraction when the logger will drop
-        the row.
+        the row. This is for the heavy generation_details table (with prompts/outputs).
 
         Args:
             generation_count: Total generations processed so far (1-indexed).
 
         Returns:
-            True if a table row should be added for this generation count.
+            True if a generation table row should be added for this generation count.
         """
         ...
 
@@ -943,6 +912,50 @@ class RewardLogger(typing.Protocol):
 
         Args:
             key_prefix: Prefix to prepend to all logged keys.
+        """
+        ...
+
+    def get_key_prefix(self) -> str:
+        """Get the current key prefix.
+
+        Returns:
+            The current key prefix (e.g., "train/", "eval/", or "").
+        """
+        ...
+
+    def log_difficulty_stats(
+        self,
+        *,
+        step: int,
+        generation_count: int,
+        sample_id: str,
+        primary_source: str,
+        raw_primary: float | None,
+        difficulty_score: float,
+        difficulty_bin: int,
+        reward_total: float,
+        predict_type: str,
+        code_type: str,
+        has_code_override: bool,
+        secondary_raw_values: dict[str, float] | None = None,
+    ) -> None:
+        """Log difficulty statistics for a sample.
+
+        Used to populate a lightweight difficulty table for analyzing reward vs difficulty.
+
+        Args:
+            step: Training step.
+            generation_count: Total generations processed so far (1-indexed).
+            sample_id: Unique identifier for the sample.
+            primary_source: Name of the primary difficulty source (e.g., "trace_step_count").
+            raw_primary: Raw value of the primary source, or None if missing.
+            difficulty_score: Normalized difficulty score.
+            difficulty_bin: Bin index for this sample's difficulty.
+            reward_total: Total reward for this sample.
+            predict_type: Sample predict type (e.g., "program_output").
+            code_type: Sample code type.
+            has_code_override: Whether the sample has a code override.
+            secondary_raw_values: Optional dict of secondary source raw values.
         """
         ...
 

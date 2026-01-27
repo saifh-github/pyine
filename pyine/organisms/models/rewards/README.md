@@ -489,9 +489,11 @@ generations per prompt in GRPO).
 - `{prefix}/categories/*`: category-wise metrics (if a category extractor is configured).
 
 **Batch-level metrics** (indexed to `{prefix}/batch_count`): These metrics are logged once per
-compute_batch call and use batch_count as the x-axis. This ensures each logged batch has a unique
-x-coordinate, avoiding WandB aggregation issues when multiple batches are processed within the same
-trainer step (e.g. gradient accumulation).
+compute_batch call (when enabled) and use batch_count as the x-axis. This ensures each logged batch
+has a unique x-coordinate, avoiding WandB aggregation issues when multiple batches are processed
+within the same trainer step (e.g. gradient accumulation).
+
+Note: Batch-level metrics are only emitted when `LoggingConfig.log_batch_stats=True`.
 
 - `{prefix}/reward/batch/mean`: mean reward across the batch;
 - `{prefix}/reward/batch/std`: standard deviation of rewards in the batch;

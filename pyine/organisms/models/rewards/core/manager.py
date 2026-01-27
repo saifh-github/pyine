@@ -11,6 +11,7 @@ import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
 import pyine.organisms.models.rewards.core.configs as reward_configs
+import pyine.organisms.models.rewards.core.difficulty as difficulty_module
 import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
@@ -150,6 +151,15 @@ class RewardManager:
         if config.verbosity_scaling is not None and config.verbosity_scaling.enabled:
             # _setup_token_counter already raised if verbosity_scaling is enabled but no tokenizer available
             self._verbosity_scaler = verbosity_scaling.VerbosityScaler(config.verbosity_scaling)
+        self._difficulty_estimator: difficulty_module.DifficultyEstimator | None = None
+        if config.difficulty is not None and config.difficulty.enabled:
+            self._difficulty_estimator = difficulty_module.DifficultyEstimator(
+                config.difficulty,
+                token_counter=self._token_counter,
+            )
+            # validate logger is provided when difficulty table is enabled
+            if config.difficulty.table_mode != "disabled" and self._logger is None:
+                raise ValueError("difficulty.table_mode requires a logger, but none was provided")
         self._warn_tag_inconsistencies()
 
     def _setup_token_counter(
@@ -158,15 +168,19 @@ class RewardManager:
     ) -> typing.Callable[[str], int] | None:
         """Set up the token counter based on configuration and provided tokenizer.
 
-        Token counting is enabled when either parsing.track_token_lengths=True, or verbosity_scaling
-        is configured and enabled.
+        Token counting is enabled when either parsing.track_token_lengths=True, verbosity_scaling
+        is configured and enabled, or difficulty config uses token-based sources.
 
         Args:
             tokenizer: Optional HuggingFace tokenizer provided to __init__.
         """
         needs_parsing_tokens = self._config.parsing is not None and self._config.parsing.track_token_lengths
         needs_verbosity_tokens = self._config.verbosity_scaling is not None and self._config.verbosity_scaling.enabled
-        if not needs_parsing_tokens and not needs_verbosity_tokens:
+        needs_difficulty_tokens = False
+        if self._config.difficulty is not None and self._config.difficulty.enabled:
+            all_sources = {self._config.difficulty.primary_source} | set(self._config.difficulty.secondary_sources)
+            needs_difficulty_tokens = bool(all_sources & difficulty_module.TOKEN_SOURCES)
+        if not needs_parsing_tokens and not needs_verbosity_tokens and not needs_difficulty_tokens:
             return None
         if tokenizer is not None:
 
@@ -295,68 +309,51 @@ class RewardManager:
         self,
         key_prefix: str,
     ) -> None:
-        """Set the key prefix for subsequent reward logging.
+        """Set the key prefix across all relevant components.
 
-        This allows dynamic prefix switching for differentiating train vs eval logs
+        This allows dynamic prefix switching for e.g. differentiating train vs eval logs
         when the reward system is called from external trainers like TRL's GRPOTrainer.
 
-        Args:
-            key_prefix: New prefix to apply to all emitted logger keys.
-        """
-        if self._logger:
-            self._logger.set_key_prefix(key_prefix)
+        Components updated:
+        - Logger: uses prefix for metric namespacing (e.g., "train/reward/total");
+        - Difficulty estimator: uses prefix to determine phase (e.g., "eval_only" tracking).
 
-    def get_reward_total_metrics(self) -> dict[str, float]:
+        Args:
+            key_prefix: New prefix to apply (e.g., "train/", "eval/").
+        """
+        if self._logger is not None:
+            self._logger.set_key_prefix(key_prefix)
+        if self._difficulty_estimator is not None:
+            self._difficulty_estimator.set_key_prefix(key_prefix)
+
+    def get_reward_total_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns aggregated total reward metrics.
 
         Keys are bare (e.g., `mean`, `std`) - callers should add appropriate prefixes.
         """
-        if self._reward_total_stats.count == 0:
-            return {}
-        assert self._reward_total_stats.min is not None and self._reward_total_stats.max is not None
-        return {
-            "mean": self._reward_total_stats.mean(),
-            "std": self._reward_total_stats.std(),
-            "min": float(self._reward_total_stats.min),
-            "max": float(self._reward_total_stats.max),
-            "sample_count": float(self._reward_total_stats.count),
-        }
+        return self._reward_total_stats.to_metrics()  # type: ignore[return-value]
 
-    def get_reward_term_metrics(self) -> dict[str, float]:
+    def get_reward_term_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns aggregated term-wise reward metrics.
 
         Keys are `{term}/mean`, `{term}/std`, etc. - callers should add appropriate prefixes.
         """
-        metrics: dict[str, float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
         for term, stats in sorted(self._reward_term_stats.items()):
-            if stats.count == 0:
-                continue
-            assert stats.min is not None and stats.max is not None
-            metrics[f"{term}/mean"] = stats.mean()
-            metrics[f"{term}/std"] = stats.std()
-            metrics[f"{term}/min"] = float(stats.min)
-            metrics[f"{term}/max"] = float(stats.max)
-            metrics[f"{term}/sample_count"] = float(stats.count)
+            metrics.update(stats.to_metrics(prefix=term))
         return metrics
 
-    def get_reward_category_metrics(self) -> dict[str, float]:
+    def get_reward_category_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns aggregated category-wise reward metrics.
 
         Keys are `{category}/mean`, etc. - callers should add appropriate prefixes.
         """
-        metrics: dict[str, float] = {}
+        metrics: dict[str, reward_types.MetricValue] = {}
         for category, stats in sorted(self._reward_category_stats.items()):
-            if stats.count == 0:
-                continue
-            assert stats.min is not None and stats.max is not None
-            metrics[f"{category}/mean"] = stats.mean()
-            metrics[f"{category}/std"] = stats.std()
-            metrics[f"{category}/min"] = stats.min
-            metrics[f"{category}/max"] = stats.max
-            metrics[f"{category}/sample_count"] = float(stats.count)
+            metrics.update(stats.to_metrics(prefix=category))
         return metrics
 
-    def get_parsing_metrics(self) -> dict[str, float]:
+    def get_parsing_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns aggregated global parsing metrics.
 
         Returns empty dict if parsing is not configured or no samples processed.
@@ -371,7 +368,7 @@ class RewardManager:
             capture_diagnostics=capture_diagnostics,
         )
 
-    def get_parsing_category_metrics(self) -> dict[str, float]:
+    def get_parsing_category_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns category-wise parsing metrics.
 
         Returns empty dict if parsing or category extraction is not configured.
@@ -389,7 +386,7 @@ class RewardManager:
     def reset_accumulators(
         self,
     ) -> None:
-        """Reset all statistics accumulators (reward totals/terms/categories, batch, and parsing).
+        """Reset all statistics accumulators (reward totals/terms/categories, batch, parsing, difficulty).
 
         This resets only the running statistics, not term state. Use `reset()` to also reset term
         state for a new run.
@@ -402,6 +399,8 @@ class RewardManager:
         self._batch_reward_std_stats = stats_utils.RunningStats()
         if self._parsing_stats is not None:
             self._parsing_stats.reset()
+        if self._difficulty_estimator is not None:
+            self._difficulty_estimator.reset()
 
     def _prepare_run_summaries_for_finalize(
         self,
@@ -440,12 +439,13 @@ class RewardManager:
             summaries.parsing_summaries,
             summaries.parsing_category_summaries,
         )
-        self._logger.log_run(
+        self._logger.log_phase_summaries(
             reward_totals=scoped_reward_totals,
             reward_term_summaries=scoped_reward_term_summaries,
             reward_category_summaries=scoped_reward_category_summaries,
             parsing_summaries=scoped_parsing,
             parsing_category_summaries=scoped_parsing_category,
+            difficulty_summaries=summaries.difficulty_summaries,
             failure_ratio=failure_ratio,
             failure_count=failure_count,
             step=step,
@@ -658,6 +658,26 @@ class RewardManager:
             # all entries should be filled since we iterate over all trace_ids
             assert all(o is not None for o in outputs_by_idx), "some samples were not processed?"
             outputs = typing.cast("list[reward_types.RewardOutput]", outputs_by_idx)
+        # compute difficulty metrics and merge into outputs (after verbosity scaling)
+        if self._difficulty_estimator is not None:
+            for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+                # compute generation count for this sample (counter not yet incremented for this batch)
+                sample_gen_count = self._monotonic_generation_count + idx + 1
+                difficulty_metrics = self._difficulty_estimator.compute(
+                    sample_data=sample_ctx.sample_data,
+                    reward_total=output.total,
+                    weighted_terms=output.weighted_terms,  # for per-term binning
+                    generation_count=sample_gen_count,  # for "sampled" mode tracking
+                )
+                if difficulty_metrics:
+                    merged_metrics = dict(output.metrics)
+                    merged_metrics.update(difficulty_metrics)
+                    outputs[idx] = reward_types.RewardOutput(
+                        total=output.total,
+                        weighted_terms=output.weighted_terms,
+                        raw_terms=output.raw_terms,
+                        metrics=merged_metrics,
+                    )
         # build per-identifier generation indices (0..k-1 for each prompt's generations)
         identifier_counts: dict[typing.Hashable, int] = {}
         generation_indices: list[int] = []
@@ -670,6 +690,15 @@ class RewardManager:
             self._token_count_cache = caches[idx]
             self._update_running_stats(sample_ctx, output)  # this is where generation count gets updated
             self._maybe_log_sample(output, sample_ctx, log=log, step=step, generation_idx=generation_indices[idx])
+        # difficulty table logging is independent of main scalar/table frequency gates
+        # (uses its own frequency gating based on DifficultyConfig.table_mode)
+        # note: generation_count must be computed per-sample for correct frequency gating
+        should_log_difficulty = self._config.logging.enabled if log is None else log
+        for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+            sample_gen_count = self._monotonic_generation_count - len(sample_ctxs) + idx + 1
+            self._maybe_log_difficulty_table_row(
+                output, sample_ctx, step=step, generation_count=sample_gen_count, log=should_log_difficulty
+            )
         # compute and log batch-level stats
         self._maybe_log_batch_stats(outputs, log=log)
         return outputs
@@ -805,7 +834,7 @@ class RewardManager:
         )
 
     def _get_run_summaries(self) -> reward_types.RunSummaries:
-        """Compute local run-level summaries (mean/min/max/std) for total, per-term, category, and parsing values.
+        """Compute local run-level summaries for total, per-term, category, parsing, and difficulty.
 
         Returns a RunSummaries dataclass with all aggregated metrics.
         """
@@ -818,12 +847,16 @@ class RewardManager:
         parsing_category_summaries = (
             self.get_parsing_category_metrics() if self._parsing_stats and self._category_extractor else None
         )
+        difficulty_summaries = None
+        if self._difficulty_estimator is not None:
+            difficulty_summaries = self._difficulty_estimator.get_run_summaries()
         return reward_types.RunSummaries(
             reward_totals=reward_totals,
             reward_term_summaries=reward_term_summaries,
             reward_category_summaries=reward_category_summaries,
             parsing_summaries=parsing_summaries,
             parsing_category_summaries=parsing_category_summaries,
+            difficulty_summaries=difficulty_summaries,
         )
 
     def _gather_run_summaries(
@@ -846,6 +879,8 @@ class RewardManager:
         }
         if self._parsing_stats is not None:
             payload["parsing"] = self._parsing_stats.as_state()
+        if self._difficulty_estimator is not None:
+            payload["difficulty"] = self._difficulty_estimator.as_state()
         gathered = pyine.utils.distrib.all_gather_objects(payload)
         if not pyine.utils.distrib.is_main_process():
             return summaries
@@ -857,6 +892,11 @@ class RewardManager:
         merged_parsing: reward_types.ParsingStatsAccumulator | None = (
             reward_types.ParsingStatsAccumulator.new() if self._parsing_stats is not None else None
         )
+        merged_difficulty: difficulty_module.DifficultyEstimator | None = None
+        if self._difficulty_estimator is not None and self._config.difficulty is not None:
+            merged_difficulty = difficulty_module.DifficultyEstimator(
+                self._config.difficulty, token_counter=self._token_counter
+            )
         for item in gathered:
             total_state = typing.cast("collections.abc.Mapping[str, int | float]", item["total"])
             merged_total.merge(stats_utils.RunningStats.from_state(total_state))
@@ -878,11 +918,21 @@ class RewardManager:
             if merged_parsing is not None and "parsing" in item:
                 parsing_state = typing.cast("dict[str, typing.Any]", item["parsing"])
                 merged_parsing.merge(reward_types.ParsingStatsAccumulator.from_state(parsing_state))
+            if merged_difficulty is not None and "difficulty" in item:
+                difficulty_state = typing.cast("dict[str, typing.Any]", item["difficulty"])
+                other_estimator = difficulty_module.DifficultyEstimator.from_state(
+                    self._config.difficulty,  # type: ignore[arg-type]
+                    difficulty_state,
+                    token_counter=self._token_counter,
+                )
+                merged_difficulty.merge(other_estimator)
         self._reward_total_stats = merged_total
         self._reward_term_stats = merged_terms
         self._reward_category_stats = merged_categories
         if merged_parsing is not None:
             self._parsing_stats = merged_parsing
+        if merged_difficulty is not None:
+            self._difficulty_estimator = merged_difficulty
         return self._get_run_summaries()
 
     @staticmethod
@@ -1067,8 +1117,8 @@ class RewardManager:
             raise ValueError("logging is enabled but no logger is configured")
         generation_count = self._monotonic_generation_count
         # query logger to see if we need to do any work at all
-        will_log_scalars = self._logger.should_log_scalars(generation_count)
-        will_add_row = self._config.logging.log_tables and self._logger.should_add_table_row(generation_count)
+        will_log_scalars = self._logger.should_log_sample_scalars(generation_count)
+        will_add_row = self._config.logging.log_tables and self._logger.should_log_sample_table_row(generation_count)
         if not will_log_scalars and not will_add_row:
             return  # skip all expensive metric/category/parsing extraction
         step_to_use = self._step if step is None else step
@@ -1115,7 +1165,7 @@ class RewardManager:
             expected_output = sample_ctx.code_exec_eval.expected
         else:
             expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
-        self._logger.log(
+        self._logger.log_sample(
             sample_id,
             generation_count=generation_count,
             total=total_to_log,
@@ -1133,41 +1183,140 @@ class RewardManager:
             generation_idx=generation_idx,
         )
 
+    def _should_log_difficulty_table_row(
+        self,
+        generation_count: int,
+        *,
+        log: bool,
+    ) -> bool:
+        """Determine if we should log a difficulty table row based on phase and config.
+
+        Args:
+            generation_count: The generation count for this specific sample.
+            log: Whether logging is enabled for this compute_batch() call. This is already
+                resolved from the log= parameter (True/False override) or LoggingConfig.enabled
+                (when log=None), matching _maybe_log_sample() semantics.
+        """
+        if not log:  # respect the resolved log flag (same semantics as _maybe_log_sample)
+            return False
+        # respect main_process_only (same as _maybe_log_sample)
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
+            return False
+        if self._config.difficulty is None or not self._config.difficulty.enabled:
+            return False
+        if self._config.difficulty.table_mode == "disabled":
+            return False
+        if self._logger is None:
+            return False
+        table_mode = self._config.difficulty.table_mode
+        # determine current phase from logger key prefix (e.g., "train/" vs "eval/")
+        key_prefix = self._logger.get_key_prefix()
+        is_eval_phase = "eval" in key_prefix.lower()
+        if table_mode == "eval_only":
+            return is_eval_phase  # log every sample in eval, skip train
+        if table_mode == "sampled":
+            if is_eval_phase:
+                return True  # log every sample in eval
+            # sample in train phase
+            return generation_count % self._config.difficulty.sample_every_n_generations == 0
+        return table_mode == "always"
+
+    def _maybe_log_difficulty_table_row(
+        self,
+        output: reward_types.RewardOutput,
+        sample_ctx: reward_types.SampleContext,
+        *,
+        step: int | None,
+        generation_count: int,
+        log: bool,
+    ) -> None:
+        """Log a difficulty table row if enabled and the frequency gate passes.
+
+        Args:
+            output: Reward output for the sample.
+            sample_ctx: Sample context.
+            step: Optional logging step override.
+            generation_count: The generation count for this specific sample.
+            log: Whether logging is enabled for this compute_batch() call.
+        """
+        if not self._should_log_difficulty_table_row(generation_count, log=log):
+            return
+        # extract difficulty metrics from output
+        metrics = output.metrics
+        difficulty_score = metrics.get("difficulty/score")
+        difficulty_bin = metrics.get("difficulty/bin_index")
+        raw_primary = metrics.get("difficulty/raw_primary")
+        primary_source = metrics.get("difficulty/source")
+        # skip if primary metrics missing (e.g., sample was skipped)
+        if difficulty_score is None or difficulty_bin is None:
+            return
+        # collect secondary raw values from metrics
+        secondary_raw_values: dict[str, float] = {}
+        for key, value in metrics.items():
+            if key.startswith("difficulty/raw/") and isinstance(value, (int, float)):
+                secondary_raw_values[key.replace("difficulty/raw/", "")] = float(value)
+        step_to_use = self._step if step is None else step
+        self._logger.log_difficulty_stats(  # type: ignore[union-attr]
+            step=step_to_use or 0,
+            generation_count=generation_count,
+            sample_id=sample_ctx.sample_id,
+            primary_source=str(primary_source) if primary_source else "",
+            raw_primary=float(raw_primary) if raw_primary is not None else None,
+            difficulty_score=float(difficulty_score),
+            difficulty_bin=int(difficulty_bin),
+            reward_total=output.total,
+            predict_type=sample_ctx.sample_data.predict_type.value,
+            code_type=sample_ctx.sample_data.code_type,
+            has_code_override=sample_ctx.sample_data.has_code_override,
+            secondary_raw_values=secondary_raw_values or None,
+        )
+
     def _scope_reward_sample_fields(
         self,
         terms: collections.abc.Mapping[str, float],
         metrics: collections.abc.Mapping[str, reward_types.MetricValue],
     ) -> tuple[dict[str, float], dict[str, reward_types.MetricValue]]:
-        """Apply the 'reward/' prefix to per-sample reward term/metric keys."""
+        """Apply the 'reward/' prefix to per-sample reward term/metric keys.
+
+        Note: Difficulty metrics (keys starting with 'difficulty/') are filtered out here
+        because they should not be logged as per-generation scalars. They only appear in
+        run-level summaries and the optional lightweight difficulty_samples table.
+        """
+        # filter out difficulty/* keys; they are not logged as per-generation scalars
+        filtered_metrics = {k: v for k, v in metrics.items() if not k.startswith("difficulty/")}
         return (
             {f"reward/terms/{k}": float(v) for k, v in terms.items()},
-            {f"reward/metrics/{k}": v for k, v in metrics.items()},
+            {f"reward/metrics/{k}": v for k, v in filtered_metrics.items()},
         )
 
     def _scope_reward_run_fields(
         self,
-        reward_totals: collections.abc.Mapping[str, float],
-        reward_term_summaries: collections.abc.Mapping[str, float],
-        reward_category_summaries: collections.abc.Mapping[str, float],
-    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        reward_totals: collections.abc.Mapping[str, reward_types.MetricValue],
+        reward_term_summaries: collections.abc.Mapping[str, reward_types.MetricValue],
+        reward_category_summaries: collections.abc.Mapping[str, reward_types.MetricValue],
+    ) -> tuple[
+        dict[str, reward_types.MetricValue],
+        dict[str, reward_types.MetricValue],
+        dict[str, reward_types.MetricValue],
+    ]:
         """Apply the 'reward/' prefix to run-level reward summary keys."""
         return (
-            {f"reward/run/total/{k}": float(v) for k, v in reward_totals.items()},
-            {f"reward/run/terms/{k}": float(v) for k, v in reward_term_summaries.items()},
-            {f"reward/run/categories/{k}": float(v) for k, v in reward_category_summaries.items()},
+            {f"reward/run/total/{k}": v for k, v in reward_totals.items()},
+            {f"reward/run/terms/{k}": v for k, v in reward_term_summaries.items()},
+            {f"reward/run/categories/{k}": v for k, v in reward_category_summaries.items()},
         )
 
     def _scope_parsing_fields(
         self,
-        parsing_summaries: dict[str, float] | None,
-        parsing_category_summaries: dict[str, float] | None,
-    ) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+        parsing_summaries: dict[str, reward_types.MetricValue] | None,
+        parsing_category_summaries: dict[str, reward_types.MetricValue] | None,
+    ) -> tuple[dict[str, reward_types.MetricValue] | None, dict[str, reward_types.MetricValue] | None]:
         """Apply 'parsing/' prefix to parsing summary keys."""
         if parsing_summaries is None and parsing_category_summaries is None:
             return None, None
-        scoped_parsing = {f"parsing/{k}": float(v) for k, v in parsing_summaries.items()} if parsing_summaries else None
+        scoped_parsing = {f"parsing/{k}": v for k, v in parsing_summaries.items()} if parsing_summaries else None
         scoped_parsing_category = (
-            {f"parsing/categories/{k}": float(v) for k, v in parsing_category_summaries.items()}
+            {f"parsing/categories/{k}": v for k, v in parsing_category_summaries.items()}
             if parsing_category_summaries
             else None
         )
@@ -1189,7 +1338,7 @@ class RewardManager:
             log: Force logging on/off; when None, uses config default.
         """
         should_log = self._config.logging.enabled if log is None else log
-        if not should_log:
+        if not should_log or not self._config.logging.log_batch_stats:
             return
         should_gather = self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed()
         # compute batch stats (use population std to match RunningStats convention)
@@ -1262,6 +1411,8 @@ class RewardManager:
         }
         if self._parsing_stats is not None:
             state["parsing_stats"] = self._parsing_stats.as_state()
+        if self._difficulty_estimator is not None:
+            state["difficulty_estimator"] = self._difficulty_estimator.as_state()
         return state
 
     def load_state(
@@ -1298,3 +1449,10 @@ class RewardManager:
         # parsing stats (optional)
         if self._parsing_stats is not None and "parsing_stats" in state:
             self._parsing_stats = reward_types.ParsingStatsAccumulator.from_state(state["parsing_stats"])
+        # difficulty estimator state (optional)
+        if self._difficulty_estimator is not None and "difficulty_estimator" in state:
+            self._difficulty_estimator = difficulty_module.DifficultyEstimator.from_state(
+                self._config.difficulty,  # type: ignore[arg-type]
+                state["difficulty_estimator"],
+                token_counter=self._token_counter,
+            )

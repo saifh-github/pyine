@@ -612,7 +612,7 @@ training and evaluation phases. Aggregate statistics are logged at phase transit
 
 Run-level metrics logged include:
 
-- `{prefix}/reward/run/total/mean`, `std`, `min`, `max`, `sample_count` - Total reward stats
+- `{prefix}/reward/run/total/mean`, `std`, `min`, `max`, `count` - Total reward stats
 - `{prefix}/reward/run/terms/{term}/mean`, etc. - Per-term reward stats
 - `{prefix}/reward/run/categories/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
 
@@ -646,7 +646,7 @@ This produces metrics like:
 - `eval/reward/run/categories/code_type/original/std` - Std deviation
 - `eval/reward/run/categories/code_type/original/min` - Min reward
 - `eval/reward/run/categories/code_type/original/max` - Max reward
-- `eval/reward/run/categories/code_type/original/sample_count` - Number of samples in category
+- `eval/reward/run/categories/code_type/original/count` - Number of samples in category
 
 For details on available reward terms and configuration options, see `pyine/organisms/models/rewards/README.md`.
 

@@ -292,6 +292,7 @@ class TestRewardManager:
             ],
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
+                log_batch_stats=True,
                 scalar_log_every_n_generations=1,
                 log_tables=False,
             ),
@@ -354,6 +355,7 @@ class TestRewardManager:
             ],
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
+                log_batch_stats=True,
                 scalar_log_every_n_generations=1,
                 log_tables=False,
             ),
@@ -1089,12 +1091,12 @@ class TestCategoryWiseRewardTracking:
         assert metrics["code_type/original/std"] == pytest.approx(0.5)
         assert metrics["code_type/original/min"] == pytest.approx(0.0)
         assert metrics["code_type/original/max"] == pytest.approx(1.0)
-        assert metrics["code_type/original/sample_count"] == 2.0
+        assert metrics["code_type/original/count"] == 2.0
         # bugfix: mean=1.0, std=0.0, min=max=1.0
         assert "code_type/bugfix/mean" in metrics
         assert metrics["code_type/bugfix/mean"] == pytest.approx(1.0)
         assert metrics["code_type/bugfix/std"] == pytest.approx(0.0)
-        assert metrics["code_type/bugfix/sample_count"] == 1.0
+        assert metrics["code_type/bugfix/count"] == 1.0
 
     def test_reset_accumulators_clears_all_stats(self) -> None:
         category_config = pyine.evals.utils.SampleCategoryExtractionConfig(

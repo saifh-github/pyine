@@ -232,6 +232,7 @@ config:
       enabled: true
       log_total: true
       log_terms: true
+      log_batch_stats: false
       log_metrics: true
       log_tables: true
       scalar_log_every_n_generations: 30  # log scalars every 30 generations

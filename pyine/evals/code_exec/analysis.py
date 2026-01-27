@@ -188,11 +188,11 @@ def extract_run_metrics(
     summary = run.summary
     prefix = f"predict/{subset_name}"
     # try to get sample_count from summary (may not be logged in older runs)
-    sample_count = summary.get(f"{prefix}/sample_count")
+    sample_count = summary.get(f"{prefix}/count")
     if sample_count is not None:
         sample_count = int(sample_count)
         assert sample_count >= 0
-    has_keyword_count = summary.get(f"{prefix}/has_keyword/true/sample_count", 0)
+    has_keyword_count = summary.get(f"{prefix}/has_keyword/true/count", 0)
     assert has_keyword_count is not None
     has_keyword_count = int(has_keyword_count)
     assert has_keyword_count >= 0
@@ -229,7 +229,7 @@ def extract_category_metrics(
     """
     summary = run.summary
     prefix = f"predict/{subset_name}/"
-    metric_names = "|".join([*ACCURACY_TYPES, "sample_count"])
+    metric_names = "|".join([*ACCURACY_TYPES, "count"])
     category_pattern = re.compile(rf"^{re.escape(prefix)}(.+?)/({metric_names})$")
     categories: dict[str, dict[str, float | int | None]] = {}
     try:
@@ -252,7 +252,7 @@ def extract_category_metrics(
             accuracy_hard=metrics.get("accuracy_hard"),
             accuracy_soft=metrics.get("accuracy_soft"),
             accuracy_grader=metrics.get("accuracy_grader"),
-            count=int(metrics.get("sample_count") or 0),
+            count=int(metrics.get("count") or 0),
         )
         for category, metrics in sorted(categories.items())
     ]

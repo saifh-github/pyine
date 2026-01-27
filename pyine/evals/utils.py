@@ -414,7 +414,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
                 continue
             loss_sum = self._category_loss_sums[category]
             metrics[f"{category}/loss"] = loss_sum / count
-            metrics[f"{category}/sample_count"] = count
+            metrics[f"{category}/count"] = count
         return metrics
 
     def define_metrics(
@@ -429,7 +429,7 @@ class CategoryWiseMetricsCallback(transformers.TrainerCallback):
                 summary="min",
             )
             wandb_run.define_metric(  # type: ignore[reportUnknownMemberType]
-                f"eval/{category}/sample_count",  # is actually static, that's why we hide it
+                f"eval/{category}/count",  # is actually static, that's why we hide it
                 hidden=True,
                 summary="none",
             )

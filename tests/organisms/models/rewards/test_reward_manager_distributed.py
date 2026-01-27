@@ -124,8 +124,8 @@ def _worker_gather_summaries_gpu(rank: int, world_size: int, result_queue: mp.Qu
         reward_totals = run_entry["reward_totals"]
         # expected: (2 samples from rank0 + 3 from rank1) = 5 total samples
         # all rewards are 1.0, so mean should be 1.0
-        assert "reward/run/total/sample_count" in reward_totals
-        assert reward_totals["reward/run/total/sample_count"] == 5.0
+        assert "reward/run/total/count" in reward_totals
+        assert reward_totals["reward/run/total/count"] == 5.0
         assert "reward/run/total/mean" in reward_totals
         assert reward_totals["reward/run/total/mean"] == pytest.approx(1.0)
         result_queue.put({"success": True, "reward_totals": reward_totals})
@@ -213,7 +213,7 @@ def _worker_finalize_run_cpu(rank: int, world_size: int) -> None:
         # should only see rank 0's stats (3 samples)
         run_entry = logger.runs[0]
         reward_totals = run_entry["reward_totals"]
-        assert reward_totals["reward/run/total/sample_count"] == 3.0
+        assert reward_totals["reward/run/total/count"] == 3.0
     _cleanup_distributed()
 
 
@@ -255,7 +255,7 @@ def _worker_mixed_logger_states_cpu(rank: int, world_size: int, result_queue: mp
         run_entry = logger.runs[0]
         reward_totals = run_entry["reward_totals"]
         # should aggregate stats from all ranks: 2 ranks * 4 samples = 8 total
-        assert reward_totals["reward/run/total/sample_count"] == 8.0
+        assert reward_totals["reward/run/total/count"] == 8.0
         assert reward_totals["reward/run/total/mean"] == pytest.approx(1.0)
         result_queue.put({"rank": rank, "success": True})
     else:

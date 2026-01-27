@@ -48,7 +48,7 @@ class TestParsingStatsLogging:
         # get_state() should not contain parsing_stats key
         state = manager.get_state()
         assert "parsing_stats" not in state
-        # flush and verify log_run has no parsing_summaries
+        # flush and verify log_phase_summaries has no parsing_summaries
         manager.flush_stats()
         assert len(logger_obj.runs) == 1
         assert "parsing_summaries" not in logger_obj.runs[0]
@@ -77,7 +77,7 @@ class TestParsingStatsLogging:
         )
         manager.compute(ctx1, log=False)
         metrics = manager.get_parsing_metrics()
-        assert metrics["sample_count"] == 1.0
+        assert metrics["count"] == 1.0
         assert metrics["output_length_chars/mean"] > 0
         # reasoning was present
         assert metrics["reasoning_length_chars/mean"] > 0
@@ -121,7 +121,7 @@ class TestParsingStatsLogging:
         manager.compute(ctx2, log=False)
         manager.compute(ctx3, log=False)
         metrics = manager.get_parsing_metrics()
-        assert metrics["sample_count"] == 3.0
+        assert metrics["count"] == 3.0
         # 2/3 missing reasoning (s2 and s3)
         assert metrics["missing_reasoning_ratio"] == pytest.approx(2.0 / 3.0)
         # 1/3 missing answer (s3)
@@ -158,12 +158,12 @@ class TestParsingStatsLogging:
         manager.compute(ctx1, log=False)
         manager.compute(ctx2, log=False)
         metrics = manager.get_parsing_metrics()
-        assert metrics["sample_count"] == 2.0
+        assert metrics["count"] == 2.0
         # 1/2 malformed
         assert metrics["malformed_ratio"] == pytest.approx(0.5)
 
-    def test_parsing_stats_included_in_log_run(self) -> None:
-        """Verify InMemoryLogger.log_run receives parsing_summaries dict."""
+    def test_parsing_stats_included_in_log_phase_summaries(self) -> None:
+        """Verify InMemoryLogger.log_phase_summaries receives parsing_summaries dict."""
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -196,7 +196,7 @@ class TestParsingStatsLogging:
         assert isinstance(parsing_summaries, dict)
         # keys should have parsing/ prefix
         assert "parsing/output_length_chars/mean" in parsing_summaries
-        assert "parsing/sample_count" in parsing_summaries
+        assert "parsing/count" in parsing_summaries
 
     def test_parsing_stats_checkpoint_roundtrip(self) -> None:
         """Verify get_state/load_state preserves all parsing stats including category-wise."""
@@ -255,7 +255,7 @@ class TestParsingStatsLogging:
         restored_metrics = restored.get_parsing_metrics()
         restored_category_metrics = restored.get_parsing_category_metrics()
         # verify global stats
-        assert restored_metrics["sample_count"] == original_metrics["sample_count"]
+        assert restored_metrics["count"] == original_metrics["count"]
         assert restored_metrics["output_length_chars/mean"] == pytest.approx(
             original_metrics["output_length_chars/mean"]
         )
@@ -286,13 +286,13 @@ class TestParsingStatsLogging:
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
         manager.compute(ctx, log=False)
-        assert manager.get_parsing_metrics()["sample_count"] == 1.0
+        assert manager.get_parsing_metrics()["count"] == 1.0
         manager.reset_accumulators()
         # after reset, get_parsing_metrics returns empty dict (no samples)
         assert manager.get_parsing_metrics() == {}
 
     def test_per_sample_parsing_metrics_logged(self) -> None:
-        """Verify per-sample parsing metrics (lengths, booleans) are in logger.log() calls."""
+        """Verify per-sample parsing metrics (lengths, booleans) are in logger.log_sample() calls."""
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -450,7 +450,7 @@ class TestParsingStatsIntegration:
         assert not sample3_metrics["parsing/has_answer"]
         # verify run-level parsing metrics before flush
         parsing_metrics = manager.get_parsing_metrics()
-        assert parsing_metrics["sample_count"] == 3.0
+        assert parsing_metrics["count"] == 3.0
         assert parsing_metrics["output_length_chars/mean"] > 0
         assert "missing_reasoning_ratio" in parsing_metrics
         assert "missing_answer_ratio" in parsing_metrics
@@ -458,7 +458,7 @@ class TestParsingStatsIntegration:
         assert parsing_metrics["missing_reasoning_ratio"] == pytest.approx(2.0 / 3.0)
         # 1 of 3 missing answer (sample 3)
         assert parsing_metrics["missing_answer_ratio"] == pytest.approx(1.0 / 3.0)
-        # flush and verify log_run received parsing_summaries (separate parsing/ prefix)
+        # flush and verify log_phase_summaries received parsing_summaries (separate parsing/ prefix)
         manager.flush_stats()
         assert len(logger_obj.runs) == 1
         run_entry = logger_obj.runs[0]
@@ -508,12 +508,12 @@ class TestParsingStatsIntegration:
         manager.compute(ctx2, log=False)
         category_parsing_metrics = manager.get_parsing_category_metrics()
         # original: 1 sample, has reasoning
-        assert "code_type/original/sample_count" in category_parsing_metrics
-        assert category_parsing_metrics["code_type/original/sample_count"] == 1.0
+        assert "code_type/original/count" in category_parsing_metrics
+        assert category_parsing_metrics["code_type/original/count"] == 1.0
         assert category_parsing_metrics["code_type/original/missing_reasoning_ratio"] == 0.0
         # bugfix: 1 sample, no reasoning
-        assert "code_type/bugfix/sample_count" in category_parsing_metrics
-        assert category_parsing_metrics["code_type/bugfix/sample_count"] == 1.0
+        assert "code_type/bugfix/count" in category_parsing_metrics
+        assert category_parsing_metrics["code_type/bugfix/count"] == 1.0
         assert category_parsing_metrics["code_type/bugfix/missing_reasoning_ratio"] == 1.0
 
     def test_category_malformed_ratio_tracked(self) -> None:
@@ -567,8 +567,8 @@ class TestParsingStatsIntegration:
         assert "code_type/bugfix/malformed_ratio" in category_parsing_metrics
         assert category_parsing_metrics["code_type/bugfix/malformed_ratio"] == pytest.approx(0.0)
 
-    def test_category_parsing_stats_included_in_log_run(self) -> None:
-        """Verify parsing_category_summaries is passed to log_run()."""
+    def test_category_parsing_stats_included_in_log_phase_summaries(self) -> None:
+        """Verify parsing_category_summaries is passed to log_phase_summaries()."""
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         category_config = pyine.evals.utils.SampleCategoryExtractionConfig(
             enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
@@ -604,7 +604,7 @@ class TestParsingStatsIntegration:
         parsing_category_summaries = run_entry["parsing_category_summaries"]
         assert isinstance(parsing_category_summaries, dict)
         # keys should have parsing/categories/ prefix
-        assert "parsing/categories/code_type/original/sample_count" in parsing_category_summaries
+        assert "parsing/categories/code_type/original/count" in parsing_category_summaries
 
 
 class TestTokenLengthTracking:

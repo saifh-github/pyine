@@ -91,9 +91,9 @@ class TestExtractCategoryMetrics:
         summary = {
             "predict/test/code_type/original/accuracy_hard": 0.90,
             "predict/test/code_type/original/accuracy_soft": 0.92,
-            "predict/test/code_type/original/sample_count": 50,
+            "predict/test/code_type/original/count": 50,
             "predict/test/predict_type/output/accuracy_hard": 0.75,
-            "predict/test/predict_type/output/sample_count": 30,
+            "predict/test/predict_type/output/count": 30,
         }
         run = MockWandBRun(summary=summary)
         categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
@@ -118,7 +118,7 @@ class TestExtractCategoryMetrics:
         summary = {
             "predict/test/tags/augment/obfuscated/accuracy_hard": 0.60,
             "predict/test/tags/augment/obfuscated/accuracy_grader": 0.65,
-            "predict/test/tags/augment/obfuscated/sample_count": 20,
+            "predict/test/tags/augment/obfuscated/count": 20,
         }
         run = MockWandBRun(summary=summary)
         categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
@@ -232,7 +232,7 @@ class TestFetchEvalSummary:
             "predict/test/accuracy_hard": 0.85,
             "predict/test/accuracy_soft": 0.90,
             "predict/test/code_type/original/accuracy_hard": 0.88,
-            "predict/test/code_type/original/sample_count": 100,
+            "predict/test/code_type/original/count": 100,
         }
         run = MockWandBRun(summary=summary_dict)
         eval_summary = pyine.evals.code_exec.analysis.fetch_eval_summary(run, subset_name="test")

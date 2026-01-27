@@ -20,7 +20,7 @@ class TestWandBRewardLogger:
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(fake_run)
         logger.set_key_prefix("train")
-        logger.log(
+        logger.log_sample(
             "s1",
             total=1.0,
             terms={"reward/terms/t": 0.25},
@@ -56,7 +56,7 @@ class TestWandBRewardLogger:
             table_flush_every_n_generations=1,
         )
         logger.set_key_prefix("train/")
-        logger.log(
+        logger.log_sample(
             "s1",
             generation_count=1,  # pass generation_count to trigger frequency gating/flush
             total=1.0,
@@ -142,7 +142,7 @@ class TestWandBRewardLogger:
             table_flush_every_n_generations=1,
         )
         logger.set_key_prefix("train/")
-        logger.log(
+        logger.log_sample(
             "s1",
             generation_count=1,  # pass generation_count to trigger frequency gating/flush
             total=1.0,
@@ -169,7 +169,7 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(fake_run)
         logger.set_key_prefix("train")
         # log with initial train prefix
-        logger.log(
+        logger.log_sample(
             "s1",
             total=1.0,
             terms={"reward/terms/t": 0.25},
@@ -179,7 +179,7 @@ class TestWandBRewardLogger:
         # switch to valid prefix
         logger.set_key_prefix("valid")
         # log with new valid prefix
-        logger.log(
+        logger.log_sample(
             "s2",
             total=2.0,
             terms={"reward/terms/t": 0.5},
@@ -202,7 +202,7 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(fake_run)
         # set prefix without trailing slash
         logger.set_key_prefix("eval")
-        logger.log(
+        logger.log_sample(
             "s1",
             total=1.0,
             terms={},
@@ -219,7 +219,7 @@ class TestWandBRewardLogger:
         logger.set_key_prefix("train")
         # switch to empty prefix
         logger.set_key_prefix("")
-        logger.log(
+        logger.log_sample(
             "s1",
             total=1.0,
             terms={},
@@ -237,14 +237,14 @@ class TestWandBRewardLogger:
             fake_run,
             scalar_log_every_n_generations=2,
         )
-        logger.log(
+        logger.log_sample(
             "s1",
             generation_count=1,
             total=1.0,
             terms={},
             metrics={},
         )
-        logger.log(
+        logger.log_sample(
             "s2",
             generation_count=2,
             total=2.0,
@@ -277,9 +277,9 @@ class TestWandBRewardLogger:
             table_row_every_n_generations=2,
             table_flush_every_n_generations=1,  # flush whenever a row is added
         )
-        logger.log("s1", generation_count=1, total=1.0, terms={}, metrics={}, step=1)
-        logger.log("s2", generation_count=2, total=2.0, terms={}, metrics={}, step=2)
-        logger.log("s3", generation_count=3, total=3.0, terms={}, metrics={}, step=3)
+        logger.log_sample("s1", generation_count=1, total=1.0, terms={}, metrics={}, step=1)
+        logger.log_sample("s2", generation_count=2, total=2.0, terms={}, metrics={}, step=2)
+        logger.log_sample("s3", generation_count=3, total=3.0, terms={}, metrics={}, step=3)
         assert len(added_rows) == 1
         assert len(fake_run.logged) == 1
         assert added_rows[0][0] == "s2"
@@ -305,7 +305,7 @@ class TestWandBRewardLogger:
             table_flush_every_n_generations=5,
         )
         for generation_count in range(1, 11):
-            logger.log(
+            logger.log_sample(
                 f"s{generation_count}",
                 generation_count=generation_count,
                 total=float(generation_count),
@@ -337,7 +337,7 @@ class TestWandBRewardLogger:
             table_flush_every_n_generations=3,
         )
         for generation_count in range(1, 7):
-            logger.log(
+            logger.log_sample(
                 f"s{generation_count}",
                 generation_count=generation_count,
                 total=float(generation_count),
@@ -369,7 +369,7 @@ class TestWandBDefineMetric:
         # define_metric should NOT be called yet (deferred until first log)
         mock_define_metric.assert_not_called()
         # first log call should trigger define_metric for "train" prefix
-        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, step=1)
         # verify define_metric was called for generation_count patterns
         calls = mock_define_metric.call_args_list
         assert len(calls) > 0, "define_metric should be called on first log()"
@@ -402,10 +402,10 @@ class TestWandBDefineMetric:
         logger = reward_logging.WandBRewardLogger(fake_run)
         logger.set_key_prefix("train")  # metrics are defined per-prefix
         # multiple log calls with the same prefix
-        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, step=1)
         first_call_count = mock_define_metric.call_count
-        logger.log("s2", total=2.0, terms={}, metrics={}, step=2)
-        logger.log("s3", total=3.0, terms={}, metrics={}, step=3)
+        logger.log_sample("s2", total=2.0, terms={}, metrics={}, step=2)
+        logger.log_sample("s3", total=3.0, terms={}, metrics={}, step=3)
         # call count should not increase after first log for same prefix
         assert mock_define_metric.call_count == first_call_count, (
             "define_metric should only be called once per prefix, not on every log()"
@@ -502,7 +502,7 @@ class TestWandBDefineMetric:
         )
         batch_call_count = mock_define_metric.call_count
         # then call log (should define generation metrics for "train")
-        logger.log("s1", total=1.0, terms={}, metrics={}, step=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, step=1)
         total_call_count = mock_define_metric.call_count
         # both should have triggered define_metric calls
         assert total_call_count > batch_call_count, (
@@ -534,7 +534,7 @@ class TestWandBDefineMetric:
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
         logger.set_key_prefix("train")
-        logger.log(
+        logger.log_sample(
             "sample_1",
             generation_count=99,
             total=2.5,
@@ -547,18 +547,18 @@ class TestWandBDefineMetric:
         assert payload["train/generation_count"] == 99
         assert payload["train/reward/total"] == pytest.approx(2.5)
 
-    def test_run_step_metrics_defined_on_first_log_run(
+    def test_run_step_metrics_defined_on_first_log_phase_summaries(
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Verify that define_metric for run-level metrics is called lazily on first log_run()."""
+        """Verify that define_metric for run-level metrics is called lazily on first log_phase_summaries()."""
         fake_run = _FakeWandBRun()
         mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
         mocker.patch.object(reward_logging.wandb, "run", fake_run)
         logger = reward_logging.WandBRewardLogger(fake_run)
         logger.set_key_prefix("train")  # metrics are defined per-prefix
         mock_define_metric.assert_not_called()
-        logger.log_run(
+        logger.log_phase_summaries(
             reward_totals={"mean": 0.5},
             reward_term_summaries={},
             reward_category_summaries={},
@@ -567,7 +567,7 @@ class TestWandBDefineMetric:
             step=100,
         )
         calls = mock_define_metric.call_args_list
-        assert len(calls) > 0, "define_metric should be called on first log_run()"
+        assert len(calls) > 0, "define_metric should be called on first log_phase_summaries()"
         # verify run-level patterns are defined with "last" summary
         patterns_defined = [call.args[0] for call in calls]
         assert any("reward/run" in p or "failures" in p for p in patterns_defined)
@@ -585,14 +585,14 @@ class TestWandBDefineMetric:
         mocker.patch.object(reward_logging.wandb, "run", fake_run)
         logger = reward_logging.WandBRewardLogger(fake_run)
         logger.set_key_prefix("train")  # metrics are defined per-prefix
-        logger.log_run(
+        logger.log_phase_summaries(
             reward_totals={"mean": 0.5},
             reward_term_summaries={},
             reward_category_summaries={},
             step=1,
         )
         first_call_count = mock_define_metric.call_count
-        logger.log_run(
+        logger.log_phase_summaries(
             reward_totals={"mean": 0.6},
             reward_term_summaries={},
             reward_category_summaries={},
@@ -613,7 +613,7 @@ class TestWandBDefineMetric:
         logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
         logger.set_key_prefix("train")  # metrics are defined per-prefix
         # trigger all define_metric calls for "train" prefix
-        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)
         logger.log_batch_stats(
             batch_mean=1.0,
             batch_std=0.1,
@@ -623,7 +623,7 @@ class TestWandBDefineMetric:
             batch_std_rolling_std=0.01,
             batch_count=1,
         )
-        logger.log_run(
+        logger.log_phase_summaries(
             reward_totals={"mean": 0.5},
             reward_term_summaries={},
             reward_category_summaries={},
@@ -644,7 +644,7 @@ class TestWandBDefineMetric:
         logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
         # first prefix: "train"
         logger.set_key_prefix("train")
-        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)
         train_call_count = mock_define_metric.call_count
         assert train_call_count > 0, "define_metric should be called for 'train' prefix"
         # verify patterns are for "train" prefix
@@ -652,7 +652,7 @@ class TestWandBDefineMetric:
         assert all("train/" in p for p in train_patterns), "all patterns should be for 'train' prefix"
         # switch to new prefix: "eval"
         logger.set_key_prefix("eval")
-        logger.log("s2", total=2.0, terms={}, metrics={}, generation_count=2)
+        logger.log_sample("s2", total=2.0, terms={}, metrics={}, generation_count=2)
         eval_call_count = mock_define_metric.call_count
         # new prefix should trigger additional define_metric calls
         assert eval_call_count > train_call_count, (
@@ -663,7 +663,7 @@ class TestWandBDefineMetric:
         assert all("eval/" in p for p in new_patterns), "new patterns should be for 'eval' prefix"
         # switching back to "train" should NOT trigger more calls (already defined)
         logger.set_key_prefix("train")
-        logger.log("s3", total=3.0, terms={}, metrics={}, generation_count=3)
+        logger.log_sample("s3", total=3.0, terms={}, metrics={}, generation_count=3)
         assert mock_define_metric.call_count == eval_call_count, (
             "switching back to already-defined prefix should not trigger more define_metric calls"
         )
@@ -679,7 +679,7 @@ class TestWandBDefineMetric:
         logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
         # use a custom prefix
         logger.set_key_prefix("custom_phase")
-        logger.log("s1", total=1.0, terms={}, metrics={}, generation_count=1)
+        logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)
         calls = mock_define_metric.call_args_list
         assert len(calls) > 0, "define_metric should be called for custom prefix"
         # verify patterns use the custom prefix

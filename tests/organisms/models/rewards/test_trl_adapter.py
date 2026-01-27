@@ -294,6 +294,7 @@ class TestTRLAdapterLogging:
             ],
             logging=reward_configs.LoggingConfig(
                 enabled=True,
+                log_batch_stats=True,
                 scalar_log_every_n_generations=1,
                 log_tables=False,
             ),
@@ -364,6 +365,7 @@ class TestTRLAdapterLogging:
             ],
             logging=reward_configs.LoggingConfig(
                 enabled=True,
+                log_batch_stats=True,
                 scalar_log_every_n_generations=1,
                 log_tables=False,
             ),
