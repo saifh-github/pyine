@@ -17,8 +17,7 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
     - `{prefix}/reward/terms/*`: per-term weighted reward values;
     - `{prefix}/reward/metrics/*`: term-emitted metrics (containing other useful information);
     - `{prefix}/reward/raw_terms/*`: pre-clipping, pre-weighting reward term values;
-    - `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer);
-    - `{prefix}/categories/*`: category-wise metrics (if a category extractor is configured).
+    - `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer).
 
 **Batch-level metrics** (indexed to `{prefix}/batch_count`):
     These metrics are logged once per compute_batch call (when enabled) and use batch_count as the x-axis.
@@ -435,7 +434,6 @@ class WandBRewardLogger:
             ("reward/metrics/*", "mean"),
             ("reward/raw_terms/*", "mean"),
             ("parsing/*", "mean"),
-            ("categories/*", "mean"),
         ]
         step_metric_key = f"{prefix}/generation_count"
         for suffix, summary in metric_suffixes:

@@ -461,11 +461,10 @@ class LoggingConfig(reward_types.BaseConfig):
     Metric Indexing:
         Different metric types are indexed to different x-axes in WandB:
 
-        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*, categories/*) are
-          indexed to `{prefix}/generation_count`. This ensures each logged generation has a unique
-          x-coordinate, avoiding aggregation issues when multiple generations are logged within
-          the same trainer step (e.g., with gradient accumulation or multiple generations per
-          prompt in GRPO).
+        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*) are indexed to
+          `{prefix}/generation_count`. This ensures each logged generation has a unique x-coordinate,
+          avoiding aggregation issues when multiple generations are logged within the same trainer
+          step (e.g., with gradient accumulation or multiple generations per prompt in GRPO).
 
         - **Batch-level metrics** (reward/batch/*) are indexed to `{prefix}/batch_count`. This
           ensures each logged batch has a unique x-coordinate, avoiding aggregation issues when

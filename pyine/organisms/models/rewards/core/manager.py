@@ -1147,9 +1147,6 @@ class RewardManager:
             if self._config.parsing is not None and sample_ctx.parsed is not None:
                 parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
                 scoped_metrics.update(parsing_metrics)
-            if categories:
-                for category in categories:
-                    scoped_metrics[f"categories/{category}"] = 1
         # extract expensive table fields only when adding a row
         reasoning: str | None = None
         final_answer: str | None = None
