@@ -32,7 +32,7 @@ class TestParsingStatsLogging:
             parsing=None,  # no parsing config
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -178,7 +178,7 @@ class TestParsingStatsLogging:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=9999,  # don't log samples
+                log_every_n_generations=9999,  # don't log samples
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -307,7 +307,7 @@ class TestParsingStatsLogging:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -328,14 +328,14 @@ class TestParsingStatsLogging:
         assert metrics["parsing/has_reasoning"]
         assert metrics["parsing/has_answer"]
 
-    def test_per_sample_parsing_metrics_respect_scalar_log_every_n_generations(self) -> None:
-        """Verify per-sample metrics follow scalar_log_every_n_generations frequency."""
+    def test_per_sample_parsing_metrics_respect_log_every_n_generations(self) -> None:
+        """Verify per-sample metrics follow log_every_n_generations frequency."""
         logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=2,  # log every 2nd sample
+            log_every_n_generations=2,  # log every 2nd sample
         )
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=2,
+            log_every_n_generations=2,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -407,7 +407,7 @@ class TestParsingStatsIntegration:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(
@@ -586,7 +586,7 @@ class TestParsingStatsIntegration:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=9999,
+                log_every_n_generations=9999,
                 category_extraction_config=category_config,
             ),
         )
@@ -749,7 +749,7 @@ class TestTokenLengthTracking:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)

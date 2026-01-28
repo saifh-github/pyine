@@ -68,7 +68,7 @@ class TestTRLAdapterLogging:
         # config similar to real GRPO setup
         scalar_log_freq = 10
         logger_obj = reward_logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=scalar_log_freq,
+            log_every_n_generations=scalar_log_freq,
         )
         config = reward_configs.RewardManagerConfig(
             terms=[
@@ -80,7 +80,7 @@ class TestTRLAdapterLogging:
             ],
             logging=reward_configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=scalar_log_freq,
+                log_every_n_generations=scalar_log_freq,
                 log_tables=False,
             ),
         )
@@ -127,7 +127,7 @@ class TestTRLAdapterLogging:
             assert all(r is not None for r in rewards)
 
         # verify generation count is correct
-        assert manager._monotonic_generation_count == total_samples
+        assert manager._total_global_generation_count == total_samples
 
         # verify we logged the expected number of samples
         expected_logged = total_samples // scalar_log_freq
@@ -244,7 +244,7 @@ class TestTRLAdapterLogging:
 
         scalar_log_freq = 5
         logger_obj = reward_logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=scalar_log_freq,
+            log_every_n_generations=scalar_log_freq,
         )
         config = reward_configs.RewardManagerConfig(
             terms=[
@@ -256,7 +256,7 @@ class TestTRLAdapterLogging:
             ],
             logging=reward_configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=scalar_log_freq,
+                log_every_n_generations=scalar_log_freq,
                 log_tables=False,
             ),
         )
@@ -306,13 +306,13 @@ class TestTRLAdapterLogging:
             f"but found duplicates. First 20 values: {logged_rewards[:20]}"
         )
 
-        # verify generation counts are strictly increasing
-        logged_gen_counts = [s["generation_count"] for s in logger_obj.samples]
-        for idx in range(1, len(logged_gen_counts)):
-            assert logged_gen_counts[idx] > logged_gen_counts[idx - 1], (
-                f"generation counts should be strictly increasing, but got "
-                f"{logged_gen_counts[idx - 1]} -> {logged_gen_counts[idx]} at index {idx}"
-            )
+        # verify per-phase counters are correct
+        # with the new per-phase counter design, generation counts are independent per phase
+        # train: 10 batches * 8 samples = 80 samples
+        # eval: 4 batches * 4 samples = 16 samples (at steps 0, 3, 6, 9)
+        assert manager._global_generation_counts["train/"] == 80
+        assert manager._global_generation_counts["eval/"] == 16
+        assert manager._total_global_generation_count == 96  # 80 + 16
 
     def test_batch_count_increments_per_compute_batch_call(self) -> None:
         """Verify that batch_count increments once per compute_batch call, not per sample."""
@@ -327,7 +327,7 @@ class TestTRLAdapterLogging:
             return _SampleIndexRewardTerm()
 
         registry.register_term("sample_index_term_batch", factory)
-        logger_obj = reward_logging.InMemoryRewardLogger(scalar_log_every_n_generations=1)
+        logger_obj = reward_logging.InMemoryRewardLogger(log_every_n_generations=1)
         config = reward_configs.RewardManagerConfig(
             terms=[
                 reward_configs.RewardTermSpec(
@@ -339,7 +339,7 @@ class TestTRLAdapterLogging:
             logging=reward_configs.LoggingConfig(
                 enabled=True,
                 log_batch_stats=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -366,13 +366,13 @@ class TestTRLAdapterLogging:
                 sample_data=sample_data_list,
             )
         # batch_count should equal number of compute_batch calls
-        assert manager._monotonic_batch_count == num_calls, (
-            f"expected batch_count={num_calls}, got {manager._monotonic_batch_count}"
+        assert manager._total_global_batch_count == num_calls, (
+            f"expected batch_count={num_calls}, got {manager._total_global_batch_count}"
         )
         # generation_count should equal total samples processed
         total_samples = num_calls * samples_per_call
-        assert manager._monotonic_generation_count == total_samples, (
-            f"expected generation_count={total_samples}, got {manager._monotonic_generation_count}"
+        assert manager._total_global_generation_count == total_samples, (
+            f"expected generation_count={total_samples}, got {manager._total_global_generation_count}"
         )
         # verify batch_stats were logged with correct batch_count values
         logged_batch_counts = [s["batch_count"] for s in logger_obj.batch_stats]
@@ -398,7 +398,7 @@ class TestTRLAdapterLogging:
             return _SampleIndexRewardTerm()
 
         registry.register_term("sample_index_term_accum", factory)
-        logger_obj = reward_logging.InMemoryRewardLogger(scalar_log_every_n_generations=1)
+        logger_obj = reward_logging.InMemoryRewardLogger(log_every_n_generations=1)
         config = reward_configs.RewardManagerConfig(
             terms=[
                 reward_configs.RewardTermSpec(
@@ -410,7 +410,7 @@ class TestTRLAdapterLogging:
             logging=reward_configs.LoggingConfig(
                 enabled=True,
                 log_batch_stats=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -441,7 +441,7 @@ class TestTRLAdapterLogging:
                     sample_data=sample_data_list,
                 )
         total_batches = num_optimizer_steps * gradient_accumulation_steps
-        assert manager._monotonic_batch_count == total_batches
+        assert manager._total_global_batch_count == total_batches
         # verify all batch_counts are unique (no duplicates from same step)
         logged_batch_counts = [s["batch_count"] for s in logger_obj.batch_stats]
         assert len(set(logged_batch_counts)) == len(logged_batch_counts), (

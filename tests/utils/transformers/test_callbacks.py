@@ -1437,6 +1437,8 @@ class TestGPUStatsLoggingCallback:
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         # mock _is_gather_safe to return True (simulates initialized process group)
         mocker.patch.object(callback, "_is_gather_safe", return_value=True)
+        # mock all_gather_objects to simulate distributed gather (avoids fail-fast check)
+        mocker.patch("pyine.utils.distrib.all_gather_objects", side_effect=lambda x: [x])
         callback.on_train_begin(args, state, control)
         state.global_step = 10
         control.should_evaluate = False
@@ -1470,6 +1472,8 @@ class TestGPUStatsLoggingCallback:
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         # mock _is_gather_safe to return True (simulates initialized process group)
         mocker.patch.object(callback, "_is_gather_safe", return_value=True)
+        # mock all_gather_objects to simulate distributed gather (avoids fail-fast check)
+        mocker.patch("pyine.utils.distrib.all_gather_objects", side_effect=lambda x: [x])
         callback.on_train_begin(args, state, control)
         # first log: no eval pending, should NOT emit anything (accumulate only)
         state.global_step = 10

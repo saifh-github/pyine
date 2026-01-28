@@ -115,14 +115,12 @@ class TestMakeWandBRewardLogger:
         mock_run = MockWandBRun()
         logging_config = reward_configs.LoggingConfig(
             log_tables=True,
-            table_flush_every_n_generations=50,
             table_max_rows=500,
         )
         logger = reward_logging.make_wandb_reward_logger(mock_run, logging_config, step=100)
         assert isinstance(logger, reward_logging.WandBRewardLogger)
         assert logger._step == 100
         assert logger._log_generation_table is True
-        assert logger._generation_table_flush_every_n == 50
         assert logger._generation_table_max_rows == 500
         assert logger._generation_table_key == "generation_details"
 

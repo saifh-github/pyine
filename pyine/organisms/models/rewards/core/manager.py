@@ -1,6 +1,7 @@
 """Reward manager implementation."""
 
 import collections.abc
+import logging
 import math
 import typing
 import warnings
@@ -17,8 +18,11 @@ import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.core.verbosity_scaling as verbosity_scaling
 import pyine.utils.distrib
+import pyine.utils.parsing
 import pyine.utils.stats as stats_utils
 import pyine.utils.tokenizers
+
+logger = logging.getLogger(__name__)
 
 _MAX_METRIC_STRING_LENGTH = 500
 """Threshold for string metric length warnings. Strings exceeding this emit a warning."""
@@ -123,11 +127,21 @@ class RewardManager:
             except Exception as exc:
                 raise ValueError(f"failed to instantiate reward term name={spec.name} type={spec.type}") from exc
 
-        # logging indices: step (trainer), epoch, generation_count (per-generation), batch_count (per-batch)
+        # logging indices: step (trainer), epoch
         self._step: int | None = None
         self._epoch: float | None = None
-        self._monotonic_generation_count: int = 0  # 1-indexed, for per-generation metric indexing
-        self._monotonic_batch_count: int = 0  # 1-indexed, for batch-level metric indexing
+        # per-phase counters keyed by NORMALIZED prefix (e.g., "train/", "eval/")
+        # these track GLOBAL counts (total across all ranks in distributed training)
+        self._global_generation_counts: dict[str, int] = {}
+        self._global_batch_counts: dict[str, int] = {}
+        # per-phase LOCAL counters (only samples processed by this rank)
+        # used for frequency gating when main_process_only=True
+        self._local_generation_counts: dict[str, int] = {}
+        # overall monotonic counters (across all phases, for debugging)
+        self._total_global_generation_count: int = 0
+        self._total_global_batch_count: int = 0
+        # current phase prefix (normalized), set via set_key_prefix()
+        self._current_prefix: str = ""
         # per-generation reward accumulators
         self._reward_total_stats = stats_utils.RunningStats()
         self._reward_term_stats: dict[str, stats_utils.RunningStats] = {
@@ -260,8 +274,13 @@ class RewardManager:
             term.reset(run_init_ctx)
         self._step = None
         self._epoch = None
-        self._monotonic_generation_count = 0
-        self._monotonic_batch_count = 0
+        # reset all global and local counters
+        self._global_generation_counts.clear()
+        self._global_batch_counts.clear()
+        self._local_generation_counts.clear()
+        self._total_global_generation_count = 0
+        self._total_global_batch_count = 0
+        self._current_prefix = ""
         self.reset_accumulators()
 
     @property
@@ -316,15 +335,222 @@ class RewardManager:
 
         Components updated:
         - Logger: uses prefix for metric namespacing (e.g., "train/reward/total");
-        - Difficulty estimator: uses prefix to determine phase (e.g., "eval_only" tracking).
+        - Difficulty estimator: uses prefix to determine phase (e.g., "eval_only" tracking);
+        - Global counters: initialized for new prefix if not present.
+
+        IMPORTANT: In distributed training, this method must be called on ALL ranks (not just
+        rank 0), even if only rank 0 has a logger. The prefix drives correctness for phase
+        mismatch detection in compute_batch().
 
         Args:
             key_prefix: New prefix to apply (e.g., "train/", "eval/").
         """
+        # normalize prefix to match logger's format (e.g., "train" -> "train/")
+        self._current_prefix = pyine.utils.parsing.normalize_path_prefix(key_prefix)
+        # initialize counters for new prefix if not present
+        self._global_generation_counts.setdefault(self._current_prefix, 0)
+        self._global_batch_counts.setdefault(self._current_prefix, 0)
+        self._local_generation_counts.setdefault(self._current_prefix, 0)
         if self._logger is not None:
             self._logger.set_key_prefix(key_prefix)
         if self._difficulty_estimator is not None:
             self._difficulty_estimator.set_key_prefix(key_prefix)
+
+    def _get_global_generation_count(
+        self,
+        prefix: str | None = None,
+    ) -> int:
+        """Get global generation count for a phase (defaults to current)."""
+        prefix = prefix if prefix is not None else self._current_prefix
+        return self._global_generation_counts.get(prefix, 0)
+
+    def _get_global_batch_count(
+        self,
+        prefix: str | None = None,
+    ) -> int:
+        """Get global batch count for a phase (defaults to current)."""
+        prefix = prefix if prefix is not None else self._current_prefix
+        return self._global_batch_counts.get(prefix, 0)
+
+    def _get_local_generation_count(
+        self,
+        prefix: str | None = None,
+    ) -> int:
+        """Get local generation count for a phase (defaults to current).
+
+        Local count tracks only samples processed by this rank, used for
+        frequency gating when main_process_only=True.
+        """
+        prefix = prefix if prefix is not None else self._current_prefix
+        return self._local_generation_counts.get(prefix, 0)
+
+    def _compute_local_batch(
+        self,
+        sample_ctxs: collections.abc.Sequence[reward_types.SampleContext],
+    ) -> tuple[list[reward_types.RewardOutput], list[reward_types.TokenCountCache | None]]:
+        """Compute rewards for local samples with optional verbosity scaling.
+
+        This handles the core reward computation (via _compute_core) and applies verbosity
+        scaling if configured. For relative mode scaling, samples are grouped by their
+        sample_data.identifier before normalization.
+
+        Args:
+            sample_ctxs: Sample contexts to evaluate (must be non-empty).
+
+        Returns:
+            Tuple of (outputs, token_caches) in the same order as inputs.
+        """
+        core_results: list[reward_types.RewardOutput] = []
+        caches: list[reward_types.TokenCountCache | None] = []
+        for sample_ctx in sample_ctxs:
+            core_results.append(self._compute_core(sample_ctx))
+            caches.append(self._populate_token_count_cache(sample_ctx))
+        if self._verbosity_scaler is None or not self._verbosity_scaler.is_relative_mode:
+            # absolute mode or no scaling: process individually
+            outputs: list[reward_types.RewardOutput] = []
+            for result, cache in zip(core_results, caches, strict=True):
+                if self._verbosity_scaler is not None:
+                    assert cache is not None, "should have been enabled for verbosity scaling?"
+                    scaled_total, v_metrics = self._verbosity_scaler.apply_absolute(
+                        aggregated_reward=result.total,
+                        cache=cache,
+                    )
+                    metrics = dict(result.metrics)
+                    metrics.update(v_metrics)
+                    output = reward_types.RewardOutput(
+                        total=scaled_total,
+                        weighted_terms=result.weighted_terms,
+                        raw_terms=result.raw_terms,
+                        metrics=metrics,
+                    )
+                else:
+                    output = result
+                outputs.append(output)
+        else:
+            # relative mode: group by sample_data.identifier, apply scaling per group
+            grouped_indices: dict[typing.Hashable, list[int]] = {}
+            for sample_idx, sample_ctx in enumerate(sample_ctxs):
+                sample_gid = sample_ctx.sample_data.identifier
+                grouped_indices.setdefault(sample_gid, []).append(sample_idx)
+            outputs_by_idx: list[reward_types.RewardOutput | None] = [None] * len(sample_ctxs)
+            for _sample_gid, sample_indices in grouped_indices.items():
+                group_totals = [core_results[idx].total for idx in sample_indices]
+                group_caches: list[reward_types.TokenCountCache] = []
+                for idx in sample_indices:
+                    cache = caches[idx]
+                    if cache is None:
+                        raise RuntimeError("token cache should have been enabled for verbosity scaling")
+                    group_caches.append(cache)
+                scaled_totals, v_metrics = self._verbosity_scaler.apply_relative(
+                    aggregated_rewards=group_totals,
+                    caches=group_caches,
+                )
+                for local_sample_idx, global_sample_idx in enumerate(sample_indices):
+                    result = core_results[global_sample_idx]
+                    metrics = dict(result.metrics)
+                    metrics.update(v_metrics[local_sample_idx])
+                    outputs_by_idx[global_sample_idx] = reward_types.RewardOutput(
+                        total=scaled_totals[local_sample_idx],
+                        weighted_terms=result.weighted_terms,
+                        raw_terms=result.raw_terms,
+                        metrics=metrics,
+                    )
+            # all entries should be filled since we iterate over all trace_ids
+            if not all(o is not None for o in outputs_by_idx):
+                raise RuntimeError("some samples were not processed in verbosity scaling")
+            outputs = typing.cast("list[reward_types.RewardOutput]", outputs_by_idx)
+        return outputs, caches
+
+    def _gather_distributed_batch_info(
+        self,
+        local_batch_size: int,
+        prefix: str,
+        local_total_reward_stats: stats_utils.RunningStats,
+        local_identifiers: collections.abc.Sequence[typing.Hashable],
+    ) -> tuple[list[int], int, stats_utils.RunningStats, list[int]]:
+        """Gather batch info from all ranks in a single collective operation.
+
+        Combines index computation, completion index computation, and total reward batch stats
+        gathering into one all_gather call to minimize synchronization overhead.
+
+        Args:
+            local_batch_size: Number of samples in this rank's batch (can be 0).
+            prefix: Current phase prefix (normalized).
+            local_total_reward_stats: Running stats for total reward values in this rank's batch
+                (may have count=0 if empty batch).
+            local_identifiers: Sample identifiers for this rank's batch (used to compute global
+                completion indices).
+
+        Returns:
+            (per_sample_global_indices, total_batch_size, merged_total_reward_stats, completion_indices)
+            - per_sample_global_indices: Global generation indices for this rank's samples ([] if empty).
+            - total_batch_size: Sum of batch sizes across all ranks.
+            - merged_total_reward_stats: Combined total reward stats from all ranks.
+            - completion_indices: Global completion indices for this rank's samples ([] if empty).
+
+        Raises:
+            RuntimeError: If ranks have different prefixes (phase mismatch).
+            RuntimeError: If ranks have divergent base counts (state inconsistency).
+        """
+        # verify parameter consistency (explicit exceptions, not asserts, for fail-loud behavior)
+        if len(local_identifiers) != local_batch_size:
+            raise ValueError(
+                f"local_identifiers length ({len(local_identifiers)}) != local_batch_size ({local_batch_size})"
+            )
+        if local_total_reward_stats.count != local_batch_size:
+            raise ValueError(
+                f"local_total_reward_stats.count ({local_total_reward_stats.count}) != "
+                f"local_batch_size ({local_batch_size}); "
+                "this could indicate samples were dropped during reward computation"
+            )
+        rank = pyine.utils.distrib.get_global_rank(default=0) or 0
+        local_base = self._get_global_generation_count(prefix)
+        # single all-gather with all batch info: (prefix, batch_size, base_count, stats, identifiers)
+        payload = (prefix, local_batch_size, local_base, local_total_reward_stats.as_state(), local_identifiers)
+        gathered = pyine.utils.distrib.all_gather_objects(payload)
+        # validate all ranks have the same prefix
+        prefixes = {g[0] for g in gathered}
+        if len(prefixes) > 1:
+            raise RuntimeError(
+                f"Global counting requires synchronized key_prefix across ranks, "
+                f"but got prefixes: {prefixes}. Ensure set_key_prefix() is called "
+                f"consistently across all ranks before compute_batch()."
+            )
+        # validate all ranks have the same base count (state consistency)
+        base_counts = {g[2] for g in gathered}
+        if len(base_counts) > 1:
+            raise RuntimeError(
+                f"State divergence detected: ranks have different base counts {base_counts}. "
+                f"This likely indicates inconsistent checkpoint loading across ranks."
+            )
+        # compute total batch size and per-rank offsets for global indices
+        batch_sizes = [g[1] for g in gathered]
+        total_batch_size = sum(batch_sizes)
+        # merge batch stats from all ranks
+        merged_stats = stats_utils.RunningStats()
+        for g in gathered:
+            rank_stats = stats_utils.RunningStats.from_state(g[3])
+            merged_stats.merge(rank_stats)
+        # early return if no samples
+        if total_batch_size == 0 or local_batch_size == 0:
+            return [], total_batch_size, merged_stats, []
+        # compute global generation indices for this rank's samples
+        offset_from_lower_ranks = sum(batch_sizes[:rank])
+        global_indices = [local_base + offset_from_lower_ranks + idx + 1 for idx in range(local_batch_size)]
+        # compute global completion indices by iterating through all samples in rank order
+        identifier_counts: dict[typing.Hashable, int] = {}
+        all_completion_indices: list[int] = []
+        for g in gathered:
+            rank_identifiers = g[4]
+            for identifier in rank_identifiers:
+                completion_idx = identifier_counts.get(identifier, 0)
+                all_completion_indices.append(completion_idx)
+                identifier_counts[identifier] = completion_idx + 1
+        # extract this rank's completion indices
+        start_idx = offset_from_lower_ranks
+        end_idx = offset_from_lower_ranks + local_batch_size
+        local_completion_indices = all_completion_indices[start_idx:end_idx]
+        return global_indices, total_batch_size, merged_stats, local_completion_indices
 
     def get_reward_total_metrics(self) -> dict[str, reward_types.MetricValue]:
         """Returns aggregated total reward metrics.
@@ -482,18 +708,29 @@ class RewardManager:
         # (must happen before logger checks since non-main ranks may not have a logger)
         if self._config.logging.barrier_before_finalize and pyine.utils.distrib.is_distributed():
             pyine.utils.distrib.barrier()
-        # determine if we should log (check logger availability and config)
-        should_log = self._logger is not None and self._config.logging.enabled
-        log_step = step if step is not None else self._step
-        summaries, has_stats = self._prepare_run_summaries_for_finalize()
-        # reset accumulators and return early if not logging
-        if not should_log or not has_stats:
+        # check if ANY rank has stats - use cheap all-reduce to ensure all ranks agree on the
+        # decision, avoiding deadlock when some ranks have empty batches
+        local_has_stats = self._reward_total_stats.count > 0
+        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
+            any_has_stats = pyine.utils.distrib.all_reduce_boolean_or(local_has_stats)
+        else:
+            any_has_stats = local_has_stats
+        if not any_has_stats:
             self.reset_accumulators()
             return
-        # return early if only main process should log and this is not main
+        # prepare summaries (may gather from distributed ranks) - ALL ranks must participate
+        # in the gather if gather_distributed_summaries=True, so this must happen before
+        # the main_process_only check
+        summaries, _ = self._prepare_run_summaries_for_finalize()
+        # now determine who should emit (after gather, so no deadlock)
+        should_log = self._logger is not None and self._config.logging.enabled
+        if not should_log:
+            self.reset_accumulators()
+            return
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             self.reset_accumulators()
             return
+        log_step = step if step is not None else self._step
         self._emit_run_summaries(
             summaries,
             step=log_step,
@@ -561,6 +798,11 @@ class RewardManager:
 
         Convenience wrapper around compute_batch() for single-sample use cases.
 
+        Note:
+            In distributed training, this method has the same synchronization requirements as
+            compute_batch(): ALL ranks must call compute() the same number of times. Failing
+            to do so will deadlock. See compute_batch() docstring for details.
+
         Args:
             sample_ctx: Sample context containing the prompt, full model output, and sample data.
             log: When True/False, force logging on/off; when None, uses config default.
@@ -588,6 +830,25 @@ class RewardManager:
         sample identifier (from `sample_ctx.sample_data.identifier`). Samples with the
         same identifier are normalized together.
 
+        In distributed training, this method uses a single all_gather call to synchronize
+        batch info (indices, completion indices, and stats) across ranks. ALL ranks must
+        call compute_batch() the same number of times (empty ranks pass []). Failing to
+        do so will deadlock.
+
+        Completion indices (`completion_idx`) are computed globally across all ranks: if
+        the same identifier appears on multiple ranks, each sample gets a unique completion
+        index within the batch. This ensures GRPO-style analysis can correctly identify
+        which completion (0 to k-1) each sample represents, even when completions are
+        distributed across ranks.
+
+        Warning:
+            **Deadlock risk on exceptions**: Local reward computation (STEP 1) happens BEFORE
+            the distributed gather (STEP 3). If one rank throws an exception during local
+            computation, other ranks will hang indefinitely waiting in the gather. An error
+            is logged before re-raising to help diagnose this scenario. Ensure reward terms
+            do not raise exceptions, or wrap compute_batch() calls in exception handlers that
+            terminate all ranks together.
+
         Args:
             sample_ctxs: Sample contexts to evaluate.
             log: When True/False, force logging on/off; when None, uses config default.
@@ -596,111 +857,136 @@ class RewardManager:
         Returns:
             Reward outputs in the same order as inputs.
         """
-        if not sample_ctxs:
-            return []
-        # increment batch counter unconditionally for every non-empty batch (1-indexed)
-        self._monotonic_batch_count += 1
-        # first pass: compute core rewards and populate token count caches
-        core_results: list[reward_types.RewardOutput] = []
-        caches: list[reward_types.TokenCountCache | None] = []
-        for sample_ctx in sample_ctxs:
-            core_results.append(self._compute_core(sample_ctx))
-            caches.append(self._populate_token_count_cache(sample_ctx))
-        if self._verbosity_scaler is None or not self._verbosity_scaler.is_relative_mode:
-            # absolute mode or no scaling: process individually
-            outputs: list[reward_types.RewardOutput] = []
-            for result, cache in zip(core_results, caches, strict=True):
-                if self._verbosity_scaler is not None:
-                    assert cache is not None, "should have been enabled for verbosity scaling?"
-                    scaled_total, v_metrics = self._verbosity_scaler.apply_absolute(
-                        aggregated_reward=result.total,
-                        cache=cache,
-                    )
-                    metrics = dict(result.metrics)
-                    metrics.update(v_metrics)
-                    output = reward_types.RewardOutput(
-                        total=scaled_total,
-                        weighted_terms=result.weighted_terms,
-                        raw_terms=result.raw_terms,
-                        metrics=metrics,
-                    )
-                else:
-                    output = result
-                outputs.append(output)
-        else:
-            # relative mode: group by sample_data.identifier, apply scaling per group
-            grouped_indices: dict[typing.Hashable, list[int]] = {}
-            for sample_idx, sample_ctx in enumerate(sample_ctxs):
-                sample_gid = sample_ctx.sample_data.identifier
-                grouped_indices.setdefault(sample_gid, []).append(sample_idx)
-            outputs_by_idx: list[reward_types.RewardOutput | None] = [None] * len(sample_ctxs)
-            for _sample_gid, sample_indices in grouped_indices.items():
-                group_totals = [core_results[idx].total for idx in sample_indices]
-                group_caches: list[reward_types.TokenCountCache] = []
-                for idx in sample_indices:
-                    cache = caches[idx]
-                    assert cache is not None, "token cache should have been enabled for verbosity scaling"
-                    group_caches.append(cache)
-                scaled_totals, v_metrics = self._verbosity_scaler.apply_relative(
-                    aggregated_rewards=group_totals,
-                    caches=group_caches,
-                )
-                for local_sample_idx, global_sample_idx in enumerate(sample_indices):
-                    result = core_results[global_sample_idx]
-                    metrics = dict(result.metrics)
-                    metrics.update(v_metrics[local_sample_idx])
-                    outputs_by_idx[global_sample_idx] = reward_types.RewardOutput(
-                        total=scaled_totals[local_sample_idx],
-                        weighted_terms=result.weighted_terms,
-                        raw_terms=result.raw_terms,
-                        metrics=metrics,
-                    )
-            # all entries should be filled since we iterate over all trace_ids
-            assert all(o is not None for o in outputs_by_idx), "some samples were not processed?"
-            outputs = typing.cast("list[reward_types.RewardOutput]", outputs_by_idx)
-        # compute difficulty metrics and merge into outputs (after verbosity scaling)
-        if self._difficulty_estimator is not None:
-            for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
-                # compute generation count for this sample (counter not yet incremented for this batch)
-                sample_gen_count = self._monotonic_generation_count + idx + 1
-                difficulty_metrics = self._difficulty_estimator.compute(
-                    sample_data=sample_ctx.sample_data,
-                    reward_total=output.total,
-                    weighted_terms=output.weighted_terms,  # for per-term binning
-                    generation_count=sample_gen_count,  # for "sampled" mode tracking
-                )
-                if difficulty_metrics:
-                    merged_metrics = dict(output.metrics)
-                    merged_metrics.update(difficulty_metrics)
-                    outputs[idx] = reward_types.RewardOutput(
-                        total=output.total,
-                        weighted_terms=output.weighted_terms,
-                        raw_terms=output.raw_terms,
-                        metrics=merged_metrics,
-                    )
-        # build per-identifier generation indices (0..k-1 for each prompt's generations)
-        identifier_counts: dict[typing.Hashable, int] = {}
-        generation_indices: list[int] = []
-        for sample_ctx in sample_ctxs:
-            gen_idx = identifier_counts.get(sample_ctx.sample_data.identifier, 0)
-            generation_indices.append(gen_idx)
-            identifier_counts[sample_ctx.sample_data.identifier] = gen_idx + 1
-        # set cache, update stats, and then log (in the correct order, important!)
-        for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
-            self._token_count_cache = caches[idx]
-            self._update_running_stats(sample_ctx, output)  # this is where generation count gets updated
-            self._maybe_log_sample(output, sample_ctx, log=log, step=step, generation_idx=generation_indices[idx])
-        # difficulty table logging is independent of main scalar/table frequency gates
-        # (uses its own frequency gating based on DifficultyConfig.table_mode)
-        # note: generation_count must be computed per-sample for correct frequency gating
-        should_log_difficulty = self._config.logging.enabled if log is None else log
-        for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
-            sample_gen_count = self._monotonic_generation_count - len(sample_ctxs) + idx + 1
-            self._maybe_log_difficulty_table_row(
-                output, sample_ctx, step=step, generation_count=sample_gen_count, log=should_log_difficulty
+        # guard: empty prefix is not allowed once prefixed counters exist
+        # (this catches both "forgot set_key_prefix after load_state" and "mixing prefixed/unprefixed usage")
+        if not self._current_prefix:
+            has_prefixed_counts = any(prefix for prefix in self._global_generation_counts if prefix) or any(
+                prefix for prefix in self._global_batch_counts if prefix
             )
-        # compute and log batch-level stats
-        self._maybe_log_batch_stats(outputs, log=log)
+            if has_prefixed_counts:
+                raise RuntimeError(
+                    "compute_batch() called with empty key_prefix but state contains counters for "
+                    f"prefixes {set(self._global_generation_counts.keys()) | set(self._global_batch_counts.keys())}. "
+                    "Empty prefix is not allowed once prefixed counters exist. "
+                    "Call set_key_prefix() (e.g., 'train/' or 'eval/') before compute_batch()."
+                )
+        local_batch_size = len(sample_ctxs)
+        # STEP 1: process samples locally (compute outputs before any distributed sync)
+        if local_batch_size > 0:
+            try:
+                outputs, caches = self._compute_local_batch(sample_ctxs)
+            except Exception:
+                # in distributed mode, other ranks may be waiting at the gather below;
+                # log a loud error to help diagnose potential deadlock before re-raising
+                if pyine.utils.distrib.is_distributed():
+                    logger.error(
+                        "Exception during local reward computation on rank %d. "
+                        "Other ranks may deadlock waiting at the distributed gather. "
+                        "Consider wrapping compute_batch() in a handler that terminates all ranks.",
+                        pyine.utils.distrib.get_global_rank(default=0),
+                    )
+                raise
+        else:
+            outputs, caches = [], []
+        # STEP 2: compute local reward stats and extract identifiers (before gather)
+        local_total_reward_stats = stats_utils.RunningStats()
+        for output in outputs:
+            local_total_reward_stats.update(float(output.total))
+        local_identifiers = [sample_ctx.sample_data.identifier for sample_ctx in sample_ctxs]
+        # STEP 3: single distributed gather for indices + completion_idx + stats (or local computation)
+        # ...in distributed mode, ALL ranks must participate (even if empty)
+        if pyine.utils.distrib.is_distributed():
+            gather_result = self._gather_distributed_batch_info(
+                local_batch_size, self._current_prefix, local_total_reward_stats, local_identifiers
+            )
+            global_sample_indices, total_batch_size, merged_total_reward_stats, completion_indices = gather_result
+        else:
+            # non-distributed: simple local computation
+            base = self._get_global_generation_count(self._current_prefix)
+            global_sample_indices = [base + idx + 1 for idx in range(local_batch_size)]
+            total_batch_size = local_batch_size
+            merged_total_reward_stats = local_total_reward_stats
+            # compute completion_idx locally (same logic as distributed, but no gathering needed)
+            identifier_counts: dict[typing.Hashable, int] = {}
+            completion_indices: list[int] = []
+            for identifier in local_identifiers:
+                completion_idx = identifier_counts.get(identifier, 0)
+                completion_indices.append(completion_idx)
+                identifier_counts[identifier] = completion_idx + 1
+        # STEP 4: if no samples globally, return early (safe, all ranks agree)
+        if total_batch_size == 0:
+            return []
+        # STEP 5: increment batch counters (per-prefix and overall)
+        self._global_batch_counts[self._current_prefix] = self._get_global_batch_count(self._current_prefix) + 1
+        self._total_global_batch_count += 1
+        # STEP 6: post-processing that needs global indices (only if this rank has samples)
+        if local_batch_size > 0:
+            # compute difficulty metrics and merge into outputs (needs global generation_count)
+            if self._difficulty_estimator is not None:
+                for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+                    difficulty_metrics = self._difficulty_estimator.compute(
+                        sample_data=sample_ctx.sample_data,
+                        reward_total=output.total,
+                        weighted_terms=output.weighted_terms,
+                        generation_count=global_sample_indices[idx],
+                    )
+                    if difficulty_metrics:
+                        merged_metrics = dict(output.metrics)
+                        merged_metrics.update(difficulty_metrics)
+                        outputs[idx] = reward_types.RewardOutput(
+                            total=output.total,
+                            weighted_terms=output.weighted_terms,
+                            raw_terms=output.raw_terms,
+                            metrics=merged_metrics,
+                        )
+            # update stats and log with correct global indices
+            global_batch_count = self._get_global_batch_count()
+            # compute local generation indices (1-indexed) for frequency-gated logging (if needed)
+            local_base = self._get_local_generation_count(self._current_prefix)
+            local_sample_indices = [local_base + idx + 1 for idx in range(local_batch_size)]
+            # note: completion_indices was already computed in STEP 3 (globally in distributed mode)
+            for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+                self._token_count_cache = caches[idx]
+                self._update_running_stats(sample_ctx, output)
+                self._maybe_log_sample(
+                    output=output,
+                    sample_ctx=sample_ctx,
+                    log=log,
+                    step=step,
+                    local_batch_idx=idx,
+                    completion_idx=completion_indices[idx],
+                    global_generation_count=global_sample_indices[idx],
+                    local_generation_count=local_sample_indices[idx],
+                    global_batch_count=global_batch_count,
+                )
+            # difficulty table logging (per-sample global counts, local counts for gating)
+            should_log_difficulty = self._config.logging.enabled if log is None else log
+            for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
+                self._maybe_log_difficulty_table_row(
+                    output=output,
+                    sample_ctx=sample_ctx,
+                    step=step,
+                    global_generation_count=global_sample_indices[idx],
+                    local_generation_count=local_sample_indices[idx],
+                    log=should_log_difficulty,
+                )
+        # STEP 7: update global generation counts (ALL ranks, including empty ones)
+        new_gen_count = self._get_global_generation_count(self._current_prefix) + total_batch_size
+        self._global_generation_counts[self._current_prefix] = new_gen_count
+        self._total_global_generation_count += total_batch_size
+        # update local generation count (only samples processed by this rank)
+        self._local_generation_counts[self._current_prefix] = (
+            self._get_local_generation_count(self._current_prefix) + local_batch_size
+        )
+        # STEP 8: batch stats logging (uses pre-gathered merged stats, no additional sync)
+        self._maybe_log_batch_stats(merged_total_reward_stats, log=log)
+        # sanity checks: verify counts are consistent (use explicit errors, not asserts)
+        if len(outputs) != local_batch_size:
+            raise RuntimeError(f"output count mismatch: {len(outputs)} != {local_batch_size}")
+        if self._get_global_generation_count() != new_gen_count:
+            raise RuntimeError(
+                f"generation count mismatch after update: {self._get_global_generation_count()} != {new_gen_count}"
+            )
         return outputs
 
     def finalize_run(
@@ -735,16 +1021,26 @@ class RewardManager:
         # (must happen before logger checks since non-main ranks may not have a logger)
         if self._config.logging.barrier_before_finalize and pyine.utils.distrib.is_distributed():
             pyine.utils.distrib.barrier()
-        # determine if we should log (check logger availability, config, and log flag)
-        should_log = log and self._config.logging.enabled and self._logger is not None
-        step_to_use = self._step if step is None else step
-        summaries, has_stats = self._prepare_run_summaries_for_finalize()
-        # return early if not logging or no stats
-        if not should_log or not has_stats:
+        # check if ANY rank has stats - use cheap all-reduce to ensure all ranks agree on the
+        # decision, avoiding deadlock when some ranks have empty batches
+        local_has_stats = self._reward_total_stats.count > 0
+        if self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed():
+            any_has_stats = pyine.utils.distrib.all_reduce_boolean_or(local_has_stats)
+        else:
+            any_has_stats = local_has_stats
+        if not any_has_stats:
             return
-        # return early if only main process should log and this is not main
+        # prepare summaries (may gather from distributed ranks) - ALL ranks must participate
+        # in the gather if gather_distributed_summaries=True, so this must happen before
+        # the main_process_only check
+        summaries, _ = self._prepare_run_summaries_for_finalize()
+        # now determine who should emit (after gather, so no deadlock)
+        should_log = log and self._config.logging.enabled and self._logger is not None
+        if not should_log:
+            return
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
             return
+        step_to_use = self._step if step is None else step
         self._emit_run_summaries(
             summaries,
             step=step_to_use,
@@ -981,11 +1277,13 @@ class RewardManager:
     ) -> None:
         """Update run-level summary stats.
 
-        Note: Per-term stats track weighted values (after per-term clipping and weight
+        Note1: per-term stats track weighted values (after per-term clipping and weight
         multiplication), not raw term values. If verbosity scaling is enabled, totals may be
         post-scaled while per-term stats remain unscaled.
+
+        Note2: global generation counts are managed at the batch level in compute_batch(),
+        not per-sample in this method. This method only updates statistics accumulators.
         """
-        self._monotonic_generation_count += 1  # increment before stats update (1-indexed)
         total_reward = float(output.total)
         self._reward_total_stats.update(total_reward)
         for term_name, term_reward in output.weighted_terms.items():
@@ -1097,7 +1395,11 @@ class RewardManager:
         *,
         log: bool | None,
         step: int | None,
-        generation_idx: int | None,
+        local_batch_idx: int,
+        completion_idx: int,
+        global_generation_count: int,
+        local_generation_count: int,
+        global_batch_count: int,
     ) -> None:
         """Log a per-sample event if logging is enabled and the frequency gate passes.
 
@@ -1106,44 +1408,58 @@ class RewardManager:
             sample_ctx: Sample context.
             log: Force logging on/off; when None, uses config default.
             step: Logging step override.
-            generation_idx: Index of this generation within its prompt group (0..k-1).
+            local_batch_idx: Index of this sample within the current batch (0-indexed).
+            completion_idx: Global completion index within samples sharing the same identifier
+                across all ranks in this batch (0-indexed). For GRPO-style batching where k
+                completions are generated per prompt, this indicates which completion (0 to k-1)
+                this sample represents. In distributed mode, identifiers are gathered across ranks
+                and completion indices are computed globally so that if the same identifier appears
+                on multiple ranks, each sample gets a unique completion index.
+            global_generation_count: Exact global generation count for this sample (across all ranks).
+            local_generation_count: Local generation count for this sample (only samples processed
+                by this rank). Used for frequency gating when main_process_only=True to ensure
+                this rank's N-th sample triggers logging.
+            global_batch_count: Global batch count (1-indexed, same for all samples in this batch).
         """
+        # early return depending on main_process_only
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
+            return
+        # check if logging is enabled (per-rank log parameter)
         should_log = self._config.logging.enabled if log is None else log
         if not should_log:
             return
-        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
-            return
+        # check if logger exists; non-main ranks may not have a logger
+        # (main rank without a logger when logging is enabled is a misconfiguration)
         if self._logger is None:
-            raise ValueError("logging is enabled but no logger is configured")
-        generation_count = self._monotonic_generation_count
+            if pyine.utils.distrib.is_main_process():
+                raise RuntimeError("logging is enabled but no logger is configured on main rank")
+            return
+        # choose which generation count to use for frequency gating:
+        # - when main_process_only=True: use local count so this rank's N-th sample triggers logging
+        # - when main_process_only=False: use global count for consistent frequency across ranks
+        # (note: x-axis value for logged metrics is however always global count for cross-rank alignment)
+        gating_count = local_generation_count if self._config.logging.main_process_only else global_generation_count
         # query logger to see if we need to do any work at all
-        will_log_scalars = self._logger.should_log_sample_scalars(generation_count)
-        will_add_row = self._config.logging.log_tables and self._logger.should_log_sample_table_row(generation_count)
-        if not will_log_scalars and not will_add_row:
+        if not self._logger.should_log_sample(gating_count):
             return  # skip all expensive metric/category/parsing extraction
+        will_add_row = self._config.logging.log_tables
         step_to_use = self._step if step is None else step
         sample_id = sample_ctx.sample_id
-        # branch extraction by purpose: scalars need terms/metrics, tables need more fields
-        terms: dict[str, float] = {}
-        metrics: dict[str, reward_types.MetricValue] = {}
-        total_to_log: float | None = None
-        scoped_terms: dict[str, float] = {}
-        scoped_metrics: dict[str, reward_types.MetricValue] = {}
-        if will_log_scalars or will_add_row:
-            terms = dict(output.weighted_terms) if self._config.logging.log_terms else {}
-            metrics = dict(output.metrics) if self._config.logging.log_metrics else {}
-            total_to_log = float(output.total) if self._config.logging.log_total else None
-            scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
+        # extract terms and metrics
+        terms = dict(output.weighted_terms) if self._config.logging.log_terms else {}
+        metrics = dict(output.metrics) if self._config.logging.log_metrics else {}
+        total_to_log = float(output.total) if self._config.logging.log_total else None
+        scoped_terms, scoped_metrics = self._scope_reward_sample_fields(terms, metrics)
         # extract categories (needed for both scalars and tables)
         categories: list[str] | None = None
         should_extract_categories = self._category_extractor is not None and (
-            will_add_row or (will_log_scalars and self._config.logging.log_metrics)
+            will_add_row or self._config.logging.log_metrics
         )
         if should_extract_categories:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
-        # add parsing metrics after scoping (for scalars and/or table rows)
-        if (will_log_scalars or will_add_row) and self._config.logging.log_metrics:
+        # add parsing metrics after scoping
+        if self._config.logging.log_metrics:
             if self._config.parsing is not None and sample_ctx.parsed is not None:
                 parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
                 scoped_metrics.update(parsing_metrics)
@@ -1164,7 +1480,11 @@ class RewardManager:
             expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
         self._logger.log_sample(
             sample_id,
-            generation_count=generation_count,
+            generation_count=global_generation_count,
+            batch_count=global_batch_count,
+            local_batch_idx=local_batch_idx,
+            completion_idx=completion_idx,
+            rank=pyine.utils.distrib.get_global_rank(default=0),
             total=total_to_log,
             terms=scoped_terms,
             raw_terms=raw_terms,
@@ -1177,19 +1497,21 @@ class RewardManager:
             final_answer=final_answer,
             categories=categories,
             tags=sample_ctx.tags or None,
-            generation_idx=generation_idx,
         )
 
     def _should_log_difficulty_table_row(
         self,
-        generation_count: int,
+        global_generation_count: int,
+        local_generation_count: int,
         *,
         log: bool,
     ) -> bool:
         """Determine if we should log a difficulty table row based on phase and config.
 
         Args:
-            generation_count: The generation count for this specific sample.
+            global_generation_count: Exact global generation count for this sample (across all ranks).
+            local_generation_count: Local generation count for this sample (only samples processed
+                by this rank). Used for frequency gating when main_process_only=True.
             log: Whether logging is enabled for this compute_batch() call. This is already
                 resolved from the log= parameter (True/False override) or LoggingConfig.enabled
                 (when log=None), matching _maybe_log_sample() semantics.
@@ -1214,8 +1536,10 @@ class RewardManager:
         if table_mode == "sampled":
             if is_eval_phase:
                 return True  # log every sample in eval
-            # sample in train phase
-            return generation_count % self._config.difficulty.sample_every_n_generations == 0
+            # sample in train phase: use local count for gating when main_process_only=True
+            # (same logic as _maybe_log_sample for consistent frequency behavior)
+            gating_count = local_generation_count if self._config.logging.main_process_only else global_generation_count
+            return gating_count % self._config.difficulty.sample_every_n_generations == 0
         return table_mode == "always"
 
     def _maybe_log_difficulty_table_row(
@@ -1224,7 +1548,8 @@ class RewardManager:
         sample_ctx: reward_types.SampleContext,
         *,
         step: int | None,
-        generation_count: int,
+        global_generation_count: int,
+        local_generation_count: int,
         log: bool,
     ) -> None:
         """Log a difficulty table row if enabled and the frequency gate passes.
@@ -1233,10 +1558,13 @@ class RewardManager:
             output: Reward output for the sample.
             sample_ctx: Sample context.
             step: Optional logging step override.
-            generation_count: The generation count for this specific sample.
+            global_generation_count: Exact global generation count for this sample (across all ranks).
+                Used as the logged x-axis value for cross-rank alignment.
+            local_generation_count: Local generation count for this sample (only samples processed
+                by this rank). Used for frequency gating when main_process_only=True.
             log: Whether logging is enabled for this compute_batch() call.
         """
-        if not self._should_log_difficulty_table_row(generation_count, log=log):
+        if not self._should_log_difficulty_table_row(global_generation_count, local_generation_count, log=log):
             return
         # extract difficulty metrics from output
         metrics = output.metrics
@@ -1255,7 +1583,7 @@ class RewardManager:
         step_to_use = self._step if step is None else step
         self._logger.log_difficulty_stats(  # type: ignore[union-attr]
             step=step_to_use or 0,
-            generation_count=generation_count,
+            generation_count=global_generation_count,
             sample_id=sample_ctx.sample_id,
             primary_source=str(primary_source) if primary_source else "",
             raw_primary=float(raw_primary) if raw_primary is not None else None,
@@ -1321,46 +1649,35 @@ class RewardManager:
 
     def _maybe_log_batch_stats(
         self,
-        outputs: collections.abc.Sequence[reward_types.RewardOutput],
+        batch_stats: stats_utils.RunningStats,
         *,
         log: bool | None,
     ) -> None:
-        """Compute and log batch-level reward statistics.
-
-        Computes mean/std of rewards in this batch and updates rolling stats.
-        Logs both current batch stats and rolling aggregates.
+        """Log batch-level reward statistics using pre-computed/gathered stats.
 
         Args:
-            outputs: Reward outputs for all samples in the batch.
+            batch_stats: Pre-computed batch statistics (already merged across ranks if distributed).
             log: Force logging on/off; when None, uses config default.
         """
-        should_log = self._config.logging.enabled if log is None else log
-        if not should_log or not self._config.logging.log_batch_stats:
+        if not self._config.logging.enabled:
             return
-        should_gather = self._config.logging.gather_distributed_summaries and pyine.utils.distrib.is_distributed()
-        # compute batch stats (use population std to match RunningStats convention)
-        batch_stats = stats_utils.RunningStats()
-        for output in outputs:
-            batch_stats.update(float(output.total))
-        if should_gather:
-            # all ranks must participate in the gather to avoid deadlock, even when main_process_only=True
-            gathered = pyine.utils.distrib.all_gather_objects(batch_stats.as_state())
-            merged = stats_utils.RunningStats()
-            for item in gathered:
-                state = typing.cast("collections.abc.Mapping[str, int | float]", item)
-                merged.merge(stats_utils.RunningStats.from_state(state))
-            batch_stats = merged
-            if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
-                return
-        else:
-            if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
-                return
+        if not self._config.logging.log_batch_stats:
+            return
+        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
+            return
+        should_log = self._config.logging.enabled if log is None else log
+        if not should_log:
+            return
         if batch_stats.count == 0:
+            return
+        # check if logger exists; non-main ranks may not have a logger
+        # (main rank without a logger when logging is enabled is a misconfiguration)
+        if self._logger is None:
+            if pyine.utils.distrib.is_main_process():
+                raise RuntimeError("logging is enabled but no logger is configured on main rank")
             return
         batch_mean = batch_stats.mean()
         batch_std = batch_stats.std()
-        if self._logger is None:
-            raise ValueError("logging is enabled but no logger is configured")
         # update rolling stats
         self._batch_reward_mean_stats.update(batch_mean)
         self._batch_reward_std_stats.update(batch_std)
@@ -1371,7 +1688,7 @@ class RewardManager:
             batch_mean_rolling_std=self._batch_reward_mean_stats.std(),
             batch_std_rolling_mean=self._batch_reward_std_stats.mean(),
             batch_std_rolling_std=self._batch_reward_std_stats.std(),
-            batch_count=self._monotonic_batch_count,
+            batch_count=self._get_global_batch_count(),
         )
 
     def get_state(
@@ -1383,21 +1700,31 @@ class RewardManager:
             Dictionary containing:
             - step: current trainer step counter (or None);
             - epoch: current trainer epoch counter (or None);
-            - monotonic_generation_count: 1-indexed counter for per-generation metric indexing;
-            - monotonic_batch_count: 1-indexed counter for batch-level metric indexing;
+            - global_generation_counts: per-phase global generation counters;
+            - global_batch_counts: per-phase global batch counters;
+            - local_generation_counts: per-phase local generation counters (for frequency gating);
+            - total_global_generation_count: overall monotonic generation counter;
+            - total_global_batch_count: overall monotonic batch counter;
             - reward_total_stats: serialized RunningStats for total rewards;
             - reward_term_stats: dict of serialized RunningStats per term;
             - reward_category_stats: dict of serialized RunningStats per category;
             - batch_reward_mean_stats: serialized RunningStats for batch means;
             - batch_reward_std_stats: serialized RunningStats for batch std devs;
             - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled).
+
+        Note:
+            _current_prefix is NOT persisted; trainer sets it via set_key_prefix().
         """
         state: dict[str, typing.Any] = {
             # logging indices
             "step": self._step,
             "epoch": self._epoch,
-            "monotonic_generation_count": self._monotonic_generation_count,
-            "monotonic_batch_count": self._monotonic_batch_count,
+            # global counters (per-phase and overall)
+            "global_generation_counts": dict(self._global_generation_counts),
+            "global_batch_counts": dict(self._global_batch_counts),
+            "local_generation_counts": dict(self._local_generation_counts),
+            "total_global_generation_count": self._total_global_generation_count,
+            "total_global_batch_count": self._total_global_batch_count,
             # per-generation reward accumulators
             "reward_total_stats": self._reward_total_stats.as_state(),
             "reward_term_stats": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
@@ -1420,8 +1747,12 @@ class RewardManager:
 
         Args:
             state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
-                step, epoch, monotonic_generation_count, monotonic_batch_count, batch_reward_mean_stats,
+                step, epoch, global_generation_counts, global_batch_counts, local_generation_counts,
+                total_global_generation_count, total_global_batch_count, batch_reward_mean_stats,
                 batch_reward_std_stats, and optionally parsing_stats.
+
+        Note:
+            _current_prefix will be set by trainer via set_key_prefix() after loading state.
 
         Raises:
             KeyError: If required keys are missing from state.
@@ -1429,8 +1760,12 @@ class RewardManager:
         # logging indices
         self._step = state["step"]
         self._epoch = state["epoch"]
-        self._monotonic_generation_count = int(state["monotonic_generation_count"])
-        self._monotonic_batch_count = int(state["monotonic_batch_count"])
+        # global counters (per-phase and overall)
+        self._global_generation_counts = dict(state.get("global_generation_counts", {}))
+        self._global_batch_counts = dict(state.get("global_batch_counts", {}))
+        self._local_generation_counts = dict(state.get("local_generation_counts", {}))
+        self._total_global_generation_count = int(state.get("total_global_generation_count", 0))
+        self._total_global_batch_count = int(state.get("total_global_batch_count", 0))
         # per-generation reward accumulators
         self._reward_total_stats = stats_utils.RunningStats.from_state(state["reward_total_stats"])
         for name, term_state in state["reward_term_stats"].items():

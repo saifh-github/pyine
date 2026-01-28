@@ -491,28 +491,32 @@ class LoggingConfig(reward_types.BaseConfig):
     """Whether to include term-emitted and parsing metrics in logs."""
     log_tables: bool = True
     """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
+    log_batch_stats: bool = True
+    """Whether to log per-batch total reward statistics (mean/std and rolling aggregates).
 
-    log_batch_stats: bool = False
-    """Whether to log per-batch reward statistics (mean/std and rolling aggregates).
-
-    Note:
-        In distributed training, enabling this can introduce a synchronization point on each
-        reward batch when `gather_distributed_summaries=True`, because the manager gathers batch
-        stats across ranks before logging.
+    The overhead is minimal since batch stats are gathered alongside per-sample global generation
+    counts in a single distributed collective operation.
     """
 
     # frequency settings (controlled by logger, not manager)
-    scalar_log_every_n_generations: pydantic.PositiveInt = 30
-    """Emit per-generation scalar metrics every N generations (1-indexed).
+    log_every_n_generations: pydantic.PositiveInt = 30
+    """Log per-generation metrics (scalars and table rows) every N generations (1-indexed).
 
+    This controls both scalar logging and table row additions. When this generation count is
+    reached, scalars are emitted and (if log_tables=True) a row is added to the table buffer.
     These metrics are indexed to `{prefix}/generation_count` in WandB, not `step_metric_key`.
     """
-    table_row_every_n_generations: pydantic.PositiveInt = 60
-    """Add a row to the table buffer every N generations (1-indexed). Logger gates rows internally."""
-    table_flush_every_n_generations: pydantic.PositiveInt = 1000
-    """Flush the table buffer every N generations (fallback if table_max_rows not reached)."""
-    table_max_rows: pydantic.PositiveInt = 1000
-    """Maximum number of rows kept in the in-memory table buffer before forcing a flush."""
+    table_max_rows: pydantic.PositiveInt = 100
+    """Maximum rows in the table buffer before flushing to W&B.
+
+    When the buffer reaches this size, it's flushed and cleared. This controls both memory
+    usage and how frequently table data appears in W&B. Lower values mean more frequent
+    uploads but more W&B API calls; higher values batch more data per upload.
+
+    Note: Tables are flushed in two scenarios: (1) when the buffer reaches this size, and
+    (2) at phase transitions when flush_stats() or finalize_run() is called. There is no
+    separate periodic flush interval—set this value to control flush frequency during phases.
+    """
 
     # metric names
     step_metric_key: str = "train/global_step"
@@ -528,7 +532,18 @@ class LoggingConfig(reward_types.BaseConfig):
 
     # distributed logging
     main_process_only: bool = True
-    """Whether reward logging should only happen on the main (rank 0) process."""
+    """Whether reward logging should only happen on the main (rank 0) process.
+
+    When True (default), logging frequency gating (log_every_n_generations) uses LOCAL
+    generation counts, so rank 0's N-th sample triggers logging. This ensures
+    predictable logging frequency regardless of how samples are distributed across ranks.
+    The x-axis value in logged metrics is still the GLOBAL generation count for cross-rank
+    alignment.
+
+    When False, all ranks log and frequency gating uses GLOBAL generation counts, so the
+    N-th global sample triggers logging regardless of which rank processes it. This requires
+    all ranks to have a logger configured.
+    """
     gather_distributed_summaries: bool = True
     """Whether to gather run summaries across ranks and log them on rank 0."""
     barrier_before_finalize: bool = True

@@ -52,8 +52,7 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(
             fake_run,
             log_tables=True,
-            table_row_every_n_generations=1,  # add row every sample for test
-            table_flush_every_n_generations=1,
+            table_max_rows=1,
         )
         logger.set_key_prefix("train/")
         logger.log_sample(
@@ -79,6 +78,10 @@ class TestWandBRewardLogger:
         expected_cols = [
             "sample_id",
             "generation_count",
+            "batch_count",
+            "local_batch_idx",
+            "completion_idx",
+            "rank",
             "step",
             "prompt",
             "expected_output",
@@ -91,7 +94,6 @@ class TestWandBRewardLogger:
             "reward_metrics_json",
             "categories_json",
             "tags_json",
-            "generation_idx",
         ]
         assert table_obj.columns == expected_cols
         # verify row content
@@ -99,36 +101,42 @@ class TestWandBRewardLogger:
         row = added_rows[0]
         assert row[0] == "s1"  # sample_id
         assert row[1] == 1  # generation_count
-        assert row[2] == 7  # step
-        assert row[3] == "test prompt"  # prompt
-        assert row[4] is None  # expected_output (not provided)
-        assert row[5] == "test output"  # model_output
-        assert row[6] == "test reasoning"  # reasoning
-        assert row[7] == "test answer"  # final_answer
-        assert row[8] == 1.0  # reward_total
+        assert row[2] is None  # batch_count (not provided)
+        assert row[3] is None  # local_batch_idx (not provided)
+        assert row[4] is None  # completion_idx (not provided)
+        assert row[5] is None  # rank (not provided)
+        assert row[6] == 7  # step
+        assert row[7] == "test prompt"  # prompt
+        assert row[8] is None  # expected_output (not provided)
+        assert row[9] == "test output"  # model_output
+        assert row[10] == "test reasoning"  # reasoning
+        assert row[11] == "test answer"  # final_answer
+        assert row[12] == 1.0  # reward_total
         # verify terms_json contains prefixed keys
-        terms_json = json.loads(typing.cast("str", row[9]))
+        terms_json = json.loads(typing.cast("str", row[13]))
         assert "train/reward/terms/t" in terms_json
         assert terms_json["train/reward/terms/t"] == 0.25
-        assert row[10] is None  # reward_terms_raw_json (not provided in this test)
+        assert row[14] is None  # reward_terms_raw_json (not provided in this test)
         # verify metrics_json contains prefixed keys
-        metrics_json = json.loads(typing.cast("str", row[11]))
+        metrics_json = json.loads(typing.cast("str", row[15]))
         assert "train/reward/metrics/m" in metrics_json
         assert metrics_json["train/reward/metrics/m"] == 2
         # verify categories_json contains category labels
-        categories_json = json.loads(typing.cast("str", row[12]))
+        categories_json = json.loads(typing.cast("str", row[16]))
         assert categories_json == ["difficulty:easy", "total_steps:10"]
         # verify tags_json contains sample tags
-        tags_json = json.loads(typing.cast("str", row[13]))
+        tags_json = json.loads(typing.cast("str", row[17]))
         assert tags_json == ["tag1", "tag2:value"]
-        assert row[14] is None  # generation_idx (not provided)
 
     def test_raw_terms_are_logged_in_scalars_and_table_json(self, mocker: pytest_mock.MockerFixture) -> None:
         added_rows: list[tuple] = []
+        captured_table: typing.Any = None
 
         class FakeTable:
             def __init__(self, columns: list[str]) -> None:
+                nonlocal captured_table
                 self.columns = columns
+                captured_table = self
 
             def add_data(self, *args: object) -> None:
                 added_rows.append(args)
@@ -138,13 +146,12 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(
             fake_run,
             log_tables=True,
-            table_row_every_n_generations=1,  # add row every sample for test
-            table_flush_every_n_generations=1,
+            table_max_rows=1,
         )
         logger.set_key_prefix("train/")
         logger.log_sample(
             "s1",
-            generation_count=1,  # pass generation_count to trigger frequency gating/flush
+            generation_count=1,
             total=1.0,
             terms={"reward/terms/t": 0.25},
             raw_terms={"t": 2.5},
@@ -161,7 +168,8 @@ class TestWandBRewardLogger:
 
         assert len(added_rows) == 1
         row = added_rows[0]
-        raw_terms_json = json.loads(typing.cast("str", row[10]))  # index: generation_count=1, reward_terms_raw_json=10
+        raw_terms_col_idx = captured_table.columns.index("reward_terms_raw_json")
+        raw_terms_json = json.loads(typing.cast("str", row[raw_terms_col_idx]))
         assert raw_terms_json["train/reward/raw_terms/t"] == pytest.approx(2.5)
 
     def test_set_key_prefix_switches_prefix_dynamically(self) -> None:
@@ -231,34 +239,28 @@ class TestWandBRewardLogger:
         assert "reward/total" in payload
         assert "train/reward/total" not in payload
 
-    def test_scalar_frequency_gating(self) -> None:
+    def test_frequency_gating_query_method(self) -> None:
+        """Test that should_log_sample returns correct values based on frequency settings."""
         fake_run = _FakeWandBRun()
         logger = reward_logging.WandBRewardLogger(
             fake_run,
-            scalar_log_every_n_generations=2,
+            log_every_n_generations=2,
         )
-        logger.log_sample(
-            "s1",
-            generation_count=1,
-            total=1.0,
-            terms={},
-            metrics={},
-        )
-        logger.log_sample(
-            "s2",
-            generation_count=2,
-            total=2.0,
-            terms={},
-            metrics={},
-        )
-        assert len(fake_run.logged) == 1
-        payload = typing.cast("dict[str, object]", fake_run.logged[0])
-        # step is NOT included in per-generation payloads (uses generation_count as x-axis)
-        assert "train/global_step" not in payload
+        # verify query method returns correct values based on frequency settings
+        assert not logger.should_log_sample(1)  # 1 % 2 != 0
+        assert logger.should_log_sample(2)  # 2 % 2 == 0
+        assert not logger.should_log_sample(3)  # 3 % 2 != 0
+        assert logger.should_log_sample(4)  # 4 % 2 == 0
+        # verify that log_sample always emits when called (gating is caller's responsibility)
+        logger.log_sample("s1", generation_count=1, total=1.0, terms={}, metrics={})
+        logger.log_sample("s2", generation_count=2, total=2.0, terms={}, metrics={})
+        assert len(fake_run.logged) == 2  # both calls emit since gating is caller's job
+        payload = typing.cast("dict[str, object]", fake_run.logged[1])
         assert payload["generation_count"] == 2
         assert payload["reward/total"] == pytest.approx(2.0)
 
-    def test_table_row_frequency_gating(self, mocker: pytest_mock.MockerFixture) -> None:
+    def test_flush_interval_triggers_on_generation_count(self, mocker: pytest_mock.MockerFixture) -> None:
+        """Test that table flush triggers based on generation_count when buffer has rows."""
         added_rows: list[tuple[object, ...]] = []
 
         class FakeTable:
@@ -273,36 +275,8 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(
             fake_run,
             log_tables=True,
-            scalar_log_every_n_generations=9999,  # avoid scalar logs
-            table_row_every_n_generations=2,
-            table_flush_every_n_generations=1,  # flush whenever a row is added
-        )
-        logger.log_sample("s1", generation_count=1, total=1.0, terms={}, metrics={}, step=1)
-        logger.log_sample("s2", generation_count=2, total=2.0, terms={}, metrics={}, step=2)
-        logger.log_sample("s3", generation_count=3, total=3.0, terms={}, metrics={}, step=3)
-        assert len(added_rows) == 1
-        assert len(fake_run.logged) == 1
-        assert added_rows[0][0] == "s2"
-        assert added_rows[0][1] == 2  # generation_count
-
-    def test_flush_interval_independent_of_row_interval(self, mocker: pytest_mock.MockerFixture) -> None:
-        added_rows: list[tuple[object, ...]] = []
-
-        class FakeTable:
-            def __init__(self, columns: list[str]) -> None:
-                self.columns = columns
-
-            def add_data(self, *args: object) -> None:
-                added_rows.append(args)
-
-        mocker.patch.object(reward_logging.wandb, "Table", FakeTable)
-        fake_run = _FakeWandBRun()
-        logger = reward_logging.WandBRewardLogger(
-            fake_run,
-            log_tables=True,
-            scalar_log_every_n_generations=9999,  # avoid scalar logs
-            table_row_every_n_generations=3,
-            table_flush_every_n_generations=5,
+            log_every_n_generations=1,  # log every sample
+            table_max_rows=5,
         )
         for generation_count in range(1, 11):
             logger.log_sample(
@@ -314,10 +288,11 @@ class TestWandBRewardLogger:
                 step=generation_count,
             )
         table_payloads = [p for p in fake_run.logged if "generation_details" in p]
-        assert len(table_payloads) == 2  # flush at sample_count 5 and 10
-        assert len(added_rows) == 3  # rows added at sample_count 3, 6, 9
+        assert len(table_payloads) == 2  # flush at generation_count 5 and 10
+        assert len(added_rows) == 10  # all 10 calls add rows
 
-    def test_scalar_and_table_gating_are_independent(self, mocker: pytest_mock.MockerFixture) -> None:
+    def test_unified_gating_controls_both_scalars_and_table_rows(self, mocker: pytest_mock.MockerFixture) -> None:
+        """Test that log_every_n_generations controls both scalar and table row logging."""
         added_rows: list[tuple[object, ...]] = []
 
         class FakeTable:
@@ -332,10 +307,15 @@ class TestWandBRewardLogger:
         logger = reward_logging.WandBRewardLogger(
             fake_run,
             log_tables=True,
-            scalar_log_every_n_generations=2,
-            table_row_every_n_generations=3,
-            table_flush_every_n_generations=3,
+            log_every_n_generations=2,
+            table_max_rows=6,
         )
+        # verify query method returns unified values
+        for generation_count in range(1, 7):
+            should_log = logger.should_log_sample(generation_count)
+            expected = generation_count % 2 == 0  # 2, 4, 6
+            assert should_log == expected, f"mismatch at {generation_count}"
+        # log_sample always emits when called (caller is responsible for gating)
         for generation_count in range(1, 7):
             logger.log_sample(
                 f"s{generation_count}",
@@ -347,9 +327,9 @@ class TestWandBRewardLogger:
             )
         scalar_payloads = [p for p in fake_run.logged if "reward/total" in p]
         table_payloads = [p for p in fake_run.logged if "generation_details" in p]
-        assert len(scalar_payloads) == 3  # 2, 4, 6
-        assert len(table_payloads) == 2  # 3, 6
-        assert len(added_rows) == 2  # rows added at sample_count 3 and 6
+        assert len(scalar_payloads) == 6  # all 6 calls emit scalars
+        assert len(table_payloads) == 1  # flush at generation_count 6
+        assert len(added_rows) == 6  # all 6 calls add rows
 
 
 class TestWandBDefineMetric:
@@ -532,7 +512,7 @@ class TestWandBDefineMetric:
     def test_generation_count_logged_in_payload(self) -> None:
         """Verify that generation_count is included in the logged payload."""
         fake_run = _FakeWandBRun()
-        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger = reward_logging.WandBRewardLogger(fake_run, log_every_n_generations=1)
         logger.set_key_prefix("train")
         logger.log_sample(
             "sample_1",
@@ -610,7 +590,7 @@ class TestWandBDefineMetric:
         fake_run = _FakeWandBRun()
         mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
         mocker.patch.object(reward_logging.wandb, "run", fake_run)
-        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger = reward_logging.WandBRewardLogger(fake_run, log_every_n_generations=1)
         logger.set_key_prefix("train")  # metrics are defined per-prefix
         # trigger all define_metric calls for "train" prefix
         logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)
@@ -641,7 +621,7 @@ class TestWandBDefineMetric:
         fake_run = _FakeWandBRun()
         mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
         mocker.patch.object(reward_logging.wandb, "run", fake_run)
-        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger = reward_logging.WandBRewardLogger(fake_run, log_every_n_generations=1)
         # first prefix: "train"
         logger.set_key_prefix("train")
         logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)
@@ -676,7 +656,7 @@ class TestWandBDefineMetric:
         fake_run = _FakeWandBRun()
         mock_define_metric = mocker.patch.object(reward_logging.wandb, "define_metric")
         mocker.patch.object(reward_logging.wandb, "run", fake_run)
-        logger = reward_logging.WandBRewardLogger(fake_run, scalar_log_every_n_generations=1)
+        logger = reward_logging.WandBRewardLogger(fake_run, log_every_n_generations=1)
         # use a custom prefix
         logger.set_key_prefix("custom_phase")
         logger.log_sample("s1", total=1.0, terms={}, metrics={}, generation_count=1)

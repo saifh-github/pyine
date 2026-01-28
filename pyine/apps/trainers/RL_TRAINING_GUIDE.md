@@ -593,10 +593,8 @@ reward_manager_config:
   # Logging (optional, enable for reward tracking in WandB)
   logging:
     enabled: false  # set to true to enable per-sample and run-level reward logging
-    scalar_log_every_n_generations: 30  # per-sample logging frequency (default: 30)
-    table_row_every_n_generations: 60  # add a table row every N generations (default: 60)
-    table_flush_every_n_generations: 1000  # flush table every N generations (default: 1000)
-    table_max_rows: 1000  # flush table when buffer reaches N rows (default: 1000)
+    log_every_n_generations: 30  # per-sample logging frequency for scalars+table rows (default: 30)
+    table_max_rows: 100  # flush table when buffer reaches N rows (default: 100)
     category_extraction_config:  # optional, for category-wise tracking
       enabled_fields: [code_type]  # Track rewards by code_type category
 ```
@@ -616,7 +614,7 @@ Run-level metrics logged include:
 - `{prefix}/reward/run/terms/{term}/mean`, etc. - Per-term reward stats
 - `{prefix}/reward/run/categories/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
 
-Per-sample metrics (when `scalar_log_every_n_generations` triggers):
+Per-sample metrics (when `log_every_n_generations` triggers):
 
 - `{prefix}/reward/total` - Sample reward total
 - `{prefix}/reward/terms/{term}` - Per-term weighted values
@@ -626,7 +624,7 @@ Per-sample metrics (when `scalar_log_every_n_generations` triggers):
 
 Where `{prefix}` is `train` or `eval`.
 
-Note: Per-sample scalar logging frequency is controlled by `scalar_log_every_n_generations` (default: 30). Set to 1 to log every sample, or higher values for less frequent logging.
+Note: Per-sample logging frequency (both scalars and table rows) is controlled by `log_every_n_generations` (default: 30). Set to 1 to log every sample, or higher values for less frequent logging.
 
 **Category-Wise Reward Tracking:**
 

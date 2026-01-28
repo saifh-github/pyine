@@ -235,9 +235,8 @@ config:
       log_batch_stats: false
       log_metrics: true
       log_tables: true
-      scalar_log_every_n_generations: 30  # log scalars every 30 generations
-      table_row_every_n_generations: 60  # add a detailed output table row every 60 generations
-      table_flush_every_n_generations: 1000  # flush table every 1000 generations
+      log_every_n_generations: 30  # log sample metrics (scalars + table rows) every 30 generations
+      table_max_rows: 100  # flush table when buffer reaches this size
       main_process_only: true
       gather_distributed_summaries: true
       barrier_before_finalize: true

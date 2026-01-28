@@ -99,6 +99,7 @@ __all__ = [
     "is_main_process",
     "is_per_node_prep_enabled",
     "local_barrier",
+    "require_initialized_process_group",
     "validate_cross_node_fingerprints",
     "validate_node_configuration",
 ]
@@ -302,6 +303,33 @@ def is_local_main_process(
     return local_rank in (None, 0)
 
 
+def require_initialized_process_group() -> None:
+    """Raise if running in a distributed environment without an initialized process group.
+
+    This is a fail-fast check for code that requires torch.distributed collectives. Some
+    frameworks (e.g., HuggingFace Accelerate) lazily initialize torch.distributed, so
+    environment variables like WORLD_SIZE may indicate distributed execution before the
+    process group is actually ready.
+
+    Raises:
+        RuntimeError: If WORLD_SIZE > 1 but torch.distributed is not initialized.
+    """
+    if not is_distributed():
+        return
+    if not torch.distributed.is_available():
+        raise RuntimeError(
+            "Distributed environment detected (WORLD_SIZE > 1) but torch.distributed is not "
+            "available. Ensure PyTorch is built with distributed support."
+        )
+    if not torch.distributed.is_initialized():
+        raise RuntimeError(
+            "Distributed environment detected (WORLD_SIZE > 1) but torch.distributed process "
+            "group is not initialized. Initialize the process group before creating components "
+            "that require distributed collectives (e.g., call torch.distributed.init_process_group "
+            "or ensure your training framework has initialized distributed before this point)."
+        )
+
+
 def barrier() -> None:
     """Synchronize all distributed processes.
 
@@ -328,11 +356,22 @@ def barrier() -> None:
     _fallback_barrier_if_needed()
 
 
+def _check_distributed_init() -> None:
+    """Check distributed initialization before each collective call.
+
+    This ensures fail-fast behavior if the process group is not properly initialized. The overhead
+    is negligible compared to collective operations themselves.
+    """
+    if is_distributed():
+        require_initialized_process_group()
+
+
 def broadcast_object(
     payload: typing.Any,
     src: int = 0,
 ) -> typing.Any:
     """Broadcast a picklable payload from the source rank to all ranks."""
+    _check_distributed_init()
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return payload
     object_list = [payload]
@@ -348,6 +387,7 @@ def broadcast_boolean(
 
     Uses object-based broadcast internally to avoid NCCL/CPU tensor incompatibility.
     """
+    _check_distributed_init()
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return flag
     return bool(broadcast_object(flag, src=src))
@@ -358,6 +398,7 @@ def all_reduce_boolean_or(flag: bool) -> bool:
 
     Uses object-based gather internally to avoid NCCL/CPU tensor incompatibility.
     """
+    _check_distributed_init()
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return flag
     all_flags = all_gather_objects(flag)
@@ -368,6 +409,7 @@ def all_gather_objects(
     obj: typing.Any,
 ) -> list[typing.Any]:
     """Gather picklable objects from all ranks."""
+    _check_distributed_init()
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return [obj]
     world_size = torch.distributed.get_world_size()  # type: ignore[reportUnknownMemberType]

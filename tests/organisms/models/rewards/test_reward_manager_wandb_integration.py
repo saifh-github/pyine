@@ -75,11 +75,11 @@ class TestRewardManagerWandBIntegration:
         """Verify that RewardManager logs per-sample and run-level metrics to WandB with correct steps."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_terms=True,
             log_metrics=True,
             log_tables=True,
-            table_flush_every_n_generations=5,
+            table_max_rows=5,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -122,7 +122,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that key prefix switching works correctly for train/eval phases."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_terms=True,
             log_metrics=True,
         )
@@ -174,10 +174,9 @@ class TestRewardManagerWandBIntegration:
         """Verify that reward tables are flushed to WandB."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_tables=True,
-            table_row_every_n_generations=1,  # add row every sample for test
-            table_flush_every_n_generations=2,  # flush after every 2 samples
+            table_max_rows=2,  # flush after every 2 rows
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -212,7 +211,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that generation_count is logged and used as x-axis for per-generation metrics."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_terms=True,
         )
         term_spec = reward_configs.RewardTermSpec(
@@ -253,7 +252,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that batch-level stats are logged with batch_count as x-axis."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
@@ -296,7 +295,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that failure metrics are included in run-level summaries."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -343,7 +342,7 @@ class TestRewardManagerWandBIntegration:
         """Verify that define_metric is called to configure x-axes for different metric types."""
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
@@ -396,7 +395,7 @@ class TestRewardManagerWandBIntegration:
         """
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=1,
+            log_every_n_generations=1,
             log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
@@ -432,5 +431,5 @@ class TestRewardManagerWandBIntegration:
         assert summary["train/batch_count"] == total_batches, (
             f"expected batch_count={total_batches}, got {summary['train/batch_count']}"
         )
-        # verify monotonic counter in manager matches
-        assert manager._monotonic_batch_count == total_batches
+        # verify global counter in manager matches
+        assert manager._total_global_batch_count == total_batches

@@ -191,10 +191,10 @@ class TestRewardManager:
     def test_logging_frequency_and_scoping(self) -> None:
         logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=2,
+            log_every_n_generations=2,
         )
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=2,
+            log_every_n_generations=2,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -227,7 +227,8 @@ class TestRewardManager:
         manager.finalize_run()
         assert len(logger_obj.runs) == 1
 
-    def test_generation_idx_is_computed_per_identifier_group(self) -> None:
+    def test_local_batch_idx_is_batch_index(self) -> None:
+        """Verify local_batch_idx is simply the 0-based index within the batch."""
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -239,7 +240,7 @@ class TestRewardManager:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -267,7 +268,7 @@ class TestRewardManager:
             ),
         ]
         manager.compute_batch(sample_ctxs)
-        assert [e["generation_idx"] for e in logger_obj.samples] == [0, 1, 0, 2]
+        assert [e["local_batch_idx"] for e in logger_obj.samples] == [0, 1, 2, 3]
 
     def test_batch_stats_are_computed_and_logged(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
@@ -293,7 +294,7 @@ class TestRewardManager:
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
                 log_batch_stats=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -356,7 +357,7 @@ class TestRewardManager:
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
                 log_batch_stats=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -372,21 +373,19 @@ class TestRewardManager:
             ]
         )
         state = manager.get_state()
-        assert state["monotonic_generation_count"] == 2
+        assert state["total_global_generation_count"] == 2
         assert state["batch_reward_mean_stats"]["count"] == 1
         assert state["batch_reward_std_stats"]["count"] == 1
 
-    def test_table_rows_include_reward_breakdown_when_scalars_gated_off(self) -> None:
+    def test_table_rows_include_reward_breakdown(self) -> None:
         logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
             enabled=True,
-            scalar_log_every_n_generations=9999,  # scalars should be skipped
+            log_every_n_generations=1,
             log_tables=True,
-            table_row_every_n_generations=1,  # row should be added for the sample
         )
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=9999,
+            log_every_n_generations=1,
             log_tables=True,
-            table_row_every_n_generations=1,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -406,7 +405,8 @@ class TestRewardManager:
             sample_data=rewards_conftest.make_sample_data("s1"),
         )
         manager.compute(ctx)
-        assert logger_obj.samples == []
+        # with unified gating, both samples and table_rows are populated when logging
+        assert len(logger_obj.samples) == 1
         assert len(logger_obj.table_rows) == 1
         row = logger_obj.table_rows[0]
         assert row["reward_total"] == pytest.approx(1.0)
@@ -416,7 +416,7 @@ class TestRewardManager:
 
     def test_difficulty_table_logs_primary_source(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=9999,
+            log_every_n_generations=9999,
             log_tables=False,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -435,7 +435,7 @@ class TestRewardManager:
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=9999,
+                log_every_n_generations=9999,
                 log_tables=False,
             ),
         )
@@ -463,7 +463,7 @@ class TestRewardManager:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -506,7 +506,7 @@ class TestRewardManager:
         # config similar to real GRPO setup: log every 10 samples for faster testing
         scalar_log_freq = 10
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            scalar_log_every_n_generations=scalar_log_freq,
+            log_every_n_generations=scalar_log_freq,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -517,7 +517,7 @@ class TestRewardManager:
             ],
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=scalar_log_freq,
+                log_every_n_generations=scalar_log_freq,
                 log_tables=False,
             ),
         )
@@ -544,7 +544,7 @@ class TestRewardManager:
                 manager.compute_batch(batch_ctxs)
 
         # verify generation count is correct
-        assert manager._monotonic_generation_count == total_samples
+        assert manager._total_global_generation_count == total_samples
 
         # verify we logged the expected number of samples (every scalar_log_freq-th sample)
         expected_logged = total_samples // scalar_log_freq
@@ -802,7 +802,7 @@ class TestRewardManager:
             terms=[pyine.organisms.models.rewards.core.configs.RewardTermSpec(name="t", type="test_metrics")],
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
                 log_total=False,
                 log_terms=False,
                 log_metrics=False,
@@ -828,7 +828,7 @@ class TestRewardManager:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=9999,
+                log_every_n_generations=9999,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -1199,7 +1199,7 @@ class TestCategoryWiseRewardTracking:
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                scalar_log_every_n_generations=1,
+                log_every_n_generations=1,
             ),
         )
         manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
@@ -1406,3 +1406,315 @@ class TestRewardManagerState:
         restored.load_state(state)
         # use custom comparison to handle NaN values in parsing stats
         assert _deep_equal_with_nan(restored.get_state(), state)
+
+
+class TestGlobalCounters:
+    """Tests for the per-phase global generation and batch counters."""
+
+    def test_prefix_normalization(self) -> None:
+        """Verify that set_key_prefix normalizes prefixes to match logger format."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        # "train" should become "train/"
+        manager.set_key_prefix("train")
+        assert manager._current_prefix == "train/"
+        assert "train/" in manager._global_generation_counts
+        # "eval/" should stay "eval/"
+        manager.set_key_prefix("eval/")
+        assert manager._current_prefix == "eval/"
+        assert "eval/" in manager._global_generation_counts
+        # empty should stay empty
+        manager.set_key_prefix("")
+        assert manager._current_prefix == ""
+
+    def test_per_phase_independent_counts(self) -> None:
+        """Verify that counters for different phases are independent."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        # process samples in train phase
+        manager.set_key_prefix("train")
+        for _ in range(3):
+            manager.compute_batch([rewards_conftest.make_sample_context(identifier="t1")])
+        # switch to eval phase and process samples
+        manager.set_key_prefix("eval")
+        for _ in range(2):
+            manager.compute_batch([rewards_conftest.make_sample_context(identifier="e1")])
+        # verify per-phase counts
+        assert manager._global_generation_counts["train/"] == 3
+        assert manager._global_generation_counts["eval/"] == 2
+        assert manager._global_batch_counts["train/"] == 3
+        assert manager._global_batch_counts["eval/"] == 2
+
+    def test_overall_monotonic_counter_increments_across_phases(self) -> None:
+        """Verify that overall monotonic counters increment across all phases."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        # process in train
+        manager.set_key_prefix("train")
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="t1"),
+                rewards_conftest.make_sample_context(identifier="t2"),
+            ]
+        )
+        # process in eval
+        manager.set_key_prefix("eval")
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="e1"),
+            ]
+        )
+        # verify overall counts
+        assert manager._total_global_generation_count == 3  # 2 + 1
+        assert manager._total_global_batch_count == 2  # 1 + 1
+
+    def test_global_indices_are_sequential_in_batch(self) -> None:
+        """Verify that global indices are sequential within a batch."""
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_generations=1,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        manager.set_key_prefix("train")
+        # first batch of 3
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s1"),
+                rewards_conftest.make_sample_context(identifier="s2"),
+                rewards_conftest.make_sample_context(identifier="s3"),
+            ]
+        )
+        # second batch of 2
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s4"),
+                rewards_conftest.make_sample_context(identifier="s5"),
+            ]
+        )
+        # verify generation counts are sequential
+        logged_counts = [s["generation_count"] for s in logger_obj.samples]
+        assert logged_counts == [1, 2, 3, 4, 5]
+
+    def test_state_persistence_includes_all_counters(self) -> None:
+        """Verify that state persistence includes all global counters."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager.set_key_prefix("train")
+        manager.compute_batch([rewards_conftest.make_sample_context(identifier="s1")])
+        manager.set_key_prefix("eval")
+        manager.compute_batch([rewards_conftest.make_sample_context(identifier="s2")])
+        state = manager.get_state()
+        # verify all counters are in state
+        assert "global_generation_counts" in state
+        assert "global_batch_counts" in state
+        assert "total_global_generation_count" in state
+        assert "total_global_batch_count" in state
+        assert state["global_generation_counts"] == {"train/": 1, "eval/": 1}
+        assert state["global_batch_counts"] == {"train/": 1, "eval/": 1}
+        assert state["total_global_generation_count"] == 2
+        assert state["total_global_batch_count"] == 2
+        # verify restore works
+        restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        restored.load_state(state)
+        assert restored._global_generation_counts == {"train/": 1, "eval/": 1}
+        assert restored._global_batch_counts == {"train/": 1, "eval/": 1}
+        assert restored._total_global_generation_count == 2
+        assert restored._total_global_batch_count == 2
+
+    def test_reset_clears_all_counters(self) -> None:
+        """Verify that reset() clears all global counters."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager.set_key_prefix("train")
+        manager.compute_batch([rewards_conftest.make_sample_context(identifier="s1")])
+        # reset
+        init_ctx = pyine.organisms.models.rewards.core.types.RunInitContext()
+        manager.reset(init_ctx)
+        # verify counters are cleared
+        assert manager._global_generation_counts == {}
+        assert manager._global_batch_counts == {}
+        assert manager._total_global_generation_count == 0
+        assert manager._total_global_batch_count == 0
+        assert manager._current_prefix == ""
+
+    def test_reset_accumulators_does_not_reset_counters(self) -> None:
+        """Verify that reset_accumulators() does NOT reset global counters."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager.set_key_prefix("train")
+        manager.compute_batch([rewards_conftest.make_sample_context(identifier="s1")])
+        # reset accumulators (happens at end of eval phase)
+        manager.reset_accumulators()
+        # counters should still be preserved
+        assert manager._global_generation_counts["train/"] == 1
+        assert manager._global_batch_counts["train/"] == 1
+        assert manager._total_global_generation_count == 1
+        assert manager._total_global_batch_count == 1
+
+    def test_completion_idx_with_interleaved_identifiers(self) -> None:
+        """Verify completion_idx is computed correctly for interleaved identifiers.
+
+        A batch with identifiers [a, a, b, a] should yield completion_idx [0, 1, 0, 2],
+        where each identifier tracks its own sequence independently.
+        """
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=1,
+            log_tables=True,
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_generations=1,
+                log_tables=True,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        manager.set_key_prefix("train")
+        # batch with interleaved identifiers: [a, a, b, a]
+        batch = [
+            rewards_conftest.make_sample_context(identifier="a"),
+            rewards_conftest.make_sample_context(identifier="a"),
+            rewards_conftest.make_sample_context(identifier="b"),
+            rewards_conftest.make_sample_context(identifier="a"),
+        ]
+        manager.compute_batch(batch, log=True)
+        # verify completion_idx values: [0, 1, 0, 2]
+        completion_indices = [row["completion_idx"] for row in logger.table_rows]
+        assert completion_indices == [0, 1, 0, 2], f"got {completion_indices}"
+
+    def test_local_generation_count_used_for_frequency_gating_when_main_process_only(self) -> None:
+        """Verify that local generation count is used for frequency gating when main_process_only=True.
+
+        With main_process_only=True and log_every_n_generations=2, samples at local
+        indices 2, 4, etc. should be logged. The logged generation_count (x-axis) should
+        still be the global count.
+        """
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=2,
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_generations=2,
+                main_process_only=True,  # use local counts for gating
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        manager.set_key_prefix("train")
+        # process 5 samples in one batch
+        batch = [rewards_conftest.make_sample_context(identifier=f"s{idx}") for idx in range(5)]
+        manager.compute_batch(batch, log=True)
+        # with local gating at every 2nd sample, we expect indices 2 and 4 to be logged
+        logged_gen_counts = [s["generation_count"] for s in logger.samples]
+        # local indices: 1, 2, 3, 4, 5 -> gating triggers at 2 and 4
+        # global counts match local counts in non-distributed mode
+        assert logged_gen_counts == [2, 4], f"got {logged_gen_counts}"
+        # verify local counts are tracked correctly
+        assert manager._local_generation_counts["train/"] == 5
+
+    def test_state_persistence_includes_local_counts(self) -> None:
+        """Verify that state persistence includes local generation counts."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager.set_key_prefix("train")
+        manager.compute_batch(
+            [
+                rewards_conftest.make_sample_context(identifier="s1"),
+                rewards_conftest.make_sample_context(identifier="s2"),
+            ]
+        )
+        state = manager.get_state()
+        # verify local counts are in state
+        assert "local_generation_counts" in state
+        assert state["local_generation_counts"] == {"train/": 2}
+        # verify restore works
+        restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        restored.load_state(state)
+        assert restored._local_generation_counts == {"train/": 2}

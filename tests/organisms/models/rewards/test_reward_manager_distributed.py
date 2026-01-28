@@ -215,15 +215,18 @@ def _worker_finalize_run_cpu(rank: int, world_size: int) -> None:
         ),
     )
     manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
-    # only rank 0 computes rewards (simulates imbalanced workload)
-    if rank == 0:
-        for i in range(3):
+    # simulate imbalanced workload: only rank 0 has samples, but ALL ranks must participate
+    # in compute_batch() to avoid distributed deadlock.
+    for i in range(3):
+        if rank == 0:
             ctx = manager.build_sample_context(
                 prompt="test",
                 model_output="<final>ok</final>",
                 sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
             )
             manager.compute(ctx, log=False)
+        else:
+            manager.compute_batch([], log=False)
     # all ranks call finalize_run (should not deadlock even though rank1 has no stats)
     manager.finalize_run()
     # verify rank 0 logged its stats
@@ -292,7 +295,7 @@ def _worker_batch_stats_gather_logs_on_all_ranks_cpu(  # type: ignore[type-arg]
     """Worker for test_batch_stats_gather_logs_on_all_ranks_cpu."""
     _init_distributed_process(rank, world_size, backend="gloo")
     logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-        scalar_log_every_n_generations=9999,
+        log_every_n_generations=9999,
         log_tables=False,
     )
     registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
@@ -319,7 +322,7 @@ def _worker_batch_stats_gather_logs_on_all_ranks_cpu(  # type: ignore[type-arg]
             main_process_only=False,
             gather_distributed_summaries=True,
             log_batch_stats=True,
-            scalar_log_every_n_generations=9999,
+            log_every_n_generations=9999,
             log_tables=False,
         ),
     )
@@ -340,6 +343,132 @@ def _worker_batch_stats_gather_logs_on_all_ranks_cpu(  # type: ignore[type-arg]
     assert entry["batch_mean"] == pytest.approx(0.5)
     assert entry["batch_std"] == pytest.approx(0.5)
     result_queue.put({"rank": rank, "success": True})
+    _cleanup_distributed()
+
+
+def _worker_global_generation_counts_unique_across_ranks_cpu(  # type: ignore[type-arg]
+    rank: int,
+    world_size: int,
+    result_queue: mp.Queue,
+) -> None:
+    """Worker for test_global_generation_counts_unique_across_ranks_cpu.
+
+    Verifies that when both ranks have samples, each rank gets unique, non-overlapping
+    global generation indices via the prefix-sum computation.
+    """
+    _init_distributed_process(rank, world_size, backend="gloo")
+    logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+        log_every_n_generations=1,  # log every sample
+        log_tables=True,
+    )
+    config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+        terms=[
+            pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                name="parseable",
+                type="parseable_answer",
+                params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+            )
+        ],
+        parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+        logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,
+            main_process_only=False,  # all ranks log
+            gather_distributed_summaries=True,
+            log_batch_stats=True,
+            log_every_n_generations=1,
+            log_tables=True,
+        ),
+    )
+    manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+    manager.set_key_prefix("train/")
+    # rank 0 has 3 samples, rank 1 has 2 samples
+    # expected global indices:
+    #   rank 0: [1, 2, 3]
+    #   rank 1: [4, 5]
+    num_samples = 3 if rank == 0 else 2
+    sample_ctxs = [rewards_conftest.make_sample_context(identifier=f"s{rank}_{i}") for i in range(num_samples)]
+    manager.compute_batch(sample_ctxs, log=True)
+    # extract generation_count from logged table rows (InMemoryRewardLogger stores dicts)
+    if not logger.table_rows:
+        result_queue.put({"rank": rank, "success": False, "error": "no table rows logged"})
+        _cleanup_distributed()
+        return
+    generation_counts = [row["generation_count"] for row in logger.table_rows]
+    result_queue.put(
+        {
+            "rank": rank,
+            "success": True,
+            "generation_counts": generation_counts,
+            "global_generation_count": manager._global_generation_counts.get("train/", 0),
+            "global_batch_count": manager._global_batch_counts.get("train/", 0),
+        }
+    )
+    _cleanup_distributed()
+
+
+def _worker_global_completion_idx_unique_across_ranks_cpu(  # type: ignore[type-arg]
+    rank: int,
+    world_size: int,
+    result_queue: mp.Queue,
+) -> None:
+    """Worker for test_global_completion_idx_unique_across_ranks_cpu.
+
+    Verifies that completion_idx is globally computed across ranks. When the same identifier
+    appears on multiple ranks, completion indices should be unique across the entire batch.
+    """
+    _init_distributed_process(rank, world_size, backend="gloo")
+    logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+        log_every_n_generations=1,
+        log_tables=True,
+    )
+    config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+        terms=[
+            pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                name="parseable",
+                type="parseable_answer",
+                params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+            )
+        ],
+        parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+        logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,
+            main_process_only=False,
+            gather_distributed_summaries=True,
+            log_batch_stats=True,
+            log_every_n_generations=1,
+            log_tables=True,
+        ),
+    )
+    manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+    manager.set_key_prefix("train/")
+    # both ranks have samples with the SAME identifier ("shared_prompt")
+    # this simulates GRPO-style batching where multiple completions for the same prompt
+    # might be distributed across ranks
+    # rank 0: [shared_prompt, shared_prompt] -> should get completion_idx [0, 1]
+    # rank 1: [shared_prompt, unique_b]      -> should get completion_idx [2, 0]
+    if rank == 0:
+        sample_ctxs = [
+            rewards_conftest.make_sample_context(identifier="shared_prompt"),
+            rewards_conftest.make_sample_context(identifier="shared_prompt"),
+        ]
+    else:
+        sample_ctxs = [
+            rewards_conftest.make_sample_context(identifier="shared_prompt"),
+            rewards_conftest.make_sample_context(identifier="unique_b"),
+        ]
+    manager.compute_batch(sample_ctxs, log=True)
+    if not logger.table_rows:
+        result_queue.put({"rank": rank, "success": False, "error": "no table rows logged"})
+        _cleanup_distributed()
+        return
+    completion_indices = [row["completion_idx"] for row in logger.table_rows]
+    result_queue.put(
+        {
+            "rank": rank,
+            "success": True,
+            "completion_indices": completion_indices,
+        }
+    )
     _cleanup_distributed()
 
 
@@ -430,3 +559,84 @@ class TestRewardManagerDistributedCPU:
             results.append(result_queue.get())
         assert len(results) == world_size
         assert all(r["success"] for r in results)
+
+    def test_global_generation_counts_unique_across_ranks_cpu(self) -> None:
+        """Test that global generation counts are unique and non-overlapping across ranks.
+
+        When both ranks have samples, the prefix-sum computation should assign:
+        - rank 0 (3 samples): global indices [1, 2, 3]
+        - rank 1 (2 samples): global indices [4, 5]
+
+        This verifies the core distributed counting invariant: no two samples across
+        any rank should have the same global generation_count.
+        """
+        world_size = 2
+        ctx = mp.get_context("spawn")
+        result_queue = ctx.Queue()
+        mp.spawn(
+            _worker_global_generation_counts_unique_across_ranks_cpu,
+            args=(world_size, result_queue),
+            nprocs=world_size,
+            join=True,
+        )
+        results = []
+        while not result_queue.empty():
+            results.append(result_queue.get())
+        assert len(results) == world_size
+        assert all(r["success"] for r in results), [r.get("error") for r in results]
+        # sort by rank to make assertions easier
+        results_by_rank = {r["rank"]: r for r in results}
+        rank0_counts = results_by_rank[0]["generation_counts"]
+        rank1_counts = results_by_rank[1]["generation_counts"]
+        # rank 0 should have indices [1, 2, 3]
+        assert rank0_counts == [1, 2, 3], f"rank 0 got {rank0_counts}"
+        # rank 1 should have indices [4, 5]
+        assert rank1_counts == [4, 5], f"rank 1 got {rank1_counts}"
+        # verify no overlap (belt and suspenders)
+        all_counts = set(rank0_counts) | set(rank1_counts)
+        assert len(all_counts) == len(rank0_counts) + len(rank1_counts), "duplicate generation counts across ranks"
+        # verify global counters are updated correctly on all ranks
+        for rank_result in results:
+            assert rank_result["global_generation_count"] == 5, (
+                f"rank {rank_result['rank']} has wrong global_generation_count: "
+                f"{rank_result['global_generation_count']}"
+            )
+            assert rank_result["global_batch_count"] == 1, (
+                f"rank {rank_result['rank']} has wrong global_batch_count: {rank_result['global_batch_count']}"
+            )
+
+    def test_global_completion_idx_unique_across_ranks_cpu(self) -> None:
+        """Test that completion_idx is globally computed across ranks.
+
+        When the same identifier appears on multiple ranks, the completion indices
+        should be globally unique within the batch. This validates the distributed
+        gathering of sample identifiers for global completion index computation.
+
+        Setup:
+        - rank 0: [shared_prompt, shared_prompt] -> completion_idx [0, 1]
+        - rank 1: [shared_prompt, unique_b]      -> completion_idx [2, 0]
+
+        Note: "unique_b" starts at 0 because it's a different identifier.
+        """
+        world_size = 2
+        ctx = mp.get_context("spawn")
+        result_queue = ctx.Queue()
+        mp.spawn(
+            _worker_global_completion_idx_unique_across_ranks_cpu,
+            args=(world_size, result_queue),
+            nprocs=world_size,
+            join=True,
+        )
+        results = []
+        while not result_queue.empty():
+            results.append(result_queue.get())
+        assert len(results) == world_size
+        assert all(r["success"] for r in results), [r.get("error") for r in results]
+        results_by_rank = {r["rank"]: r for r in results}
+        rank0_completion = results_by_rank[0]["completion_indices"]
+        rank1_completion = results_by_rank[1]["completion_indices"]
+        # rank 0 has [shared_prompt, shared_prompt] -> [0, 1]
+        assert rank0_completion == [0, 1], f"rank 0 got {rank0_completion}"
+        # rank 1 has [shared_prompt, unique_b] -> [2, 0]
+        # shared_prompt continues from rank 0's count (2), unique_b starts fresh (0)
+        assert rank1_completion == [2, 0], f"rank 1 got {rank1_completion}"

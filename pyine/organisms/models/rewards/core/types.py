@@ -739,8 +739,10 @@ class OutputParser(typing.Protocol):
 class RewardLogger(typing.Protocol):
     """Protocol for logging reward outputs and aggregated summaries.
 
-    The logger controls frequency gating for scalars and table rows based on generation_count.
-    The manager handles key scoping and orchestration. Terms must never log directly.
+    The manager handles frequency gating, key scoping, and orchestration. The logger provides
+    a query method (should_log_sample) that the manager uses to determine whether to call
+    log_sample. When log_sample is called, the logger should always emit; gating decisions
+    are made by the manager, not the logger. Terms must never log directly.
     """
 
     def log_sample(
@@ -748,6 +750,10 @@ class RewardLogger(typing.Protocol):
         sample_id: str,
         *,
         generation_count: int | None = None,
+        batch_count: int | None = None,
+        local_batch_idx: int | None = None,
+        completion_idx: int | None = None,
+        rank: int | None = None,
         total: float | None,
         terms: collections.abc.Mapping[str, float] | None = None,
         metrics: collections.abc.Mapping[str, MetricValue] | None = None,
@@ -760,15 +766,27 @@ class RewardLogger(typing.Protocol):
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
-        generation_idx: int | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
 
+        This method should always emit when called; frequency gating is the manager's
+        responsibility, not the logger's. Use should_log_sample() as a query method
+        before calling this.
+
         Args:
             sample_id: Unique identifier for the sample.
-            generation_count: Total generations processed so far (1-indexed). Used by the logger
-                for frequency gating. If None, frequency gating is skipped (always log).
+            generation_count: Total generations processed so far (1-indexed). Used as the
+                x-axis value for per-generation metrics, not for gating.
+            batch_count: Global batch counter (1-indexed). All samples in the same batch share
+                this value.
+            local_batch_idx: Index of this sample within the current batch (0-indexed).
+            completion_idx: Global completion index within samples sharing the same identifier
+                across all ranks in this batch (0-indexed). For GRPO-style batching where k
+                completions are generated per prompt, this indicates which completion (0 to k-1)
+                this sample represents. In distributed mode, identifiers are gathered across ranks
+                so completion indices are globally unique within each batch.
+            rank: Global rank of the process logging this sample (0-indexed).
             total: Total reward value, or None to omit from logging.
             terms: Per-term weighted reward values (optional).
             metrics: Per-sample metrics (optional) including term-emitted metrics, parsing
@@ -782,8 +800,6 @@ class RewardLogger(typing.Protocol):
             final_answer: Optional parsed final answer text for table logging.
             categories: Optional list of category labels for the sample (for table logging).
             tags: Optional list of sample tags (for table logging).
-            generation_idx: Generation index within a prompt's completions (0-indexed,
-                computed per sample_data.identifier group). Used for GRPO/multi-generation analysis.
             **kwargs: Additional keyword arguments for forward compatibility.
                 Custom implementations should accept **kwargs to remain compatible
                 with future additions to the logging interface.
@@ -822,36 +838,20 @@ class RewardLogger(typing.Protocol):
         """
         ...
 
-    def should_log_sample_scalars(
+    def should_log_sample(
         self,
         generation_count: int,
     ) -> bool:
-        """Return True if sample scalars should be logged for this generation_count.
+        """Return True if sample metrics should be logged for this generation_count.
 
-        Used by the manager to skip expensive metric extraction when the logger will drop the data.
+        Used by the manager to skip expensive metric/field extraction when the logger will
+        drop the data. This controls both scalar emission and table row addition.
 
         Args:
             generation_count: Total generations processed so far (1-indexed).
 
         Returns:
-            True if scalars should be emitted for this generation count.
-        """
-        ...
-
-    def should_log_sample_table_row(
-        self,
-        generation_count: int,
-    ) -> bool:
-        """Return True if a sample table row should be logged for this generation_count.
-
-        Used by the manager to skip expensive table field extraction when the logger will drop
-        the row. This is for the heavy generation_details table (with prompts/outputs).
-
-        Args:
-            generation_count: Total generations processed so far (1-indexed).
-
-        Returns:
-            True if a generation table row should be added for this generation count.
+            True if this generation should be logged.
         """
         ...
 

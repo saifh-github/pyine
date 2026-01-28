@@ -385,3 +385,48 @@ class TestFingerprintPayload:
         assert payload.ok is False
         assert payload.fingerprint is None
         assert payload.error == "test error"
+
+
+class TestRequireInitializedProcessGroup:
+    def test_passes_when_not_distributed(self) -> None:
+        """No error when WORLD_SIZE <= 1 (not distributed)."""
+        pyine.utils.distrib.require_initialized_process_group()  # should not raise
+
+    def test_raises_when_distributed_but_not_initialized(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Raises RuntimeError when WORLD_SIZE > 1 but torch.distributed not initialized."""
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        with pytest.raises(RuntimeError, match="process group is not initialized"):
+            pyine.utils.distrib.require_initialized_process_group()
+
+
+class TestAllGatherObjects:
+    def test_returns_single_element_when_not_distributed(self) -> None:
+        """Returns [obj] when not in distributed mode."""
+        result = pyine.utils.distrib.all_gather_objects({"key": "value"})
+        assert result == [{"key": "value"}]
+
+    def test_raises_when_distributed_but_not_initialized(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Raises if WORLD_SIZE > 1 but process group not initialized."""
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        with pytest.raises(RuntimeError, match="process group is not initialized"):
+            pyine.utils.distrib.all_gather_objects({"key": "value"})
+
+    def test_raises_when_env_changes_to_distributed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Check still runs when environment changes from non-distributed to distributed."""
+        # first call: not distributed, should succeed and return [obj]
+        result = pyine.utils.distrib.all_gather_objects({"key": "value"})
+        assert result == [{"key": "value"}]
+        # now set WORLD_SIZE=2 (but don't init process group)
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        # second call should raise because we're now distributed but not initialized
+        with pytest.raises(RuntimeError, match="process group is not initialized"):
+            pyine.utils.distrib.all_gather_objects({"key": "value"})
