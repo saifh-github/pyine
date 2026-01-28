@@ -67,8 +67,8 @@ class TRLRewardResult:
     """List of reward values (None indicates a skipped sample)."""
     outputs: list[reward_types.RewardOutput | None] | None = None
     """Full RewardOutput objects for each sample (if requested)."""
-    errors: dict[int, str] = dataclasses.field(default_factory=lambda: dict[int, str]())
-    """List of error messages for failed samples (indexed by sample position)."""
+    errors: dict[int, str] = dataclasses.field(default_factory=lambda: {})
+    """Error messages for failed samples (indexed by sample position)."""
 
 
 type TRLCompletions = list[list[dict[str, str]]]
@@ -329,9 +329,12 @@ class TRLRewardAdapter:
     ) -> list[samples_common.SampleData]:
         """Extract SampleData objects from kwargs.
 
-        Handles the case where HuggingFace datasets serialize NamedTuples to dicts.
-        Reconstructs SampleData instances from these dicts, fixing enum fields that
-        were serialized to strings.
+        Supports two common formats:
+        - `SampleData` instances (already reconstructed), and
+        - dict-like mappings (HuggingFace datasets can serialize NamedTuples to dicts).
+
+        For mapping inputs, reconstructs `SampleData` instances and fixes enum fields that were
+        serialized to strings by HF datasets.
         """
         sample_data: typing.Any = kwargs.get(self._sample_data_key)
 
@@ -343,14 +346,19 @@ class TRLRewardAdapter:
 
         result: list[samples_common.SampleData] = []
         for idx, sd in enumerate(sample_data):
-            # Dictionary from HuggingFace dataset - reconstruct SampleData (NamedTuple)
-            # Need to convert enum fields back from strings
-            try:
-                sd_dict = typing.cast("dict[str, typing.Any]", sd)
-                sd_fixed = self._fix_sample_data_dict(sd_dict)
-                result.append(samples_common.SampleData(**sd_fixed))
-            except Exception as exc:
-                raise ValueError(f"failed to reconstruct SampleData from dict at index {idx}: {exc}") from exc
+            if isinstance(sd, samples_common.SampleData):
+                result.append(sd)
+                continue
+            if isinstance(sd, collections.abc.Mapping):
+                try:
+                    sd_fixed = self._fix_sample_data_dict(dict(sd))  # type: ignore[arg-type]
+                    result.append(samples_common.SampleData(**sd_fixed))
+                except Exception as exc:
+                    raise ValueError(f"failed to reconstruct SampleData from mapping at index {idx}: {exc}") from exc
+                continue
+            raise TypeError(
+                f"expected SampleData or mapping for '{self._sample_data_key}' at index {idx}, got {type(sd)}"
+            )
         return result
 
     def get_failure_stats(

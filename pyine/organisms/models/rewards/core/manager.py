@@ -1345,13 +1345,13 @@ class RewardManager:
         if should_gather:
             # all ranks must participate in the gather to avoid deadlock, even when main_process_only=True
             gathered = pyine.utils.distrib.all_gather_objects(batch_stats.as_state())
-            if not pyine.utils.distrib.is_main_process():
-                return
             merged = stats_utils.RunningStats()
             for item in gathered:
                 state = typing.cast("collections.abc.Mapping[str, int | float]", item)
                 merged.merge(stats_utils.RunningStats.from_state(state))
             batch_stats = merged
+            if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
+                return
         else:
             if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
                 return

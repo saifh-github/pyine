@@ -34,10 +34,12 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
 **Run-level summaries** (indexed to `step_metric_key`, default `train/global_step`):
     These metrics are logged when flush_stats() is called (e.g., at phase transitions).
 
-    - `{prefix}/reward/run/mean`, `{prefix}/reward/run/std`: accumulated reward statistics;
-    - `{prefix}/reward/run/count`: number of generations processed;
+    - `{prefix}/reward/run/total/{mean,std,min,max,count}`: accumulated total reward statistics;
+    - `{prefix}/reward/run/terms/{term}/{mean,std,min,max,count}`: per-term reward statistics;
+    - `{prefix}/reward/run/categories/{category}/{mean,std,min,max,count}`: per-category reward statistics;
     - `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
     - `{prefix}/failures/failure_count`: count of failed generations in the phase.
+    - `{prefix}/difficulty/run/*`: aggregated difficulty diagnostics (when enabled).
 
 Where `{prefix}` is typically "train" or "eval" depending on the training phase.
 """

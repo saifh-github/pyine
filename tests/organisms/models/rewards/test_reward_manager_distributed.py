@@ -15,6 +15,8 @@ import torch.multiprocessing as mp
 import pyine.organisms.models.rewards.core.configs
 import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
+import pyine.organisms.models.rewards.core.registry
+import pyine.organisms.models.rewards.core.types
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -37,6 +39,24 @@ def _cleanup_distributed() -> None:
     """Clean up torch.distributed after test."""
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
+
+
+class _RankAsFloatTerm:
+    """Simple term for distributed tests that returns the current rank as the reward."""
+
+    def reset(
+        self,
+        run_init_ctx: pyine.organisms.models.rewards.core.types.RunInitContext,
+    ) -> None:
+        del run_init_ctx
+
+    def __call__(
+        self,
+        sample_ctx: pyine.organisms.models.rewards.core.types.SampleContext,
+    ) -> pyine.organisms.models.rewards.core.types.TermResult:
+        del sample_ctx
+        rank_str = os.environ.get("RANK", "0")
+        return pyine.organisms.models.rewards.core.types.TermResult(value=float(int(rank_str)))
 
 
 # worker functions for GPU tests (must be at module level for pickling)
@@ -264,6 +284,65 @@ def _worker_mixed_logger_states_cpu(rank: int, world_size: int, result_queue: mp
     _cleanup_distributed()
 
 
+def _worker_batch_stats_gather_logs_on_all_ranks_cpu(  # type: ignore[type-arg]
+    rank: int,
+    world_size: int,
+    result_queue: mp.Queue,
+) -> None:
+    """Worker for test_batch_stats_gather_logs_on_all_ranks_cpu."""
+    _init_distributed_process(rank, world_size, backend="gloo")
+    logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+        scalar_log_every_n_generations=9999,
+        log_tables=False,
+    )
+    registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
+
+    def factory(
+        spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
+        *,
+        parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+    ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
+        del spec
+        del parser
+        return _RankAsFloatTerm()
+
+    registry.register_term("test_rank_as_float", factory)
+    config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+        terms=[
+            pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                name="rank",
+                type="test_rank_as_float",
+            )
+        ],
+        logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+            enabled=True,
+            main_process_only=False,
+            gather_distributed_summaries=True,
+            log_batch_stats=True,
+            scalar_log_every_n_generations=9999,
+            log_tables=False,
+        ),
+    )
+    manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+        config,
+        logger=logger,
+        registry=registry,
+    )
+    manager.compute_batch(
+        [
+            rewards_conftest.make_sample_context(identifier=f"s{rank}_0"),
+            rewards_conftest.make_sample_context(identifier=f"s{rank}_1"),
+        ]
+    )
+    assert len(logger.batch_stats) == 1
+    entry = logger.batch_stats[0]
+    assert entry["batch_count"] == 1
+    assert entry["batch_mean"] == pytest.approx(0.5)
+    assert entry["batch_std"] == pytest.approx(0.5)
+    result_queue.put({"rank": rank, "success": True})
+    _cleanup_distributed()
+
+
 @pytest.mark.distributed
 @pytest.mark.skipif(
     torch.cuda.device_count() < 2,
@@ -329,6 +408,23 @@ class TestRewardManagerDistributedCPU:
         ctx = mp.get_context("spawn")
         result_queue = ctx.Queue()
         mp.spawn(_worker_mixed_logger_states_cpu, args=(world_size, result_queue), nprocs=world_size, join=True)
+        results = []
+        while not result_queue.empty():
+            results.append(result_queue.get())
+        assert len(results) == world_size
+        assert all(r["success"] for r in results)
+
+    def test_batch_stats_gather_logs_on_all_ranks_cpu(self) -> None:
+        """Test that batch stats are logged on all ranks when main_process_only=False."""
+        world_size = 2
+        ctx = mp.get_context("spawn")
+        result_queue = ctx.Queue()
+        mp.spawn(
+            _worker_batch_stats_gather_logs_on_all_ranks_cpu,
+            args=(world_size, result_queue),
+            nprocs=world_size,
+            join=True,
+        )
         results = []
         while not result_queue.empty():
             results.append(result_queue.get())

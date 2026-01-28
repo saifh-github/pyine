@@ -221,6 +221,24 @@ class TestRunSummaries:
         # higher difficulty should correlate with lower reward
         assert summaries["reward/correlation"] < 0
 
+    def test_run_summaries_return_minimal_metrics_when_no_scores(self) -> None:
+        """Run summaries should still include diagnostic ratios even when no scores were computed."""
+        sample_data = _make_sample_data(has_code_override=True)
+        config = reward_configs.DifficultyConfig(
+            enabled=True,
+            primary_source="trace_step_count",
+            code_override_mode=difficulty_module.CodeOverrideMode.skip,
+        )
+        estimator = difficulty_module.DifficultyEstimator(config)
+        metrics = estimator.compute(sample_data, reward_total=0.5)
+        assert metrics["difficulty/execution_skipped"] == 1
+        assert metrics["difficulty/primary_missing"] == 1
+        summaries = estimator.get_run_summaries()
+        assert summaries["count"] == 0
+        assert summaries["override_skip_ratio"] == pytest.approx(1.0)
+        assert "num_bins" in summaries
+        assert "bin_edge_0" in summaries
+
     def test_run_summaries_percentiles(self) -> None:
         """Run summaries should include percentiles when track_percentiles is enabled."""
         config = reward_configs.DifficultyConfig(

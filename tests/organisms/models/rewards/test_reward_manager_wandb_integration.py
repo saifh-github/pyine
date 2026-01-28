@@ -254,6 +254,7 @@ class TestRewardManagerWandBIntegration:
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
             scalar_log_every_n_generations=1,
+            log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -343,6 +344,7 @@ class TestRewardManagerWandBIntegration:
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
             scalar_log_every_n_generations=1,
+            log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",
@@ -395,6 +397,7 @@ class TestRewardManagerWandBIntegration:
         logging_config = reward_configs.LoggingConfig(
             enabled=True,
             scalar_log_every_n_generations=1,
+            log_batch_stats=True,
         )
         term_spec = reward_configs.RewardTermSpec(
             name="parseable",

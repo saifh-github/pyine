@@ -414,6 +414,43 @@ class TestRewardManager:
         assert isinstance(terms, dict)
         assert "reward/terms/parseable" in terms
 
+    def test_difficulty_table_logs_primary_source(self) -> None:
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            scalar_log_every_n_generations=9999,
+            log_tables=False,
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            difficulty=pyine.organisms.models.rewards.core.configs.DifficultyConfig(
+                enabled=True,
+                primary_source="trace_step_count",
+                table_mode="always",
+            ),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                scalar_log_every_n_generations=9999,
+                log_tables=False,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+        )
+        output = manager.compute(ctx)
+        assert output.metrics.get("difficulty/source") == "trace_step_count"
+        assert len(logger_obj.difficulty_stats) == 1
+        row = logger_obj.difficulty_stats[0]
+        assert row["primary_source"] == "trace_step_count"
+
     def test_step_is_propagated_to_logger(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(

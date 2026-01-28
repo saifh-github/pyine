@@ -180,6 +180,50 @@ class TestTRLAdapterLogging:
                 f"at gen_count={gen_count}, expected reward {expected_reward}, got {actual_reward}"
             )
 
+    def test_trl_adapter_accepts_sample_data_objects(self) -> None:
+        registry = reward_registry.RewardRegistry()
+
+        def factory(
+            spec: reward_configs.RewardTermSpec,
+            *,
+            parser: reward_types.OutputParser | None,
+        ) -> reward_types.RewardTerm:
+            del spec, parser
+            return _SampleIndexRewardTerm()
+
+        registry.register_term("sample_index_term_objects", factory)
+        config = reward_configs.RewardManagerConfig(
+            terms=[
+                reward_configs.RewardTermSpec(
+                    name="index",
+                    type="sample_index_term_objects",
+                    require_parsed=False,
+                )
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = reward_manager.RewardManager(config, registry=registry)
+        adapter = rewards_trl.TRLRewardAdapter(
+            manager=manager,
+            sample_data_key="sample_data",
+            skip_on_error=False,
+        )
+
+        completions = [
+            [{"role": "assistant", "content": "output_0"}],
+            [{"role": "assistant", "content": "output_1"}],
+            [{"role": "assistant", "content": "output_2"}],
+        ]
+        sample_data_list = [
+            rewards_conftest.make_sample_data("sample_0"),
+            rewards_conftest.make_sample_data("sample_1"),
+            rewards_conftest.make_sample_data("sample_2"),
+        ]
+        prompts = ["prompt_0", "prompt_1", "prompt_2"]
+
+        rewards = adapter(completions, prompts=prompts, sample_data=sample_data_list)
+        assert rewards == [0.0, 1.0, 2.0]
+
     def test_trl_adapter_with_train_eval_prefix_switching(self) -> None:
         """Verify that prefix switching during train/eval doesn't cause value repetition.
 

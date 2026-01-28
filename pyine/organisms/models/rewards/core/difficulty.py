@@ -424,6 +424,7 @@ class DifficultyEstimator:
         """
         self._total_count += 1
         metrics: dict[str, reward_types.MetricValue] = {
+            "difficulty/source": self._config.primary_source,
             "difficulty/execution_skipped": 0,
             "difficulty/primary_missing": 0,
             "difficulty/has_code_override": int(sample_data.has_code_override),
@@ -487,18 +488,20 @@ class DifficultyEstimator:
         Returns dict with difficulty score distribution stats, quality flags, bin edges, and per-bin
         reward stats.
         """
-        if self._score_stats.count == 0:
+        if self._total_count == 0:
             return {}
-        assert self._total_count > 0
         metrics: dict[str, reward_types.MetricValue] = {}
-        assert self._score_stats.min is not None and self._score_stats.max is not None
-        metrics["mean"] = self._score_stats.mean()
-        metrics["std"] = self._score_stats.std()
-        metrics["min"] = float(self._score_stats.min)
-        metrics["max"] = float(self._score_stats.max)
-        metrics["count"] = self._score_stats.count
         metrics["missing_ratio"] = self._missing_count / self._total_count
         metrics["override_skip_ratio"] = self._override_skip_count / self._total_count
+        if self._score_stats.count > 0:
+            assert self._score_stats.min is not None and self._score_stats.max is not None
+            metrics["mean"] = self._score_stats.mean()
+            metrics["std"] = self._score_stats.std()
+            metrics["min"] = float(self._score_stats.min)
+            metrics["max"] = float(self._score_stats.max)
+            metrics["count"] = self._score_stats.count
+        else:
+            metrics["count"] = 0
         # percentiles (only if values were tracked during any phase)
         if self._score_values:
             sorted_values = sorted(self._score_values)
@@ -511,13 +514,14 @@ class DifficultyEstimator:
             for edge_idx in range(self._config.num_difficulty_bins + 1):
                 pct = int(edge_idx * 100 / self._config.num_difficulty_bins)
                 metrics[f"recommended_edge_{edge_idx}"] = sorted_values[_percentile_index(n, pct)]
-        # correlation and slope between difficulty and reward (catches trends bins can hide)
-        metrics.update(self._corr_stats.to_metrics(prefix="reward"))
-        # secondary source stats and correlations
-        for source, corr_stats in self._secondary_corr_stats.items():
-            metrics.update(corr_stats.to_metrics(prefix=f"secondary/{source}/reward"))
-            if source in self._secondary_stats:
-                metrics.update(self._secondary_stats[source].to_metrics(prefix=f"secondary/{source}"))
+        if self._score_stats.count > 0:
+            # correlation and slope between difficulty and reward (catches trends bins can hide)
+            metrics.update(self._corr_stats.to_metrics(prefix="reward"))
+            # secondary source stats and correlations
+            for source, corr_stats in self._secondary_corr_stats.items():
+                metrics.update(corr_stats.to_metrics(prefix=f"secondary/{source}/reward"))
+                if source in self._secondary_stats:
+                    metrics.update(self._secondary_stats[source].to_metrics(prefix=f"secondary/{source}"))
         # bin edges (critical for interpretability)
         # convention: inf edges are logged as -1.0 (sentinel value)
         # the has_overflow_bin flag indicates whether the last bin is an overflow bin
