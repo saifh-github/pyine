@@ -4,18 +4,21 @@ This module provides adapters to use our reward system with TRL-based training p
 (e.g., GRPOTrainer, PPOTrainer). The key challenge is mapping TRL's batch-based reward function
 signature to our SampleContext-based reward computation.
 
-TRL reward function signature (as used by GRPOTrainer):
+TRL reward function signature (as used by GRPOTrainer) can vary slightly across TRL versions.
+This adapter is implemented to match the calling pattern used in this repo:
+
     ```python
-    def reward_fn(
-        prompts: list[str] | list[list[dict[str, str]]],
-        completions: list[list[dict[str, str]]],
+    rewards = adapter(
+        completions,  # list[list[{"role": ..., "content": ...}]]
+        prompts=prompts,  # list[str] or list[list[{"role": ..., "content": ...}]]
+        sample_data=sample_data,  # list[SampleData] or list[dict] (HF datasets serialized)
         **kwargs,
-    ) -> list[float | None]: ...
+    )
     ```
 
 Where:
-- `prompts` is a list of prompts (strings for standard format, message lists for conversational);
 - `completions[i]` is a list of messages (dicts with "role" and "content" keys) for sample `i`;
+- `prompts` is optionally provided via `kwargs` (strings for standard format, message lists for conversational);
 - `kwargs` contains other dataset columns (e.g., sample_data, ground_truth);
 - the returned output is a list of rewards (or None to skip a sample).
 
@@ -304,8 +307,21 @@ class TRLRewardAdapter:
             elif isinstance(prompt, (list, tuple)):
                 # conversational format: list of message dicts with "role" and "content"
                 prompt = typing.cast("collections.abc.Sequence[typing.Any]", prompt)
-                assert all(isinstance(msg, dict) and isinstance(msg["content"], str) for msg in prompt)
-                result.append("\n\n".join([msg["content"] for msg in prompt]))
+                contents: list[str] = []
+                for msg_idx, msg in enumerate(prompt):
+                    if not isinstance(msg, collections.abc.Mapping):
+                        raise TypeError(
+                            f"expected mapping message in prompt at index {prompt_idx}, got {type(msg)} at {msg_idx}"
+                        )
+                    msg = typing.cast("collections.abc.Mapping[str, typing.Any]", msg)
+                    content: typing.Any = msg.get("content")
+                    if not isinstance(content, str):
+                        raise TypeError(
+                            f"expected string 'content' in prompt at index {prompt_idx}, "
+                            f"got {type(content)} at {msg_idx}"
+                        )
+                    contents.append(content)
+                result.append("\n\n".join(contents))
             else:
                 raise TypeError(f"expected str or list for prompt at index {prompt_idx}, got {type(prompt)}")
         return result

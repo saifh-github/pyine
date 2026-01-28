@@ -228,6 +228,10 @@ def _get_default_code_exec_reward_manager_configs(
                 "strict": False,
                 "capture_diagnostics": True,
             },
+            # keep logging opt-in; RewardManager otherwise requires a logger when enabled=True
+            "logging": {
+                "enabled": False,
+            },
         },
     )
     # todo: add defaults for soft-matching, llm-grader, ...

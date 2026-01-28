@@ -65,7 +65,9 @@ class VerbosityScalingConfig(reward_types.BaseConfig):
 
     Important:
         For relative mode, "group" means samples sharing the same prompt (identified by trace_id
-        in GRPO training). TRL adapter groups completions before computing relative scaling.
+        in GRPO training). Grouping is handled by `RewardManager.compute_batch()` based on
+        `SampleData.identifier` (trace id) so that multiple generations for the same prompt are
+        normalized together.
 
     Relative mode and max_factor:
         In relative mode, samples at or below the group mean get factor ~max_factor, not necessarily 1.0.

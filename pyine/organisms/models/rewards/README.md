@@ -36,9 +36,11 @@ config = reward_configs.RewardManagerConfig(
             name="parseable",  # name used for breakdown/logging key
             type="parseable_answer",  # registry type used to identify the implemented class
             weight=1.0,  # scalar weight applied to the term value during aggregation
+            require_parsed=True,  # fail fast if SampleContext.parsed is missing
             params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
         ),
     ],
+    logging=reward_configs.LoggingConfig(enabled=False),  # optional; disable by default for quick start
     parsing=reward_configs.ParsingConfig(
         final_tag="answer",  # parseable_answer term will inherit this tag
         fallback_policy="none",
@@ -49,7 +51,7 @@ config = reward_configs.RewardManagerConfig(
 manager = reward_manager.RewardManager(config)
 
 # compute reward for a sample; note: sample_data required (should come from datamodule)
-ctx = reward_types.SampleContext(
+ctx = manager.build_sample_context(
     prompt="What is 2+2?",
     model_output="<answer>4</answer>",
     sample_data=sample_data,
@@ -184,6 +186,7 @@ config = reward_configs.RewardManagerConfig(
             name="format_compliance",
             type="parseable_answer",
             weight=0.5,
+            require_parsed=True,
             params={
                 "reward_if_present": 1.0,
                 "reward_if_missing": 0.0,
@@ -195,7 +198,7 @@ config = reward_configs.RewardManagerConfig(
             name="accuracy",
             type="hard_match",
             weight=1.0,
-            params = {
+            params={
                 "reward_if_match": 1.0,
                 "reward_if_no_match": 0.0,
                 "strip_whitespace": True,
@@ -221,6 +224,7 @@ config = reward_configs.RewardManagerConfig(
             },
         ),
     ],
+    logging=reward_configs.LoggingConfig(enabled=False),
     parsing=reward_configs.ParsingConfig(final_tag="final"),
     aggregation=reward_configs.AggregationConfig(
         clip_total_min=0.0,
@@ -254,6 +258,7 @@ import pyine.organisms.models.rewards.core.configs as reward_configs
 
 config = reward_configs.RewardManagerConfig(
     terms=[...],
+    logging=reward_configs.LoggingConfig(enabled=False),
     verbosity_scaling=reward_configs.VerbosityScalingConfig(
         enabled=True,
         mode="absolute",
@@ -273,6 +278,7 @@ at or below mean length get factor ~1.0; above mean get factor < 1.0.
 ```python
 config = reward_configs.RewardManagerConfig(
     terms=[...],
+    logging=reward_configs.LoggingConfig(enabled=False),
     verbosity_scaling=reward_configs.VerbosityScalingConfig(
         enabled=True,
         mode="relative",
@@ -540,6 +546,7 @@ config = reward_configs.RewardManagerConfig(
 Use registry snapshots for test isolation:
 
 ```python
+import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.terms
 
