@@ -58,6 +58,7 @@ def sft_training_config(
         do_eval=True,
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
+        gradient_checkpointing=True,  # trades compute for memory
         max_steps=10,
         eval_strategy="steps",
         eval_steps=5,
@@ -80,6 +81,7 @@ def sft_training_config(
         base_model="HuggingFaceTB/SmolLM-360M-Instruct",
         quantization_mode="none",
         auto_model_config={"low_cpu_mem_usage": True},
+        collator_hard_seq_length_cap=256,  # cap sequence length for lower memory footprint
         training_args_config=training_args,
         datamodule_config=real_datamodule_config,
         use_wandb_logging=True,
@@ -252,6 +254,7 @@ class TestHFTrainerSFTIntegration:
             do_train=True,
             do_eval=False,
             per_device_train_batch_size=2,
+            gradient_checkpointing=True,  # trades compute for memory
             max_steps=3,
             save_strategy="steps",
             save_steps=3,
@@ -268,6 +271,7 @@ class TestHFTrainerSFTIntegration:
             base_model="HuggingFaceTB/SmolLM-360M-Instruct",
             quantization_mode="none",
             auto_model_config={"low_cpu_mem_usage": True},
+            collator_hard_seq_length_cap=256,  # cap sequence length for lower memory footprint
             training_args_config=training_args_phase1,
             datamodule_config=real_datamodule_config,
             use_wandb_logging=False,
@@ -309,6 +313,7 @@ class TestHFTrainerSFTIntegration:
             do_train=True,
             do_eval=False,
             per_device_train_batch_size=2,
+            gradient_checkpointing=True,  # trades compute for memory
             max_steps=6,
             save_strategy="steps",
             save_steps=3,
@@ -325,6 +330,7 @@ class TestHFTrainerSFTIntegration:
             base_model="HuggingFaceTB/SmolLM-360M-Instruct",
             quantization_mode="none",
             auto_model_config={"low_cpu_mem_usage": True},
+            collator_hard_seq_length_cap=256,  # cap sequence length for lower memory footprint
             training_args_config=training_args_phase2,
             datamodule_config=real_datamodule_config,
             use_wandb_logging=False,
