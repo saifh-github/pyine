@@ -761,6 +761,27 @@ power, and temperature will be unavailable.)
     gathered or logged)
 - For distributed training, stats are aggregated across all ranks (unless `gather_train_metrics: "never"`)
 
+### Throughput Logging
+
+Enable throughput tracking to monitor training and evaluation speed:
+
+```yaml
+config:
+  throughput_logging: {}  # Use defaults, or set to null to disable
+```
+
+**Logged metrics**:
+
+- `train/throughput/samples_per_second`: Training samples processed per second
+- `train/throughput/steps_per_second`: Optimizer steps per second
+- `eval/throughput/samples_per_second`: Eval samples processed per second
+
+**Notes**:
+
+- Measurement window resets on eval and checkpoint saves to avoid inflated metrics
+- Eval throughput is only logged during training runs (standalone `trainer.evaluate()` calls are not tracked)
+- By default, only rank 0 logs metrics using global batch size
+
 ### Prompt Templates
 
 Available in `pyine/prompts/configs/code_execution.yaml`:
