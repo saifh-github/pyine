@@ -5,7 +5,8 @@
 # project structure variables (can be overridden by the including Makefile)
 SRC_DIR ?= src
 TEST_DIR ?= tests
-UV_PREVIEW_FEATURES ?= extra-build-dependencies  # keeps uv preview warning noise down for this feature
+# keeps uv preview warning noise down for this feature
+UV_PREVIEW_FEATURES ?= extra-build-dependencies
 export UV_PREVIEW_FEATURES
 
 .PHONY: info help clean check-uv install install-all lock lock-deps stats setup-nbstripout setup-nbstripout-tool check-notebooks
