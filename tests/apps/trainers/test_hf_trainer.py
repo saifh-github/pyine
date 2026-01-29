@@ -329,6 +329,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
         gpu_stats_logging=None,
+        throughput_logging=None,
     )
     collator_calls = _install_collator_stub(config)
 
@@ -453,6 +454,7 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
         evals_config=types.SimpleNamespace(category_extraction_config=None),
         use_wandb_logging=False,
         gpu_stats_logging=None,
+        throughput_logging=None,
     )
     _install_collator_stub(config)
     runtime = types.SimpleNamespace(wandb_run=None)
@@ -626,6 +628,7 @@ def test_train_enables_wandb_batch_logging(
         get_model=lambda: _FakeModel(),
         get_tokenizer=lambda: _FakeTokenizer(),
         gpu_stats_logging=None,
+        throughput_logging=None,
     )
 
     captured_handlers: list[typing.Callable[[pyine.utils.transformers.CollatorBatchLogRecord], None]] = []
@@ -1141,6 +1144,7 @@ def test_train_resumes_from_checkpoint_with_real_trainer(
             get_model=_build_tiny_model,
             get_tokenizer=_SimpleTokenizer,
             gpu_stats_logging=None,
+            throughput_logging=None,
         )
         _install_collator_stub(config, collator_factory=_build_collator)
         return config
@@ -1363,6 +1367,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
         get_model=mock_get_model,
         get_tokenizer=mock_get_tokenizer,
         gpu_stats_logging=None,
+        throughput_logging=None,
     )
 
     # test case 1: without resume_artifacts, checkpoint_path should be None
@@ -1490,6 +1495,7 @@ def test_sft_train_attaches_gpu_stats_callback_when_configured(
         get_model=_FakeModel,
         get_tokenizer=_FakeTokenizer,
         gpu_stats_logging=pyine.utils.transformers.callbacks.GPUStatsLoggingConfig(),
+        throughput_logging=None,
         get_collator=lambda *_a, **_k: None,
     )
     runtime = types.SimpleNamespace(wandb_run=None)

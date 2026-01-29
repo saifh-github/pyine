@@ -15,6 +15,7 @@ import pyine.utils.gpu
 import pyine.utils.reprod
 import pyine.utils.stats
 import pyine.utils.transformers.checkpoints
+import pyine.utils.transformers.training
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ __all__ = [
     "EpochAwarenessCallback",
     "RewardLoggingCallback",
     "ThroughputLoggingCallback",
+    "ThroughputLoggingConfig",
     "GPUStatsLoggingCallback",
     "GPUStatsLoggingConfig",
     "create_epoch_awareness_callback",
@@ -448,8 +450,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         self.train_prefix = train_prefix
         self.eval_prefix = eval_prefix
         self.resume_from_checkpoint = pathlib.Path(resume_from_checkpoint) if resume_from_checkpoint else None
-        self._in_eval: bool | None = None
-        self._saw_eval_prediction_step: bool = False
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
 
     def _get_and_reset_failure_stats(self) -> tuple[float | None, int | None]:
         """Get failure statistics from reward adapter and reset them.
@@ -484,8 +485,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         Args:
             step: Optional step to anchor the flush (defaults to current manager step).
         """
-        if self._in_eval:
-            return
+        if self._phase.in_eval:
+            return  # idempotence guard: already in eval
         failure_ratio, failure_count = self._get_and_reset_failure_stats()
         self.reward_manager.flush_stats(
             step=step,
@@ -494,8 +495,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         )
         self.reward_manager.set_key_prefix(self.eval_prefix)
         self.reward_manager.set_step(None)  # clear step for eval
-        self._in_eval = True
-        self._saw_eval_prediction_step = False  # reset for new eval phase
+        self._phase.mark_entering_eval()  # suppresses unexpected warnings when prediction steps follow
 
     @typing.override
     def on_step_begin(
@@ -506,9 +506,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         """Set train prefix, logging step, and epoch at the start of each training step."""
-        if self._in_eval is not False:
+        if self._phase.in_eval:
             self.reward_manager.set_key_prefix(self.train_prefix)
-            self._in_eval = False
         self.reward_manager.set_step(state.global_step)
         self.reward_manager.set_epoch(state.epoch)
 
@@ -520,12 +519,13 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Switch to eval prefix before step-based evaluation.
+        """Track training progress and switch to eval prefix before step-based evaluation.
 
         DefaultFlowCallback sets control.should_evaluate = True in its own on_step_end, and Trainer
         calls _maybe_log_save_evaluate() immediately after all callbacks' on_step_end. By switching
         here, we ensure the first eval batch logs under the correct prefix.
         """
+        self._phase.handle_step_or_epoch_end(control)  # marks training as seen
         if control.should_evaluate:
             self._switch_to_eval(step=state.global_step)
 
@@ -547,18 +547,19 @@ class RewardLoggingCallback(transformers.TrainerCallback):
 
         We only set the prefix (no flush) to ensure subsequent batches log correctly.
         """
-        if self._in_eval is not True:
-            # unexpected: we should have switched to eval in on_step_end/on_epoch_end
-            # this may indicate HF Trainer callback ordering changed, or eval was triggered
-            # outside the normal flow; we can't safely flush, so just set prefix and warn
-            logger.warning(
-                "on_prediction_step called but _in_eval is not True. This may indicate "
-                "HuggingFace Trainer callback ordering changed unexpectedly. The first eval "
-                "batch may have been logged under the wrong prefix. Please report this issue."
-            )
+        first_step, unexpected = self._phase.handle_prediction_step()
+        if first_step:
+            # first prediction step of this eval phase; _switch_to_eval wasn't called
+            if unexpected:
+                # unexpected: we should have switched to eval in on_step_end/on_epoch_end
+                # this may indicate HF Trainer callback ordering changed, or eval was triggered
+                # outside the normal flow; we can't safely flush, so just set prefix and warn
+                logger.warning(
+                    "on_prediction_step called without prior should_evaluate=True. This may indicate "
+                    "HuggingFace Trainer callback ordering changed unexpectedly. The first eval "
+                    "batch may have been logged under the wrong prefix. Please report this issue."
+                )
             self.reward_manager.set_key_prefix(self.eval_prefix)
-            self._in_eval = True
-        self._saw_eval_prediction_step = True  # mark that we processed at least one eval batch
         # clear step for per-sample eval logs; global_step doesn't change during eval, so logging
         # multiple samples at the same step would cause WandB to overwrite scalar metrics
         self.reward_manager.set_step(None)
@@ -571,12 +572,13 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs: typing.Any,
     ) -> None:
-        """Switch to eval prefix before epoch-based evaluation.
+        """Track training progress and switch to eval prefix before epoch-based evaluation.
 
         DefaultFlowCallback sets control.should_evaluate = True in its own on_epoch_end for
         eval_strategy="epoch". Trainer evaluates immediately after on_epoch_end, so we switch
         here to ensure the first eval batch logs under the correct prefix.
         """
+        self._phase.handle_step_or_epoch_end(control)  # marks training as seen
         if control.should_evaluate:
             self._switch_to_eval(step=state.global_step)
 
@@ -591,7 +593,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         """Flush accumulated stats and reset to train prefix after evaluation completes."""
         # only flush if we actually processed eval samples (on_prediction_step was called);
         # if eval had zero samples, skip flushing to avoid logging stale stats under eval prefix
-        if self._saw_eval_prediction_step:
+        if self._phase.saw_eval_samples:
             # anchor eval summary at current global_step so it aligns with training metrics
             failure_ratio, failure_count = self._get_and_reset_failure_stats()
             self.reward_manager.flush_stats(
@@ -599,9 +601,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                 failure_ratio=failure_ratio,
                 failure_count=failure_count,
             )
-        self._saw_eval_prediction_step = False  # reset for next eval
+        self._phase.handle_evaluate()  # reset phase tracker
         self.reward_manager.set_key_prefix(self.train_prefix)
-        self._in_eval = False  # evaluation done, switch back right away
 
     @typing.override
     def on_train_begin(
@@ -615,8 +616,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
 
         This method follows a specific order to ensure correct prefix/accumulator semantics:
         1. Load checkpoint state first (if resuming), restoring step and accumulators;
-        2. Always set train prefix and _in_eval = False (consistent starting point);
-        3. If eval_on_start=True, transition train→eval properly via _switch_to_eval().
+        2. Always set train prefix and reset phase tracker (consistent starting point);
+        3. If eval_on_start=True, transition train->eval properly via _switch_to_eval().
 
         Raises:
             FileNotFoundError: If resuming from checkpoint but reward_state.json is missing.
@@ -630,11 +631,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                     "checkpoint may be incomplete or from an older version"
                 )
             self._load_reward_state(reward_state_path)
-        # 2. always start in train mode (prefix + state flags)
+        # 2. always start in train mode (prefix + phase tracker reset)
         self.reward_manager.set_key_prefix(self.train_prefix)
-        self._in_eval = False
-        self._saw_eval_prediction_step = False  # reset in case callback instance is reused
-        # 3. if eval_on_start, transition train→eval properly (flush under train prefix, then switch)
+        # reset phase tracker in case callback instance is reused
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
+        # 3. if eval_on_start, transition train->eval properly (flush under train prefix, then switch)
         if getattr(args, "eval_on_start", False):
             self._switch_to_eval(step=state.global_step)
 
@@ -712,48 +713,84 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         logger.debug("restored reward manager state from checkpoint")
 
 
+class ThroughputLoggingConfig(pydantic.BaseModel):
+    """Configuration for throughput logging callback.
+
+    To disable throughput logging, set `throughput_logging: null` in your config (or don't set it
+    at all). A non-null config means the callback is enabled.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    only_main_process: bool = True
+    """Specifies whether only rank 0 logs metrics using global batch size.
+
+    If False, all ranks log local throughput (per-device batch size only).
+
+    Note: When False, metrics will be duplicated across ranks in W&B unless you configure
+    rank-specific metric names or filter by rank.
+    """
+    log_train_throughput: bool = True
+    """Whether to log train throughput metrics."""
+    log_eval_throughput: bool = True
+    """Whether to log eval throughput metrics."""
+    train_prefix: str = "train/throughput/"
+    """Prefix for train throughput metric keys."""
+    eval_prefix: str = "eval/throughput/"
+    """Prefix for eval throughput metric keys."""
+
+
 class ThroughputLoggingCallback(transformers.TrainerCallback):
     """Injects rolling throughput metrics into the trainer's log dict.
 
-    Tracks elapsed compute time between `on_log` calls (excluding checkpoint I/O) and
-    calculates throughput. Metrics are injected into the `logs` dict passed to `on_log`,
-    so they flow to whatever reporters the trainer uses (W&B, TensorBoard, etc.).
+    Tracks elapsed compute time between `on_log` calls (excluding checkpoint I/O) and calculates
+    throughput separately for train and eval phases. Metrics are injected into the `logs` dict
+    passed to `on_log`, so they flow to whatever reporters the trainer uses (W&B, TensorBoard, etc.).
 
     Injected metrics:
-        - `{prefix}samples_per_second`: Training samples processed per second
-        - `{prefix}steps_per_second`: Optimizer steps per second
+        - `{train_prefix}samples_per_second`: Training samples processed per second
+        - `{train_prefix}steps_per_second`: Optimizer steps per second
+        - `{eval_prefix}samples_per_second`: Eval samples processed per second
+
+    Train throughput:
+        - Measurement window resets on eval and save (steps completed before these events
+          are excluded from the next throughput calculation if no log occurred in between)
+        - Includes train on_log overhead (on_log comes after on_step_end in HF ordering)
+
+    Eval throughput:
+        - Normal flow: Timer starts in on_step_end when should_evaluate=True
+        - eval_on_start flow: Timer starts in first on_prediction_step (fallback)
+        - Skipped if no samples processed or predict-only run
+        - Only logged during training runs (standalone trainer.evaluate() calls are not tracked)
 
     Args:
-        only_main_process: If True, only injects metrics on the main process (rank 0).
-        prefix: Prefix for metric keys.
+        config: Configuration for throughput logging. If None, uses defaults.
     """
 
     def __init__(
         self,
-        *,
-        only_main_process: bool = True,
-        prefix: str = "throughput/",
+        config: ThroughputLoggingConfig | None = None,
     ) -> None:
-        self.only_main_process = only_main_process
-        self.prefix = prefix
-        self._last_log_time: float | None = None
-        self._last_log_step: int = 0
+        """Initialize the callback.
+
+        Args:
+            config: Configuration for throughput logging. If None, uses defaults.
+        """
+        self._config = config or ThroughputLoggingConfig()
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
+        self._saw_train_begin: bool = False  # distinguishes training vs predict-only
+        # train timing
+        self._train_last_log_time: float | None = None
+        self._train_last_log_step: int = 0
+        # eval timing
+        self._eval_start_time: float | None = None
+        self._eval_prediction_steps: int = 0
 
     def _should_log(self) -> bool:
         """Check if metrics should be logged on this process."""
-        if not self.only_main_process:
+        if not self._config.only_main_process:
             return True
         return pyine.utils.distrib.is_main_process()
-
-    def _get_effective_batch_size(
-        self,
-        args: transformers.TrainingArguments,
-    ) -> int:
-        """Calculate effective batch size accounting for distributed training and gradient accumulation."""
-        per_device_batch_size = typing.cast("int", getattr(args, "per_device_train_batch_size", 1))
-        world_size = typing.cast("int", getattr(args, "world_size", 1))
-        grad_accum_steps = typing.cast("int", getattr(args, "gradient_accumulation_steps", 1))
-        return per_device_batch_size * world_size * grad_accum_steps
 
     @typing.override
     def on_train_begin(
@@ -764,8 +801,61 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Initialize timing state at the start of training."""
-        self._last_log_time = time.perf_counter()
-        self._last_log_step = state.global_step
+        self._saw_train_begin = True
+        # reset phase tracker in case callback instance is reused
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
+        # reset train timing
+        self._train_last_log_time = time.perf_counter()
+        self._train_last_log_step = state.global_step
+        # reset eval timing
+        self._eval_start_time = None
+        self._eval_prediction_steps = 0
+
+    @typing.override
+    def on_step_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Handle eval transition and start eval timer."""
+        transitioning = self._phase.handle_step_or_epoch_end(control)
+        if transitioning and self._eval_start_time is None:  # guard against double reset
+            # start eval timer HERE, so first batch time is included
+            self._eval_start_time = time.perf_counter()
+            self._eval_prediction_steps = 0
+
+    @typing.override
+    def on_epoch_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Handle eval transition at epoch end (same as on_step_end)."""
+        transitioning = self._phase.handle_step_or_epoch_end(control)
+        if transitioning and self._eval_start_time is None:  # guard against double reset
+            self._eval_start_time = time.perf_counter()
+            self._eval_prediction_steps = 0
+
+    @typing.override
+    def on_prediction_step(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Track eval samples and handle fallback timer start for eval_on_start."""
+        _first_step, unexpected = self._phase.handle_prediction_step()
+        # fallback for eval_on_start: start timer if not already started
+        if self._eval_start_time is None:
+            self._eval_start_time = time.perf_counter()
+        self._eval_prediction_steps += 1
+        if unexpected:
+            logger.warning("Unexpected eval phase detected without should_evaluate flag")
 
     @typing.override
     def on_log(
@@ -773,34 +863,100 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         args: transformers.TrainingArguments,
         state: transformers.TrainerState,
         control: transformers.TrainerControl,
+        logs: dict[str, typing.Any] | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Calculate and inject throughput metrics whenever the trainer logs."""
         if not self._should_log():
             return
-        if self._last_log_time is None:
-            self._last_log_time = time.perf_counter()  # on_train_begin wasn't called
-            self._last_log_step = state.global_step
+        if logs is None:
+            return
+        # determine context and inject appropriate metrics
+        if self._phase.is_eval_context(logs):
+            self._inject_eval_throughput(args, logs)
+        else:
+            # warn if logs look like eval but we're not in eval context
+            looks_like_eval = any(k.startswith(("eval_", "eval/")) for k in logs)
+            if looks_like_eval:
+                logger.warning(
+                    "on_log received eval-like logs but not in eval context (_phase.in_eval=False, "
+                    "_phase.eval_pending=False). This may indicate HuggingFace Trainer callback "
+                    "ordering changed. Throughput metrics will be classified as train."
+                )
+            self._inject_train_throughput(args, state, logs)
+
+    def _inject_train_throughput(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        logs: dict[str, typing.Any],
+    ) -> None:
+        """Inject train throughput metrics if enabled and valid."""
+        if not self._config.log_train_throughput:
+            return
+        if self._train_last_log_time is None:
+            self._train_last_log_time = time.perf_counter()  # on_train_begin wasn't called
+            self._train_last_log_step = state.global_step
             return
         current_time = time.perf_counter()
-        elapsed = current_time - self._last_log_time
-        steps_delta = state.global_step - self._last_log_step
+        elapsed = current_time - self._train_last_log_time
+        steps_delta = state.global_step - self._train_last_log_step
         if elapsed <= 0 or steps_delta <= 0:
-            self._last_log_time = current_time  # avoid division by zero
-            self._last_log_step = state.global_step
+            self._train_last_log_time = current_time  # avoid division by zero
+            self._train_last_log_step = state.global_step
             return
-        effective_batch_size = self._get_effective_batch_size(args)
+        effective_batch_size = pyine.utils.transformers.training.get_effective_train_batch_size(
+            args, include_world_size=self._config.only_main_process
+        )
         samples_delta = steps_delta * effective_batch_size
         samples_per_second = samples_delta / elapsed
         steps_per_second = steps_delta / elapsed
-        # inject metrics into the logs dict so they flow to whatever reporters are configured
-        logs = kwargs.get("logs")
-        if logs is not None and isinstance(logs, dict):
-            logs[f"{self.prefix}samples_per_second"] = samples_per_second
-            logs[f"{self.prefix}steps_per_second"] = steps_per_second
+        logs[f"{self._config.train_prefix}samples_per_second"] = samples_per_second
+        logs[f"{self._config.train_prefix}steps_per_second"] = steps_per_second
         # update state for next interval
-        self._last_log_time = current_time
-        self._last_log_step = state.global_step
+        self._train_last_log_time = current_time
+        self._train_last_log_step = state.global_step
+
+    def _inject_eval_throughput(
+        self,
+        args: transformers.TrainingArguments,
+        logs: dict[str, typing.Any],
+    ) -> None:
+        """Inject eval throughput metrics if enabled and valid."""
+        if not self._config.log_eval_throughput:
+            return  # logging disabled, but state reset happens in on_evaluate
+        if not self._saw_train_begin:
+            return  # predict-only run (Trainer.predict() without on_train_begin), skip
+        if self._eval_prediction_steps == 0:
+            return  # empty eval, skip entirely
+        if self._eval_start_time is None:
+            return  # shouldn't happen, but guard anyway
+        elapsed = time.perf_counter() - self._eval_start_time
+        if elapsed <= 0:
+            return
+        eval_batch_size = pyine.utils.transformers.training.get_effective_eval_batch_size(
+            args, include_world_size=self._config.only_main_process
+        )
+        samples = self._eval_prediction_steps * eval_batch_size
+        logs[f"{self._config.eval_prefix}samples_per_second"] = samples / elapsed
+
+    @typing.override
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Reset eval state after evaluation completes and resume train timing."""
+        # reset eval timing state (unconditionally, even if logging disabled)
+        self._eval_start_time = None
+        self._eval_prediction_steps = 0
+        # reset phase tracker
+        self._phase.handle_evaluate()
+        # resume train timing (reset both time AND step anchor to avoid inflated throughput)
+        self._train_last_log_time = time.perf_counter()
+        self._train_last_log_step = state.global_step
 
     @typing.override
     def on_save(
@@ -811,7 +967,31 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         **_: typing.Any,
     ) -> None:
         """Reset timing after checkpoint save to exclude I/O overhead from throughput."""
-        self._last_log_time = time.perf_counter()  # exclude checkpoint I/O from next interval
+        # reset both time AND step anchor to avoid inflated throughput
+        self._train_last_log_time = time.perf_counter()
+        self._train_last_log_step = state.global_step
+
+    @typing.override
+    def on_predict(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        metrics: dict[str, float],
+        **_: typing.Any,
+    ) -> None:
+        """Reset eval state after predict completes.
+
+        Trainer.predict() uses on_prediction_step but doesn't call on_evaluate, so we need
+        this hook to reset eval state and avoid misclassifying subsequent training logs.
+        """
+        self._eval_start_time = None
+        self._eval_prediction_steps = 0
+        self._phase.handle_evaluate()
+        # resume train timing if we were in a training run
+        if self._saw_train_begin:
+            self._train_last_log_time = time.perf_counter()
+            self._train_last_log_step = state.global_step
 
 
 class GPUStatsLoggingConfig(pydantic.BaseModel):
@@ -1034,10 +1214,8 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         """
         self._config = config if config is not None else GPUStatsLoggingConfig()
         self._collector: pyine.utils.gpu.GPUStatsCollector | None = None
-        # phase tracking (all flags must be rank-synchronous to avoid deadlocks)
-        self._in_eval: bool = False
-        self._eval_pending: bool = False
-        self._saw_eval_prediction_step: bool = False
+        # phase tracking via shared tracker (all flags must be rank-synchronous to avoid deadlocks)
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
         # tracks whether train phase metrics need flushing (for at_phase_end mode when should_log=False)
         self._train_phase_needs_flush: bool = False
         # stashed train peak percent (captured before peak reset when should_log=False)
@@ -1095,7 +1273,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         Args:
             should_log: Whether a train log will happen (from control.should_log).
         """
-        self._eval_pending = True
+        # note: _phase.handle_step_or_epoch_end() is called in on_step_end/on_epoch_end before this
         self._eval.reset()
         # mark that train phase metrics need flushing (for at_phase_end mode)
         if self._config.gather_train_metrics == "at_phase_end" and self._train.sample_count > 0:
@@ -1436,9 +1614,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 "in W&B/TensorBoard). Use gather_train_metrics='always' if you need metrics in W&B."
             )
         # reset state (all flags must be rank-synchronous to avoid deadlocks)
-        self._in_eval = False
-        self._eval_pending = False
-        self._saw_eval_prediction_step = False
+        self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
         self._train_phase_needs_flush = False
         self._stashed_train_peak_percent = None
         self._train.reset()
@@ -1465,7 +1641,8 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         if state.global_step % self._config.sample_every_n_steps == 0:
             self._sample_stats(eval_only=False)
         # handle eval transition (if DefaultFlowCallback set should_evaluate=True)
-        if control.should_evaluate:
+        transitioning = self._phase.handle_step_or_epoch_end(control)
+        if transitioning:
             self._handle_eval_transition(should_log=control.should_log)
 
     @typing.override
@@ -1484,7 +1661,8 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         if self._collector is None or not self._collector.is_enabled():
             return
         # handle eval transition (if DefaultFlowCallback set should_evaluate=True)
-        if control.should_evaluate:
+        transitioning = self._phase.handle_step_or_epoch_end(control)
+        if transitioning:
             self._handle_eval_transition(should_log=control.should_log)
 
     @typing.override
@@ -1498,9 +1676,11 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         """Sample stats during evaluation."""
         if self._collector is None or not self._collector.is_enabled():
             return
-        self._in_eval = True
+        self._phase.handle_prediction_step()
+        # note: we don't warn on unexpected here because GPUStatsLoggingCallback doesn't have
+        # sensitive prefix-switching like RewardLoggingCallback; unexpected could occur during
+        # predict-only runs or eval_on_start, which are valid use cases
         self._sample_stats(eval_only=True)
-        self._saw_eval_prediction_step = True
 
     @typing.override
     def on_evaluate(
@@ -1514,8 +1694,8 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
 
         Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
         The actual order inside evaluate() is:
-        1. on_prediction_step (multiple times during eval loop) - sets _in_eval=True
-        2. on_log (with eval metrics) - we detect this via _in_eval=True
+        1. on_prediction_step (multiple times during eval loop) - sets _phase.in_eval=True
+        2. on_log (with eval metrics) - we detect this via _phase.in_eval=True
         3. on_evaluate (this method) - cleanup
 
         This method is called AFTER the eval on_log, so eval metrics have already been
@@ -1532,11 +1712,9 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 )
             self._train.reset()
         # cleanup phase state on all ranks (must be rank-synchronous)
-        self._saw_eval_prediction_step = False
-        self._eval_pending = False
+        self._phase.handle_evaluate()
         self._train_phase_needs_flush = False  # either flushed above or by on_log
         self._stashed_train_peak_percent = None  # either used above or by on_log
-        self._in_eval = False  # should already be cleared by on_log, but ensure cleanup for robustness
         # reset peak stats so eval peaks don't contaminate next train interval
         self._reset_peak_stats()
 
@@ -1552,37 +1730,38 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         """Inject GPU metrics into logs dict.
 
         IMPORTANT: All ranks must execute this method and agree on the code path to avoid
-        deadlocks when gathering is enabled. We use _in_eval (set in on_prediction_step,
-        cleared here) to determine eval vs train context in a rank-synchronous way.
+        deadlocks when gathering is enabled. We use _phase.in_eval (set in on_prediction_step,
+        cleared in on_evaluate) to determine eval vs train context in a rank-synchronous way.
 
         Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
         - Train log: on_step_end -> on_log (train) -> [if should_evaluate]
           -> on_prediction_step -> on_log (eval) -> on_evaluate
-        - The _in_eval flag is True after on_prediction_step and before we clear it here
-        - The _eval_pending flag is True from on_step_end until on_evaluate clears it
+        - The _phase.in_eval flag is True after on_prediction_step until on_evaluate resets it
+        - The _phase.eval_pending flag is True from on_step_end until on_prediction_step clears it
         """
         if self._collector is None or not self._collector.is_enabled():
             return
-        # determine eval vs train context; prefer _in_eval flag but handle edge cases
-        is_eval_context = self._in_eval
-        if logs is not None and not self._in_eval:
+        # determine eval vs train context; prefer _phase.in_eval flag but handle edge cases
+        is_eval_context = self._phase.in_eval
+        if logs is not None and not self._phase.in_eval:
             looks_like_eval = any(key.startswith("eval_") or key.startswith("eval/") for key in logs)
             if looks_like_eval:
-                if self._eval_pending:
+                if self._phase.eval_pending:
                     # edge case: eval-like logs but on_prediction_step wasn't called (e.g., empty eval dataloader)
-                    # _eval_pending is rank-synchronous (set in on_step_end/on_epoch_end), so this is safe
+                    # _phase.eval_pending is rank-synchronous (set in on_step_end/on_epoch_end), so this is safe
                     is_eval_context = True
                     if self._should_log():
                         logger.info(
-                            "on_log received eval-like logs but _in_eval=False (on_prediction_step not called). "
-                            "Treating as eval context based on _eval_pending flag (likely empty eval dataloader)."
+                            "on_log received eval-like logs but _phase.in_eval=False (on_prediction_step not called). "
+                            "Treating as eval context based on _phase.eval_pending flag (likely empty eval dataloader)."
                         )
                 elif self._should_log():
-                    # unexpected: eval-like logs without _eval_pending; warn but treat as train
+                    # unexpected: eval-like logs without _phase.eval_pending; warn but treat as train
                     logger.warning(
-                        "on_log received eval-like logs (keys starting with 'eval_' or 'eval/') but _in_eval=False "
-                        "and _eval_pending=False. This may indicate HuggingFace Trainer callback ordering changed. "
-                        "GPU stats will be classified as train metrics. Please report this issue."
+                        "on_log received eval-like logs (keys starting with 'eval_' or 'eval/') but "
+                        "_phase.in_eval=False and _phase.eval_pending=False. This may indicate HuggingFace "
+                        "Trainer callback ordering changed. GPU stats will be classified as train metrics. "
+                        "Please report this issue."
                     )
         # use determined context for metric injection
         if is_eval_context:
@@ -1619,7 +1798,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 eval_metrics = self._gather_and_compute_eval_metrics()
             elif self._should_log():
                 # local only mode: only main rank needs to compute (others would just drop results)
-                eval_metrics = self._compute_eval_metrics() if self._saw_eval_prediction_step else {}
+                eval_metrics = self._compute_eval_metrics() if self._phase.saw_eval_samples else {}
             else:
                 eval_metrics = {}
             # only main rank injects into logs (if logs is valid)
@@ -1628,7 +1807,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                     logs[f"eval/gpu/{key}"] = value
             # all ranks reset accumulators to stay in sync
             self._eval.reset()
-            self._in_eval = False  # clear flag (rank-synchronous)
+            # note: _phase.in_eval is cleared by _phase.handle_evaluate() in on_evaluate
         else:
             # TRAIN LOG: compute/gather and inject train metrics
             # IMPORTANT: if gathering, ALL ranks must call gather to avoid deadlock
@@ -1637,7 +1816,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             # - "never": emit local metrics at every train log
             # - "at_phase_end": accumulate throughout phase, emit only at phase end (before eval)
             # - "always": gather and emit at every train log
-            is_phase_end = self._eval_pending
+            is_phase_end = self._phase.eval_pending
             at_phase_end_mode = self._config.gather_train_metrics == "at_phase_end"
             if at_phase_end_mode and not is_phase_end:
                 # "at_phase_end" mode but not at phase end: keep accumulating, don't emit

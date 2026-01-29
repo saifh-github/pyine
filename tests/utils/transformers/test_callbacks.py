@@ -471,7 +471,7 @@ class TestRewardLoggingCallback:
         args.eval_on_start = False
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
         callback.on_train_begin(args, state, control)
-        assert callback._in_eval is False
+        assert callback._phase.in_eval is False
         assert reward_manager.key_prefix == "train"
 
     def test_on_train_begin_initializes_eval_prefix_when_eval_on_start_true(
@@ -484,13 +484,36 @@ class TestRewardLoggingCallback:
         args.eval_on_start = True
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
         callback.on_train_begin(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         assert reward_manager.key_prefix == "eval"
         # should have flushed train stats (empty) before switching
         assert len(reward_manager.flush_calls) == 1
         assert reward_manager.flush_calls[0] == state.global_step
         # step should be cleared for eval
         assert reward_manager.step is None
+
+    def test_on_step_begin_resets_prefix_after_eval_on_start(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Test that on_step_begin resets prefix to train after eval_on_start completes."""
+        args.eval_on_start = True
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        # 1. on_train_begin with eval_on_start=True puts us in eval mode
+        callback.on_train_begin(args, state, control)
+        assert callback._phase.in_eval is True
+        assert reward_manager.key_prefix == "eval"
+        # 2. on_evaluate ends the eval phase
+        callback.on_evaluate(args, state, control)
+        assert callback._phase.in_eval is False
+        assert reward_manager.key_prefix == "train"
+        # 3. on_step_begin for first training step should stay in train mode
+        callback.on_step_begin(args, state, control)
+        assert callback._phase.in_eval is False
+        assert reward_manager.key_prefix == "train"
 
     def test_on_step_end_switches_to_eval_when_should_evaluate_true(
         self,
@@ -500,11 +523,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.key_prefix = "train"
         control.should_evaluate = True
         callback.on_step_end(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
+        assert callback._phase.saw_training is True  # handle_step_or_epoch_end was called
         assert reward_manager.key_prefix == "eval"
         assert len(reward_manager.flush_calls) == 1
         assert reward_manager.step is None
@@ -517,11 +540,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.key_prefix = "train"
         control.should_evaluate = False
         callback.on_step_end(args, state, control)
-        assert callback._in_eval is False
+        assert callback._phase.in_eval is False
+        assert callback._phase.saw_training is True  # handle_step_or_epoch_end was called
         assert reward_manager.key_prefix == "train"
         assert len(reward_manager.flush_calls) == 0
 
@@ -533,11 +556,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = True
+        callback._phase.mark_entering_eval()  # set phase tracker to in_eval
         reward_manager.key_prefix = "eval"
         control.should_evaluate = True
         callback.on_step_end(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         assert reward_manager.key_prefix == "eval"
         # no flush because already in eval
         assert len(reward_manager.flush_calls) == 0
@@ -550,11 +573,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.key_prefix = "train"
         control.should_evaluate = True
         callback.on_epoch_end(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
+        assert callback._phase.saw_training is True  # handle_step_or_epoch_end was called
         assert reward_manager.key_prefix == "eval"
         assert len(reward_manager.flush_calls) == 1
         assert reward_manager.step is None
@@ -567,11 +590,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.key_prefix = "train"
         control.should_evaluate = False
         callback.on_epoch_end(args, state, control)
-        assert callback._in_eval is False
+        assert callback._phase.in_eval is False
+        assert callback._phase.saw_training is True  # handle_step_or_epoch_end was called
         assert reward_manager.key_prefix == "train"
         assert len(reward_manager.flush_calls) == 0
 
@@ -580,11 +603,10 @@ class TestRewardLoggingCallback:
         reward_manager: _FakeRewardManager,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.step = 100
         callback._switch_to_eval(step=100)
         assert reward_manager.step is None
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         assert reward_manager.key_prefix == "eval"
 
     def test_on_prediction_step_sets_prefix_without_flush(
@@ -595,13 +617,14 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = False
         reward_manager.key_prefix = "train"
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
-        assert reward_manager.key_prefix == "eval"
+        assert callback._phase.in_eval is True
+        assert callback._phase.saw_eval_samples is True
         # should NOT have flushed (on_prediction_step is too late)
         assert len(reward_manager.flush_calls) == 0
+        # prefix should be set to eval since this is first prediction step
+        assert reward_manager.key_prefix == "eval"
         assert reward_manager.step is None
 
     def test_on_prediction_step_only_clears_step_if_already_in_eval(
@@ -612,11 +635,11 @@ class TestRewardLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = True
+        callback._phase.mark_entering_eval()  # set phase tracker (simulates _switch_to_eval)
         reward_manager.key_prefix = "eval"
         reward_manager.step = 50
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         assert reward_manager.key_prefix == "eval"
         assert len(reward_manager.flush_calls) == 0
         assert reward_manager.step is None
@@ -631,14 +654,13 @@ class TestRewardLoggingCallback:
         """Test that on_evaluate skips flush if eval had zero samples (no prediction steps)."""
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
         # simulate: on_step_end switched to eval, but no prediction_step was called (zero samples)
-        callback._in_eval = True
-        callback._saw_eval_prediction_step = False
+        callback._phase.mark_entering_eval()  # sets in_eval=True but saw_eval_samples=False
         reward_manager.key_prefix = "eval"
         callback.on_evaluate(args, state, control)
         # should NOT have flushed (no eval samples processed)
         assert len(reward_manager.flush_calls) == 0
         # should have reset to train mode
-        assert callback._in_eval is False
+        assert callback._phase.in_eval is False
         assert reward_manager.key_prefix == "train"
 
     def test_on_evaluate_flushes_if_prediction_steps_occurred(
@@ -650,17 +672,16 @@ class TestRewardLoggingCallback:
     ) -> None:
         """Test that on_evaluate flushes if prediction steps occurred during eval."""
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = True
-        callback._saw_eval_prediction_step = True
+        callback._phase.handle_prediction_step()  # sets saw_eval_samples=True
         reward_manager.key_prefix = "eval"
         callback.on_evaluate(args, state, control)
         # should have flushed
         assert len(reward_manager.flush_calls) == 1
         assert reward_manager.flush_calls[0] == state.global_step
         # should have reset flag
-        assert callback._saw_eval_prediction_step is False
+        assert callback._phase.saw_eval_samples is False
         # should have reset to train mode
-        assert callback._in_eval is False
+        assert callback._phase.in_eval is False
         assert reward_manager.key_prefix == "train"
 
     def test_on_prediction_step_sets_saw_eval_prediction_step_flag(
@@ -670,12 +691,38 @@ class TestRewardLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
     ) -> None:
-        """Test that on_prediction_step sets _saw_eval_prediction_step flag."""
+        """Test that on_prediction_step sets saw_eval_samples flag."""
         callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
-        callback._in_eval = True
-        callback._saw_eval_prediction_step = False
+        assert callback._phase.saw_eval_samples is False
         callback.on_prediction_step(args, state, control)
-        assert callback._saw_eval_prediction_step is True
+        assert callback._phase.saw_eval_samples is True
+
+    def test_unexpected_eval_switches_prefix_and_warns(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Test unexpected eval (no should_evaluate=True) still switches prefix and logs warning."""
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        reward_manager.key_prefix = "train"
+        # simulate training step (sets saw_training=True) without should_evaluate
+        control.should_evaluate = False
+        callback.on_step_end(args, state, control)
+        assert callback._phase.saw_training is True
+        assert callback._phase.in_eval is False
+        # now call prediction_step without going through normal eval flow
+        # this simulates HF Trainer behavior change or external eval trigger
+        warn_mock = mocker.patch.object(callbacks_module.logger, "warning")
+        callback.on_prediction_step(args, state, control)
+        # should have switched prefix to eval
+        assert reward_manager.key_prefix == "eval"
+        assert callback._phase.in_eval is True
+        # should have logged a warning about unexpected eval
+        warn_mock.assert_called_once()
+        assert "without prior should_evaluate=True" in warn_mock.call_args[0][0]
 
 
 class TestThroughputLoggingCallback:
@@ -686,6 +733,7 @@ class TestThroughputLoggingCallback:
     ) -> pytest_mock.MockFixture:
         return mocker.MagicMock(
             per_device_train_batch_size=4,
+            per_device_eval_batch_size=8,
             world_size=2,
             gradient_accumulation_steps=2,
         )
@@ -702,14 +750,15 @@ class TestThroughputLoggingCallback:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> pytest_mock.MockFixture:
-        return mocker.MagicMock()
+        return mocker.MagicMock(should_evaluate=False)
 
     def test_should_log_main_process(
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
-        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
         assert callback._should_log() is True
 
     def test_should_log_worker_process(
@@ -717,7 +766,8 @@ class TestThroughputLoggingCallback:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
-        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
         assert callback._should_log() is False
 
     def test_should_log_all_processes(
@@ -725,25 +775,9 @@ class TestThroughputLoggingCallback:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
-        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=False)
+        config = callbacks_module.ThroughputLoggingConfig(only_main_process=False)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
         assert callback._should_log() is True
-
-    def test_effective_batch_size(
-        self,
-        args: pytest_mock.MockFixture,
-    ) -> None:
-        callback = callbacks_module.ThroughputLoggingCallback()
-        # 4 * 2 * 2 = 16
-        assert callback._get_effective_batch_size(args) == 16
-
-    def test_effective_batch_size_missing_attrs(
-        self,
-        mocker: pytest_mock.MockerFixture,
-    ) -> None:
-        callback = callbacks_module.ThroughputLoggingCallback()
-        args = mocker.MagicMock(spec=[])  # no attributes
-        # defaults to 1 * 1 * 1 = 1
-        assert callback._get_effective_batch_size(args) == 1
 
     def test_on_train_begin_initializes_state(
         self,
@@ -752,18 +786,18 @@ class TestThroughputLoggingCallback:
         control: pytest_mock.MockFixture,
     ) -> None:
         callback = callbacks_module.ThroughputLoggingCallback()
-        assert callback._last_log_time is None
+        assert callback._train_last_log_time is None
         callback.on_train_begin(args, state, control)
-        assert callback._last_log_time is not None
-        assert callback._last_log_step == 0
+        assert callback._train_last_log_time is not None
+        assert callback._train_last_log_step == 0
+        assert callback._saw_train_begin is True
 
-    def test_on_log_calculates_throughput(
+    def test_on_log_calculates_train_throughput(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        # patch perf_counter to return fixed values: 100.0 at train_begin, 102.0 at on_log
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 102.0]  # 2 seconds elapsed
         callback = callbacks_module.ThroughputLoggingCallback()
@@ -774,8 +808,8 @@ class TestThroughputLoggingCallback:
         callback.on_log(args, state, control, logs=logs)
         # effective batch size = 4 * 2 * 2 = 16
         # samples = 10 * 16 = 160, elapsed = 2 seconds
-        assert logs["throughput/samples_per_second"] == 80.0  # 160 / 2
-        assert logs["throughput/steps_per_second"] == 5.0  # 10 / 2
+        assert logs["train/throughput/samples_per_second"] == 80.0  # 160 / 2
+        assert logs["train/throughput/steps_per_second"] == 5.0  # 10 / 2
 
     def test_on_log_skips_on_worker_process(
         self,
@@ -784,12 +818,13 @@ class TestThroughputLoggingCallback:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
-        callback = callbacks_module.ThroughputLoggingCallback(only_main_process=True)
+        config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
         state = mocker.MagicMock(global_step=10)
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "throughput/samples_per_second" not in logs
-        assert "throughput/steps_per_second" not in logs
+        assert "train/throughput/samples_per_second" not in logs
+        assert "train/throughput/steps_per_second" not in logs
 
     def test_on_log_handles_zero_elapsed(
         self,
@@ -797,17 +832,15 @@ class TestThroughputLoggingCallback:
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        # patch perf_counter to return same value (elapsed == 0)
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.return_value = 100.0
         callback = callbacks_module.ThroughputLoggingCallback()
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
-        state.global_step = 10  # steps advanced but time didn't
+        state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        # should skip logging due to zero elapsed time (avoids division by zero)
-        assert "throughput/samples_per_second" not in logs
+        assert "train/throughput/samples_per_second" not in logs
 
     def test_on_log_handles_zero_steps(
         self,
@@ -815,16 +848,14 @@ class TestThroughputLoggingCallback:
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        # patch perf_counter: time advances but steps don't
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
         callback = callbacks_module.ThroughputLoggingCallback()
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
-        # global_step hasn't changed (steps_delta = 0)
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "throughput/samples_per_second" not in logs
+        assert "train/throughput/samples_per_second" not in logs
 
     def test_custom_prefix(
         self,
@@ -833,8 +864,9 @@ class TestThroughputLoggingCallback:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
-        mock_time.side_effect = [100.0, 101.0]  # 1 second elapsed
-        callback = callbacks_module.ThroughputLoggingCallback(prefix="train/speed/")
+        mock_time.side_effect = [100.0, 101.0]
+        config = callbacks_module.ThroughputLoggingConfig(train_prefix="train/speed/")
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         state.global_step = 5
@@ -842,7 +874,6 @@ class TestThroughputLoggingCallback:
         callback.on_log(args, state, control, logs=logs)
         assert "train/speed/samples_per_second" in logs
         assert "train/speed/steps_per_second" in logs
-        # 5 steps * 16 batch size / 1 second = 80 samples/sec
         assert logs["train/speed/samples_per_second"] == 80.0
         assert logs["train/speed/steps_per_second"] == 5.0
 
@@ -853,18 +884,15 @@ class TestThroughputLoggingCallback:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
-        mock_time.side_effect = [100.0, 105.0, 106.0]  # train_begin, on_save, on_log
+        mock_time.side_effect = [100.0, 105.0, 106.0]
         callback = callbacks_module.ThroughputLoggingCallback()
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
-        # checkpoint happens at t=105 (5 sec of I/O)
         callback.on_save(args, state, control)
-        # on_log happens at t=106, but timer was reset at t=105
         state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        # elapsed = 106 - 105 = 1 second (not 6 seconds)
-        assert logs["throughput/steps_per_second"] == 10.0
+        assert logs["train/throughput/steps_per_second"] == 10.0
 
     def test_resume_training_with_nonzero_step(
         self,
@@ -872,21 +900,361 @@ class TestThroughputLoggingCallback:
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Test that resuming training (global_step > 0) works correctly."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
         callback = callbacks_module.ThroughputLoggingCallback()
-        state = mocker.MagicMock(global_step=500)  # resumed from step 500
+        state = mocker.MagicMock(global_step=500)
         callback.on_train_begin(args, state, control)
-        assert callback._last_log_step == 500
-        state.global_step = 510  # 10 more steps
+        assert callback._train_last_log_step == 500
+        state.global_step = 510
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert logs["throughput/steps_per_second"] == 10.0
+        assert logs["train/throughput/steps_per_second"] == 10.0
 
     def test_callback_inheritance(self) -> None:
         callback = callbacks_module.ThroughputLoggingCallback()
         assert isinstance(callback, transformers.TrainerCallback)
+
+    def test_eval_throughput_from_prediction_steps(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies eval throughput is calculated from prediction steps."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        # trace: train_begin(100), step_end(101 sets eval timer), on_log(102 computes elapsed)
+        # note: prediction steps don't call perf_counter since timer already set
+        mock_time.side_effect = [100.0, 101.0, 102.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        # transition to eval
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)
+        # two prediction steps (no perf_counter calls since timer already set)
+        callback.on_prediction_step(args, state, control)
+        callback.on_prediction_step(args, state, control)
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}  # eval-like logs
+        callback.on_log(args, state, control, logs=logs)
+        # eval batch size = 8 * 2 = 16, 2 prediction steps, elapsed = 102 - 101 = 1 second
+        expected_samples = 2 * 16
+        expected_throughput = expected_samples / 1.0
+        assert "eval/throughput/samples_per_second" in logs
+        assert logs["eval/throughput/samples_per_second"] == pytest.approx(expected_throughput)
+
+    def test_eval_timing_starts_at_step_end(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies timer starts in on_step_end, not on_prediction_step."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        # trace: train_begin(100), step_end(101 sets eval timer), on_log(103 computes elapsed)
+        # note: prediction step doesn't call perf_counter since timer already set
+        mock_time.side_effect = [100.0, 101.0, 103.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        # transition to eval
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)
+        assert callback._eval_start_time == 101.0  # timer started at step_end
+        callback.on_prediction_step(args, state, control)
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}
+        callback.on_log(args, state, control, logs=logs)
+        # elapsed = 103 - 101 = 2 seconds (includes first batch)
+        expected_samples = 1 * 8 * 2  # 1 step * eval batch size
+        assert logs["eval/throughput/samples_per_second"] == expected_samples / 2.0
+
+    def test_log_train_disabled(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies train throughput not logged when disabled."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]
+        config = callbacks_module.ThroughputLoggingConfig(log_train_throughput=False)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        state.global_step = 10
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        assert "train/throughput/samples_per_second" not in logs
+        assert "train/throughput/steps_per_second" not in logs
+
+    def test_log_eval_disabled_still_resets_state(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies state reset even when eval logging disabled."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0, 104.0]
+        config = callbacks_module.ThroughputLoggingConfig(log_eval_throughput=False)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)
+        callback.on_prediction_step(args, state, control)
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}
+        callback.on_log(args, state, control, logs=logs)
+        assert "eval/throughput/samples_per_second" not in logs
+        # on_evaluate should reset state
+        callback.on_evaluate(args, state, control)
+        assert callback._eval_start_time is None
+        assert callback._eval_prediction_steps == 0
+
+    def test_empty_eval_skips_throughput(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies no metrics when _eval_prediction_steps == 0."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)
+        # no prediction steps
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}
+        callback.on_log(args, state, control, logs=logs)
+        assert "eval/throughput/samples_per_second" not in logs
+
+    def test_unexpected_eval_logs_warning(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies warning when unexpected eval detected."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
+        mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        # complete a training step (sets saw_training=True)
+        control.should_evaluate = False
+        callback.on_step_end(args, state, control)
+        # unexpected prediction step without should_evaluate
+        callback.on_prediction_step(args, state, control)
+        mock_logger.warning.assert_called_once()
+        assert "Unexpected eval phase" in str(mock_logger.warning.call_args)
+
+    def test_predict_only_skips_eval_throughput(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies no eval throughput when training never happened (predict-only)."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        # no on_train_begin, directly to prediction
+        callback.on_prediction_step(args, state, control)
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}
+        callback.on_log(args, state, control, logs=logs)
+        # _saw_train_begin is False, so eval throughput should be skipped
+        assert "eval/throughput/samples_per_second" not in logs
+
+    def test_eval_on_start_no_warning(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies no warning during eval_on_start flow."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
+        mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        # eval_on_start: prediction step without on_step_end first
+        callback.on_prediction_step(args, state, control)
+        # no warning because no training step has completed yet
+        mock_logger.warning.assert_not_called()
+
+    def test_eval_on_start_emits_metrics(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies eval throughput is logged during eval_on_start."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0]  # train_begin, pred, on_log
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        callback.on_prediction_step(args, state, control)
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3}
+        callback.on_log(args, state, control, logs=logs)
+        # timer started in on_prediction_step (fallback), elapsed = 102 - 101 = 1 second
+        expected_samples = 1 * 8 * 2
+        assert "eval/throughput/samples_per_second" in logs
+        assert logs["eval/throughput/samples_per_second"] == expected_samples / 1.0
+
+    def test_train_throughput_after_eval_not_inflated(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies train throughput isn't inflated when eval occurs between logs.
+
+        Without the step anchor reset, throughput would be inflated because:
+        - Steps are counted from before eval (e.g., step 5 to step 15 = 10 steps)
+        - But time is only from after eval (1 second instead of 3 seconds)
+        """
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        # trace: train_begin(100), step_end(101), on_eval(102), on_log(103)
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        # train 5 steps, then eval
+        state.global_step = 5
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)
+        callback.on_evaluate(args, state, control)
+        # train 5 more steps, then log
+        state.global_step = 10
+        control.should_evaluate = False
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # with fix: step anchor reset to 5 after eval, so steps = 10 - 5 = 5, time = 1 sec
+        # effective batch size = 4 * 2 * 2 = 16, samples = 5 * 16 = 80
+        assert logs["train/throughput/samples_per_second"] == 80.0  # 80 samples / 1 sec
+        assert logs["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
+
+    def test_train_throughput_after_save_not_inflated(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies train throughput isn't inflated when save occurs between logs."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        # trace: train_begin(100), on_save(101), on_log(102)
+        mock_time.side_effect = [100.0, 101.0, 102.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        callback.on_train_begin(args, state, control)
+        # train 5 steps, then save
+        state.global_step = 5
+        callback.on_save(args, state, control)
+        # train 5 more steps, then log
+        state.global_step = 10
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # with fix: step anchor reset to 5 after save, so steps = 10 - 5 = 5, time = 1 sec
+        assert logs["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
+
+    def test_callback_reuse_resets_state(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies callback state is properly reset when reused across training runs."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 200.0, 201.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=0)
+        # first training run
+        callback.on_train_begin(args, state, control)
+        control.should_evaluate = False
+        callback.on_step_end(args, state, control)  # sets saw_training
+        assert callback._phase.saw_training is True
+        # simulate eval leaving stale state
+        callback._eval_start_time = 999.0
+        callback._eval_prediction_steps = 99
+        # second training run (reuse callback)
+        state.global_step = 0
+        callback.on_train_begin(args, state, control)
+        # state should be reset
+        assert callback._phase.saw_training is False
+        assert callback._eval_start_time is None
+        assert callback._eval_prediction_steps == 0
+        assert callback._train_last_log_step == 0
+
+    def test_on_predict_resets_eval_state(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies on_predict resets eval state to avoid misclassifying subsequent train logs."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        # simulate predict flow: prediction steps but no on_evaluate
+        callback.on_prediction_step(args, state, control)
+        assert callback._phase.in_eval is True
+        assert callback._eval_prediction_steps == 1
+        # on_predict should reset state
+        callback.on_predict(args, state, control, metrics={})
+        assert callback._phase.in_eval is False
+        assert callback._eval_start_time is None
+        assert callback._eval_prediction_steps == 0
+
+    def test_predict_mid_training_doesnt_break_train_logs(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies that Trainer.predict() mid-training doesn't misclassify subsequent train logs."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=5)
+        callback.on_train_begin(args, state, control)
+        # simulate predict flow mid-training
+        callback.on_prediction_step(args, state, control)
+        callback.on_predict(args, state, control, metrics={})
+        # subsequent training logs should work correctly
+        state.global_step = 10
+        logs: dict[str, float] = {}
+        callback.on_log(args, state, control, logs=logs)
+        # should have train throughput (not misclassified as eval)
+        assert "train/throughput/steps_per_second" in logs
+        assert "eval/throughput/samples_per_second" not in logs
+
+    def test_eval_like_logs_without_context_warns(
+        self,
+        args: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Verifies warning when eval-like logs appear without proper eval context."""
+        mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
+        mock_time.side_effect = [100.0, 101.0]
+        mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
+        callback = callbacks_module.ThroughputLoggingCallback()
+        state = mocker.MagicMock(global_step=10)
+        callback.on_train_begin(args, state, control)
+        # send eval-like logs without being in eval context
+        logs: dict[str, typing.Any] = {"eval_loss": 0.3, "eval_accuracy": 0.9}
+        callback.on_log(args, state, control, logs=logs)
+        # should warn about misclassification
+        mock_logger.warning.assert_called_once()
+        assert "eval-like logs" in str(mock_logger.warning.call_args)
 
 
 class _FakeGPUStatsCollector:
@@ -1025,9 +1393,9 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         callback.on_train_begin(args, state, control)
-        assert callback._in_eval is False
-        assert callback._eval_pending is False
-        assert callback._saw_eval_prediction_step is False
+        assert callback._phase.in_eval is False
+        assert callback._phase.eval_pending is False
+        assert callback._phase.saw_eval_samples is False
         assert callback._train.sample_count == 0
         assert callback._eval.sample_count == 0
 
@@ -1090,7 +1458,7 @@ class TestGPUStatsLoggingCallback:
         control.should_evaluate = True
         control.should_log = False
         callback.on_step_end(args, state, control)
-        assert callback._eval_pending is True
+        assert callback._phase.eval_pending is True
         assert callback._eval.sample_count == 0  # phase reset
 
     def test_on_prediction_step_marks_in_eval(
@@ -1107,8 +1475,8 @@ class TestGPUStatsLoggingCallback:
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         callback.on_train_begin(args, state, control)
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
-        assert callback._saw_eval_prediction_step is True
+        assert callback._phase.in_eval is True
+        assert callback._phase.saw_eval_samples is True
         assert callback._eval.sample_count == 1
         assert callback._train.sample_count == 0  # eval_only=True
 
@@ -1149,12 +1517,12 @@ class TestGPUStatsLoggingCallback:
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        """Test eval metrics are injected directly in on_log when _in_eval is True.
+        """Test eval metrics are injected directly in on_log when _phase.in_eval is True.
 
         Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
         The actual order inside evaluate() is:
-        1. on_prediction_step (multiple times) - sets _in_eval=True
-        2. on_log (with eval metrics) - we detect via _in_eval=True, inject eval metrics
+        1. on_prediction_step (multiple times) - sets _phase.in_eval=True
+        2. on_log (with eval metrics) - we detect via _phase.in_eval=True, inject eval metrics
         3. on_evaluate - cleanup
 
         So on_log with eval content comes BEFORE on_evaluate.
@@ -1171,19 +1539,19 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         callback.on_train_begin(args, state, control)
-        # simulate eval: on_prediction_step sets _in_eval=True
+        # simulate eval: on_prediction_step sets _phase.in_eval=True
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
-        assert callback._saw_eval_prediction_step is True
-        # now on_log (with eval content) should inject eval metrics and clear _in_eval
+        assert callback._phase.in_eval is True
+        assert callback._phase.saw_eval_samples is True
+        # now on_log (with eval content) should inject eval metrics
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
         assert "eval/gpu/utilization_gpu_percent/mean" in logs
-        assert callback._in_eval is False  # cleared by on_log
         # then on_evaluate comes after and cleans up the rest
         callback.on_evaluate(args, state, control)
-        assert callback._saw_eval_prediction_step is False
-        assert callback._eval_pending is False
+        assert callback._phase.saw_eval_samples is False
+        assert callback._phase.eval_pending is False
+        assert callback._phase.in_eval is False
 
     def test_on_log_does_not_inject_train_metrics_on_eval_log(
         self,
@@ -1197,10 +1565,10 @@ class TestGPUStatsLoggingCallback:
 
         Note on HuggingFace Trainer callback ordering (verified in transformers 4.46+):
         - on_step_end (samples train stats)
-        - on_prediction_step (sets _in_eval=True)
+        - on_prediction_step (sets _phase.in_eval=True)
         - on_log (with eval content) - should use eval branch, not train
 
-        We use _in_eval (set in on_prediction_step) to detect eval context.
+        We use _phase.in_eval (set in on_prediction_step) to detect eval context.
         """
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
@@ -1216,9 +1584,9 @@ class TestGPUStatsLoggingCallback:
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
-        # on_prediction_step sets _in_eval=True (correct HF order)
+        # on_prediction_step sets _phase.in_eval=True (correct HF order)
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         # on_log with eval content - should NOT inject train metrics (uses eval branch)
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
@@ -1261,12 +1629,14 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         callback.on_train_begin(args, state, control)
-        # set flags that on_evaluate should clean up
-        callback._eval_pending = True
-        callback._saw_eval_prediction_step = True
+        # set flags that on_evaluate should clean up by simulating prediction steps
+        control.should_evaluate = True
+        callback.on_step_end(args, state, control)  # sets eval_pending
+        callback.on_prediction_step(args, state, control)  # sets in_eval and saw_eval_samples
         callback.on_evaluate(args, state, control)
-        assert callback._saw_eval_prediction_step is False
-        assert callback._eval_pending is False
+        assert callback._phase.saw_eval_samples is False
+        assert callback._phase.eval_pending is False
+        assert callback._phase.in_eval is False
         # verify peak stats were reset
         assert len(fake_collector._peak_reset_calls) > 0
 
@@ -1362,7 +1732,8 @@ class TestGPUStatsLoggingCallback:
         callback = callbacks_module.GPUStatsLoggingCallback(config=config)
         callback.on_train_begin(args, state, control)
         initial_reset_count = len(fake_collector._peak_reset_calls)
-        callback._saw_eval_prediction_step = True
+        # simulate eval phase with prediction steps
+        callback.on_prediction_step(args, state, control)
         callback.on_evaluate(args, state, control)
         # should have called reset_pytorch_peak_stats
         assert len(fake_collector._peak_reset_calls) > initial_reset_count
@@ -1541,13 +1912,13 @@ class TestGPUStatsLoggingCallback:
         control.should_log = False  # key: no train log will happen!
         callback.on_step_end(args, state, control)
         # verify state after on_step_end
-        assert callback._eval_pending is True
+        assert callback._phase.eval_pending is True
         assert callback._train_phase_needs_flush is True
         assert callback._stashed_train_peak_percent is not None  # peak was captured
         stashed_peak = callback._stashed_train_peak_percent
         # now eval runs
         callback.on_prediction_step(args, state, control)
-        assert callback._in_eval is True
+        assert callback._phase.in_eval is True
         # eval on_log: should emit BOTH train metrics (delayed) and eval metrics
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
@@ -1564,5 +1935,5 @@ class TestGPUStatsLoggingCallback:
         # verify eval metrics were also injected
         eval_keys = [k for k in logs if k.startswith("eval/gpu/")]
         assert len(eval_keys) > 0, "expected eval/gpu/ metrics"
-        # verify _in_eval was cleared
-        assert callback._in_eval is False
+        # note: _phase.in_eval is cleared by handle_evaluate() in on_evaluate
+        # at this point, on_log has completed but on_evaluate hasn't been called yet
