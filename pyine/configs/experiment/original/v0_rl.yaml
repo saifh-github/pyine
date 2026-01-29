@@ -16,7 +16,6 @@ defaults:
 runtime:
   exp_name: original/v0_rl
   run_name: "${runtime.exp_name}"
-  # run_name not specified, will use YMD_HMS timestamp
   # run_group not specified, can be added online later
   # notes not specified, can be added online later
   tags:
@@ -245,12 +244,12 @@ config:
       normalization_mode: log
       num_difficulty_bins: 10
 
-    # Logging configuration (disabled by default, can be enabled for debugging)
+    # Logging configuration for reward metrics
     logging:
       enabled: true
       log_total: true
       log_terms: true
-      log_batch_stats: false
+      log_batch_stats: false  # disable per-batch stats (reduces metric clutter)
       log_metrics: true
       log_tables: true
       log_every_n_generations: 30  # log sample metrics (scalars + table rows) every 30 generations
