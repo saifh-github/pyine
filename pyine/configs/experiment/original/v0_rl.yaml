@@ -32,6 +32,16 @@ config:
   use_wandb_logging: true
   base_model: Qwen/Qwen3-4B-Instruct-2507
 
+  # GPU stats logging (tracks utilization, memory, power, temperature)
+  gpu_stats_logging:  # set to null to disable
+    require_nvml: false  # falls back to PyTorch-only stats if nvidia-ml-py unavailable
+    sample_every_n_steps: 1  # cheap (~1-3ms), no GPU sync
+    gather_train_metrics: "at_phase_end"  # "never", "at_phase_end", or "always"
+    gather_eval_metrics: true
+
+  # throughput logging (tracks samples/sec and steps/sec for train and eval)
+  throughput_logging: {}  # set to null to disable
+
   # Model settings (same as SFT v0)
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
