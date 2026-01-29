@@ -967,11 +967,11 @@ def get_taco_configs(
 
     # emit warnings for missing datasets (users should not be trying to launch experiments with these)
     if taco_latest_path is None:
-        warnings.warn(
+        # this is a demo/debug dataset, so instead of an actual warning, let's use a debug log
+        logger.debug(
             "no TACO base dataset found, skipping TACO configs; "
             "if you intended to use TACO dataset demos/tests, please ensure that a dataset is present "
             "in the expected location (see the top-level README for more details)",
-            stacklevel=2,
         )
     if taco_split_path is None:
         warnings.warn(
