@@ -237,6 +237,14 @@ config:
       emit_metrics: true
       skip_negative_rewards: true
 
+    # Difficulty estimation configuration (analyzes reward vs task complexity)
+    difficulty:
+      enabled: true
+      primary_source: trace_step_count  # reasoning depth (number of trace steps)
+      secondary_sources: [halstead_effort]  # computational burden proxy
+      normalization_mode: log
+      num_difficulty_bins: 10
+
     # Logging configuration (disabled by default, can be enabled for debugging)
     logging:
       enabled: true

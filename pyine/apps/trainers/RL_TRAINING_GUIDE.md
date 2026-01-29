@@ -782,6 +782,39 @@ config:
 - Eval throughput is only logged during training runs (standalone `trainer.evaluate()` calls are not tracked)
 - By default, only rank 0 logs metrics using global batch size
 
+### Difficulty Logging
+
+Enable task difficulty estimation to analyze how model performance scales with problem complexity:
+
+```yaml
+config:
+  reward_manager_config:
+    difficulty:
+      enabled: true
+      primary_source: trace_step_count  # reasoning depth proxy
+      secondary_sources: [halstead_effort]  # computational burden proxy
+      normalization_mode: log  # log1p transform for unbounded metrics
+      num_difficulty_bins: 10
+```
+
+**Difficulty axes**:
+
+- **Reasoning depth**: Captured by `trace_step_count` (number of sequential trace steps)
+- **Computational burden**: Approximated by `halstead_effort` (code complexity metric)
+
+**Logged metrics** (when enabled):
+
+- `difficulty/score`: Normalized difficulty score per sample
+- `difficulty/bin`: Bin index (0 to num_bins-1)
+- `difficulty/reward_by_bin/*`: Per-bin reward statistics (mean, count)
+- Raw values for primary and secondary sources
+
+**Notes**:
+
+- Set `enabled: false` or omit `difficulty` entirely to disable
+- For samples with code overrides, set `code_override_mode` to control handling (default: `skip`)
+- Use `track_percentiles`, `track_bin_quantiles`, or `table_mode` for deeper analysis (memory overhead)
+
 ### Prompt Templates
 
 Available in `pyine/prompts/configs/code_execution.yaml`:
