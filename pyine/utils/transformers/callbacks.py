@@ -870,6 +870,8 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         if not self._should_log():
             return
         if logs is None:
+            logs = kwargs.get("logs")
+        if not isinstance(logs, dict):
             return
         # determine context and inject appropriate metrics
         if self._phase.is_eval_context(logs):
@@ -1741,6 +1743,8 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         """
         if self._collector is None or not self._collector.is_enabled():
             return
+        if logs is None:
+            logs = kwargs.get("logs")
         # determine eval vs train context; prefer _phase.in_eval flag but handle edge cases
         is_eval_context = self._phase.in_eval
         if logs is not None and not self._phase.in_eval:
