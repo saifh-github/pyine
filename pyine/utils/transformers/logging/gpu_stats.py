@@ -10,7 +10,7 @@ class GPUStatsLogger:
 
     def __init__(
         self,
-        wandb_run: typing.Any,
+        wandb_run: typing.Any | None,
         config: typing.Any,
     ) -> None:
         """Initialize GPU stats logger.
@@ -23,6 +23,7 @@ class GPUStatsLogger:
         self._config = config
         self._step_metric_key = logging_common.DEFAULT_STEP_METRIC_KEY
         self._metrics_defined = False
+        self._enabled = wandb_run is not None
 
     def log_train_stats(
         self,
@@ -35,6 +36,8 @@ class GPUStatsLogger:
             step: Current global step (for x-axis)
             **metrics: GPU stats to log (e.g., utilization_gpu_percent, pytorch_peak_percent)
         """
+        if not self._enabled:
+            return
         if not self._metrics_defined:
             self._define_metrics()
         payload = {}
@@ -54,6 +57,8 @@ class GPUStatsLogger:
             step: Current global step (for x-axis)
             **metrics: GPU stats to log
         """
+        if not self._enabled:
+            return
         if not self._metrics_defined:
             self._define_metrics()
         payload = {}
@@ -68,6 +73,8 @@ class GPUStatsLogger:
         Deferred until first log to ensure it runs AFTER HuggingFace's WandbCallback
         calls wandb.define_metric("*", step_metric="train/global_step").
         """
+        if not self._enabled:
+            return
         for prefix in [self._config.train_prefix, self._config.eval_prefix]:
             logging_common.deferred_define_metric(
                 self._wandb_run,

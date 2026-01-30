@@ -1268,13 +1268,13 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
     def __init__(
         self,
         config: GPUStatsLoggingConfig,
-        wandb_run: typing.Any,
+        wandb_run: typing.Any | None,
     ) -> None:
         """Initialize the callback.
 
         Args:
             config: Configuration for the callback.
-            wandb_run: The wandb run object for direct logging.
+            wandb_run: The wandb run object for direct logging (optional on non-main ranks).
         """
         self._config = config
         self._logger = pyine.utils.transformers.logging.GPUStatsLogger(wandb_run, config)
