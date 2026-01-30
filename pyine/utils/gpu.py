@@ -136,13 +136,36 @@ def _get_nvml_handle_for_torch_device(
         if pci_bus_id is None:
             logger.warning(f"torch device {torch_device_index} has no pci_bus_id attribute")
             return None
-        # try direct lookup first (most efficient)
+        # try direct lookup first (most efficient) when pci_bus_id is str/bytes
         # note: nvidia-ml-py>=12.0.0 handles str/bytes conversion internally
-        try:
-            return _pynvml.nvmlDeviceGetHandleByPciBusId(pci_bus_id)
-        except _pynvml.NVMLError:
-            pass
+        if isinstance(pci_bus_id, (str, bytes)):
+            try:
+                return _pynvml.nvmlDeviceGetHandleByPciBusId(pci_bus_id)
+            except _pynvml.NVMLError:
+                pass
+        else:
+            logger.warning(
+                f"torch device {torch_device_index} has unexpected pci_bus_id type "
+                f"{type(pci_bus_id)}; falling back to NVML PCI matching"
+            )
+        # optional UUID-based lookup before fallback PCI matching
+        cuda_uuid = getattr(props, "uuid", None)
+        if cuda_uuid is not None:
+            cuda_uuid_str = str(cuda_uuid)
+            with contextlib.suppress(_pynvml.NVMLError):
+                return _pynvml.nvmlDeviceGetHandleByUUID(cuda_uuid_str)
         # fallback: iterate NVML devices and match by PCI info (handles format differences)
+        pci_domain_id = getattr(props, "pci_domain_id", None)
+        pci_device_id = getattr(props, "pci_device_id", None)
+        pci_bus_id_int = pci_bus_id if isinstance(pci_bus_id, int) else None
+        target_pci_tuple: tuple[int, int, int, int] | None = None
+        if (
+            pci_domain_id is not None
+            and pci_bus_id_int is not None
+            and pci_device_id is not None
+            and all(isinstance(value, int) for value in [pci_domain_id, pci_bus_id_int, pci_device_id])
+        ):
+            target_pci_tuple = (pci_domain_id, pci_bus_id_int, pci_device_id, 0)
         device_count = _pynvml.nvmlDeviceGetCount()
         for nvml_idx in range(device_count):
             handle = _pynvml.nvmlDeviceGetHandleByIndex(nvml_idx)
@@ -150,8 +173,12 @@ def _get_nvml_handle_for_torch_device(
             nvml_bus_id = nvml_pci.busId
             if isinstance(nvml_bus_id, bytes):
                 nvml_bus_id = nvml_bus_id.decode()
-            if _pci_bus_ids_match(nvml_bus_id, pci_bus_id):
+            if isinstance(pci_bus_id, (str, bytes)) and _pci_bus_ids_match(nvml_bus_id, pci_bus_id):
                 return handle
+            if target_pci_tuple is not None:
+                nvml_tuple = _parse_pci_bus_id(nvml_bus_id)
+                if nvml_tuple is not None and nvml_tuple == target_pci_tuple:
+                    return handle
         logger.warning(
             f"NVML initialized but no device found matching PyTorch device {torch_device_index} "
             f"(PCI bus ID: {pci_bus_id}); NVML stats will be unavailable for this device"
