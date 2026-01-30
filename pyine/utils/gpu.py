@@ -144,7 +144,7 @@ def _get_nvml_handle_for_torch_device(
             except _pynvml.NVMLError:
                 pass
         else:
-            logger.warning(
+            logger.debug(
                 f"torch device {torch_device_index} has unexpected pci_bus_id type "
                 f"{type(pci_bus_id)}; falling back to NVML PCI matching"
             )
