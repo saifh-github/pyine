@@ -1498,15 +1498,18 @@ def test_sft_train_attaches_gpu_stats_callback_when_configured(
         throughput_logging=None,
         get_collator=lambda *_a, **_k: None,
     )
-    runtime = types.SimpleNamespace(wandb_run=None)
+    mock_wandb_run = types.SimpleNamespace(log=lambda *a, **k: None, define_metric=lambda *a, **k: None)
+    runtime = types.SimpleNamespace(wandb_run=mock_wandb_run)
     pyine.apps.trainers.hf_trainer.sft_train(
         datamodule=_FakeDataModule(),
         config=config,
         runtime=runtime,
         resume_artifacts=None,
     )
-    # verify GPUStatsLoggingCallback was added
+    # verify GPUStatsLoggingCallback was added (requires wandb_run to be available)
     gpu_callbacks = [
         cb for cb in captured_callbacks if isinstance(cb, pyine.utils.transformers.callbacks.GPUStatsLoggingCallback)
     ]
-    assert len(gpu_callbacks) == 1, "GPUStatsLoggingCallback should be attached when config is set"
+    assert len(gpu_callbacks) == 1, (
+        "GPUStatsLoggingCallback should be attached when config is set and wandb_run available"
+    )

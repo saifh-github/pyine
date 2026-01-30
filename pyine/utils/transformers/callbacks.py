@@ -15,6 +15,7 @@ import pyine.utils.gpu
 import pyine.utils.reprod
 import pyine.utils.stats
 import pyine.utils.transformers.checkpoints
+import pyine.utils.transformers.logging
 import pyine.utils.transformers.training
 
 logger = logging.getLogger(__name__)
@@ -741,13 +742,13 @@ class ThroughputLoggingConfig(pydantic.BaseModel):
 
 
 class ThroughputLoggingCallback(transformers.TrainerCallback):
-    """Injects rolling throughput metrics into the trainer's log dict.
+    """Logs throughput metrics directly to wandb using direct wandb.run.log() calls.
 
     Tracks elapsed compute time between `on_log` calls (excluding checkpoint I/O) and calculates
-    throughput separately for train and eval phases. Metrics are injected into the `logs` dict
-    passed to `on_log`, so they flow to whatever reporters the trainer uses (W&B, TensorBoard, etc.).
+    throughput separately for train and eval phases. Uses ThroughputLogger to bypass the trainer's
+    logging lifecycle (which, with TRL, saves to log_history BEFORE calling on_log callbacks).
 
-    Injected metrics:
+    Logged metrics:
         - `{train_prefix}samples_per_second`: Training samples processed per second
         - `{train_prefix}steps_per_second`: Optimizer steps per second
         - `{eval_prefix}samples_per_second`: Eval samples processed per second
@@ -764,19 +765,23 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         - Only logged during training runs (standalone trainer.evaluate() calls are not tracked)
 
     Args:
-        config: Configuration for throughput logging. If None, uses defaults.
+        config: Configuration for throughput logging.
+        wandb_run: The wandb run object for direct logging.
     """
 
     def __init__(
         self,
-        config: ThroughputLoggingConfig | None = None,
+        config: ThroughputLoggingConfig,
+        wandb_run: typing.Any,
     ) -> None:
         """Initialize the callback.
 
         Args:
-            config: Configuration for throughput logging. If None, uses defaults.
+            config: Configuration for throughput logging.
+            wandb_run: The wandb run object for direct logging.
         """
-        self._config = config or ThroughputLoggingConfig()
+        self._config = config
+        self._logger = pyine.utils.transformers.logging.ThroughputLogger(wandb_run, config)
         self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
         self._saw_train_begin: bool = False  # distinguishes training vs predict-only
         # train timing
@@ -866,16 +871,16 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         logs: dict[str, typing.Any] | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        """Calculate and inject throughput metrics whenever the trainer logs."""
+        """Calculate and log throughput metrics directly to wandb."""
         if not self._should_log():
             return
         if logs is None:
             logs = kwargs.get("logs")
         if not isinstance(logs, dict):
             return
-        # determine context and inject appropriate metrics
+        # determine context and log appropriate metrics
         if self._phase.is_eval_context(logs):
-            self._inject_eval_throughput(args, logs)
+            self._log_eval_throughput(args, state)
         else:
             # warn if logs look like eval but we're not in eval context
             looks_like_eval = any(k.startswith(("eval_", "eval/")) for k in logs)
@@ -885,26 +890,25 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
                     "_phase.eval_pending=False). This may indicate HuggingFace Trainer callback "
                     "ordering changed. Throughput metrics will be classified as train."
                 )
-            self._inject_train_throughput(args, state, logs)
+            self._log_train_throughput(args, state)
 
-    def _inject_train_throughput(
+    def _log_train_throughput(
         self,
         args: transformers.TrainingArguments,
         state: transformers.TrainerState,
-        logs: dict[str, typing.Any],
     ) -> None:
-        """Inject train throughput metrics if enabled and valid."""
+        """Log train throughput metrics directly to wandb if enabled and valid."""
         if not self._config.log_train_throughput:
             return
         if self._train_last_log_time is None:
-            self._train_last_log_time = time.perf_counter()  # on_train_begin wasn't called
+            self._train_last_log_time = time.perf_counter()
             self._train_last_log_step = state.global_step
             return
         current_time = time.perf_counter()
         elapsed = current_time - self._train_last_log_time
         steps_delta = state.global_step - self._train_last_log_step
         if elapsed <= 0 or steps_delta <= 0:
-            self._train_last_log_time = current_time  # avoid division by zero
+            self._train_last_log_time = current_time
             self._train_last_log_step = state.global_step
             return
         effective_batch_size = pyine.utils.transformers.training.get_effective_train_batch_size(
@@ -913,26 +917,33 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         samples_delta = steps_delta * effective_batch_size
         samples_per_second = samples_delta / elapsed
         steps_per_second = steps_delta / elapsed
-        logs[f"{self._config.train_prefix}samples_per_second"] = samples_per_second
-        logs[f"{self._config.train_prefix}steps_per_second"] = steps_per_second
+        logger.info(
+            f"train throughput: samples_per_second={samples_per_second:.2f}, "
+            f"steps_per_second={steps_per_second:.4f}, effective_batch_size={effective_batch_size}"
+        )
+        self._logger.log_train_throughput(
+            step=state.global_step,
+            samples_per_second=samples_per_second,
+            steps_per_second=steps_per_second,
+        )
         # update state for next interval
         self._train_last_log_time = current_time
         self._train_last_log_step = state.global_step
 
-    def _inject_eval_throughput(
+    def _log_eval_throughput(
         self,
         args: transformers.TrainingArguments,
-        logs: dict[str, typing.Any],
+        state: transformers.TrainerState,
     ) -> None:
-        """Inject eval throughput metrics if enabled and valid."""
+        """Log eval throughput metrics directly to wandb if enabled and valid."""
         if not self._config.log_eval_throughput:
-            return  # logging disabled, but state reset happens in on_evaluate
+            return
         if not self._saw_train_begin:
-            return  # predict-only run (Trainer.predict() without on_train_begin), skip
+            return
         if self._eval_prediction_steps == 0:
-            return  # empty eval, skip entirely
+            return
         if self._eval_start_time is None:
-            return  # shouldn't happen, but guard anyway
+            return
         elapsed = time.perf_counter() - self._eval_start_time
         if elapsed <= 0:
             return
@@ -940,7 +951,15 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
             args, include_world_size=self._config.only_main_process
         )
         samples = self._eval_prediction_steps * eval_batch_size
-        logs[f"{self._config.eval_prefix}samples_per_second"] = samples / elapsed
+        samples_per_second = samples / elapsed
+        logger.info(
+            f"eval throughput: samples_per_second={samples_per_second:.2f}, "
+            f"eval_batch_size={eval_batch_size}, prediction_steps={self._eval_prediction_steps}"
+        )
+        self._logger.log_eval_throughput(
+            step=state.global_step,
+            samples_per_second=samples_per_second,
+        )
 
     @typing.override
     def on_evaluate(
@@ -995,6 +1014,43 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
             self._train_last_log_time = time.perf_counter()
             self._train_last_log_step = state.global_step
 
+    @typing.override
+    def on_train_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **_: typing.Any,
+    ) -> None:
+        """Log final train throughput metrics to wandb.
+
+        This ensures metrics are logged at the end of training, not just via logger.info.
+        """
+        if not self._should_log() or not self._config.log_train_throughput:
+            return
+        if self._train_last_log_time is None:
+            return
+        current_time = time.perf_counter()
+        elapsed = current_time - self._train_last_log_time
+        steps_delta = state.global_step - self._train_last_log_step
+        if elapsed <= 0 or steps_delta <= 0:
+            return
+        effective_batch_size = pyine.utils.transformers.training.get_effective_train_batch_size(
+            args, include_world_size=self._config.only_main_process
+        )
+        samples_delta = steps_delta * effective_batch_size
+        samples_per_second = samples_delta / elapsed
+        steps_per_second = steps_delta / elapsed
+        logger.info(
+            f"final train throughput: samples_per_second={samples_per_second:.2f}, "
+            f"steps_per_second={steps_per_second:.4f}"
+        )
+        self._logger.log_train_throughput(
+            step=state.global_step,
+            samples_per_second=samples_per_second,
+            steps_per_second=steps_per_second,
+        )
+
 
 class GPUStatsLoggingConfig(pydantic.BaseModel):
     """Configuration for GPU stats logging callback.
@@ -1045,6 +1101,10 @@ class GPUStatsLoggingConfig(pydantic.BaseModel):
     Note: 'total_sample_calls' in logged metrics is the total across all ranks (when gathered),
     not per-device data points.
     """
+    train_prefix: str = "train/gpu/"
+    """Prefix for training phase metrics."""
+    eval_prefix: str = "eval/gpu/"
+    """Prefix for evaluation phase metrics."""
 
 
 @dataclasses.dataclass
@@ -1207,14 +1267,17 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
 
     def __init__(
         self,
-        config: GPUStatsLoggingConfig | None = None,
+        config: GPUStatsLoggingConfig,
+        wandb_run: typing.Any,
     ) -> None:
         """Initialize the callback.
 
         Args:
-            config: Configuration for the callback. If None, uses defaults.
+            config: Configuration for the callback.
+            wandb_run: The wandb run object for direct logging.
         """
-        self._config = config if config is not None else GPUStatsLoggingConfig()
+        self._config = config
+        self._logger = pyine.utils.transformers.logging.GPUStatsLogger(wandb_run, config)
         self._collector: pyine.utils.gpu.GPUStatsCollector | None = None
         # phase tracking via shared tracker (all flags must be rank-synchronous to avoid deadlocks)
         self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
@@ -1767,9 +1830,9 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                         "Trainer callback ordering changed. GPU stats will be classified as train metrics. "
                         "Please report this issue."
                     )
-        # use determined context for metric injection
+        # use determined context for metric logging
         if is_eval_context:
-            # EVAL LOG: compute/gather and inject eval metrics directly
+            # EVAL LOG: compute/gather and log eval metrics directly to wandb
             # IMPORTANT: if gathering, ALL ranks must call gather to avoid deadlock
             #
             # ...first, handle any pending train phase metrics that weren't emitted
@@ -1783,12 +1846,11 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                     train_metrics = self._compute_train_metrics(peak_percent_override=stashed_peak)
                 else:
                     train_metrics = {}
-                if self._should_log() and logs is not None:
-                    for key, value in train_metrics.items():
-                        logs[f"train/gpu/{key}"] = value
+                if self._should_log() and train_metrics:
+                    self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 self._train.reset()
                 self._train_phase_needs_flush = False
-                self._stashed_train_peak_percent = None  # clear after use
+                self._stashed_train_peak_percent = None
             # now handle eval metrics (note: eval gather uses different config than train gather)
             wants_eval_gather = self._config.gather_eval_metrics and pyine.utils.distrib.is_distributed()
             if wants_eval_gather and not self._is_gather_safe():
@@ -1805,15 +1867,14 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 eval_metrics = self._compute_eval_metrics() if self._phase.saw_eval_samples else {}
             else:
                 eval_metrics = {}
-            # only main rank injects into logs (if logs is valid)
-            if self._should_log() and logs is not None:
-                for key, value in eval_metrics.items():
-                    logs[f"eval/gpu/{key}"] = value
+            # only main rank logs to wandb
+            if self._should_log() and eval_metrics:
+                self._logger.log_eval_stats(step=state.global_step, **eval_metrics)
             # all ranks reset accumulators to stay in sync
             self._eval.reset()
             # note: _phase.in_eval is cleared by _phase.handle_evaluate() in on_evaluate
         else:
-            # TRAIN LOG: compute/gather and inject train metrics
+            # TRAIN LOG: compute/gather and log train metrics directly to wandb
             # IMPORTANT: if gathering, ALL ranks must call gather to avoid deadlock
             #
             # ...behavior depends on gather_train_metrics setting:
@@ -1824,7 +1885,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             at_phase_end_mode = self._config.gather_train_metrics == "at_phase_end"
             if at_phase_end_mode and not is_phase_end:
                 # "at_phase_end" mode but not at phase end: keep accumulating, don't emit
-                # (no reset, no injection, no gathering)
+                # (no reset, no logging, no gathering)
                 pass
             else:
                 # either "never", "always", or "at_phase_end" at actual phase end
@@ -1835,14 +1896,13 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 else:
                     # local only, compute on main rank
                     train_metrics = self._compute_train_metrics() if self._should_log() else {}
-                # only main rank injects into logs (if logs is valid)
-                if self._should_log() and logs is not None:
-                    for key, value in train_metrics.items():
-                        logs[f"train/gpu/{key}"] = value
+                # only main rank logs to wandb
+                if self._should_log() and train_metrics:
+                    self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 # all ranks reset accumulators and peak stats to stay in sync
                 self._train.reset()
                 self._reset_peak_stats()
-                self._train_phase_needs_flush = False  # we've emitted
+                self._train_phase_needs_flush = False
 
     @typing.override
     def on_train_end(
@@ -1857,8 +1917,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         This handles the case where gather_train_metrics='at_phase_end' but eval never runs
         (e.g., eval_strategy='no'). Without this, accumulated train metrics would be lost.
 
-        Since on_train_end doesn't receive a logs dict for injection, we log directly
-        using Python logging. The metrics will appear in logs but not in wandb/tensorboard.
+        Logs directly to wandb since on_train_end doesn't receive a logs dict.
         """
         if self._collector is None or not self._collector.is_enabled():
             return
@@ -1871,9 +1930,10 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             train_metrics = self._gather_and_compute_train_metrics()
         else:
             train_metrics = self._compute_train_metrics() if self._should_log() else {}
-        # log directly (can't inject into logs dict at train_end)
+        # log to wandb and logger.info
         if self._should_log() and train_metrics:
-            logger.info(f"GPU stats at train_end (not injected into trainer logs): train/gpu metrics: {train_metrics}")
+            logger.info(f"GPU stats at train_end: train/gpu metrics: {train_metrics}")
+            self._logger.log_train_stats(step=state.global_step, **train_metrics)
         # cleanup
         self._train.reset()
         self._reset_peak_stats()

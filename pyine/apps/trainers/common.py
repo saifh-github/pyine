@@ -85,6 +85,43 @@ def validate_wandb_sweeper_requirements(config: AppMainConfig) -> None:
             )
 
 
+def get_wandb_run_for_callback(
+    config: typing.Any,
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+    callback_config: typing.Any,
+) -> typing.Any | None:
+    """Get wandb_run for callback, with validation for only_main_process setting.
+
+    This helper resolves the appropriate wandb_run for callbacks that log directly to wandb
+    (like ThroughputLoggingCallback and GPUStatsLoggingCallback). It handles:
+    - Returning None if runtime or wandb_run is unavailable
+    - Returning None on non-main ranks when callback_config.only_main_process=True
+    - Warning if only_main_process=False but wandb_init_on_all_ranks=False
+
+    Args:
+        config: The app config object (must have wandb_init_on_all_ranks attribute).
+        runtime: The runtime config object (may be None).
+        callback_config: The callback's config object (must have only_main_process attribute).
+
+    Returns:
+        wandb_run if available and appropriate for this process, None otherwise.
+    """
+    if not runtime or not runtime.wandb_run:
+        return None
+    if callback_config.only_main_process:
+        if not pyine.utils.distrib.is_main_process():
+            return None
+        return runtime.wandb_run
+    # log from all ranks - warn if wandb not available on all ranks
+    if not config.wandb_init_on_all_ranks:
+        logger.warning(
+            f"{callback_config.__class__.__name__}.only_main_process=False requires "
+            "wandb_init_on_all_ranks=True to log from all ranks. Metrics from non-main "
+            "ranks will be silently dropped."
+        )
+    return runtime.wandb_run
+
+
 def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> None:
     """Validates that training, prediction, and vLLM server settings are compatible.
 

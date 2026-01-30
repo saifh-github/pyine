@@ -5,6 +5,7 @@ from . import configs as _configs
 from . import constants as _constants
 from . import data as _data
 from . import generation as _generation
+from . import logging as _logging
 from . import models as _models
 from . import training as _training
 from .callbacks import *  # noqa: F403
@@ -14,6 +15,7 @@ from .configs import *  # noqa: F403
 from .constants import *  # noqa: F403
 from .data import *  # noqa: F403
 from .generation import *  # noqa: F403
+from .logging import *  # noqa: F403
 from .models import *  # noqa: F403
 from .training import *  # noqa: F403
 
@@ -25,5 +27,6 @@ __all__.extend(_configs.__all__)
 __all__.extend(_constants.__all__)
 __all__.extend(_data.__all__)
 __all__.extend(_generation.__all__)
+__all__.extend(_logging.__all__)
 __all__.extend(_models.__all__)
 __all__.extend(_training.__all__)

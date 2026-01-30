@@ -727,6 +727,17 @@ class TestRewardLoggingCallback:
 
 class TestThroughputLoggingCallback:
     @pytest.fixture
+    def mock_wandb_run(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> pytest_mock.MockFixture:
+        """Create a mock wandb_run object."""
+        mock_run = mocker.MagicMock()
+        mock_run.log = mocker.MagicMock()
+        mock_run.define_metric = mocker.MagicMock()
+        return mock_run
+
+    @pytest.fixture
     def args(
         self,
         mocker: pytest_mock.MockerFixture,
@@ -755,28 +766,31 @@ class TestThroughputLoggingCallback:
     def test_should_log_main_process(
         self,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert callback._should_log() is True
 
     def test_should_log_worker_process(
         self,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert callback._should_log() is False
 
     def test_should_log_all_processes(
         self,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         config = callbacks_module.ThroughputLoggingConfig(only_main_process=False)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert callback._should_log() is True
 
     def test_on_train_begin_initializes_state(
@@ -784,8 +798,10 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert callback._train_last_log_time is None
         callback.on_train_begin(args, state, control)
         assert callback._train_last_log_time is not None
@@ -797,122 +813,147 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
-        mock_time.side_effect = [100.0, 102.0]  # 2 seconds elapsed
-        callback = callbacks_module.ThroughputLoggingCallback()
+        mock_time.side_effect = [100.0, 102.0]
+        mocker.patch("wandb.run", mock_wandb_run)
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
-        state.global_step = 10  # 10 steps completed
+        state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        # effective batch size = 4 * 2 * 2 = 16
-        # samples = 10 * 16 = 160, elapsed = 2 seconds
-        assert logs["train/throughput/samples_per_second"] == 80.0  # 160 / 2
-        assert logs["train/throughput/steps_per_second"] == 5.0  # 10 / 2
+        # verify wandb_run.log was called with correct metrics
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["train/throughput/samples_per_second"] == 80.0
+        assert call_args["train/throughput/steps_per_second"] == 5.0
+        assert call_args["train/global_step"] == 10
 
     def test_on_log_skips_on_worker_process(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         config = callbacks_module.ThroughputLoggingConfig(only_main_process=True)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/throughput/samples_per_second" not in logs
-        assert "train/throughput/steps_per_second" not in logs
+        # verify wandb_run.log was NOT called
+        assert not mock_wandb_run.log.called
 
     def test_on_log_handles_zero_elapsed(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.return_value = 100.0
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/throughput/samples_per_second" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_on_log_handles_zero_steps(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/throughput/samples_per_second" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_custom_prefix(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
         config = callbacks_module.ThroughputLoggingConfig(train_prefix="train/speed/")
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         state.global_step = 5
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/speed/samples_per_second" in logs
-        assert "train/speed/steps_per_second" in logs
-        assert logs["train/speed/samples_per_second"] == 80.0
-        assert logs["train/speed/steps_per_second"] == 5.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "train/speed/samples_per_second" in call_args
+        assert "train/speed/steps_per_second" in call_args
+        assert call_args["train/speed/samples_per_second"] == 80.0
+        assert call_args["train/speed/steps_per_second"] == 5.0
 
     def test_on_save_resets_timing(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 105.0, 106.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         callback.on_save(args, state, control)
         state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert logs["train/throughput/steps_per_second"] == 10.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["train/throughput/steps_per_second"] == 10.0
 
     def test_resume_training_with_nonzero_step(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=500)
         callback.on_train_begin(args, state, control)
         assert callback._train_last_log_step == 500
         state.global_step = 510
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert logs["train/throughput/steps_per_second"] == 10.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["train/throughput/steps_per_second"] == 10.0
 
-    def test_callback_inheritance(self) -> None:
-        callback = callbacks_module.ThroughputLoggingCallback()
+    def test_callback_inheritance(
+        self,
+        mock_wandb_run: pytest_mock.MockFixture,
+    ) -> None:
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert isinstance(callback, transformers.TrainerCallback)
 
     def test_eval_throughput_from_prediction_steps(
@@ -920,13 +961,15 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies eval throughput is calculated from prediction steps."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         # trace: train_begin(100), step_end(101 sets eval timer), on_log(102 computes elapsed)
         # note: prediction steps don't call perf_counter since timer already set
         mock_time.side_effect = [100.0, 101.0, 102.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         # transition to eval
@@ -940,21 +983,25 @@ class TestThroughputLoggingCallback:
         # eval batch size = 8 * 2 = 16, 2 prediction steps, elapsed = 102 - 101 = 1 second
         expected_samples = 2 * 16
         expected_throughput = expected_samples / 1.0
-        assert "eval/throughput/samples_per_second" in logs
-        assert logs["eval/throughput/samples_per_second"] == pytest.approx(expected_throughput)
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "eval/throughput/samples_per_second" in call_args
+        assert call_args["eval/throughput/samples_per_second"] == pytest.approx(expected_throughput)
 
     def test_eval_timing_starts_at_step_end(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies timer starts in on_step_end, not on_prediction_step."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         # trace: train_begin(100), step_end(101 sets eval timer), on_log(103 computes elapsed)
         # note: prediction step doesn't call perf_counter since timer already set
         mock_time.side_effect = [100.0, 101.0, 103.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         # transition to eval
@@ -966,38 +1013,41 @@ class TestThroughputLoggingCallback:
         callback.on_log(args, state, control, logs=logs)
         # elapsed = 103 - 101 = 2 seconds (includes first batch)
         expected_samples = 1 * 8 * 2  # 1 step * eval batch size
-        assert logs["eval/throughput/samples_per_second"] == expected_samples / 2.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["eval/throughput/samples_per_second"] == expected_samples / 2.0
 
     def test_log_train_disabled(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies train throughput not logged when disabled."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
         config = callbacks_module.ThroughputLoggingConfig(log_train_throughput=False)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         state.global_step = 10
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/throughput/samples_per_second" not in logs
-        assert "train/throughput/steps_per_second" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_log_eval_disabled_still_resets_state(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies state reset even when eval logging disabled."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0, 104.0]
         config = callbacks_module.ThroughputLoggingConfig(log_eval_throughput=False)
-        callback = callbacks_module.ThroughputLoggingCallback(config=config)
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         control.should_evaluate = True
@@ -1005,7 +1055,7 @@ class TestThroughputLoggingCallback:
         callback.on_prediction_step(args, state, control)
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
-        assert "eval/throughput/samples_per_second" not in logs
+        assert not mock_wandb_run.log.called
         # on_evaluate should reset state
         callback.on_evaluate(args, state, control)
         assert callback._eval_start_time is None
@@ -1016,11 +1066,13 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies no metrics when _eval_prediction_steps == 0."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         control.should_evaluate = True
@@ -1028,19 +1080,21 @@ class TestThroughputLoggingCallback:
         # no prediction steps
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
-        assert "eval/throughput/samples_per_second" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_unexpected_eval_logs_warning(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies warning when unexpected eval detected."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
         mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         # complete a training step (sets saw_training=True)
@@ -1056,30 +1110,34 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies no eval throughput when training never happened (predict-only)."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         # no on_train_begin, directly to prediction
         callback.on_prediction_step(args, state, control)
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
         # _saw_train_begin is False, so eval throughput should be skipped
-        assert "eval/throughput/samples_per_second" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_eval_on_start_no_warning(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies no warning during eval_on_start flow."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
         mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         # eval_on_start: prediction step without on_step_end first
@@ -1092,11 +1150,13 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies eval throughput is logged during eval_on_start."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0]  # train_begin, pred, on_log
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         callback.on_prediction_step(args, state, control)
@@ -1104,14 +1164,17 @@ class TestThroughputLoggingCallback:
         callback.on_log(args, state, control, logs=logs)
         # timer started in on_prediction_step (fallback), elapsed = 102 - 101 = 1 second
         expected_samples = 1 * 8 * 2
-        assert "eval/throughput/samples_per_second" in logs
-        assert logs["eval/throughput/samples_per_second"] == expected_samples / 1.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "eval/throughput/samples_per_second" in call_args
+        assert call_args["eval/throughput/samples_per_second"] == expected_samples / 1.0
 
     def test_train_throughput_after_eval_not_inflated(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies train throughput isn't inflated when eval occurs between logs.
 
@@ -1122,7 +1185,8 @@ class TestThroughputLoggingCallback:
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         # trace: train_begin(100), step_end(101), on_eval(102), on_log(103)
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         # train 5 steps, then eval
@@ -1137,20 +1201,24 @@ class TestThroughputLoggingCallback:
         callback.on_log(args, state, control, logs=logs)
         # with fix: step anchor reset to 5 after eval, so steps = 10 - 5 = 5, time = 1 sec
         # effective batch size = 4 * 2 * 2 = 16, samples = 5 * 16 = 80
-        assert logs["train/throughput/samples_per_second"] == 80.0  # 80 samples / 1 sec
-        assert logs["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["train/throughput/samples_per_second"] == 80.0  # 80 samples / 1 sec
+        assert call_args["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
 
     def test_train_throughput_after_save_not_inflated(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies train throughput isn't inflated when save occurs between logs."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         # trace: train_begin(100), on_save(101), on_log(102)
         mock_time.side_effect = [100.0, 101.0, 102.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         callback.on_train_begin(args, state, control)
         # train 5 steps, then save
@@ -1161,18 +1229,22 @@ class TestThroughputLoggingCallback:
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
         # with fix: step anchor reset to 5 after save, so steps = 10 - 5 = 5, time = 1 sec
-        assert logs["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert call_args["train/throughput/steps_per_second"] == 5.0  # 5 steps / 1 sec
 
     def test_callback_reuse_resets_state(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies callback state is properly reset when reused across training runs."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 200.0, 201.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=0)
         # first training run
         callback.on_train_begin(args, state, control)
@@ -1196,11 +1268,13 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies on_predict resets eval state to avoid misclassifying subsequent train logs."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         # simulate predict flow: prediction steps but no on_evaluate
@@ -1218,11 +1292,13 @@ class TestThroughputLoggingCallback:
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies that Trainer.predict() mid-training doesn't misclassify subsequent train logs."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0, 102.0, 103.0]
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=5)
         callback.on_train_begin(args, state, control)
         # simulate predict flow mid-training
@@ -1233,20 +1309,24 @@ class TestThroughputLoggingCallback:
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
         # should have train throughput (not misclassified as eval)
-        assert "train/throughput/steps_per_second" in logs
-        assert "eval/throughput/samples_per_second" not in logs
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "train/throughput/steps_per_second" in call_args
+        assert "eval/throughput/samples_per_second" not in call_args
 
     def test_eval_like_logs_without_context_warns(
         self,
         args: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Verifies warning when eval-like logs appear without proper eval context."""
         mock_time = mocker.patch("pyine.utils.transformers.callbacks.time.perf_counter")
         mock_time.side_effect = [100.0, 101.0]
         mock_logger = mocker.patch("pyine.utils.transformers.callbacks.logger")
-        callback = callbacks_module.ThroughputLoggingCallback()
+        config = callbacks_module.ThroughputLoggingConfig()
+        callback = callbacks_module.ThroughputLoggingCallback(config=config, wandb_run=mock_wandb_run)
         state = mocker.MagicMock(global_step=10)
         callback.on_train_begin(args, state, control)
         # send eval-like logs without being in eval context
@@ -1342,6 +1422,17 @@ class TestGPUStatsLoggingConfig:
 
 class TestGPUStatsLoggingCallback:
     @pytest.fixture
+    def mock_wandb_run(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> pytest_mock.MockFixture:
+        """Create a mock wandb_run object."""
+        mock_run = mocker.MagicMock()
+        mock_run.log = mocker.MagicMock()
+        mock_run.define_metric = mocker.MagicMock()
+        return mock_run
+
+    @pytest.fixture
     def config(self) -> callbacks_module.GPUStatsLoggingConfig:
         # use gather_train_metrics="never" for general tests that expect metrics at every log
         # specific tests for "at_phase_end" behavior override this
@@ -1366,19 +1457,20 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=_FakeGPUStatsCollector(enabled=False))
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         assert callback._collector is not None
         assert callback._collector.is_enabled() is False
         # on_step_end should not crash
         callback.on_step_end(args, state, control)
-        # on_log should not inject anything
+        # on_log should not log anything
         logs: dict[str, float] = {}
         callback.on_log(args, state, control, logs=logs)
-        assert len(logs) == 0
+        assert not mock_wandb_run.log.called
 
     def test_on_train_begin_initializes_state(
         self,
@@ -1387,11 +1479,12 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         assert callback._phase.in_eval is False
         assert callback._phase.eval_pending is False
@@ -1406,11 +1499,12 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
@@ -1425,12 +1519,13 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         config = callbacks_module.GPUStatsLoggingConfig(sample_every_n_steps=5)
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 3  # not divisible by 5
         callback.on_step_end(args, state, control)
@@ -1446,11 +1541,12 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
@@ -1468,11 +1564,12 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         callback.on_prediction_step(args, state, control)
         assert callback._phase.in_eval is True
@@ -1487,6 +1584,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
@@ -1498,16 +1596,18 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.get_device_properties", return_value=mock_props)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
         logs: dict[str, typing.Any] = {"loss": 0.5}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/gpu/utilization_gpu_percent/mean" in logs
-        assert "train/gpu/pytorch_peak_percent" in logs
-        assert "train/gpu/total_sample_calls" in logs
-        assert logs["train/gpu/utilization_gpu_percent/mean"] == 75.0
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "train/gpu/utilization_gpu_percent/mean" in call_args
+        assert "train/gpu/pytorch_peak_percent" in call_args
+        assert "train/gpu/total_sample_calls" in call_args
+        assert call_args["train/gpu/utilization_gpu_percent/mean"] == 75.0
 
     def test_on_log_injects_eval_metrics_when_in_eval(
         self,
@@ -1516,6 +1616,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test eval metrics are injected directly in on_log when _phase.in_eval is True.
 
@@ -1537,7 +1638,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.get_device_properties", return_value=mock_props)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         # simulate eval: on_prediction_step sets _phase.in_eval=True
         callback.on_prediction_step(args, state, control)
@@ -1546,7 +1647,9 @@ class TestGPUStatsLoggingCallback:
         # now on_log (with eval content) should inject eval metrics
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
-        assert "eval/gpu/utilization_gpu_percent/mean" in logs
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
+        assert "eval/gpu/utilization_gpu_percent/mean" in call_args
         # then on_evaluate comes after and cleans up the rest
         callback.on_evaluate(args, state, control)
         assert callback._phase.saw_eval_samples is False
@@ -1560,6 +1663,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that train metrics are NOT injected when in eval context.
 
@@ -1580,7 +1684,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.get_device_properties", return_value=mock_props)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
@@ -1590,10 +1694,13 @@ class TestGPUStatsLoggingCallback:
         # on_log with eval content - should NOT inject train metrics (uses eval branch)
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
+        # verify wandb logging occurred
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
         # train metrics should NOT be injected (only eval metrics)
-        assert "train/gpu/utilization_gpu_percent/mean" not in logs
+        assert "train/gpu/utilization_gpu_percent/mean" not in call_args
         # eval metrics SHOULD be injected
-        assert "eval/gpu/utilization_gpu_percent/mean" in logs
+        assert "eval/gpu/utilization_gpu_percent/mean" in call_args
 
     def test_on_log_skips_when_not_main_process(
         self,
@@ -1602,18 +1709,19 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
         logs: dict[str, typing.Any] = {"loss": 0.5}
         callback.on_log(args, state, control, logs=logs)
-        assert "train/gpu/utilization_gpu_percent/mean" not in logs
+        assert not mock_wandb_run.log.called
 
     def test_on_evaluate_cleans_up_state(
         self,
@@ -1622,12 +1730,13 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test on_evaluate properly cleans up state flags and resets peak stats."""
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         # set flags that on_evaluate should clean up by simulating prediction steps
         control.should_evaluate = True
@@ -1647,6 +1756,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
@@ -1658,21 +1768,27 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.get_device_properties", return_value=mock_props)
         fake_collector = _FakeGPUStatsCollector(enabled=True, nvml_available=False)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 1
         callback.on_step_end(args, state, control)
         logs: dict[str, typing.Any] = {"loss": 0.5}
         callback.on_log(args, state, control, logs=logs)
+        assert mock_wandb_run.log.called
+        call_args = mock_wandb_run.log.call_args[0][0]
         # NVML metrics should be absent
-        assert "train/gpu/utilization_gpu_percent/mean" not in logs
-        assert "train/gpu/power_watts/mean" not in logs
+        assert "train/gpu/utilization_gpu_percent/mean" not in call_args
+        assert "train/gpu/power_watts/mean" not in call_args
         # PyTorch metrics should be present
-        assert "train/gpu/pytorch_allocated_percent/mean" in logs
-        assert "train/gpu/pytorch_peak_percent" in logs
+        assert "train/gpu/pytorch_allocated_percent/mean" in call_args
+        assert "train/gpu/pytorch_peak_percent" in call_args
 
-    def test_callback_inheritance(self) -> None:
-        callback = callbacks_module.GPUStatsLoggingCallback()
+    def test_callback_inheritance(
+        self,
+        mock_wandb_run: pytest_mock.MockFixture,
+    ) -> None:
+        config = callbacks_module.GPUStatsLoggingConfig()
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         assert isinstance(callback, transformers.TrainerCallback)
 
     def test_config_validation_only_main_process_false_with_gather(
@@ -1681,6 +1797,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that only_main_process=False + gather_eval_metrics=True raises error."""
         config = callbacks_module.GPUStatsLoggingConfig(
@@ -1692,7 +1809,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.device_count", return_value=1)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         with pytest.raises(ValueError, match="Cannot use only_main_process=False"):
             callback.on_train_begin(args, state, control)
 
@@ -1702,6 +1819,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test double-counting guard: collect_all_visible_devices + distributed + multi-GPU raises error."""
         config = callbacks_module.GPUStatsLoggingConfig(
@@ -1713,7 +1831,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.device_count", return_value=2)  # multiple GPUs
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         with pytest.raises(ValueError, match="Cannot use collect_all_visible_devices=True"):
             callback.on_train_begin(args, state, control)
 
@@ -1724,12 +1842,13 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that on_evaluate resets peak stats to prevent contamination."""
         mocker.patch("pyine.utils.distrib.is_distributed", return_value=False)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         initial_reset_count = len(fake_collector._peak_reset_calls)
         # simulate eval phase with prediction steps
@@ -1744,6 +1863,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that peak stats reset covers all devices when collect_all_visible_devices=True."""
         config = callbacks_module.GPUStatsLoggingConfig(
@@ -1754,7 +1874,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("torch.cuda.device_count", return_value=2)  # two GPUs visible
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         # should have called reset with list of all device indices [0, 1]
         assert len(fake_collector._peak_reset_calls) == 1
@@ -1771,6 +1891,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that gather_train_metrics='never' uses local metrics only."""
         config = callbacks_module.GPUStatsLoggingConfig(gather_train_metrics="never")
@@ -1778,7 +1899,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         state.global_step = 10  # divisible by sample_every_n_steps
         control.should_evaluate = False
@@ -1798,6 +1919,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that gather_train_metrics='always' uses gathered metrics."""
         config = callbacks_module.GPUStatsLoggingConfig(gather_train_metrics="always")
@@ -1805,7 +1927,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         # mock _is_gather_safe to return True (simulates initialized process group)
         mocker.patch.object(callback, "_is_gather_safe", return_value=True)
         # mock all_gather_objects to simulate distributed gather (avoids fail-fast check)
@@ -1828,6 +1950,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test that gather_train_metrics='at_phase_end' accumulates and only emits at phase end.
 
@@ -1840,7 +1963,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         # mock _is_gather_safe to return True (simulates initialized process group)
         mocker.patch.object(callback, "_is_gather_safe", return_value=True)
         # mock all_gather_objects to simulate distributed gather (avoids fail-fast check)
@@ -1881,6 +2004,7 @@ class TestGPUStatsLoggingCallback:
         state: pytest_mock.MockFixture,
         control: pytest_mock.MockFixture,
         mocker: pytest_mock.MockerFixture,
+        mock_wandb_run: pytest_mock.MockFixture,
     ) -> None:
         """Test delayed train flush when should_evaluate=True but should_log=False.
 
@@ -1898,7 +2022,7 @@ class TestGPUStatsLoggingCallback:
         mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
         fake_collector = _FakeGPUStatsCollector(enabled=True)
         mocker.patch("pyine.utils.gpu.GPUStatsCollector", return_value=fake_collector)
-        callback = callbacks_module.GPUStatsLoggingCallback(config=config)
+        callback = callbacks_module.GPUStatsLoggingCallback(config=config, wandb_run=mock_wandb_run)
         callback.on_train_begin(args, state, control)
         # sample during training
         state.global_step = 10
@@ -1922,18 +2046,25 @@ class TestGPUStatsLoggingCallback:
         # eval on_log: should emit BOTH train metrics (delayed) and eval metrics
         logs: dict[str, typing.Any] = {"eval_loss": 0.3}
         callback.on_log(args, state, control, logs=logs)
-        # verify train metrics were injected with train/gpu/ prefix
-        train_keys = [k for k in logs if k.startswith("train/gpu/")]
+        # verify wandb logging occurred
+        assert mock_wandb_run.log.called
+        # check all log calls (there should be 2: one for train, one for eval)
+        assert mock_wandb_run.log.call_count >= 2
+        all_logged_metrics = {}
+        for call in mock_wandb_run.log.call_args_list:
+            all_logged_metrics.update(call[0][0])
+        # verify train metrics were logged with train/gpu/ prefix
+        train_keys = [k for k in all_logged_metrics if k.startswith("train/gpu/")]
         assert len(train_keys) > 0, "expected train/gpu/ metrics in delayed flush"
         # verify peak percent used the stashed value
-        if "train/gpu/pytorch_peak_percent" in logs:
-            assert logs["train/gpu/pytorch_peak_percent"] == stashed_peak
+        if "train/gpu/pytorch_peak_percent" in all_logged_metrics:
+            assert all_logged_metrics["train/gpu/pytorch_peak_percent"] == stashed_peak
         # verify train state was cleaned up
         assert callback._train_phase_needs_flush is False
         assert callback._stashed_train_peak_percent is None
         assert callback._train.sample_count == 0
-        # verify eval metrics were also injected
-        eval_keys = [k for k in logs if k.startswith("eval/gpu/")]
+        # verify eval metrics were also logged
+        eval_keys = [k for k in all_logged_metrics if k.startswith("eval/gpu/")]
         assert len(eval_keys) > 0, "expected eval/gpu/ metrics"
         # note: _phase.in_eval is cleared by handle_evaluate() in on_evaluate
         # at this point, on_log has completed but on_evaluate hasn't been called yet

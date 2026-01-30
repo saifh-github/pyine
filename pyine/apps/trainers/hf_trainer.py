@@ -119,9 +119,21 @@ def sft_train(
     milestone_logger = pyine.utils.transformers.StdoutMilestones(print_fn=logger.info)
     callbacks: list[transformers.TrainerCallback] = [milestone_logger, eval_metrics_callback]
     if config.throughput_logging is not None:
-        callbacks.append(pyine.utils.transformers.ThroughputLoggingCallback(config=config.throughput_logging))
+        wandb_run = pyine.apps.trainers.common.get_wandb_run_for_callback(config, runtime, config.throughput_logging)
+        if wandb_run is not None:
+            throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback(
+                config=config.throughput_logging,
+                wandb_run=wandb_run,
+            )
+            callbacks.append(throughput_callback)
     if config.gpu_stats_logging is not None:
-        callbacks.append(pyine.utils.transformers.GPUStatsLoggingCallback(config=config.gpu_stats_logging))
+        wandb_run = pyine.apps.trainers.common.get_wandb_run_for_callback(config, runtime, config.gpu_stats_logging)
+        if wandb_run is not None:
+            gpu_stats_callback = pyine.utils.transformers.GPUStatsLoggingCallback(
+                config=config.gpu_stats_logging,
+                wandb_run=wandb_run,
+            )
+            callbacks.append(gpu_stats_callback)
     train_subset_names = getattr(config.datamodule_config, "train_subset_names", [])
     epoch_callback = pyine.utils.transformers.create_epoch_awareness_callback(
         train_dataset=train_ds,
@@ -268,13 +280,23 @@ def rl_train(
 
     # 7. Add throughput logging callback if configured
     if config.throughput_logging is not None:
-        throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback(config=config.throughput_logging)
-        pyine.apps.trainers.common.add_callback_to_trainer(trainer, throughput_callback)
+        wandb_run = pyine.apps.trainers.common.get_wandb_run_for_callback(config, runtime, config.throughput_logging)
+        if wandb_run is not None:
+            throughput_callback = pyine.utils.transformers.ThroughputLoggingCallback(
+                config=config.throughput_logging,
+                wandb_run=wandb_run,
+            )
+            pyine.apps.trainers.common.add_callback_to_trainer(trainer, throughput_callback)
 
     # 8. Add GPU stats logging callback if configured
     if config.gpu_stats_logging is not None:
-        gpu_stats_callback = pyine.utils.transformers.GPUStatsLoggingCallback(config=config.gpu_stats_logging)
-        pyine.apps.trainers.common.add_callback_to_trainer(trainer, gpu_stats_callback)
+        wandb_run = pyine.apps.trainers.common.get_wandb_run_for_callback(config, runtime, config.gpu_stats_logging)
+        if wandb_run is not None:
+            gpu_stats_callback = pyine.utils.transformers.GPUStatsLoggingCallback(
+                config=config.gpu_stats_logging,
+                wandb_run=wandb_run,
+            )
+            pyine.apps.trainers.common.add_callback_to_trainer(trainer, gpu_stats_callback)
 
     # 9. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
