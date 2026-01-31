@@ -1765,3 +1765,153 @@ class TestGlobalCounters:
         restored = pyine.organisms.models.rewards.core.manager.RewardManager(config)
         restored.load_state(state)
         assert restored._local_generation_counts == {"train/": 2}
+
+
+class TestResetPhaseLocalCounts:
+    """Tests for reset_phase_local_counts() method."""
+
+    def test_reset_phase_local_counts_resets_local_not_global(self) -> None:
+        """Verify reset_phase_local_counts() resets local but not global counts."""
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=1, log_tables=True
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable", type="parseable_answer", weight=1.0
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(enabled=True, log_every_n_generations=1),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        manager.set_key_prefix("eval/")
+        for idx in range(10):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        assert manager._local_generation_counts["eval/"] == 10
+        assert manager._global_generation_counts["eval/"] == 10
+        manager.reset_phase_local_counts()
+        assert manager._local_generation_counts["eval/"] == 0  # RESET
+        assert manager._global_generation_counts["eval/"] == 10  # NOT reset
+
+    def test_set_key_prefix_does_not_reset_counts(self) -> None:
+        """Verify set_key_prefix() never resets counts (reset is explicit)."""
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=1, log_tables=True
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable", type="parseable_answer", weight=1.0
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(enabled=True, log_every_n_generations=1),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        manager.set_key_prefix("eval/")
+        for idx in range(5):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        assert manager._local_generation_counts["eval/"] == 5
+        # redundant call (e.g., from "unexpected" path) - no reset
+        manager.set_key_prefix("eval/")
+        assert manager._local_generation_counts["eval/"] == 5
+        # different prefix - still no reset
+        manager.set_key_prefix("train/")
+        manager.set_key_prefix("eval/")
+        assert manager._local_generation_counts["eval/"] == 5  # still 5
+
+    def test_reset_without_prefix_raises_if_not_set(self) -> None:
+        """Verify reset_phase_local_counts(prefix=None) raises if current prefix is empty."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable", type="parseable_answer", weight=1.0
+                )
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        # before set_key_prefix(), _current_prefix is empty
+        with pytest.raises(ValueError, match="current prefix is empty"):
+            manager.reset_phase_local_counts()  # prefix=None by default
+        # after set_key_prefix(), it works
+        manager.set_key_prefix("train/")
+        manager.reset_phase_local_counts()  # should not raise
+        # explicit prefix always works, even before set_key_prefix
+        manager2 = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        manager2.reset_phase_local_counts(prefix="eval/")  # should not raise
+
+    def test_local_reset_does_not_affect_gating_when_main_process_only_false(self) -> None:
+        """Verify local resets don't affect gating when main_process_only=False."""
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=3, log_tables=True
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable", type="parseable_answer", weight=1.0
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                log_every_n_generations=3,
+                main_process_only=False,  # uses global counts
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        # first epoch: samples logged at global counts 3, 6, 9
+        manager.set_key_prefix("eval/")
+        for idx in range(10):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        logged_ids_epoch1 = [s["sample_id"] for s in logger.samples]
+        assert logged_ids_epoch1 == ["sample_2", "sample_5", "sample_8"]  # counts 3, 6, 9
+        # reset local counts (should NOT affect gating with main_process_only=False)
+        manager.reset_phase_local_counts()
+        logger.samples.clear()
+        # second epoch: samples logged at global counts 12, 15, 18 (not 3, 6, 9)
+        for idx in range(10):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        logged_ids_epoch2 = [s["sample_id"] for s in logger.samples]
+        # different samples logged because gating uses global counts (11-20), not local (1-10)
+        # logged at global counts 12, 15, 18 -> indices 1, 4, 7
+        assert logged_ids_epoch2 == ["sample_1", "sample_4", "sample_7"]
+        assert logged_ids_epoch1 != logged_ids_epoch2  # confirms local reset had no effect
+
+    def test_same_samples_logged_each_eval_epoch(self) -> None:
+        """Verify frequency gating logs same samples each eval epoch with explicit reset."""
+        logger = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
+            log_every_n_generations=3, log_tables=True
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable", type="parseable_answer", weight=1.0
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True, log_every_n_generations=3, main_process_only=True
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+        # first eval epoch (10 samples)
+        manager.set_key_prefix("eval/")
+        manager.reset_phase_local_counts()  # explicit reset before phase
+        for idx in range(10):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        logged_ids_epoch1 = [s["sample_id"] for s in logger.samples]
+        # second eval epoch (same 10 samples)
+        manager.set_key_prefix("train/")
+        manager.set_key_prefix("eval/")
+        manager.reset_phase_local_counts()  # explicit reset before phase
+        logger.samples.clear()  # clear for clean comparison
+        for idx in range(10):
+            sample_ctx = rewards_conftest.make_sample_context(identifier=f"sample_{idx}")
+            manager.compute_batch([sample_ctx])
+        logged_ids_epoch2 = [s["sample_id"] for s in logger.samples]
+        # same samples logged (by ID) - positions 3, 6, 9 in each epoch
+        assert logged_ids_epoch1 == logged_ids_epoch2
+        assert logged_ids_epoch1 == ["sample_2", "sample_5", "sample_8"]  # 0-indexed, logged at counts 3,6,9

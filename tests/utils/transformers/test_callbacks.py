@@ -409,6 +409,7 @@ class _FakeRewardManager:
         self.step: int | None = None
         self.epoch: float | None = None
         self.flush_calls: list[int | None] = []
+        self.reset_phase_local_counts_calls: list[str | None] = []
 
     def set_key_prefix(self, prefix: str) -> None:
         self.key_prefix = prefix
@@ -427,6 +428,10 @@ class _FakeRewardManager:
         failure_count: int | None = None,
     ) -> None:
         self.flush_calls.append(step)
+
+    def reset_phase_local_counts(self, prefix: str | None = None) -> None:
+        """Track calls to reset_phase_local_counts for test assertions."""
+        self.reset_phase_local_counts_calls.append(prefix)
 
     def get_state(self) -> dict[str, typing.Any]:
         return {}
@@ -723,6 +728,116 @@ class TestRewardLoggingCallback:
         # should have logged a warning about unexpected eval
         warn_mock.assert_called_once()
         assert "without prior should_evaluate=True" in warn_mock.call_args[0][0]
+
+    def test_phase_local_counts_reset_on_all_phase_entries(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Verify reset_phase_local_counts() called at all phase transitions."""
+        args.eval_on_start = False
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        # on_train_begin should reset (train phase entry via _switch_to_train)
+        callback.on_train_begin(args, state, control)
+        assert len(reward_manager.reset_phase_local_counts_calls) == 1
+        assert reward_manager.key_prefix == "train"
+        # _switch_to_eval should reset (eval phase entry)
+        callback._switch_to_eval(step=100)
+        assert len(reward_manager.reset_phase_local_counts_calls) == 2
+        assert reward_manager.key_prefix == "eval"
+        # on_evaluate should reset (back to train phase entry via _switch_to_train)
+        callback._phase._in_eval = True
+        callback._phase._saw_eval_prediction_step = True
+        callback.on_evaluate(args, state, control)
+        assert len(reward_manager.reset_phase_local_counts_calls) == 3
+        assert reward_manager.key_prefix == "train"
+
+    def test_phase_local_counts_reset_on_empty_eval(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Verify reset happens even when eval had zero samples (consistent semantics)."""
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        callback.on_train_begin(args, state, control)
+        initial_reset_count = len(reward_manager.reset_phase_local_counts_calls)
+        # simulate eval with zero samples
+        callback._switch_to_eval(step=100)
+        assert len(reward_manager.reset_phase_local_counts_calls) == initial_reset_count + 1
+        # on_evaluate still resets even though saw_eval_samples is False
+        callback._phase._in_eval = True
+        callback._phase._saw_eval_prediction_step = False  # no samples processed
+        callback.on_evaluate(args, state, control)
+        assert len(reward_manager.reset_phase_local_counts_calls) == initial_reset_count + 2
+
+    def test_on_step_begin_fallback_uses_switch_to_train(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Verify on_step_begin fallback path (when _phase.in_eval) uses _switch_to_train()."""
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        callback.on_train_begin(args, state, control)
+        initial_reset_count = len(reward_manager.reset_phase_local_counts_calls)
+        # simulate being in eval phase without on_evaluate having fired (callback ordering issue)
+        callback._phase._in_eval = True
+        reward_manager.key_prefix = "eval"  # simulate eval prefix was set
+        # on_step_begin should detect in_eval and switch back to train with reset
+        state.global_step = 50
+        state.epoch = 1.0
+        callback.on_step_begin(args, state, control)
+        # should have reset (via _switch_to_train)
+        assert len(reward_manager.reset_phase_local_counts_calls) == initial_reset_count + 1
+        assert reward_manager.key_prefix == "train"
+        assert reward_manager.step == 50
+        assert reward_manager.epoch == 1.0
+
+    def test_on_step_begin_no_reset_when_already_in_train(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Verify on_step_begin does NOT reset when already in train phase (normal path)."""
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        callback.on_train_begin(args, state, control)
+        initial_reset_count = len(reward_manager.reset_phase_local_counts_calls)
+        # normal train step - _phase.in_eval is False
+        callback._phase._in_eval = False
+        state.global_step = 10
+        state.epoch = 0.5
+        callback.on_step_begin(args, state, control)
+        # should NOT have reset (no phase change)
+        assert len(reward_manager.reset_phase_local_counts_calls) == initial_reset_count
+        assert reward_manager.step == 10
+        assert reward_manager.epoch == 0.5
+
+    def test_on_prediction_step_fallback_resets_local_counts(
+        self,
+        reward_manager: _FakeRewardManager,
+        args: pytest_mock.MockFixture,
+        state: pytest_mock.MockFixture,
+        control: pytest_mock.MockFixture,
+    ) -> None:
+        """Verify on_prediction_step fallback path (first step, no prior switch) resets local counts."""
+        callback = callbacks_module.RewardLoggingCallback(reward_manager=reward_manager)
+        reward_manager.key_prefix = "train"
+        # simulate entering eval without _switch_to_eval being called (fallback path)
+        # _phase.in_eval is False, handle_prediction_step() returns (True, True) for first unexpected step
+        callback._phase._saw_training = True  # mark that we saw training (makes eval "unexpected")
+        initial_reset_count = len(reward_manager.reset_phase_local_counts_calls)
+        # call on_prediction_step - should set prefix AND reset counts
+        callback.on_prediction_step(args, state, control)
+        # should have reset (first prediction step sets prefix and resets)
+        assert len(reward_manager.reset_phase_local_counts_calls) == initial_reset_count + 1
+        assert reward_manager.key_prefix == "eval"
 
 
 class TestThroughputLoggingCallback:

@@ -477,11 +477,15 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         return failure_ratio, failure_count
 
     def _switch_to_eval(self, step: int | None = None) -> None:
-        """Switch to eval prefix, flush train stats, and clear step.
+        """Switch to eval prefix, flush train stats, reset phase-local counts, and clear step.
 
         This method handles the train -> eval transition by flushing accumulated training stats
         under the current (train) prefix before switching to eval mode. It should be called BEFORE
         evaluation starts to ensure the first eval batch logs correctly.
+
+        **Per-Phase Gating:** Resets phase-local counts so that `log_every_n_generations` gating
+        selects the same eval samples every time (when dataset is deterministic). This implements
+        "per-phase" sample logging where gating restarts at count 0 for each eval phase.
 
         Args:
             step: Optional step to anchor the flush (defaults to current manager step).
@@ -495,8 +499,29 @@ class RewardLoggingCallback(transformers.TrainerCallback):
             failure_count=failure_count,
         )
         self.reward_manager.set_key_prefix(self.eval_prefix)
+        self.reward_manager.reset_phase_local_counts()  # per-phase gating: consistent eval sample logging
         self.reward_manager.set_step(None)  # clear step for eval
         self._phase.mark_entering_eval()  # suppresses unexpected warnings when prediction steps follow
+
+    def _switch_to_train(self) -> None:
+        """Switch to train prefix and reset phase-local counts.
+
+        This centralizes the "phase entry = reset" logic for train phases, mirroring
+        _switch_to_eval() for eval phases. Called from on_train_begin(), on_evaluate(),
+        and the on_step_begin fallback path.
+
+        **Per-Phase Gating:** Resets phase-local counts so that `log_every_n_generations` gating
+        restarts at count 0 for each "train segment" (the train steps between evaluations).
+        This is intentional: sample logging frequency applies within each phase, not continuously
+        across the entire training run. The per-prefix global count (WandB x-axis) remains
+        monotonic within each prefix, ensuring unique x-axis values for logged samples.
+
+        Note:
+            Requires `self.train_prefix` to be non-empty (the default "train" is always valid).
+            Empty prefixes would cause `reset_phase_local_counts()` to raise ValueError.
+        """
+        self.reward_manager.set_key_prefix(self.train_prefix)
+        self.reward_manager.reset_phase_local_counts()
 
     @typing.override
     def on_step_begin(
@@ -508,7 +533,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Set train prefix, logging step, and epoch at the start of each training step."""
         if self._phase.in_eval:
-            self.reward_manager.set_key_prefix(self.train_prefix)
+            # fallback path: on_evaluate didn't fire (callback ordering issue), switch back to train
+            self._switch_to_train()
         self.reward_manager.set_step(state.global_step)
         self.reward_manager.set_epoch(state.epoch)
 
@@ -546,7 +572,9 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         - If pre-eval switching was missed, flushing now would flush a mixed train+eval
           accumulator under the wrong context.
 
-        We only set the prefix (no flush) to ensure subsequent batches log correctly.
+        We set the prefix and reset local counts (no flush) to ensure:
+        - Subsequent batches log correctly under eval prefix;
+        - Per-phase gating starts fresh (same samples logged in each eval phase).
         """
         first_step, unexpected = self._phase.handle_prediction_step()
         if first_step:
@@ -561,6 +589,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                     "batch may have been logged under the wrong prefix. Please report this issue."
                 )
             self.reward_manager.set_key_prefix(self.eval_prefix)
+            # reset local counts for per-phase gating (ensures same samples logged each eval)
+            self.reward_manager.reset_phase_local_counts()
         # clear step for per-sample eval logs; global_step doesn't change during eval, so logging
         # multiple samples at the same step would cause WandB to overwrite scalar metrics
         self.reward_manager.set_step(None)
@@ -603,7 +633,7 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                 failure_count=failure_count,
             )
         self._phase.handle_evaluate()  # reset phase tracker
-        self.reward_manager.set_key_prefix(self.train_prefix)
+        self._switch_to_train()  # switch back to train with local counts reset
 
     @typing.override
     def on_train_begin(
@@ -620,6 +650,11 @@ class RewardLoggingCallback(transformers.TrainerCallback):
         2. Always set train prefix and reset phase tracker (consistent starting point);
         3. If eval_on_start=True, transition train->eval properly via _switch_to_eval().
 
+        **Resume Behavior:** Even when resuming from checkpoint, local generation counts are
+        reset via `_switch_to_train()`. This is intentional per-phase gating: each training
+        run (including resumed runs) starts sample logging from count 0. Global counts and
+        accumulators are restored from checkpoint for WandB x-axis continuity and stats.
+
         Raises:
             FileNotFoundError: If resuming from checkpoint but reward_state.json is missing.
         """
@@ -632,8 +667,8 @@ class RewardLoggingCallback(transformers.TrainerCallback):
                     "checkpoint may be incomplete or from an older version"
                 )
             self._load_reward_state(reward_state_path)
-        # 2. always start in train mode (prefix + phase tracker reset)
-        self.reward_manager.set_key_prefix(self.train_prefix)
+        # 2. always start in train mode (prefix + local counts reset + phase tracker reset)
+        self._switch_to_train()
         # reset phase tracker in case callback instance is reused
         self._phase = pyine.utils.transformers.training.EvalPhaseTracker()
         # 3. if eval_on_start, transition train->eval properly (flush under train prefix, then switch)

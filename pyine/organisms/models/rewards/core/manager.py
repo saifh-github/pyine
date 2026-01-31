@@ -369,6 +369,53 @@ class RewardManager:
         if self._difficulty_estimator is not None:
             self._difficulty_estimator.set_key_prefix(key_prefix)
 
+    def reset_phase_local_counts(
+        self,
+        prefix: str | None = None,
+    ) -> None:
+        """Reset phase-local generation count for per-phase sample logging consistency.
+
+        This method enables deterministic sample selection within each phase (train/eval).
+        When called at phase entry, it resets the local generation count to 0, so that
+        `log_every_n_generations` gating selects the same samples in each phase.
+
+        **Per-Phase Gating Semantics:**
+
+        With `main_process_only=True` (default), sample logging uses local counts for gating:
+
+        - Eval phases: Resetting at each eval start ensures the same eval samples are logged
+          every time, regardless of how many train samples were processed (helpful for tracking
+          specific samples across epochs or eval checkpoints).
+        - Train phases: Resetting after returning from eval means train logging also restarts
+          from count 0 within each "train segment" (the train steps between evaluations).
+
+        This is intentional "per-phase" gating: `log_every_n_generations` determines which
+        samples to log within each phase, not continuously across the entire training run.
+        The per-prefix global count (used for WandB x-axis) remains monotonic within each
+        prefix (train/ or eval/), ensuring unique x-axis values for logged samples.
+
+        Args:
+            prefix: The prefix to reset. If None, uses current prefix (must not be empty).
+
+        Raises:
+            ValueError: If prefix is None and current prefix is empty (not yet set).
+                This guards against ordering bugs where reset is called before set_key_prefix().
+
+        Note:
+            This only affects frequency gating when main_process_only=True (default).
+            When main_process_only=False, gating uses global counts which are never reset.
+        """
+        if prefix is None:
+            if not self._current_prefix:
+                raise ValueError(
+                    "reset_phase_local_counts() called with prefix=None but current prefix is empty; "
+                    "call set_key_prefix() first or pass an explicit prefix"
+                )
+            target_prefix = self._current_prefix
+        else:
+            target_prefix = pyine.utils.parsing.normalize_path_prefix(prefix)
+        self._local_generation_counts[target_prefix] = 0
+
     def _get_global_generation_count(
         self,
         prefix: str | None = None,
