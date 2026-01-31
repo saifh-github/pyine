@@ -917,7 +917,7 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         samples_delta = steps_delta * effective_batch_size
         samples_per_second = samples_delta / elapsed
         steps_per_second = steps_delta / elapsed
-        logger.info(
+        logger.debug(
             f"train throughput: samples_per_second={samples_per_second:.2f}, "
             f"steps_per_second={steps_per_second:.4f}, effective_batch_size={effective_batch_size}"
         )
@@ -952,7 +952,7 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         )
         samples = self._eval_prediction_steps * eval_batch_size
         samples_per_second = samples / elapsed
-        logger.info(
+        logger.debug(
             f"eval throughput: samples_per_second={samples_per_second:.2f}, "
             f"eval_batch_size={eval_batch_size}, prediction_steps={self._eval_prediction_steps}"
         )
@@ -1024,7 +1024,7 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
     ) -> None:
         """Log final train throughput metrics to wandb.
 
-        This ensures metrics are logged at the end of training, not just via logger.info.
+        This ensures metrics are logged at the end of training, not just via logger.debug.
         """
         if not self._should_log() or not self._config.log_train_throughput:
             return
@@ -1041,7 +1041,7 @@ class ThroughputLoggingCallback(transformers.TrainerCallback):
         samples_delta = steps_delta * effective_batch_size
         samples_per_second = samples_delta / elapsed
         steps_per_second = steps_delta / elapsed
-        logger.info(
+        logger.debug(
             f"final train throughput: samples_per_second={samples_per_second:.2f}, "
             f"steps_per_second={steps_per_second:.4f}"
         )
@@ -1088,7 +1088,7 @@ class GPUStatsLoggingConfig(pydantic.BaseModel):
      - 'at_phase_end': Accumulate all samples during train phase, then gather and emit once
        at phase end (before eval). This gives cluster-wide aggregated stats with minimal
        gathering overhead. **Requires evaluation to run** - if eval_strategy='no', metrics
-       are only logged via logger.info at train end (not to wandb/tensorboard).
+       are only logged via logger.debug at train end (not to wandb/tensorboard).
      - 'always': Gather and emit at every train on_log. Higher overhead but works regardless
        of eval strategy - use this if eval_strategy='no' and you want metrics in wandb.
     """
@@ -1700,7 +1700,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         ):
             logger.warning(
                 "GPU stats logging: gather_train_metrics='at_phase_end' with eval_strategy='no' means "
-                "train/gpu metrics will only be logged via logger.info at train end (they will NOT appear "
+                "train/gpu metrics will only be logged via logger.debug at train end (they will NOT appear "
                 "in W&B/TensorBoard). Use gather_train_metrics='always' if you need metrics in W&B."
             )
         # reset state (all flags must be rank-synchronous to avoid deadlocks)
@@ -1798,7 +1798,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             if train_metrics:
                 logger.warning(
                     "Train phase GPU stats were not flushed before on_evaluate completed (unexpected callback "
-                    f"ordering). Logging via logger.info instead. train/gpu metrics: {train_metrics}"
+                    f"ordering). train/gpu metrics: {train_metrics}"
                 )
             self._train.reset()
         # cleanup phase state on all ranks (must be rank-synchronous)
@@ -1872,7 +1872,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 else:
                     train_metrics = {}
                 if self._should_log() and train_metrics:
-                    logger.info(self._format_gpu_stats_summary(train_metrics, "train"))
+                    logger.debug(self._format_gpu_stats_summary(train_metrics, "train"))
                     self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 self._train.reset()
                 self._train_phase_needs_flush = False
@@ -1895,7 +1895,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 eval_metrics = {}
             # only main rank logs to wandb
             if self._should_log() and eval_metrics:
-                logger.info(self._format_gpu_stats_summary(eval_metrics, "eval"))
+                logger.debug(self._format_gpu_stats_summary(eval_metrics, "eval"))
                 self._logger.log_eval_stats(step=state.global_step, **eval_metrics)
             # all ranks reset accumulators to stay in sync
             self._eval.reset()
@@ -1925,7 +1925,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                     train_metrics = self._compute_train_metrics() if self._should_log() else {}
                 # only main rank logs to wandb
                 if self._should_log() and train_metrics:
-                    logger.info(self._format_gpu_stats_summary(train_metrics, "train"))
+                    logger.debug(self._format_gpu_stats_summary(train_metrics, "train"))
                     self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 # all ranks reset accumulators and peak stats to stay in sync
                 self._train.reset()
@@ -1958,9 +1958,9 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             train_metrics = self._gather_and_compute_train_metrics()
         else:
             train_metrics = self._compute_train_metrics() if self._should_log() else {}
-        # log to wandb and logger.info
+        # log to wandb and logger.debug
         if self._should_log() and train_metrics:
-            logger.info(f"final {self._format_gpu_stats_summary(train_metrics, 'train')}")
+            logger.debug(f"final {self._format_gpu_stats_summary(train_metrics, 'train')}")
             self._logger.log_train_stats(step=state.global_step, **train_metrics)
         # cleanup
         self._train.reset()
