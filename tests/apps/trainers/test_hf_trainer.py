@@ -1489,7 +1489,7 @@ def test_sft_train_attaches_gpu_stats_callback_when_configured(
         ),
         evals_config=types.SimpleNamespace(category_extraction_config=None),
         gradient_checkpointing=False,
-        use_wandb_logging=False,
+        use_wandb_logging=True,  # required for GPU stats callback to be attached
         collator_batch_logging=False,
         output_dir=str(tmp_path / "output"),
         get_model=_FakeModel,

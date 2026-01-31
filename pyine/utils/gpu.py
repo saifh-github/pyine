@@ -149,14 +149,14 @@ def _get_nvml_handle_for_torch_device(
                 f"{type(pci_bus_id)}; falling back to NVML PCI matching"
             )
         # optional UUID-based lookup before fallback PCI matching
-        cuda_uuid = getattr(props, "uuid", None)
+        cuda_uuid = getattr(props, "uuid", None)  # type: ignore[reportUnknownArgumentType]
         if cuda_uuid is not None:
             cuda_uuid_str = str(cuda_uuid)
             with contextlib.suppress(_pynvml.NVMLError):
                 return _pynvml.nvmlDeviceGetHandleByUUID(cuda_uuid_str)
         # fallback: iterate NVML devices and match by PCI info (handles format differences)
-        pci_domain_id = getattr(props, "pci_domain_id", None)
-        pci_device_id = getattr(props, "pci_device_id", None)
+        pci_domain_id = getattr(props, "pci_domain_id", None)  # type: ignore[reportUnknownArgumentType]
+        pci_device_id = getattr(props, "pci_device_id", None)  # type: ignore[reportUnknownArgumentType]
         pci_bus_id_int = pci_bus_id if isinstance(pci_bus_id, int) else None
         target_pci_tuple: tuple[int, int, int, int] | None = None
         if (
@@ -173,8 +173,10 @@ def _get_nvml_handle_for_torch_device(
             nvml_bus_id = nvml_pci.busId
             if isinstance(nvml_bus_id, bytes):
                 nvml_bus_id = nvml_bus_id.decode()
-            if isinstance(pci_bus_id, (str, bytes)) and _pci_bus_ids_match(nvml_bus_id, pci_bus_id):
-                return handle
+            if isinstance(pci_bus_id, (str, bytes)):
+                pci_bus_id_str = pci_bus_id.decode() if isinstance(pci_bus_id, bytes) else pci_bus_id
+                if _pci_bus_ids_match(nvml_bus_id, pci_bus_id_str):
+                    return handle
             if target_pci_tuple is not None:
                 nvml_tuple = _parse_pci_bus_id(nvml_bus_id)
                 if nvml_tuple is not None and nvml_tuple == target_pci_tuple:

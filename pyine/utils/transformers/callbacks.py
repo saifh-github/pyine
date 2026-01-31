@@ -1437,6 +1437,31 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             result["pytorch_peak_percent"] = peak_percent
         return result
 
+    def _format_gpu_stats_summary(
+        self,
+        metrics: dict[str, float | int],
+        phase: str,
+    ) -> str:
+        """Format key GPU stats for logging.
+
+        Args:
+            metrics: Metrics dict from _compute_*_metrics.
+            phase: Phase name for the log message (e.g., "train", "eval").
+
+        Returns:
+            Formatted summary string.
+        """
+        parts = [f"{phase} gpu:"]
+        if "utilization_gpu_percent/mean" in metrics:
+            parts.append(f"util={metrics['utilization_gpu_percent/mean']:.1f}%")
+        if "pytorch_allocated_percent/mean" in metrics:
+            parts.append(f"mem={metrics['pytorch_allocated_percent/mean']:.1f}%")
+        if "pytorch_peak_percent" in metrics:
+            parts.append(f"peak={metrics['pytorch_peak_percent']:.1f}%")
+        if len(parts) == 1:
+            return f"{phase} gpu: (no stats available)"
+        return " ".join(parts)
+
     def _compute_train_metrics(
         self,
         peak_percent_override: float | None = None,
@@ -1847,6 +1872,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 else:
                     train_metrics = {}
                 if self._should_log() and train_metrics:
+                    logger.info(self._format_gpu_stats_summary(train_metrics, "train"))
                     self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 self._train.reset()
                 self._train_phase_needs_flush = False
@@ -1869,6 +1895,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                 eval_metrics = {}
             # only main rank logs to wandb
             if self._should_log() and eval_metrics:
+                logger.info(self._format_gpu_stats_summary(eval_metrics, "eval"))
                 self._logger.log_eval_stats(step=state.global_step, **eval_metrics)
             # all ranks reset accumulators to stay in sync
             self._eval.reset()
@@ -1898,6 +1925,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
                     train_metrics = self._compute_train_metrics() if self._should_log() else {}
                 # only main rank logs to wandb
                 if self._should_log() and train_metrics:
+                    logger.info(self._format_gpu_stats_summary(train_metrics, "train"))
                     self._logger.log_train_stats(step=state.global_step, **train_metrics)
                 # all ranks reset accumulators and peak stats to stay in sync
                 self._train.reset()
@@ -1932,7 +1960,7 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
             train_metrics = self._compute_train_metrics() if self._should_log() else {}
         # log to wandb and logger.info
         if self._should_log() and train_metrics:
-            logger.info(f"GPU stats at train_end: train/gpu metrics: {train_metrics}")
+            logger.info(f"final {self._format_gpu_stats_summary(train_metrics, 'train')}")
             self._logger.log_train_stats(step=state.global_step, **train_metrics)
         # cleanup
         self._train.reset()
