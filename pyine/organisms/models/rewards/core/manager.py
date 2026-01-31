@@ -1,6 +1,7 @@
 """Reward manager implementation."""
 
 import collections.abc
+import json
 import logging
 import math
 import typing
@@ -171,9 +172,6 @@ class RewardManager:
                 config.difficulty,
                 token_counter=self._token_counter,
             )
-            # validate logger is provided when difficulty table is enabled
-            if config.difficulty.table_mode != "disabled" and self._logger is None:
-                raise ValueError("difficulty.table_mode requires a logger, but none was provided")
         self._warn_tag_inconsistencies()
 
     def _setup_token_counter(
@@ -921,14 +919,13 @@ class RewardManager:
         self._total_global_batch_count += 1
         # STEP 6: post-processing that needs global indices (only if this rank has samples)
         if local_batch_size > 0:
-            # compute difficulty metrics and merge into outputs (needs global generation_count)
+            # compute difficulty metrics and merge into outputs
             if self._difficulty_estimator is not None:
                 for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
                     difficulty_metrics = self._difficulty_estimator.compute(
                         sample_data=sample_ctx.sample_data,
                         reward_total=output.total,
                         weighted_terms=output.weighted_terms,
-                        generation_count=global_sample_indices[idx],
                     )
                     if difficulty_metrics:
                         merged_metrics = dict(output.metrics)
@@ -958,17 +955,6 @@ class RewardManager:
                     global_generation_count=global_sample_indices[idx],
                     local_generation_count=local_sample_indices[idx],
                     global_batch_count=global_batch_count,
-                )
-            # difficulty table logging (per-sample global counts, local counts for gating)
-            should_log_difficulty = self._config.logging.enabled if log is None else log
-            for idx, (output, sample_ctx) in enumerate(zip(outputs, sample_ctxs, strict=True)):
-                self._maybe_log_difficulty_table_row(
-                    output=output,
-                    sample_ctx=sample_ctx,
-                    step=step,
-                    global_generation_count=global_sample_indices[idx],
-                    local_generation_count=local_sample_indices[idx],
-                    log=should_log_difficulty,
                 )
         # STEP 7: update global generation counts (ALL ranks, including empty ones)
         new_gen_count = self._get_global_generation_count(self._current_prefix) + total_batch_size
@@ -1478,6 +1464,18 @@ class RewardManager:
             expected_output = sample_ctx.code_exec_eval.expected
         else:
             expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
+        # extract difficulty metrics from output (if present)
+        all_metrics = output.metrics
+        difficulty_source = all_metrics.get("difficulty/source")
+        difficulty_score = all_metrics.get("difficulty/score")
+        difficulty_bin = all_metrics.get("difficulty/bin_index")
+        difficulty_raw_primary = all_metrics.get("difficulty/raw_primary")
+        # build secondary values JSON with deterministic ordering
+        secondary_raw: dict[str, float] = {}
+        for key, value in all_metrics.items():
+            if key.startswith("difficulty/raw/") and isinstance(value, (int, float)):
+                secondary_raw[key.replace("difficulty/raw/", "")] = float(value)
+        difficulty_secondary_json = json.dumps(secondary_raw, sort_keys=True) if secondary_raw else None
         self._logger.log_sample(
             sample_id,
             generation_count=global_generation_count,
@@ -1497,103 +1495,14 @@ class RewardManager:
             final_answer=final_answer,
             categories=categories,
             tags=sample_ctx.tags or None,
-        )
-
-    def _should_log_difficulty_table_row(
-        self,
-        global_generation_count: int,
-        local_generation_count: int,
-        *,
-        log: bool,
-    ) -> bool:
-        """Determine if we should log a difficulty table row based on phase and config.
-
-        Args:
-            global_generation_count: Exact global generation count for this sample (across all ranks).
-            local_generation_count: Local generation count for this sample (only samples processed
-                by this rank). Used for frequency gating when main_process_only=True.
-            log: Whether logging is enabled for this compute_batch() call. This is already
-                resolved from the log= parameter (True/False override) or LoggingConfig.enabled
-                (when log=None), matching _maybe_log_sample() semantics.
-        """
-        if not log:  # respect the resolved log flag (same semantics as _maybe_log_sample)
-            return False
-        # respect main_process_only (same as _maybe_log_sample)
-        if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
-            return False
-        if self._config.difficulty is None or not self._config.difficulty.enabled:
-            return False
-        if self._config.difficulty.table_mode == "disabled":
-            return False
-        if self._logger is None:
-            return False
-        table_mode = self._config.difficulty.table_mode
-        # determine current phase from logger key prefix (e.g., "train/" vs "eval/")
-        key_prefix = self._logger.get_key_prefix()
-        is_eval_phase = "eval" in key_prefix.lower()
-        if table_mode == "eval_only":
-            return is_eval_phase  # log every sample in eval, skip train
-        if table_mode == "sampled":
-            if is_eval_phase:
-                return True  # log every sample in eval
-            # sample in train phase: use local count for gating when main_process_only=True
-            # (same logic as _maybe_log_sample for consistent frequency behavior)
-            gating_count = local_generation_count if self._config.logging.main_process_only else global_generation_count
-            return gating_count % self._config.difficulty.sample_every_n_generations == 0
-        return table_mode == "always"
-
-    def _maybe_log_difficulty_table_row(
-        self,
-        output: reward_types.RewardOutput,
-        sample_ctx: reward_types.SampleContext,
-        *,
-        step: int | None,
-        global_generation_count: int,
-        local_generation_count: int,
-        log: bool,
-    ) -> None:
-        """Log a difficulty table row if enabled and the frequency gate passes.
-
-        Args:
-            output: Reward output for the sample.
-            sample_ctx: Sample context.
-            step: Optional logging step override.
-            global_generation_count: Exact global generation count for this sample (across all ranks).
-                Used as the logged x-axis value for cross-rank alignment.
-            local_generation_count: Local generation count for this sample (only samples processed
-                by this rank). Used for frequency gating when main_process_only=True.
-            log: Whether logging is enabled for this compute_batch() call.
-        """
-        if not self._should_log_difficulty_table_row(global_generation_count, local_generation_count, log=log):
-            return
-        # extract difficulty metrics from output
-        metrics = output.metrics
-        difficulty_score = metrics.get("difficulty/score")
-        difficulty_bin = metrics.get("difficulty/bin_index")
-        raw_primary = metrics.get("difficulty/raw_primary")
-        primary_source = metrics.get("difficulty/source")
-        # skip if primary metrics missing (e.g., sample was skipped)
-        if difficulty_score is None or difficulty_bin is None:
-            return
-        # collect secondary raw values from metrics
-        secondary_raw_values: dict[str, float] = {}
-        for key, value in metrics.items():
-            if key.startswith("difficulty/raw/") and isinstance(value, (int, float)):
-                secondary_raw_values[key.replace("difficulty/raw/", "")] = float(value)
-        step_to_use = self._step if step is None else step
-        self._logger.log_difficulty_stats(  # type: ignore[union-attr]
-            step=step_to_use or 0,
-            generation_count=global_generation_count,
-            sample_id=sample_ctx.sample_id,
-            primary_source=str(primary_source) if primary_source else "",
-            raw_primary=float(raw_primary) if raw_primary is not None else None,
-            difficulty_score=float(difficulty_score),
-            difficulty_bin=int(difficulty_bin),
-            reward_total=output.total,
+            difficulty_source=str(difficulty_source) if difficulty_source else None,
+            difficulty_score=float(difficulty_score) if difficulty_score is not None else None,
+            difficulty_bin=int(difficulty_bin) if difficulty_bin is not None else None,
+            difficulty_raw_primary=float(difficulty_raw_primary) if difficulty_raw_primary is not None else None,
+            difficulty_secondary_json=difficulty_secondary_json,
             predict_type=sample_ctx.sample_data.predict_type.value,
             code_type=sample_ctx.sample_data.code_type,
             has_code_override=sample_ctx.sample_data.has_code_override,
-            secondary_raw_values=secondary_raw_values or None,
         )
 
     def _scope_reward_sample_fields(
@@ -1605,7 +1514,7 @@ class RewardManager:
 
         Note: Difficulty metrics (keys starting with 'difficulty/') are filtered out here
         because they should not be logged as per-generation scalars. They only appear in
-        run-level summaries and the optional lightweight difficulty_samples table.
+        run-level summaries and as explicit columns in the generation_details table.
         """
         # filter out difficulty/* keys; they are not logged as per-generation scalars
         filtered_metrics = {k: v for k, v in metrics.items() if not k.startswith("difficulty/")}

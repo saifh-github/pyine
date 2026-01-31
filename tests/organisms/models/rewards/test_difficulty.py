@@ -234,7 +234,7 @@ class TestRunSummaries:
         assert metrics["difficulty/execution_skipped"] == 1
         assert metrics["difficulty/primary_missing"] == 1
         summaries = estimator.get_run_summaries()
-        assert summaries["count"] == 0
+        assert summaries["score/count"] == 0
         assert summaries["override_skip_ratio"] == pytest.approx(1.0)
         assert "num_bins" in summaries
         assert "bin_edge_0" in summaries
@@ -251,9 +251,9 @@ class TestRunSummaries:
             sample_data = _make_sample_data(trace_step_count=step_count)
             estimator.compute(sample_data, reward_total=0.5)
         summaries = estimator.get_run_summaries()
-        assert "median" in summaries
-        assert "p90" in summaries
-        assert "p99" in summaries
+        assert "score/median" in summaries
+        assert "score/p90" in summaries
+        assert "score/p99" in summaries
 
 
 class TestConfigValidation:
@@ -401,8 +401,8 @@ class TestStateSerialization:
         restored = difficulty_module.DifficultyEstimator.from_state(config, state)
         restored_summaries = restored.get_run_summaries()
         # check key metrics match
-        assert original_summaries["mean"] == pytest.approx(restored_summaries["mean"])
-        assert original_summaries["count"] == restored_summaries["count"]
+        assert original_summaries["score/mean"] == pytest.approx(restored_summaries["score/mean"])
+        assert original_summaries["score/count"] == restored_summaries["score/count"]
 
     def test_from_state_rejects_mismatched_bin_count(self) -> None:
         """from_state should raise ValueError if bin counts don't match config."""
@@ -618,64 +618,8 @@ class TestRewardManagerConfigValidation:
             )
 
 
-class TestSampledMode:
-    """Tests for 'sampled' mode tracking options."""
-
-    def test_sampled_mode_tracks_at_interval(self) -> None:
-        """Sampled mode should only track at the configured interval."""
-        config = reward_configs.DifficultyConfig(
-            enabled=True,
-            primary_source="trace_step_count",
-            track_percentiles="sampled",
-            sample_every_n_generations=10,
-        )
-        estimator = difficulty_module.DifficultyEstimator(config)
-        # process 25 samples with generation counts 1-25
-        for gen_count in range(1, 26):
-            sample_data = _make_sample_data(trace_step_count=gen_count * 10)
-            estimator.compute(sample_data, reward_total=0.5, generation_count=gen_count)
-        # should only have tracked at generations 10 and 20 (every 10th)
-        assert len(estimator._score_values) == 2
-
-    def test_sampled_mode_bin_values_at_interval(self) -> None:
-        """Sampled mode should track bin values at the configured interval."""
-        config = reward_configs.DifficultyConfig(
-            enabled=True,
-            primary_source="trace_step_count",
-            track_bin_quantiles="sampled",
-            sample_every_n_generations=5,
-        )
-        estimator = difficulty_module.DifficultyEstimator(config)
-        # process 12 samples
-        for gen_count in range(1, 13):
-            sample_data = _make_sample_data(trace_step_count=50)  # all same difficulty -> same bin
-            estimator.compute(sample_data, reward_total=0.5, generation_count=gen_count)
-        # should have tracked at generations 5 and 10 (every 5th out of 12)
-        total_tracked = sum(len(vals) for vals in estimator._bin_reward_values)
-        assert total_tracked == 2
-
-    def test_sampled_mode_per_term_at_interval(self) -> None:
-        """Sampled mode should track per-term rewards at the configured interval."""
-        config = reward_configs.DifficultyConfig(
-            enabled=True,
-            primary_source="trace_step_count",
-            track_per_term_rewards="sampled",
-            sample_every_n_generations=3,
-        )
-        estimator = difficulty_module.DifficultyEstimator(config)
-        # process 10 samples
-        for gen_count in range(1, 11):
-            sample_data = _make_sample_data(trace_step_count=50)
-            estimator.compute(
-                sample_data,
-                reward_total=0.5,
-                weighted_terms={"term_a": 0.3, "term_b": 0.2},
-                generation_count=gen_count,
-            )
-        # should have tracked at generations 3, 6, 9 (every 3rd out of 10)
-        assert "term_a" in estimator._bin_term_reward_stats
-        total_term_count = sum(s.count for s in estimator._bin_term_reward_stats["term_a"])
-        assert total_term_count == 3
+class TestTrackingModes:
+    """Tests for tracking mode options (disabled, eval_only, always)."""
 
     def test_always_mode_tracks_all(self) -> None:
         """Always mode should track every generation."""
@@ -685,9 +629,9 @@ class TestSampledMode:
             track_percentiles="always",
         )
         estimator = difficulty_module.DifficultyEstimator(config)
-        for gen_count in range(1, 11):
-            sample_data = _make_sample_data(trace_step_count=gen_count * 10)
-            estimator.compute(sample_data, reward_total=0.5, generation_count=gen_count)
+        for idx in range(10):
+            sample_data = _make_sample_data(trace_step_count=(idx + 1) * 10)
+            estimator.compute(sample_data, reward_total=0.5)
         # should track all 10 samples
         assert len(estimator._score_values) == 10
 
@@ -700,13 +644,33 @@ class TestSampledMode:
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         # process in train phase (default)
-        for gen_count in range(1, 6):
-            sample_data = _make_sample_data(trace_step_count=gen_count * 10)
-            estimator.compute(sample_data, reward_total=0.5, generation_count=gen_count)
+        for idx in range(5):
+            sample_data = _make_sample_data(trace_step_count=(idx + 1) * 10)
+            estimator.compute(sample_data, reward_total=0.5)
         assert len(estimator._score_values) == 0  # no tracking in train
         # switch to eval phase
         estimator.set_key_prefix("eval/")
-        for gen_count in range(6, 11):
-            sample_data = _make_sample_data(trace_step_count=gen_count * 10)
-            estimator.compute(sample_data, reward_total=0.5, generation_count=gen_count)
+        for idx in range(5):
+            sample_data = _make_sample_data(trace_step_count=(idx + 6) * 10)
+            estimator.compute(sample_data, reward_total=0.5)
         assert len(estimator._score_values) == 5  # tracked during eval
+
+    def test_disabled_mode_never_tracks(self) -> None:
+        """Disabled mode should never track percentiles."""
+        config = reward_configs.DifficultyConfig(
+            enabled=True,
+            primary_source="trace_step_count",
+            track_percentiles="disabled",
+        )
+        estimator = difficulty_module.DifficultyEstimator(config)
+        # process in train phase
+        for idx in range(5):
+            sample_data = _make_sample_data(trace_step_count=(idx + 1) * 10)
+            estimator.compute(sample_data, reward_total=0.5)
+        assert len(estimator._score_values) == 0  # not tracked
+        # switch to eval phase
+        estimator.set_key_prefix("eval/")
+        for idx in range(5):
+            sample_data = _make_sample_data(trace_step_count=(idx + 6) * 10)
+            estimator.compute(sample_data, reward_total=0.5)
+        assert len(estimator._score_values) == 0  # still not tracked

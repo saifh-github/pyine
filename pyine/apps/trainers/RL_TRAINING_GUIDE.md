@@ -640,11 +640,11 @@ logging:
 
 This produces metrics like:
 
-- `eval/reward/run/categories/code_type/original/mean` - Mean reward for `code_type=original` samples
-- `eval/reward/run/categories/code_type/original/std` - Std deviation
-- `eval/reward/run/categories/code_type/original/min` - Min reward
-- `eval/reward/run/categories/code_type/original/max` - Max reward
-- `eval/reward/run/categories/code_type/original/count` - Number of samples in category
+- `{prefix}/reward/run/categories/code_type/original/mean` - Mean reward for `code_type=original` samples
+- `{prefix}/reward/run/categories/code_type/original/std` - Std deviation
+- `{prefix}/reward/run/categories/code_type/original/min` - Min reward
+- `{prefix}/reward/run/categories/code_type/original/max` - Max reward
+- `{prefix}/reward/run/categories/code_type/original/count` - Number of samples in category
 
 For details on available reward terms and configuration options, see `pyine/organisms/models/rewards/README.md`.
 
@@ -727,6 +727,8 @@ config:
 
 ```bash
 uv sync --extra gpu-monitoring
+# or
+make install-all
 ```
 
 (Note: pip/uv normalize extras names, so `gpu-monitoring` and `gpu_monitoring` are equivalent.
@@ -734,24 +736,30 @@ uv sync --extra gpu-monitoring
 `nvidia-ml-py`, you still get PyTorch CUDA memory stats; NVML-specific metrics like utilization,
 power, and temperature will be unavailable.)
 
-**Logged metrics** (under `train/gpu/*` and `eval/gpu/*`):
+**Logged metrics** (under `train/*` and `eval/*` prefixes):
 
-- `utilization_gpu_percent/*`: GPU compute utilization (mean/std/min/max)
-- `utilization_mem_controller_percent/*`: Memory controller utilization (mean/std/min/max)
-- `vram_used_percent/*`: VRAM usage percentage
-- `pytorch_allocated_percent/*`: PyTorch memory allocation percentage
-- `pytorch_peak_percent`: Peak memory since last phase (max across devices/ranks, not mean)
-- `power_watts/*`: Power consumption (watts)
-- `temperature_celsius/*`: GPU temperature
-- `total_sample_calls`: Number of sampling calls (total across ranks when gathered)
+- `{prefix}/gpu/utilization_gpu_percent/*`: GPU compute utilization (mean/std/min/max)
+- `{prefix}/gpu/utilization_mem_controller_percent/*`: Memory controller utilization (mean/std/min/max)
+- `{prefix}/gpu/vram_used_percent/*`: VRAM usage percentage
+- `{prefix}/gpu/pytorch_allocated_percent/*`: PyTorch memory allocation percentage
+- `{prefix}/gpu/pytorch_peak_percent`: Peak memory since last phase (max across devices/ranks, not mean)
+- `{prefix}/gpu/power_watts/*`: Power consumption (watts)
+- `{prefix}/gpu/temperature_celsius/*`: GPU temperature
+- `{prefix}/gpu/total_sample_calls`: Number of sampling calls (total across ranks when gathered)
 
 **Notes**:
 
 - Without `nvidia-ml-py`, only PyTorch memory stats are logged (utilization/power/temperature unavailable)
+- **Running stats window and reset behavior**: Stats are computed using unbounded rolling accumulators
+  (mean/std/min/max) that reset at different frequencies depending on the mode:
+  - **Train stats**: Window size depends on `gather_train_metrics`:
+    - `"at_phase_end"`: Accumulates from train start until eval (window = `eval_steps` training steps)
+    - `"always"` / `"never"`: Accumulates between `on_log` calls (window = `logging_steps` training steps)
+  - **Eval stats**: Accumulates for the entire evaluation run, reset at eval start
 - `gather_train_metrics` behavior:
   - `"at_phase_end"` (default): Accumulates stats throughout training and emits once before eval.
     **Important**: This requires evaluation to run. If `eval_strategy: "no"`, metrics are logged via
-    `logger.info` at train end only (they will **not** appear in W&B/TensorBoard). Use `"always"`
+    `logger.debug` at train end only (they will **not** appear in W&B/TensorBoard). Use `"always"`
     instead if you need metrics in W&B without evaluation.
   - `"always"`: Emits metrics at every train `on_log` (every `logging_steps`). Works regardless of
     eval strategy and metrics appear in W&B/TensorBoard under `train/gpu/*`. **Recommended when
@@ -797,23 +805,55 @@ config:
       num_difficulty_bins: 10
 ```
 
-**Difficulty axes**:
+**Available difficulty sources**:
 
-- **Reasoning depth**: Captured by `trace_step_count` (number of sequential trace steps)
-- **Computational burden**: Approximated by `halstead_effort` (code complexity metric)
+- **Execution-related** (affected by `has_code_override`, use `code_override_mode` to control):
+  - `trace_step_count` (default): Number of trace execution steps
+  - `segment_span`: `last_line - first_line` of the code segment
+  - Any key from `complexity_metrics` (e.g., `halstead_effort`, `cyclomatic_complexity`, `maintainability_index`)
+- **Context-related** (valid even with code overrides):
+  - `code_length`, `inputs_length`, `output_length`: Character lengths
+  - `code_tokens`, `inputs_tokens`, `output_tokens`: Token counts (require tokenizer)
 
 **Logged metrics** (when enabled):
 
-- `difficulty/score`: Normalized difficulty score per sample
-- `difficulty/bin`: Bin index (0 to num_bins-1)
-- `difficulty/reward_by_bin/*`: Per-bin reward statistics (mean, count)
-- Raw values for primary and secondary sources
+Per-sample difficulty data is available in the `generation_details` table (when `logging.log_tables=True`) as explicit columns:
 
-**Notes**:
+- `difficulty_source`: Name of the primary difficulty source
+- `difficulty_score`: Normalized difficulty score
+- `difficulty_bin`: Bin index (0 to num_bins-1)
+- `difficulty_raw_primary`: Raw value of the primary source
+- `difficulty_secondary_json`: JSON of secondary source raw values
 
-- Set `enabled: false` or omit `difficulty` entirely to disable
-- For samples with code overrides, set `code_override_mode` to control handling (default: `skip`)
-- Use `track_percentiles`, `track_bin_quantiles`, or `table_mode` for deeper analysis (memory overhead)
+Note: Per-sample difficulty metrics are NOT logged as scalars (they are filtered from per-generation scalar logging to reduce noise). Only run-level summaries appear as scalars.
+
+Run-level summaries (logged at phase end under `{prefix}/difficulty/run/*`):
+
+- `score/mean`, `score/std`, `score/min`, `score/max`, `score/count`: Score distribution stats
+- `bin_{idx}/count`, `bin_{idx}/reward_mean`, `bin_{idx}/reward_std`: Per-bin reward stats
+- `reward/correlation`, `reward/slope`: Difficulty-reward correlation and linear slope
+- `missing_ratio`, `override_skip_ratio`: Quality diagnostics
+- `secondary/{source}/reward/correlation`: Correlation for each secondary source
+
+**Configuration options**:
+
+- `enabled` (default: `true`): Whether difficulty estimation is active
+- `primary_source` (default: `trace_step_count`): Main metric for difficulty scoring
+- `secondary_sources` (default: `[halstead_effort]`): Additional sources to log raw values
+- `normalization_mode`: `log` (default, unbounded log1p), `fixed_range` (0-1 clamped), or `none` (raw)
+- `num_difficulty_bins` (default: 10): Number of bins for stratified analysis
+- `score_clip_max`: Optional ceiling to prevent outliers from dominating bins
+- `bin_max_score`: Maximum score for auto-generated bin edges (log mode only)
+- `bin_edges`: Manual bin edges (overrides automatic computation)
+- `code_override_mode`: How to handle samples with code overrides (`skip`, `use_original`, `recompute_step_count`)
+
+**Memory-heavy tracking options** (use sparingly):
+
+- `track_percentiles`: Store all scores for median/p90/p99 (`disabled`, `eval_only`, `always`)
+- `track_bin_quantiles`: Store per-bin rewards for quantiles (`disabled`, `eval_only`, `always`)
+- `track_per_term_rewards`: Per-bin stats for each reward term (`disabled`, `eval_only`, `always`)
+
+Per-sample difficulty data is logged as columns in the `generation_details` table when `logging.log_tables=True`.
 
 ### Prompt Templates
 

@@ -766,6 +766,14 @@ class RewardLogger(typing.Protocol):
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        difficulty_source: str | None = None,
+        difficulty_score: float | None = None,
+        difficulty_bin: int | None = None,
+        difficulty_raw_primary: float | None = None,
+        difficulty_secondary_json: str | None = None,
+        predict_type: str | None = None,
+        code_type: str | None = None,
+        has_code_override: bool | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
@@ -800,6 +808,14 @@ class RewardLogger(typing.Protocol):
             final_answer: Optional parsed final answer text for table logging.
             categories: Optional list of category labels for the sample (for table logging).
             tags: Optional list of sample tags (for table logging).
+            difficulty_source: Name of the primary difficulty source (e.g., "trace_step_count").
+            difficulty_score: Normalized difficulty score.
+            difficulty_bin: Bin index for this sample's difficulty.
+            difficulty_raw_primary: Raw value of the primary difficulty source.
+            difficulty_secondary_json: JSON string of secondary difficulty raw values.
+            predict_type: Sample predict type (e.g., "program_output").
+            code_type: Sample code type.
+            has_code_override: Whether the sample has a code override.
             **kwargs: Additional keyword arguments for forward compatibility.
                 Custom implementations should accept **kwargs to remain compatible
                 with future additions to the logging interface.
@@ -920,42 +936,6 @@ class RewardLogger(typing.Protocol):
 
         Returns:
             The current key prefix (e.g., "train/", "eval/", or "").
-        """
-        ...
-
-    def log_difficulty_stats(
-        self,
-        *,
-        step: int,
-        generation_count: int,
-        sample_id: str,
-        primary_source: str,
-        raw_primary: float | None,
-        difficulty_score: float,
-        difficulty_bin: int,
-        reward_total: float,
-        predict_type: str,
-        code_type: str,
-        has_code_override: bool,
-        secondary_raw_values: dict[str, float] | None = None,
-    ) -> None:
-        """Log difficulty statistics for a sample.
-
-        Used to populate a lightweight difficulty table for analyzing reward vs difficulty.
-
-        Args:
-            step: Training step.
-            generation_count: Total generations processed so far (1-indexed).
-            sample_id: Unique identifier for the sample.
-            primary_source: Name of the primary difficulty source (e.g., "trace_step_count").
-            raw_primary: Raw value of the primary source, or None if missing.
-            difficulty_score: Normalized difficulty score.
-            difficulty_bin: Bin index for this sample's difficulty.
-            reward_total: Total reward for this sample.
-            predict_type: Sample predict type (e.g., "program_output").
-            code_type: Sample code type.
-            has_code_override: Whether the sample has a code override.
-            secondary_raw_values: Optional dict of secondary source raw values.
         """
         ...
 

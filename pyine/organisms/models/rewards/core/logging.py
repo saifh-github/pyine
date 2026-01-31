@@ -79,7 +79,6 @@ class InMemoryRewardLogger:
         self.table_rows: list[dict[str, object]] = []
         self.runs: list[dict[str, object]] = []
         self.batch_stats: list[dict[str, object]] = []
-        self.difficulty_stats: list[dict[str, object]] = []
         self._step: int | None = None
         self._epoch: float | None = None
         self._key_prefix: str = ""
@@ -120,6 +119,14 @@ class InMemoryRewardLogger:
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        difficulty_source: str | None = None,
+        difficulty_score: float | None = None,
+        difficulty_bin: int | None = None,
+        difficulty_raw_primary: float | None = None,
+        difficulty_secondary_json: str | None = None,
+        predict_type: str | None = None,
+        code_type: str | None = None,
+        has_code_override: bool | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Record a per-sample logging event in memory.
@@ -144,6 +151,14 @@ class InMemoryRewardLogger:
             final_answer: Parsed final answer text.
             categories: Sample categories for grouping.
             tags: Additional sample tags.
+            difficulty_source: Name of the primary difficulty source.
+            difficulty_score: Normalized difficulty score.
+            difficulty_bin: Bin index for this sample's difficulty.
+            difficulty_raw_primary: Raw value of the primary difficulty source.
+            difficulty_secondary_json: JSON string of secondary difficulty raw values.
+            predict_type: Sample predict type.
+            code_type: Sample code type.
+            has_code_override: Whether the sample has a code override.
             **kwargs: Additional fields to store.
         """
         # note: frequency gating is the caller's responsibility (typically RewardManager);
@@ -170,6 +185,14 @@ class InMemoryRewardLogger:
             "reward_metrics": dict(metrics) if metrics is not None else None,
             "categories": list(categories) if categories is not None else None,
             "tags": list(tags) if tags is not None else None,
+            "difficulty_source": difficulty_source,
+            "difficulty_score": difficulty_score,
+            "difficulty_bin": difficulty_bin,
+            "difficulty_raw_primary": difficulty_raw_primary,
+            "difficulty_secondary_json": difficulty_secondary_json,
+            "predict_type": predict_type,
+            "code_type": code_type,
+            "has_code_override": has_code_override,
             **kwargs,
         }
         self.samples.append(dict(record))
@@ -191,39 +214,6 @@ class InMemoryRewardLogger:
     def get_key_prefix(self) -> str:
         """Get the current key prefix."""
         return self._key_prefix
-
-    def log_difficulty_stats(
-        self,
-        *,
-        step: int,
-        generation_count: int,
-        sample_id: str,
-        primary_source: str,
-        raw_primary: float | None,
-        difficulty_score: float,
-        difficulty_bin: int,
-        reward_total: float,
-        predict_type: str,
-        code_type: str,
-        has_code_override: bool,
-        secondary_raw_values: dict[str, float] | None = None,
-    ) -> None:
-        """Record difficulty statistics for a sample in memory."""
-        record: dict[str, object] = {
-            "step": step,
-            "generation_count": generation_count,
-            "sample_id": sample_id,
-            "primary_source": primary_source,
-            "raw_primary": raw_primary,
-            "difficulty_score": difficulty_score,
-            "difficulty_bin": difficulty_bin,
-            "reward_total": reward_total,
-            "predict_type": predict_type,
-            "code_type": code_type,
-            "has_code_override": has_code_override,
-            "secondary_raw_values": dict(secondary_raw_values) if secondary_raw_values else None,
-        }
-        self.difficulty_stats.append(record)
 
     def log_phase_summaries(
         self,
@@ -351,25 +341,6 @@ class WandBRewardLogger:
         self._generation_metrics_defined_prefixes: set[str] = set()
         self._batch_metrics_defined_prefixes: set[str] = set()
         self._run_metrics_defined_prefixes: set[str] = set()
-        # difficulty table support (lightweight per-sample table)
-        self._difficulty_table_rows: list[dict[str, object]] = []
-        self._difficulty_table_columns = [
-            # note: these should stay aligned with the features prepared in the difficulty estimator
-            "step",
-            "generation_count",
-            "sample_id",
-            "primary_source",
-            "raw_primary",
-            "difficulty_score",
-            "difficulty_bin",
-            "reward_total",
-            "predict_type",
-            "code_type",
-            "has_code_override",
-        ]
-        # secondary raw values added dynamically as columns when present
-        self._difficulty_table_secondary_columns: set[str] = set()
-        # note: difficulty table uses the same max_rows as generation table (managed by LoggingConfig)
         if self._log_every_n_generations < 1:
             raise ValueError("log_every_n_generations must be >= 1")
         # NOTE: we do NOT call _define_*_step_metrics() here because HuggingFace's
@@ -535,6 +506,14 @@ class WandBRewardLogger:
         final_answer: str | None = None,
         categories: collections.abc.Sequence[str] | None = None,
         tags: collections.abc.Sequence[str] | None = None,
+        difficulty_source: str | None = None,
+        difficulty_score: float | None = None,
+        difficulty_bin: int | None = None,
+        difficulty_raw_primary: float | None = None,
+        difficulty_secondary_json: str | None = None,
+        predict_type: str | None = None,
+        code_type: str | None = None,
+        has_code_override: bool | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward payload to W&B.
@@ -564,6 +543,14 @@ class WandBRewardLogger:
             final_answer: Parsed final answer text.
             categories: Sample categories for grouping.
             tags: Additional sample tags.
+            difficulty_source: Name of the primary difficulty source.
+            difficulty_score: Normalized difficulty score.
+            difficulty_bin: Bin index for this sample's difficulty.
+            difficulty_raw_primary: Raw value of the primary difficulty source.
+            difficulty_secondary_json: JSON string of secondary difficulty raw values.
+            predict_type: Sample predict type.
+            code_type: Sample code type.
+            has_code_override: Whether the sample has a code override.
             **kwargs: Absorbed for forward compatibility.
         """
         del kwargs  # absorb any future additions for forward compatibility
@@ -628,6 +615,14 @@ class WandBRewardLogger:
                 "reward_metrics_json": json.dumps(prefixed_metrics, sort_keys=True),
                 "categories_json": json.dumps(list(categories), sort_keys=True) if categories else None,
                 "tags_json": json.dumps(list(tags), sort_keys=True) if tags else None,
+                "difficulty_source": difficulty_source,
+                "difficulty_score": difficulty_score,
+                "difficulty_bin": difficulty_bin,
+                "difficulty_raw_primary": difficulty_raw_primary,
+                "difficulty_secondary_json": difficulty_secondary_json,
+                "predict_type": predict_type,
+                "code_type": code_type,
+                "has_code_override": has_code_override,
             }
             self._generation_table_rows.append(row)
             # flush table when buffer reaches max size
@@ -675,60 +670,6 @@ class WandBRewardLogger:
             prefixed[self._prefix_key("epoch")] = self._epoch
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
 
-    def log_difficulty_stats(
-        self,
-        *,
-        step: int,
-        generation_count: int,
-        sample_id: str,
-        primary_source: str,
-        raw_primary: float | None,
-        difficulty_score: float,
-        difficulty_bin: int,
-        reward_total: float,
-        predict_type: str,
-        code_type: str,
-        has_code_override: bool,
-        secondary_raw_values: dict[str, float] | None = None,
-    ) -> None:
-        """Add a row to the lightweight difficulty table."""
-        row: dict[str, object] = {
-            "step": step,
-            "generation_count": generation_count,
-            "sample_id": sample_id,
-            "primary_source": primary_source,
-            "raw_primary": raw_primary,
-            "difficulty_score": difficulty_score,
-            "difficulty_bin": difficulty_bin,
-            "reward_total": reward_total,
-            "predict_type": predict_type,
-            "code_type": code_type,
-            "has_code_override": has_code_override,
-        }
-        # add secondary raw values as dynamic columns
-        if secondary_raw_values:
-            for key, value in secondary_raw_values.items():
-                col_name = f"raw_{key}"
-                self._difficulty_table_secondary_columns.add(col_name)
-                row[col_name] = value
-        self._difficulty_table_rows.append(row)
-        # force flush if buffer exceeds max rows (uses same limit as generation table)
-        if len(self._difficulty_table_rows) >= self._generation_table_max_rows:
-            self.flush_difficulty_table()
-
-    def flush_difficulty_table(self) -> None:
-        """Flush difficulty table to wandb."""
-        if not self._difficulty_table_rows:
-            return
-        # build final column list: base + dynamic secondary columns
-        all_columns = list(self._difficulty_table_columns) + sorted(self._difficulty_table_secondary_columns)
-        table = wandb.Table(
-            columns=all_columns,
-            data=[[row.get(col, None) for col in all_columns] for row in self._difficulty_table_rows],
-        )
-        self._wandb_run.log({self._prefix_key("difficulty_samples"): table})  # type: ignore[reportUnknownMemberType]
-        self._difficulty_table_rows = []
-
     def log_phase_summaries(
         self,
         *,
@@ -769,8 +710,6 @@ class WandBRewardLogger:
         self._wandb_run.log(prefixed)  # type: ignore[reportUnknownMemberType]
         if self._log_generation_table:
             self.flush_generation_table()
-        # flush difficulty table at phase-level logging (e.g., end of eval phase)
-        self.flush_difficulty_table()
 
     def set_step(
         self,
@@ -825,6 +764,14 @@ class WandBRewardLogger:
             "reward_metrics_json",
             "categories_json",
             "tags_json",
+            "difficulty_source",
+            "difficulty_score",
+            "difficulty_bin",
+            "difficulty_raw_primary",
+            "difficulty_secondary_json",
+            "predict_type",
+            "code_type",
+            "has_code_override",
         ]
         table = wandb.Table(columns=columns)
         table_obj = typing.cast("typing.Any", table)
@@ -848,6 +795,14 @@ class WandBRewardLogger:
                 row["reward_metrics_json"],
                 row["categories_json"],
                 row["tags_json"],
+                row["difficulty_source"],
+                row["difficulty_score"],
+                row["difficulty_bin"],
+                row["difficulty_raw_primary"],
+                row["difficulty_secondary_json"],
+                row["predict_type"],
+                row["code_type"],
+                row["has_code_override"],
             ]
             table_obj.add_data(*row_data)
         self._wandb_run.log({self._prefix_key(self._generation_table_key): table})  # type: ignore[reportUnknownMemberType]

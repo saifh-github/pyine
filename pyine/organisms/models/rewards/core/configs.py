@@ -284,7 +284,7 @@ class DifficultyConfig(reward_types.BaseConfig):
       otherwise fall back to original trace_step_count.
     """
 
-    track_percentiles: typing.Literal["disabled", "eval_only", "sampled", "always"] = "disabled"
+    track_percentiles: typing.Literal["disabled", "eval_only", "always"] = "disabled"
     """When to track difficulty score distribution for percentile computation.
 
     Stores all difficulty scores in memory for accurate median/p90/p99.
@@ -292,11 +292,10 @@ class DifficultyConfig(reward_types.BaseConfig):
     Options:
     - 'disabled': do not track percentiles;
     - 'eval_only': only track during eval phase;
-    - 'sampled': track every `sample_every_n_generations` generations;
     - 'always': track every generation (use with caution for long runs).
     """
 
-    track_per_term_rewards: typing.Literal["disabled", "eval_only", "sampled", "always"] = "disabled"
+    track_per_term_rewards: typing.Literal["disabled", "eval_only", "always"] = "disabled"
     """When to track per-term reward stats within difficulty bins.
 
     Logs per-bin statistics for each individual reward term (in addition to total reward).
@@ -305,11 +304,10 @@ class DifficultyConfig(reward_types.BaseConfig):
     Options:
     - 'disabled': do not track per-term rewards;
     - 'eval_only': only track during eval phase;
-    - 'sampled': track every `sample_every_n_generations` generations;
     - 'always': track every generation (use with caution for long runs).
     """
 
-    track_bin_quantiles: typing.Literal["disabled", "eval_only", "sampled", "always"] = "disabled"
+    track_bin_quantiles: typing.Literal["disabled", "eval_only", "always"] = "disabled"
     """When to track per-difficulty-bin reward quantiles (p10/p50/p90).
 
     Stores all reward values per difficulty bin in memory for quantile computation.
@@ -317,31 +315,7 @@ class DifficultyConfig(reward_types.BaseConfig):
     Options:
     - 'disabled': do not track bin quantiles;
     - 'eval_only': only track during eval phase;
-    - 'sampled': track every `sample_every_n_generations` generations;
     - 'always': track every generation (use with caution for long runs).
-    """
-
-    table_mode: typing.Literal["disabled", "eval_only", "sampled", "always"] = "disabled"
-    """When to log the lightweight per-sample difficulty table.
-
-    Logs a minimal wandb table (difficulty_samples) with columns: step, generation_count, sample_id,
-    primary_source, raw_primary, difficulty_score, difficulty_bin, reward_total, predict_type,
-    code_type, has_code_override. Secondary raw values (e.g., halstead_effort) are added as dynamic
-    columns when present. Useful for downstream "difficulty vs reward" analysis.
-
-    Options:
-    - 'disabled': do not log the table;
-    - 'eval_only': only log during eval phase (prefix contains 'eval');
-    - 'sampled': log every `sample_every_n_generations` generations;
-    - 'always': log every sample in all phases (use with caution).
-    """
-
-    sample_every_n_generations: pydantic.PositiveInt = 100
-    """Sampling interval for 'sampled' mode tracking options.
-
-    When any tracking option (track_percentiles, track_per_term_rewards, track_bin_quantiles,
-    table_mode) is set to 'sampled', values are tracked/logged every N generations. This
-    provides a representative sample without storing everything.
     """
 
     @pydantic.model_validator(mode="after")

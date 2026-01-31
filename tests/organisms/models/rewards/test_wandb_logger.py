@@ -94,6 +94,14 @@ class TestWandBRewardLogger:
             "reward_metrics_json",
             "categories_json",
             "tags_json",
+            "difficulty_source",
+            "difficulty_score",
+            "difficulty_bin",
+            "difficulty_raw_primary",
+            "difficulty_secondary_json",
+            "predict_type",
+            "code_type",
+            "has_code_override",
         ]
         assert table_obj.columns == expected_cols
         # verify row content

@@ -416,7 +416,7 @@ class TestRewardManager:
 
     def test_difficulty_table_logs_primary_source(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger(
-            log_every_n_generations=9999,
+            log_every_n_generations=1,
             log_tables=False,
         )
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
@@ -431,11 +431,10 @@ class TestRewardManager:
             difficulty=pyine.organisms.models.rewards.core.configs.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",
-                table_mode="always",
             ),
             logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
                 enabled=True,
-                log_every_n_generations=9999,
+                log_every_n_generations=1,
                 log_tables=False,
             ),
         )
@@ -447,9 +446,10 @@ class TestRewardManager:
         )
         output = manager.compute(ctx)
         assert output.metrics.get("difficulty/source") == "trace_step_count"
-        assert len(logger_obj.difficulty_stats) == 1
-        row = logger_obj.difficulty_stats[0]
-        assert row["primary_source"] == "trace_step_count"
+        # difficulty columns are now logged as part of log_sample(), not separately
+        assert len(logger_obj.samples) == 1
+        sample_record = logger_obj.samples[0]
+        assert sample_record["difficulty_source"] == "trace_step_count"
 
     def test_step_is_propagated_to_logger(self) -> None:
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()

@@ -200,17 +200,15 @@ class DifficultyEstimator:
 
     def _is_mode_active(
         self,
-        mode: str,
-        generation_count: int | None = None,
+        mode: typing.Literal["disabled", "eval_only", "always"],
     ) -> bool:
         """Check if a phase-aware mode setting is currently active.
 
         Args:
-            mode: The mode setting ("disabled", "eval_only", "sampled", "always").
-            generation_count: Current generation count (required for "sampled" mode).
+            mode: The mode setting ("disabled", "eval_only", "always").
 
         Returns:
-            True if the mode is active for the current phase/generation.
+            True if the mode is active for the current phase.
         """
         if mode == "disabled":
             return False
@@ -218,23 +216,19 @@ class DifficultyEstimator:
             return True
         if mode == "eval_only":
             return self._is_eval_phase
-        if mode == "sampled":
-            if generation_count is None:
-                return False  # can't determine without generation count
-            return generation_count % self._config.sample_every_n_generations == 0
         return False
 
-    def _should_track_percentiles(self, generation_count: int | None = None) -> bool:
-        """Check if percentile tracking is active for the current phase/generation."""
-        return self._is_mode_active(self._config.track_percentiles, generation_count)
+    def _should_track_percentiles(self) -> bool:
+        """Check if percentile tracking is active for the current phase."""
+        return self._is_mode_active(self._config.track_percentiles)
 
-    def _should_track_per_term_rewards(self, generation_count: int | None = None) -> bool:
-        """Check if per-term reward tracking is active for the current phase/generation."""
-        return self._is_mode_active(self._config.track_per_term_rewards, generation_count)
+    def _should_track_per_term_rewards(self) -> bool:
+        """Check if per-term reward tracking is active for the current phase."""
+        return self._is_mode_active(self._config.track_per_term_rewards)
 
-    def _should_track_bin_values(self, generation_count: int | None = None) -> bool:
+    def _should_track_bin_values(self) -> bool:
         """Check if bin value tracking is active (for quantiles)."""
-        return self._is_mode_active(self._config.track_bin_quantiles, generation_count)
+        return self._is_mode_active(self._config.track_bin_quantiles)
 
     def _compute_bin_edges(self) -> list[float]:
         """Compute bin edges based on normalization mode and config.
@@ -409,7 +403,6 @@ class DifficultyEstimator:
         sample_data: pyine.organisms.datamodules.samples.SampleData,
         reward_total: float,
         weighted_terms: dict[str, float] | None = None,
-        generation_count: int | None = None,
     ) -> dict[str, reward_types.MetricValue]:
         """Compute difficulty metrics for a sample.
 
@@ -417,7 +410,6 @@ class DifficultyEstimator:
             sample_data: Sample data containing trace/complexity info.
             reward_total: Total reward value for this sample.
             weighted_terms: Optional per-term reward values (for per-term binning when enabled).
-            generation_count: Optional monotonic generation count (required for "sampled" mode tracking).
 
         Returns:
             Dictionary of difficulty metrics to merge into RewardOutput.metrics.
@@ -460,15 +452,15 @@ class DifficultyEstimator:
         metrics["difficulty/raw_primary"] = raw_primary
         metrics["difficulty/score"] = difficulty_score
         self._score_stats.update(difficulty_score)
-        if self._should_track_percentiles(generation_count):
+        if self._should_track_percentiles():
             self._score_values.append(difficulty_score)
         bin_idx = self._get_bin_index(difficulty_score)
         self._bin_reward_stats[bin_idx].update(reward_total)
         metrics["difficulty/bin_index"] = bin_idx
         self._corr_stats.update(difficulty_score, reward_total)
-        if self._should_track_bin_values(generation_count):
+        if self._should_track_bin_values():
             self._bin_reward_values[bin_idx].append(reward_total)
-        if self._should_track_per_term_rewards(generation_count) and weighted_terms:
+        if self._should_track_per_term_rewards() and weighted_terms:
             for term_name, term_value in weighted_terms.items():
                 if term_name not in self._bin_term_reward_stats:
                     self._bin_term_reward_stats[term_name] = [
@@ -495,25 +487,25 @@ class DifficultyEstimator:
         metrics["override_skip_ratio"] = self._override_skip_count / self._total_count
         if self._score_stats.count > 0:
             assert self._score_stats.min is not None and self._score_stats.max is not None
-            metrics["mean"] = self._score_stats.mean()
-            metrics["std"] = self._score_stats.std()
-            metrics["min"] = float(self._score_stats.min)
-            metrics["max"] = float(self._score_stats.max)
-            metrics["count"] = self._score_stats.count
+            metrics["score/mean"] = self._score_stats.mean()
+            metrics["score/std"] = self._score_stats.std()
+            metrics["score/min"] = float(self._score_stats.min)
+            metrics["score/max"] = float(self._score_stats.max)
+            metrics["score/count"] = self._score_stats.count
         else:
-            metrics["count"] = 0
+            metrics["score/count"] = 0
         # percentiles (only if values were tracked during any phase)
         if self._score_values:
             sorted_values = sorted(self._score_values)
             n = len(sorted_values)
-            metrics["median"] = sorted_values[_percentile_index(n, 50)]
-            metrics["p90"] = sorted_values[_percentile_index(n, 90)]
-            metrics["p99"] = sorted_values[_percentile_index(n, 99)]
+            metrics["score/median"] = sorted_values[_percentile_index(n, 50)]
+            metrics["score/p90"] = sorted_values[_percentile_index(n, 90)]
+            metrics["score/p99"] = sorted_values[_percentile_index(n, 99)]
             # recommended percentile-based bin edges for calibrating future runs;
             # these edges divide the observed distribution into equal-mass bins
             for edge_idx in range(self._config.num_difficulty_bins + 1):
                 pct = int(edge_idx * 100 / self._config.num_difficulty_bins)
-                metrics[f"recommended_edge_{edge_idx}"] = sorted_values[_percentile_index(n, pct)]
+                metrics[f"score/recommended_edge_{edge_idx}"] = sorted_values[_percentile_index(n, pct)]
         if self._score_stats.count > 0:
             # correlation and slope between difficulty and reward (catches trends bins can hide)
             metrics.update(self._corr_stats.to_metrics(prefix="reward"))
