@@ -47,6 +47,7 @@ Where `{prefix}` is typically "train" or "eval" depending on the training phase.
 
 import collections.abc
 import json
+import re
 import typing
 
 import wandb
@@ -54,6 +55,176 @@ import wandb
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.parsing as parsing_utils
+import pyine.utils.stats as stats_utils
+
+
+def _has_nonempty_stats(
+    stats_items: list[tuple[str, stats_utils.RunningStats]] | None,
+) -> bool:
+    """Check if any RunningStats in the list has count > 0."""
+    if not stats_items:
+        return False
+    return any(stats.count > 0 for _name, stats in stats_items)
+
+
+def _has_nonempty_bin_stats(
+    bin_stats: list[stats_utils.RunningStats] | None,
+) -> bool:
+    """Check if any bin RunningStats has count > 0."""
+    if not bin_stats:
+        return False
+    return any(stats.count > 0 for stats in bin_stats)
+
+
+def _has_nonempty_bin_term_stats(
+    bin_term_stats: dict[str, list[stats_utils.RunningStats]] | None,
+) -> bool:
+    """Check if any per-term per-bin RunningStats has count > 0."""
+    if not bin_term_stats:
+        return False
+    return any(stats.count > 0 for term_stats_list in bin_term_stats.values() for stats in term_stats_list)
+
+
+def _build_stats_table_from_running_stats(
+    stats_items: list[tuple[str, stats_utils.RunningStats]],
+    id_column: str,
+) -> wandb.Table:
+    """Build table from (name, RunningStats) pairs in given order."""
+    columns = [id_column, "mean", "std", "min", "max", "count"]
+    table = wandb.Table(columns=columns)
+    for name, stats in stats_items:
+        if stats.count > 0:
+            table.add_data(name, stats.mean(), stats.std(), stats.min, stats.max, stats.count)  # type: ignore[reportUnknownMemberType]
+    return table
+
+
+def _build_difficulty_bin_table(
+    bin_stats: list[stats_utils.RunningStats],
+    bin_edges: list[float],
+    bin_reward_values: list[list[float]] | None = None,
+) -> wandb.Table:
+    """Build table from per-bin RunningStats in ascending bin_idx order.
+
+    Args:
+        bin_stats: Per-bin RunningStats (list indexed by bin_idx).
+        bin_edges: Bin edge values (must have len(bin_stats) + 1 elements).
+        bin_reward_values: Optional per-bin raw values for quantile computation.
+
+    Raises:
+        ValueError: If len(bin_edges) != len(bin_stats) + 1.
+
+    Note: Infinity bin edges are stored as actual float("inf") in the table.
+    """
+    if len(bin_edges) != len(bin_stats) + 1:
+        raise ValueError(f"bin_edges length ({len(bin_edges)}) must be len(bin_stats) + 1 ({len(bin_stats) + 1})")
+    columns = [
+        "bin_idx",
+        "lower_edge",
+        "upper_edge",
+        "count",
+        "reward_mean",
+        "reward_std",
+        "reward_min",
+        "reward_max",
+        "reward_p10",
+        "reward_p50",
+        "reward_p90",
+    ]
+    table = wandb.Table(columns=columns)
+    for bin_idx, stats in enumerate(bin_stats):
+        if stats.count > 0:
+            lower = bin_edges[bin_idx]
+            upper = bin_edges[bin_idx + 1] if bin_idx + 1 < len(bin_edges) else float("inf")
+            # compute quantiles if raw values available
+            p10 = p50 = p90 = None
+            if bin_reward_values and bin_idx < len(bin_reward_values):
+                bin_vals = sorted(bin_reward_values[bin_idx])
+                if bin_vals:
+                    n = len(bin_vals)
+                    p10 = bin_vals[stats_utils.percentile_index(n, 10)]
+                    p50 = bin_vals[stats_utils.percentile_index(n, 50)]
+                    p90 = bin_vals[stats_utils.percentile_index(n, 90)]
+            table.add_data(  # type: ignore[reportUnknownMemberType]
+                bin_idx,
+                lower,
+                upper,
+                stats.count,
+                stats.mean(),
+                stats.std(),
+                stats.min,
+                stats.max,
+                p10,
+                p50,
+                p90,
+            )
+    return table
+
+
+def _build_difficulty_bin_term_table(
+    bin_term_stats: dict[str, list[stats_utils.RunningStats]],
+    bin_edges: list[float],
+    term_order: list[str],
+) -> wandb.Table:
+    """Build table from per-term per-bin RunningStats.
+
+    Rows are ordered by bin_idx, then by term order from config.
+
+    Args:
+        bin_term_stats: Dict mapping term name to per-bin RunningStats lists.
+        bin_edges: Bin edge values (must have at least 2 elements to define bins).
+        term_order: Ordered list of term names.
+
+    Raises:
+        ValueError: If bin_edges has fewer than 2 elements, or if any term's stats list
+            has a length that doesn't match the expected number of bins.
+    """
+    if len(bin_edges) < 2:
+        raise ValueError(f"bin_edges must have at least 2 elements, got {len(bin_edges)}")
+    num_bins = len(bin_edges) - 1
+    # validate per-term list lengths
+    for term_name, term_stats_list in bin_term_stats.items():
+        if len(term_stats_list) != num_bins:
+            raise ValueError(
+                f"term '{term_name}' has {len(term_stats_list)} bin stats, expected {num_bins} (len(bin_edges) - 1)"
+            )
+    columns = ["bin_idx", "lower_edge", "upper_edge", "term", "reward_mean", "reward_std"]
+    table = wandb.Table(columns=columns)
+    for bin_idx in range(num_bins):
+        lower = bin_edges[bin_idx]
+        upper = bin_edges[bin_idx + 1] if bin_idx + 1 < len(bin_edges) else float("inf")
+        for term_name in term_order:
+            term_bin_stats_list = bin_term_stats.get(term_name)
+            if not term_bin_stats_list:
+                continue
+            stats = term_bin_stats_list[bin_idx]
+            if stats.count > 0:
+                table.add_data(bin_idx, lower, upper, term_name, stats.mean(), stats.std())  # type: ignore[reportUnknownMemberType]
+    return table
+
+
+def _build_parsing_category_table(
+    category_stats: list[tuple[str, dict[str, float | int | None]]],
+) -> wandb.Table:
+    """Build parsing category table with dynamic columns from actual data.
+
+    Columns are built from the union of all keys across all categories, ensuring no data is lost
+    even if new metrics are added. Column order is deterministic: ["category", "count"] followed
+    by remaining keys sorted alphabetically.
+    """
+    # build column set from union of all stats keys
+    all_keys: set[str] = set()
+    for _category, stats in category_stats:
+        all_keys.update(stats.keys())
+    # deterministic order: category first, count second, then alphabetical
+    all_keys.discard("count")  # remove count so we can place it second
+    columns = ["category", "count"] + sorted(all_keys)
+    table = wandb.Table(columns=columns)
+    for category, stats in category_stats:
+        row: list[typing.Any] = [category, stats.get("count")]
+        for col in columns[2:]:  # skip "category" and "count"
+            row.append(stats.get(col))  # None if missing
+        table.add_data(*row)  # type: ignore[reportUnknownMemberType]
+    return table
 
 
 class InMemoryRewardLogger:
@@ -230,7 +401,6 @@ class InMemoryRewardLogger:
         **kwargs: typing.Any,
     ) -> None:
         """Record a phase-level summary logging event in memory."""
-        del kwargs  # absorb any future additions for forward compatibility
         record: dict[str, object] = {
             "step": step,
             "reward_totals": dict(reward_totals),
@@ -247,6 +417,32 @@ class InMemoryRewardLogger:
             record["failure_ratio"] = failure_ratio
         if failure_count is not None:
             record["failure_count"] = failure_count
+        # store structured data if provided (for test verification)
+        # ...snapshot mutable objects to avoid retroactive mutation
+        if "term_stats" in kwargs:
+            record["term_stats"] = [(name, stats.as_state()) for name, stats in kwargs["term_stats"]]
+        if "category_stats" in kwargs:
+            record["category_stats"] = [(name, stats.as_state()) for name, stats in kwargs["category_stats"]]
+        if "bin_stats" in kwargs:
+            record["bin_stats"] = [stats.as_state() for stats in kwargs["bin_stats"]]
+        if "bin_edges" in kwargs:
+            record["bin_edges"] = list(kwargs["bin_edges"])
+        if "bin_term_stats" in kwargs:
+            record["bin_term_stats"] = {
+                name: [stats.as_state() for stats in stats_list]
+                for name, stats_list in kwargs["bin_term_stats"].items()
+            }
+        if "term_order" in kwargs:
+            record["term_order"] = list(kwargs["term_order"])
+        if "parsing_category_stats" in kwargs:
+            # already a list of tuples with dicts, but make a copy
+            record["parsing_category_stats"] = [(cat, dict(stats)) for cat, stats in kwargs["parsing_category_stats"]]
+        if "reward_total_values" in kwargs:
+            record["reward_total_values"] = list(kwargs["reward_total_values"])
+        if "difficulty_score_values" in kwargs:
+            record["difficulty_score_values"] = list(kwargs["difficulty_score_values"])
+        if "bin_reward_values" in kwargs:
+            record["bin_reward_values"] = [list(vals) for vals in kwargs["bin_reward_values"]]
         self.runs.append(record)
 
     def log_batch_stats(
@@ -295,6 +491,21 @@ class WandBRewardLogger:
         are logged within the same trainer step (e.g., with gradient accumulation or multiple
         generations per prompt in GRPO).
 
+    Table Logging:
+        This logger supports two types of table logging:
+
+        - **Per-generation details table** (`generation_details`): Controlled by the `log_tables`
+          constructor argument. When enabled, logs detailed per-sample data (prompts, completions,
+          reward breakdowns) to a W&B table. Useful for debugging but can be expensive for large
+          runs.
+
+        - **Run-level summary tables** (`term_summary`, `category_summary`, `bin_summary`, etc.):
+          Always logged when the corresponding structured data is provided via kwargs to
+          `log_phase_summaries()`. These tables consolidate per-term/per-category/per-bin metrics
+          that would otherwise clutter dashboards as individual scalars. When these tables are
+          emitted, the corresponding individual scalars are suppressed to avoid duplication. If
+          the structured data kwargs are NOT provided, scalars are kept to avoid silent data loss.
+
     Integration with HuggingFace Trainer:
         The `wandb.define_metric()` calls that configure the step metrics are **deferred until
         the first log() call**, not called in `__init__`. This is intentional: HuggingFace's
@@ -302,6 +513,24 @@ class WandBRewardLogger:
         `on_train_begin`, and our more specific patterns must be defined AFTER that wildcard
         to take precedence.
     """
+
+    # patterns that are replaced by tables when table data is provided
+    # these are only suppressed when the corresponding structured data is passed to log_phase_summaries;
+    # if no table data is provided, scalars are kept to avoid silent data loss
+    # note: category patterns use .+ to allow nested segments (e.g., code_type/original)
+    _TERM_SCALAR_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^reward/run/terms/[^/]+/(mean|std|min|max|count)$"
+    )
+    _CATEGORY_SCALAR_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^reward/run/categories/.+/(mean|std|min|max|count)$"
+    )
+    _PARSING_CATEGORY_SCALAR_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(r"^parsing/categories/.+/")
+    _DIFFICULTY_BIN_SCALAR_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^difficulty/run/bin_\d+/(count|reward_(mean|std|min|max)|reward_p(10|50|90))$"
+    )
+    _DIFFICULTY_BIN_TERM_SCALAR_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^difficulty/run/bin_\d+/term_[^/]+/reward_(mean|std)$"
+    )
 
     def __init__(
         self,
@@ -312,6 +541,7 @@ class WandBRewardLogger:
         table_max_rows: int = 100,
         step_metric_key: str = "train/global_step",
         log_every_n_generations: int = 1,
+        histogram_num_bins: int = 50,
     ) -> None:
         """Create a WandB-backed logger.
 
@@ -326,6 +556,7 @@ class WandBRewardLogger:
                 "train/global_step" to align with HuggingFace Trainer's WandbCallback. Per-generation
                 metrics use `{prefix}/generation_count` and batch metrics use `{prefix}/batch_count`.
             log_every_n_generations: Log metrics (scalars and table rows) every N generations (1-indexed).
+            histogram_num_bins: Number of bins for histogram visualizations.
         """
         self._wandb_run = wandb_run
         self._key_prefix = ""
@@ -337,6 +568,7 @@ class WandBRewardLogger:
         self._generation_table_rows: list[dict[str, object]] = []
         self._step_metric_key = step_metric_key
         self._log_every_n_generations = log_every_n_generations
+        self._histogram_num_bins = histogram_num_bins
         # track which prefixes have had wandb.define_metric called (called lazily per-prefix)
         self._generation_metrics_defined_prefixes: set[str] = set()
         self._batch_metrics_defined_prefixes: set[str] = set()
@@ -348,6 +580,39 @@ class WandBRewardLogger:
         # in on_train_begin, which would override our definitions if we called them earlier.
         # instead, we defer our define_metric calls to the first log() call, ensuring they
         # happen AFTER any trainer setup and thus take precedence.
+
+    def _is_suppressed_scalar(
+        self,
+        key: str,
+        *,
+        has_term_table: bool = False,
+        has_category_table: bool = False,
+        has_parsing_category_table: bool = False,
+        has_bin_table: bool = False,
+        has_bin_term_table: bool = False,
+    ) -> bool:
+        """Check if scalar key should be suppressed (replaced by table).
+
+        Scalars are only suppressed when the corresponding table data is provided, preventing
+        silent data loss if a caller omits the structured data kwargs.
+
+        Args:
+            key: The scalar metric key to check.
+            has_term_table: True if term_stats was provided for term_summary table.
+            has_category_table: True if category_stats was provided for category_summary table.
+            has_parsing_category_table: True if parsing_category_stats was provided.
+            has_bin_table: True if bin_stats/bin_edges were provided for bin_summary table.
+            has_bin_term_table: True if bin_term_stats was provided for bin_term_summary table.
+        """
+        if has_term_table and self._TERM_SCALAR_PATTERN.match(key):
+            return True
+        if has_category_table and self._CATEGORY_SCALAR_PATTERN.match(key):
+            return True
+        if has_parsing_category_table and self._PARSING_CATEGORY_SCALAR_PATTERN.match(key):
+            return True
+        if has_bin_table and self._DIFFICULTY_BIN_SCALAR_PATTERN.match(key):
+            return True
+        return bool(has_bin_term_table and self._DIFFICULTY_BIN_TERM_SCALAR_PATTERN.match(key))
 
     def _define_generation_step_metrics(self) -> None:
         """Define WandB step metrics and summaries for per-generation reward logging.
@@ -685,24 +950,99 @@ class WandBRewardLogger:
         **kwargs: typing.Any,
     ) -> None:
         """Log phase-level summary payload to W&B (e.g., at end of train/eval phase)."""
-        del kwargs  # absorb any future additions for forward compatibility
         self._define_run_step_metrics()  # deferred initialization
         payload_step = self._step if step is None else step
-        payload: dict[str, reward_types.MetricValue] = {
-            **reward_totals,
-            **reward_term_summaries,
-            **reward_category_summaries,
-            **(parsing_summaries or {}),
-            **(parsing_category_summaries or {}),
-        }
+        # determine which tables will actually be emitted (have non-empty data)
+        # ...scalars are only suppressed when the corresponding table will have rows, preventing silent data loss
+        has_term_table = _has_nonempty_stats(kwargs.get("term_stats"))
+        has_category_table = _has_nonempty_stats(kwargs.get("category_stats"))
+        has_parsing_category_table = bool(kwargs.get("parsing_category_stats"))  # checked by truthiness (dicts)
+        has_bin_table = (
+            "bin_stats" in kwargs and "bin_edges" in kwargs and _has_nonempty_bin_stats(kwargs.get("bin_stats"))
+        )
+        has_bin_term_table = (
+            "bin_term_stats" in kwargs
+            and "bin_edges" in kwargs
+            and "term_order" in kwargs
+            and _has_nonempty_bin_term_stats(kwargs.get("bin_term_stats"))
+        )
+        # build payload, filtering out scalars only when corresponding table is provided
+        # this ensures no data is silently lost if table data is missing
+        payload: dict[str, reward_types.MetricValue] = {}
+        # reward_totals: always keep (not suppressed)
+        payload.update(reward_totals)
+        # reward_term_summaries: filter only if term table will be emitted
+        for key, value in reward_term_summaries.items():
+            if not self._is_suppressed_scalar(key, has_term_table=has_term_table):
+                payload[key] = value
+        # reward_category_summaries: filter only if category table will be emitted
+        for key, value in reward_category_summaries.items():
+            if not self._is_suppressed_scalar(key, has_category_table=has_category_table):
+                payload[key] = value
+        # parsing_summaries (GLOBAL): always keep unchanged; not in suppression scope
+        if parsing_summaries:
+            payload.update(parsing_summaries)
+        # parsing_category_summaries (PER-CATEGORY): filter only if parsing table will be emitted
+        if parsing_category_summaries:
+            for key, value in parsing_category_summaries.items():
+                if not self._is_suppressed_scalar(key, has_parsing_category_table=has_parsing_category_table):
+                    payload[key] = value
+        # difficulty_summaries: filter bin stats only if bin tables will be emitted
         if difficulty_summaries:
             for key, value in difficulty_summaries.items():
-                payload[f"difficulty/run/{key}"] = value
+                full_key = f"difficulty/run/{key}"
+                if not self._is_suppressed_scalar(
+                    full_key, has_bin_table=has_bin_table, has_bin_term_table=has_bin_term_table
+                ):
+                    payload[full_key] = value
         if failure_ratio is not None:
             payload["failures/failure_ratio"] = failure_ratio
         if failure_count is not None:
             payload["failures/failure_count"] = failure_count
         prefixed: dict[str, object] = self._prefix_payload(payload)
+        # emit tables (skip empty tables to avoid W&B schema churn)
+        if "term_stats" in kwargs and kwargs["term_stats"]:
+            table = _build_stats_table_from_running_stats(kwargs["term_stats"], "term")
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("reward/run/term_summary")] = table
+        if "category_stats" in kwargs and kwargs["category_stats"]:
+            table = _build_stats_table_from_running_stats(kwargs["category_stats"], "category")
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("reward/run/category_summary")] = table
+        if "bin_stats" in kwargs and "bin_edges" in kwargs:
+            table = _build_difficulty_bin_table(
+                kwargs["bin_stats"],
+                kwargs["bin_edges"],
+                kwargs.get("bin_reward_values"),  # for quantiles
+            )
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("difficulty/run/bin_summary")] = table
+        if "bin_term_stats" in kwargs and "bin_edges" in kwargs and "term_order" in kwargs:
+            table = _build_difficulty_bin_term_table(
+                kwargs["bin_term_stats"],
+                kwargs["bin_edges"],
+                kwargs["term_order"],
+            )
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("difficulty/run/bin_term_summary")] = table
+        if "parsing_category_stats" in kwargs and kwargs["parsing_category_stats"]:
+            table = _build_parsing_category_table(kwargs["parsing_category_stats"])
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("parsing/run/category_summary")] = table
+        # emit histograms (always)
+        if "reward_total_values" in kwargs and kwargs["reward_total_values"]:
+            hist = wandb.Histogram(kwargs["reward_total_values"], num_bins=self._histogram_num_bins)
+            prefixed[self._prefix_key("reward/run/total_histogram")] = hist
+        if "difficulty_score_values" in kwargs and kwargs["difficulty_score_values"]:
+            hist = wandb.Histogram(kwargs["difficulty_score_values"], num_bins=self._histogram_num_bins)
+            prefixed[self._prefix_key("difficulty/run/score_histogram")] = hist
+        # per-bin difficulty histograms
+        bin_reward_values = kwargs.get("bin_reward_values")
+        if bin_reward_values:
+            for bin_idx, bin_vals in enumerate(bin_reward_values):
+                if bin_vals:
+                    hist = wandb.Histogram(bin_vals, num_bins=self._histogram_num_bins)
+                    prefixed[self._prefix_key(f"difficulty/run/bin_{bin_idx}_histogram")] = hist
         if payload_step is not None:
             prefixed[self._step_metric_key] = payload_step  # global_step not prefixed
         if self._epoch is not None:
@@ -832,4 +1172,5 @@ def make_wandb_reward_logger(
         table_max_rows=logging_config.table_max_rows,
         step_metric_key=logging_config.step_metric_key,
         log_every_n_generations=logging_config.log_every_n_generations,
+        histogram_num_bins=logging_config.histogram_num_bins,
     )

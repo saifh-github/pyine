@@ -531,6 +531,43 @@ class LoggingConfig(reward_types.BaseConfig):
     and log category-wise metrics during evaluation. If None, category-wise logging is disabled.
     """
 
+    # histogram settings
+    histogram_num_bins: int = 50
+    """Number of bins for histogram visualizations. Must be > 0."""
+    histogram_max_samples: int = 100_000
+    """Maximum samples to retain for total reward histogram building (uses reservoir sampling).
+
+    Bounds memory usage when processing many samples per phase. Set to 0 to disable
+    limit (not recommended for long runs).
+
+    Note: This setting only applies to the total reward histogram. Difficulty score and per-bin
+    histograms are controlled by DifficultyConfig tracking flags (track_percentiles,
+    track_bin_quantiles). When enabled, those histograms store all values for the phase without
+    bounds, which may cause memory growth in very long runs.
+    """
+
+    @pydantic.field_validator("histogram_num_bins")
+    @classmethod
+    def _validate_histogram_num_bins(
+        cls,
+        value: int,
+    ) -> int:
+        """Validate histogram_num_bins is positive."""
+        if value <= 0:
+            raise ValueError("histogram_num_bins must be > 0")
+        return value
+
+    @pydantic.field_validator("histogram_max_samples")
+    @classmethod
+    def _validate_histogram_max_samples(
+        cls,
+        value: int,
+    ) -> int:
+        """Validate histogram_max_samples is non-negative."""
+        if value < 0:
+            raise ValueError("histogram_max_samples must be >= 0")
+        return value
+
 
 class RewardTermSpec(reward_types.BaseConfig):
     """Specification for a single reward term instance.

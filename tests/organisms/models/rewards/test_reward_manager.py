@@ -1,3 +1,5 @@
+import warnings
+
 import pytest
 
 import pyine.evals.utils
@@ -738,6 +740,51 @@ class TestRewardManager:
         assert len(recorded) == 1
         assert "final_tag='answer'" in str(recorded[0].message)
         assert "parser uses final_tag='final'" in str(recorded[0].message)
+
+    def test_histogram_max_samples_zero_emits_warning_when_logging_enabled(self) -> None:
+        """Verify warning is emitted when histogram_max_samples=0 and logging is enabled."""
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                histogram_max_samples=0,
+            ),
+        )
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger_obj)
+        # filter for our specific warning
+        relevant = [w for w in recorded if "histogram_max_samples=0" in str(w.message)]
+        assert len(relevant) == 1
+        assert "memory" in str(relevant[0].message).lower()
+        assert "checkpoint" in str(relevant[0].message).lower()
+
+    def test_histogram_max_samples_zero_no_warning_when_logging_disabled(self) -> None:
+        """Verify no warning is emitted when logging is disabled (histogram tracking inactive)."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=False,
+                histogram_max_samples=0,
+            ),
+        )
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        # should NOT emit warning because logging is disabled
+        relevant = [w for w in recorded if "histogram_max_samples=0" in str(w.message)]
+        assert len(relevant) == 0
 
     def test_compute_batch_preserves_input_order(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()

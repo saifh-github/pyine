@@ -660,6 +660,94 @@ class ParsingStatsAccumulator:
         metrics["count"] = self.total_count
         return metrics
 
+    def _iter_category_data(
+        self,
+        *,
+        reasoning_enabled: bool,
+        answer_enabled: bool,
+        capture_diagnostics: bool,
+    ) -> collections.abc.Iterator[
+        tuple[
+            str,  # category name
+            int,  # total count
+            dict[str, stats_utils.RunningStats],  # length stats by metric name
+            dict[str, float],  # ratio metrics
+        ]
+    ]:
+        """Shared helper that yields per-category data for both public methods.
+
+        This centralizes the iteration logic to avoid divergence between get_category_metrics() and
+        get_category_stats_structured().
+        """
+        for category in sorted(self.category_total_count.keys()):
+            total = self.category_total_count.get(category, 0)
+            if total == 0:
+                continue
+            length_stats: dict[str, stats_utils.RunningStats] = {}
+            ratio_metrics: dict[str, float] = {}
+            # output length (always included)
+            cat_output_chars = self.category_output_length_chars.get(category)
+            if cat_output_chars:
+                length_stats["output_length_chars"] = cat_output_chars
+            cat_output_tokens = self.category_output_length_tokens.get(category)
+            if cat_output_tokens:
+                length_stats["output_length_tokens"] = cat_output_tokens
+            # reasoning length (gated)
+            if reasoning_enabled:
+                cat_reasoning_chars = self.category_reasoning_length_chars.get(category)
+                if cat_reasoning_chars:
+                    length_stats["reasoning_length_chars"] = cat_reasoning_chars
+                cat_reasoning_tokens = self.category_reasoning_length_tokens.get(category)
+                if cat_reasoning_tokens:
+                    length_stats["reasoning_length_tokens"] = cat_reasoning_tokens
+                ratio_metrics["missing_reasoning_ratio"] = (
+                    self.category_missing_reasoning_count.get(category, 0) / total
+                )
+            # answer length (gated)
+            if answer_enabled:
+                cat_answer_chars = self.category_answer_length_chars.get(category)
+                if cat_answer_chars:
+                    length_stats["answer_length_chars"] = cat_answer_chars
+                cat_answer_tokens = self.category_answer_length_tokens.get(category)
+                if cat_answer_tokens:
+                    length_stats["answer_length_tokens"] = cat_answer_tokens
+                ratio_metrics["missing_answer_ratio"] = self.category_missing_answer_count.get(category, 0) / total
+            # diagnostics (gated)
+            if capture_diagnostics:
+                ratio_metrics["malformed_ratio"] = self.category_malformed_count.get(category, 0) / total
+            yield category, total, length_stats, ratio_metrics
+
+    def get_category_stats_structured(
+        self,
+        *,
+        reasoning_enabled: bool = True,
+        answer_enabled: bool = True,
+        capture_diagnostics: bool = False,
+    ) -> list[tuple[str, dict[str, float | int | None]]]:
+        """Return per-category stats as sorted list of (category, stats_dict) pairs.
+
+        Uses underscore-based keys for table column names (e.g., "output_length_chars_mean").
+        Args match get_category_metrics() for consistent gating behavior.
+        """
+        result: list[tuple[str, dict[str, float | int | None]]] = []
+        for category, total, length_stats, ratio_metrics in self._iter_category_data(
+            reasoning_enabled=reasoning_enabled,
+            answer_enabled=answer_enabled,
+            capture_diagnostics=capture_diagnostics,
+        ):
+            cat_stats: dict[str, float | int | None] = {"count": total}
+            # add length stats with underscore-based keys
+            for metric_name, rs in length_stats.items():
+                cat_stats[f"{metric_name}_mean"] = rs.mean()
+                cat_stats[f"{metric_name}_std"] = rs.std()
+                cat_stats[f"{metric_name}_min"] = rs.min
+                cat_stats[f"{metric_name}_max"] = rs.max
+                cat_stats[f"{metric_name}_count"] = rs.count
+            # add ratio metrics directly
+            cat_stats.update(ratio_metrics)
+            result.append((category, cat_stats))
+        return result
+
     def get_category_metrics(
         self,
         *,
@@ -668,6 +756,9 @@ class ParsingStatsAccumulator:
         capture_diagnostics: bool = False,
     ) -> dict[str, MetricValue]:
         """Return category-wise parsing metrics.
+
+        Uses slash-based key format (e.g., "{category}/output_length_chars/mean") for backward
+        compatibility with existing scalar consumers.
 
         Args:
             reasoning_enabled: Whether reasoning extraction is enabled.
@@ -678,43 +769,17 @@ class ParsingStatsAccumulator:
             Dict of metric name to value, empty if no categories.
         """
         metrics: dict[str, MetricValue] = {}
-        for category in sorted(self.category_total_count.keys()):
-            total = self.category_total_count.get(category, 0)
-            if total == 0:
-                continue
-            # output length
-            cat_output_chars = self.category_output_length_chars.get(category)
-            if cat_output_chars:
-                metrics.update(cat_output_chars.to_metrics(prefix=f"{category}/output_length_chars"))
-            cat_output_tokens = self.category_output_length_tokens.get(category)
-            if cat_output_tokens:
-                metrics.update(cat_output_tokens.to_metrics(prefix=f"{category}/output_length_tokens"))
-            # reasoning length
-            if reasoning_enabled:
-                cat_reasoning_chars = self.category_reasoning_length_chars.get(category)
-                if cat_reasoning_chars:
-                    metrics.update(cat_reasoning_chars.to_metrics(prefix=f"{category}/reasoning_length_chars"))
-                cat_reasoning_tokens = self.category_reasoning_length_tokens.get(category)
-                if cat_reasoning_tokens:
-                    metrics.update(cat_reasoning_tokens.to_metrics(prefix=f"{category}/reasoning_length_tokens"))
-            # answer length
-            if answer_enabled:
-                cat_answer_chars = self.category_answer_length_chars.get(category)
-                if cat_answer_chars:
-                    metrics.update(cat_answer_chars.to_metrics(prefix=f"{category}/answer_length_chars"))
-                cat_answer_tokens = self.category_answer_length_tokens.get(category)
-                if cat_answer_tokens:
-                    metrics.update(cat_answer_tokens.to_metrics(prefix=f"{category}/answer_length_tokens"))
-            # format ratios
-            if reasoning_enabled:
-                missing_reasoning = self.category_missing_reasoning_count.get(category, 0)
-                metrics[f"{category}/missing_reasoning_ratio"] = missing_reasoning / total
-            if answer_enabled:
-                missing_answer = self.category_missing_answer_count.get(category, 0)
-                metrics[f"{category}/missing_answer_ratio"] = missing_answer / total
-            if capture_diagnostics:
-                malformed = self.category_malformed_count.get(category, 0)
-                metrics[f"{category}/malformed_ratio"] = malformed / total
+        for category, total, length_stats, ratio_metrics in self._iter_category_data(
+            reasoning_enabled=reasoning_enabled,
+            answer_enabled=answer_enabled,
+            capture_diagnostics=capture_diagnostics,
+        ):
+            # add length stats with slash-based keys via to_metrics()
+            for metric_name, rs in length_stats.items():
+                metrics.update(rs.to_metrics(prefix=f"{category}/{metric_name}"))
+            # add ratio metrics with category prefix
+            for ratio_name, ratio_value in ratio_metrics.items():
+                metrics[f"{category}/{ratio_name}"] = ratio_value
             metrics[f"{category}/count"] = total
         return metrics
 

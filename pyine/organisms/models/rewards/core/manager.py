@@ -4,6 +4,7 @@ import collections.abc
 import json
 import logging
 import math
+import random
 import typing
 import warnings
 
@@ -171,6 +172,20 @@ class RewardManager:
             self._difficulty_estimator = difficulty_module.DifficultyEstimator(
                 config.difficulty,
                 token_counter=self._token_counter,
+            )
+        # histogram value tracking (for reward total histogram)
+        # ...only active when logging is enabled to avoid memory/checkpoint/gather overhead
+        self._reward_total_values: list[float] = []
+        self._reward_total_values_count: int = 0  # total seen (for reservoir sampling)
+        # dedicated RNG for histogram reservoir sampling, seeded from global RNG for reproducibility
+        # (if user seeds their run, histogram sampling will also be deterministic)
+        self._histogram_rng = random.Random(random.getrandbits(64))  # maybe revisit this later for epoch-wise seeding
+        if config.logging.enabled and config.logging.histogram_max_samples == 0:
+            warnings.warn(
+                "histogram_max_samples=0 disables the reservoir sampling limit; all reward values will "
+                "be stored in memory and included in checkpoints, which may cause memory/checkpoint size "
+                "growth on long runs. Set to a positive value to bound memory usage.",
+                stacklevel=2,
             )
         self._warn_tag_inconsistencies()
 
@@ -621,6 +636,8 @@ class RewardManager:
         self._reward_category_stats.clear()
         self._batch_reward_mean_stats = stats_utils.RunningStats()
         self._batch_reward_std_stats = stats_utils.RunningStats()
+        self._reward_total_values = []
+        self._reward_total_values_count = 0
         if self._parsing_stats is not None:
             self._parsing_stats.reset()
         if self._difficulty_estimator is not None:
@@ -663,6 +680,36 @@ class RewardManager:
             summaries.parsing_summaries,
             summaries.parsing_category_summaries,
         )
+        # build kwargs with structured data for tables/histograms
+        kwargs: dict[str, typing.Any] = {}
+        # terms: preserve config order (always pass for tables)
+        kwargs["term_stats"] = [
+            (name, self._reward_term_stats[name]) for name in self.enabled_term_names if name in self._reward_term_stats
+        ]
+        # categories: alphabetical (always pass for tables)
+        kwargs["category_stats"] = sorted(self._reward_category_stats.items())
+        # difficulty data (if enabled)
+        if self._difficulty_estimator:
+            kwargs["bin_stats"] = self._difficulty_estimator.get_bin_stats()
+            kwargs["bin_edges"] = self._difficulty_estimator.get_bin_edges()
+            kwargs["bin_term_stats"] = self._difficulty_estimator.get_bin_term_stats()
+            kwargs["term_order"] = list(self.enabled_term_names)
+            hist_data = self._difficulty_estimator.get_histogram_data()
+            kwargs["difficulty_score_values"] = hist_data["score_values"]
+            kwargs["bin_reward_values"] = hist_data["bin_reward_values"]
+        # parsing category stats (if enabled)
+        if self._parsing_stats and self._category_extractor:
+            parsing_config = self._config.parsing
+            reasoning_on = parsing_config.enabled_fields in ("both", "reasoning_only") if parsing_config else True
+            answer_on = parsing_config.enabled_fields in ("both", "final_only") if parsing_config else True
+            capture_diag = parsing_config.capture_diagnostics if parsing_config else False
+            kwargs["parsing_category_stats"] = self._parsing_stats.get_category_stats_structured(
+                reasoning_enabled=reasoning_on,
+                answer_enabled=answer_on,
+                capture_diagnostics=capture_diag,
+            )
+        # pass histogram values (always)
+        kwargs["reward_total_values"] = self._reward_total_values
         self._logger.log_phase_summaries(
             reward_totals=scoped_reward_totals,
             reward_term_summaries=scoped_reward_term_summaries,
@@ -673,6 +720,7 @@ class RewardManager:
             failure_ratio=failure_ratio,
             failure_count=failure_count,
             step=step,
+            **kwargs,
         )
 
     def flush_stats(
@@ -1158,6 +1206,8 @@ class RewardManager:
             "total": self._reward_total_stats.as_state(),
             "terms": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
             "categories": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
+            "reward_total_values": self._reward_total_values,
+            "reward_total_values_count": self._reward_total_values_count,
         }
         if self._parsing_stats is not None:
             payload["parsing"] = self._parsing_stats.as_state()
@@ -1215,6 +1265,37 @@ class RewardManager:
             self._parsing_stats = merged_parsing
         if merged_difficulty is not None:
             self._difficulty_estimator = merged_difficulty
+        # merge histogram values on rank 0 with weighted resampling;
+        # each rank's reservoir must be weighted by total_count / len(values) to be properly represented
+        max_samples = self._config.logging.histogram_max_samples
+        total_global_count = sum(item.get("reward_total_values_count", 0) for item in gathered)
+        if max_samples > 0 and total_global_count > 0:
+            # build weighted pool: each value gets weight = total_count_r / len(values_r)
+            weighted_pool: list[tuple[float, float]] = []  # (value, weight)
+            for item in gathered:
+                values = item.get("reward_total_values", [])
+                total_count = item.get("reward_total_values_count", 0)
+                if values and total_count > 0:
+                    weight = total_count / len(values)
+                    weighted_pool.extend((v, weight) for v in values)
+            # sample from weighted pool using weights
+            if len(weighted_pool) > max_samples:
+                values_only = [v for v, _ in weighted_pool]
+                weights_only = [w for _, w in weighted_pool]
+                # weighted sampling with replacement to approximate global distribution
+                # uses dedicated RNG to avoid mutating global random state
+                self._reward_total_values = self._histogram_rng.choices(
+                    values_only, weights=weights_only, k=max_samples
+                )
+            else:
+                self._reward_total_values = [v for v, _ in weighted_pool]
+        else:
+            # no limit or no samples: just concat
+            self._reward_total_values = []
+            for item in gathered:
+                self._reward_total_values.extend(item.get("reward_total_values", []))
+        self._reward_total_values_count = total_global_count
+        # note: DifficultyEstimator histogram values are already merged via as_state()/merge()
         return self._get_run_summaries()
 
     @staticmethod
@@ -1256,6 +1337,24 @@ class RewardManager:
             if not math.isfinite(float(metric_value_any)):
                 raise ValueError(f"term '{term_name}' metric '{metric_key_any}' is non-finite: {metric_value_any}")
 
+    def _add_reward_value_with_reservoir(
+        self,
+        value: float,
+    ) -> None:
+        """Add value using reservoir sampling if max_samples exceeded.
+
+        Uses a dedicated RNG instance to avoid mutating global random state.
+        """
+        max_samples = self._config.logging.histogram_max_samples
+        self._reward_total_values_count += 1
+        if max_samples <= 0 or len(self._reward_total_values) < max_samples:
+            self._reward_total_values.append(value)
+        else:
+            # reservoir sampling: replace random element
+            idx = self._histogram_rng.randint(0, self._reward_total_values_count - 1)
+            if idx < max_samples:
+                self._reward_total_values[idx] = value
+
     def _update_running_stats(
         self,
         sample_ctx: reward_types.SampleContext,
@@ -1272,6 +1371,8 @@ class RewardManager:
         """
         total_reward = float(output.total)
         self._reward_total_stats.update(total_reward)
+        if self._config.logging.enabled:
+            self._add_reward_value_with_reservoir(total_reward)
         for term_name, term_reward in output.weighted_terms.items():
             assert term_name in self._reward_term_stats
             self._reward_term_stats[term_name].update(float(term_reward))
@@ -1641,6 +1742,9 @@ class RewardManager:
             # batch-level reward accumulators
             "batch_reward_mean_stats": self._batch_reward_mean_stats.as_state(),
             "batch_reward_std_stats": self._batch_reward_std_stats.as_state(),
+            # histogram values for checkpoint persistence
+            "reward_total_values": self._reward_total_values,
+            "reward_total_values_count": self._reward_total_values_count,
         }
         if self._parsing_stats is not None:
             state["parsing_stats"] = self._parsing_stats.as_state()
@@ -1687,6 +1791,9 @@ class RewardManager:
         # batch-level reward accumulators
         self._batch_reward_mean_stats = stats_utils.RunningStats.from_state(state["batch_reward_mean_stats"])
         self._batch_reward_std_stats = stats_utils.RunningStats.from_state(state["batch_reward_std_stats"])
+        # histogram values (optional, for checkpoint persistence)
+        self._reward_total_values = list(state.get("reward_total_values", []))
+        self._reward_total_values_count = int(state.get("reward_total_values_count", 0))
         # parsing stats (optional)
         if self._parsing_stats is not None and "parsing_stats" in state:
             self._parsing_stats = reward_types.ParsingStatsAccumulator.from_state(state["parsing_stats"])

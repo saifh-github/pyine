@@ -1,7 +1,10 @@
 """Tests for reward logging implementations."""
 
+import wandb
+
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.logging as reward_logging
+import pyine.utils.stats as stats_utils
 
 
 class TestInMemoryRewardLogger:
@@ -123,6 +126,25 @@ class TestMakeWandBRewardLogger:
         assert logger._log_generation_table is True
         assert logger._generation_table_max_rows == 500
         assert logger._generation_table_key == "generation_details"
+
+
+class TestLoggingConfigValidation:
+    def test_histogram_num_bins_must_be_positive(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="histogram_num_bins must be > 0"):
+            reward_configs.LoggingConfig(histogram_num_bins=0)
+        with pytest.raises(ValueError, match="histogram_num_bins must be > 0"):
+            reward_configs.LoggingConfig(histogram_num_bins=-1)
+
+    def test_histogram_max_samples_must_be_non_negative(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="histogram_max_samples must be >= 0"):
+            reward_configs.LoggingConfig(histogram_max_samples=-1)
+        # 0 is allowed (disables limit)
+        config = reward_configs.LoggingConfig(histogram_max_samples=0)
+        assert config.histogram_max_samples == 0
 
 
 class TestWandBRewardLogger:
@@ -278,3 +300,413 @@ class TestWandBRewardLogger:
         payload = logged_payloads[0]
         assert "train/failures/failure_ratio" in payload
         assert "train/failures/failure_count" in payload
+
+
+class TestTableConstructionHelpers:
+    """Tests for table construction helper functions."""
+
+    def test_build_stats_table_from_running_stats(self) -> None:
+        stats_items = [
+            ("term_a", stats_utils.RunningStats()),
+            ("term_b", stats_utils.RunningStats()),
+        ]
+        stats_items[0][1].update(1.0)
+        stats_items[0][1].update(2.0)
+        stats_items[1][1].update(3.0)
+        table = reward_logging._build_stats_table_from_running_stats(stats_items, "term")
+        assert table.columns == ["term", "mean", "std", "min", "max", "count"]
+        assert len(table.data) == 2
+        assert table.data[0][0] == "term_a"  # first row, first column
+        assert table.data[1][0] == "term_b"  # second row, first column
+
+    def test_build_stats_table_skips_empty_stats(self) -> None:
+        stats_items = [
+            ("term_a", stats_utils.RunningStats()),  # empty, count=0
+            ("term_b", stats_utils.RunningStats()),
+        ]
+        stats_items[1][1].update(1.0)  # only term_b has data
+        table = reward_logging._build_stats_table_from_running_stats(stats_items, "term")
+        assert len(table.data) == 1
+        assert table.data[0][0] == "term_b"
+
+    def test_build_difficulty_bin_table(self) -> None:
+        bin_stats = [stats_utils.RunningStats() for _ in range(3)]
+        bin_stats[0].update(0.5)
+        bin_stats[0].update(0.6)
+        bin_stats[1].update(0.7)
+        bin_edges = [0.0, 0.33, 0.67, 1.0]
+        table = reward_logging._build_difficulty_bin_table(bin_stats, bin_edges)
+        assert "bin_idx" in table.columns
+        assert "reward_mean" in table.columns
+        assert "reward_p50" in table.columns
+        assert len(table.data) == 2  # bin_stats[2] is empty
+
+    def test_build_difficulty_bin_table_with_quantiles(self) -> None:
+        bin_stats = [stats_utils.RunningStats() for _ in range(2)]
+        for val in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+            bin_stats[0].update(val)
+        bin_edges = [0.0, 0.5, 1.0]
+        bin_reward_values = [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], []]
+        table = reward_logging._build_difficulty_bin_table(bin_stats, bin_edges, bin_reward_values)
+        assert len(table.data) == 1
+        p10_col_idx = table.columns.index("reward_p10")
+        p50_col_idx = table.columns.index("reward_p50")
+        p90_col_idx = table.columns.index("reward_p90")
+        assert table.data[0][p10_col_idx] is not None  # p10
+        assert table.data[0][p50_col_idx] is not None  # p50
+        assert table.data[0][p90_col_idx] is not None  # p90
+
+    def test_build_difficulty_bin_term_table(self) -> None:
+        bin_term_stats = {
+            "term_a": [stats_utils.RunningStats(), stats_utils.RunningStats()],
+            "term_b": [stats_utils.RunningStats(), stats_utils.RunningStats()],
+        }
+        bin_term_stats["term_a"][0].update(0.5)
+        bin_term_stats["term_b"][1].update(0.7)
+        bin_edges = [0.0, 0.5, 1.0]
+        term_order = ["term_a", "term_b"]
+        table = reward_logging._build_difficulty_bin_term_table(bin_term_stats, bin_edges, term_order)
+        assert "term" in table.columns
+        assert len(table.data) == 2  # two non-empty entries
+
+    def test_build_parsing_category_table(self) -> None:
+        category_stats = [
+            ("cat_a", {"count": 10, "output_length_chars_mean": 100.0, "missing_reasoning_ratio": 0.1}),
+            ("cat_b", {"count": 20, "output_length_chars_mean": 200.0}),
+        ]
+        table = reward_logging._build_parsing_category_table(category_stats)
+        assert table.columns[0] == "category"
+        assert table.columns[1] == "count"
+        assert len(table.data) == 2
+        # columns are dynamically built from union of keys
+        assert "output_length_chars_mean" in table.columns
+        assert "missing_reasoning_ratio" in table.columns
+
+    def test_build_difficulty_bin_table_validates_bin_edges(self) -> None:
+        """Verify validation catches mismatched bin_edges and bin_stats lengths."""
+        import pytest
+
+        bin_stats = [stats_utils.RunningStats() for _ in range(3)]
+        # wrong: should be len(bin_stats) + 1 = 4
+        bin_edges = [0.0, 0.5, 1.0]  # only 3 elements
+        with pytest.raises(ValueError, match="bin_edges length"):
+            reward_logging._build_difficulty_bin_table(bin_stats, bin_edges)
+
+    def test_build_difficulty_bin_term_table_validates_bin_edges(self) -> None:
+        """Verify validation catches bin_edges with fewer than 2 elements."""
+        import pytest
+
+        bin_term_stats = {"term_a": [stats_utils.RunningStats()]}
+        bin_edges = [0.0]  # only 1 element
+        with pytest.raises(ValueError, match="at least 2 elements"):
+            reward_logging._build_difficulty_bin_term_table(bin_term_stats, bin_edges, ["term_a"])
+
+    def test_build_difficulty_bin_term_table_validates_per_term_list_length(self) -> None:
+        """Verify validation catches per-term stats lists with wrong length."""
+        import pytest
+
+        bin_edges = [0.0, 0.5, 1.0]  # 2 bins
+        bin_term_stats = {
+            "term_a": [stats_utils.RunningStats()],  # only 1 element, should be 2
+        }
+        with pytest.raises(ValueError, match="term 'term_a' has 1 bin stats, expected 2"):
+            reward_logging._build_difficulty_bin_term_table(bin_term_stats, bin_edges, ["term_a"])
+
+
+class TestScalarSuppressionPatterns:
+    """Tests for scalar suppression pattern matching.
+
+    Scalars are only suppressed when the corresponding table flag is True.
+    This prevents silent data loss when table data is not provided.
+    """
+
+    def test_term_scalars_are_suppressed_when_flag_is_true(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # suppressed only when has_term_table=True
+        assert logger._is_suppressed_scalar("reward/run/terms/accuracy/mean", has_term_table=True)
+        assert logger._is_suppressed_scalar("reward/run/terms/accuracy/std", has_term_table=True)
+        assert logger._is_suppressed_scalar("reward/run/terms/accuracy/min", has_term_table=True)
+        assert logger._is_suppressed_scalar("reward/run/terms/accuracy/max", has_term_table=True)
+        assert logger._is_suppressed_scalar("reward/run/terms/accuracy/count", has_term_table=True)
+        # NOT suppressed when has_term_table=False (no table data provided)
+        assert not logger._is_suppressed_scalar("reward/run/terms/accuracy/mean", has_term_table=False)
+
+    def test_category_scalars_are_suppressed_when_flag_is_true(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # suppressed only when has_category_table=True
+        assert logger._is_suppressed_scalar("reward/run/categories/code_type_python/mean", has_category_table=True)
+        assert logger._is_suppressed_scalar("reward/run/categories/code_type_python/count", has_category_table=True)
+        # nested category names with slashes
+        assert logger._is_suppressed_scalar("reward/run/categories/code_type/original/mean", has_category_table=True)
+        # NOT suppressed when has_category_table=False
+        assert not logger._is_suppressed_scalar("reward/run/categories/code_type_python/mean", has_category_table=False)
+
+    def test_parsing_category_scalars_are_suppressed_when_flag_is_true(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # all parsing/categories/* scalars are suppressed when flag is True
+        assert logger._is_suppressed_scalar(
+            "parsing/categories/code_type/output_length_chars/mean", has_parsing_category_table=True
+        )
+        assert logger._is_suppressed_scalar(
+            "parsing/categories/code_type/output_length_chars/std", has_parsing_category_table=True
+        )
+        assert logger._is_suppressed_scalar(
+            "parsing/categories/code_type/reasoning_length_tokens/count", has_parsing_category_table=True
+        )
+        assert logger._is_suppressed_scalar(
+            "parsing/categories/predict_type/missing_reasoning_ratio", has_parsing_category_table=True
+        )
+        assert logger._is_suppressed_scalar("parsing/categories/predict_type/count", has_parsing_category_table=True)
+        # nested category names with slashes
+        assert logger._is_suppressed_scalar(
+            "parsing/categories/code_type/original/output_length_chars/mean",
+            has_parsing_category_table=True,
+        )
+        # any new metrics would also be suppressed
+        assert logger._is_suppressed_scalar("parsing/categories/foo/some_new_metric", has_parsing_category_table=True)
+        # NOT suppressed when has_parsing_category_table=False
+        assert not logger._is_suppressed_scalar(
+            "parsing/categories/code_type/output_length_chars/mean", has_parsing_category_table=False
+        )
+
+    def test_difficulty_bin_scalars_are_suppressed_when_flag_is_true(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # bin stats suppressed when has_bin_table=True
+        assert logger._is_suppressed_scalar("difficulty/run/bin_0/count", has_bin_table=True)
+        assert logger._is_suppressed_scalar("difficulty/run/bin_0/reward_mean", has_bin_table=True)
+        assert logger._is_suppressed_scalar("difficulty/run/bin_5/reward_p50", has_bin_table=True)
+        # bin term stats suppressed when has_bin_term_table=True
+        assert logger._is_suppressed_scalar("difficulty/run/bin_0/term_accuracy/reward_mean", has_bin_term_table=True)
+        # NOT suppressed when flags are False
+        assert not logger._is_suppressed_scalar("difficulty/run/bin_0/count", has_bin_table=False)
+
+    def test_total_scalars_are_not_suppressed(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # total scalars are never suppressed, regardless of flags
+        assert not logger._is_suppressed_scalar("reward/run/total/mean", has_term_table=True)
+        assert not logger._is_suppressed_scalar("reward/run/total/count", has_category_table=True)
+
+    def test_difficulty_score_scalars_are_not_suppressed(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # score scalars are never suppressed (only bin stats are)
+        assert not logger._is_suppressed_scalar("difficulty/run/score/mean", has_bin_table=True)
+        assert not logger._is_suppressed_scalar("difficulty/run/score/p90", has_bin_table=True)
+
+    def test_global_parsing_scalars_are_not_suppressed(self) -> None:
+        logger = reward_logging.WandBRewardLogger(object())
+        # global parsing scalars are never suppressed (only per-category are)
+        assert not logger._is_suppressed_scalar("parsing/output_length_chars_mean", has_parsing_category_table=True)
+        assert not logger._is_suppressed_scalar("parsing/missing_reasoning_ratio", has_parsing_category_table=True)
+
+
+class TestWandBRewardLoggerTables:
+    """Tests for table and histogram logging in WandBRewardLogger."""
+
+    def test_log_phase_summaries_emits_term_table(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        term_stats = [("term_a", stats_utils.RunningStats())]
+        term_stats[0][1].update(0.5)
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            term_stats=term_stats,
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/term_summary" in payload
+        assert isinstance(payload["reward/run/term_summary"], wandb.Table)
+
+    def test_log_phase_summaries_skips_empty_tables(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # empty term_stats (all RunningStats have count=0)
+        term_stats = [("term_a", stats_utils.RunningStats())]
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            term_stats=term_stats,
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/term_summary" not in payload  # empty table not logged
+
+    def test_log_phase_summaries_emits_histogram(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run, histogram_num_bins=20)
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            reward_total_values=[0.1, 0.2, 0.3, 0.4, 0.5],
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/total_histogram" in payload
+        assert isinstance(payload["reward/run/total_histogram"], wandb.Histogram)
+
+    def test_log_phase_summaries_filters_suppressed_scalars_when_table_provided(self) -> None:
+        """Verify scalars are suppressed only when corresponding table data is provided."""
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # provide term_stats so term scalars ARE suppressed
+        term_stats = [("accuracy", stats_utils.RunningStats())]
+        term_stats[0][1].update(0.8)
+        logger.log_phase_summaries(
+            reward_totals={"reward/run/total/mean": 0.5},
+            reward_term_summaries={
+                "reward/run/terms/accuracy/mean": 0.8,  # suppressed because term_stats provided
+                "reward/run/terms/accuracy/count": 100,  # suppressed because term_stats provided
+            },
+            reward_category_summaries={},
+            term_stats=term_stats,  # providing this causes term scalars to be suppressed
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/total/mean" in payload  # not suppressed
+        assert "reward/run/terms/accuracy/mean" not in payload  # suppressed
+        assert "reward/run/terms/accuracy/count" not in payload  # suppressed
+        assert "reward/run/term_summary" in payload  # table is emitted
+
+    def test_log_phase_summaries_keeps_scalars_when_table_not_provided(self) -> None:
+        """Verify scalars are NOT suppressed when table data is not provided."""
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # NO term_stats provided, so term scalars should NOT be suppressed
+        logger.log_phase_summaries(
+            reward_totals={"reward/run/total/mean": 0.5},
+            reward_term_summaries={
+                "reward/run/terms/accuracy/mean": 0.8,  # NOT suppressed (no term_stats)
+                "reward/run/terms/accuracy/count": 100,  # NOT suppressed (no term_stats)
+            },
+            reward_category_summaries={},
+            # term_stats NOT provided
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/total/mean" in payload
+        assert "reward/run/terms/accuracy/mean" in payload  # NOT suppressed
+        assert "reward/run/terms/accuracy/count" in payload  # NOT suppressed
+        assert "reward/run/term_summary" not in payload  # no table emitted
+
+    def test_log_phase_summaries_keeps_scalars_when_all_stats_empty(self) -> None:
+        """Verify scalars are NOT suppressed when term_stats is provided but all have count=0."""
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # term_stats provided but all have count=0, so no table will be emitted
+        # and scalars should NOT be suppressed
+        term_stats = [("accuracy", stats_utils.RunningStats())]  # count=0, no data
+        logger.log_phase_summaries(
+            reward_totals={"reward/run/total/mean": 0.5},
+            reward_term_summaries={
+                "reward/run/terms/accuracy/mean": 0.8,
+                "reward/run/terms/accuracy/count": 100,
+            },
+            reward_category_summaries={},
+            term_stats=term_stats,  # provided but empty
+        )
+        payload = logged_payloads[0]
+        assert "reward/run/total/mean" in payload
+        # scalars NOT suppressed because table would be empty (no non-zero stats)
+        assert "reward/run/terms/accuracy/mean" in payload
+        assert "reward/run/terms/accuracy/count" in payload
+        # table NOT emitted because all stats have count=0
+        assert "reward/run/term_summary" not in payload
+
+
+class TestInMemoryRewardLoggerStructuredData:
+    """Tests for InMemoryRewardLogger storing snapshots of structured kwargs."""
+
+    def test_stores_term_stats_as_snapshot(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        running_stats = stats_utils.RunningStats()
+        running_stats.update(0.5)
+        term_stats = [("term_a", running_stats)]
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            term_stats=term_stats,
+        )
+        assert len(logger.runs) == 1
+        assert "term_stats" in logger.runs[0]
+        # stored as dict snapshot, not original object
+        stored = logger.runs[0]["term_stats"]
+        assert stored[0][0] == "term_a"
+        assert isinstance(stored[0][1], dict)  # snapshot is a dict
+        assert stored[0][1]["count"] == 1
+        # verify mutation of original doesn't affect stored snapshot
+        running_stats.update(100.0)
+        assert stored[0][1]["count"] == 1  # still 1, not 2
+
+    def test_stores_reward_total_values_as_copy(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        values = [0.1, 0.2, 0.3]
+        logger.log_phase_summaries(
+            reward_totals={},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            reward_total_values=values,
+        )
+        stored = logger.runs[0]["reward_total_values"]
+        assert stored == [0.1, 0.2, 0.3]
+        # verify mutation of original doesn't affect stored copy
+        values.append(0.4)
+        assert len(stored) == 3  # still 3, not 4
+
+    def test_stores_bin_stats_as_snapshot(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        bin_stats = [stats_utils.RunningStats() for _ in range(3)]
+        bin_stats[0].update(0.5)
+        bin_edges = [0.0, 0.33, 0.67, 1.0]
+        logger.log_phase_summaries(
+            reward_totals={},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            bin_stats=bin_stats,
+            bin_edges=bin_edges,
+        )
+        stored_stats = logger.runs[0]["bin_stats"]
+        stored_edges = logger.runs[0]["bin_edges"]
+        # stored as dict snapshots
+        assert isinstance(stored_stats[0], dict)
+        assert stored_stats[0]["count"] == 1
+        assert stored_edges == [0.0, 0.33, 0.67, 1.0]
+        # verify mutation of original doesn't affect stored snapshot
+        bin_stats[0].update(100.0)
+        bin_edges.append(2.0)
+        assert stored_stats[0]["count"] == 1  # still 1
+        assert len(stored_edges) == 4  # still 4

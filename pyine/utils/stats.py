@@ -280,3 +280,28 @@ class RunningCorrStats:
         if slope is not None:
             metrics[f"{key_prefix}slope"] = slope
         return metrics
+
+
+def percentile_index(n: int, percentile: float) -> int:
+    """Get 0-indexed position for percentile using nearest-rank method.
+
+    This is useful for extracting percentile values from a sorted list without interpolation
+    (e.g., for p10, p50, p90 from histogram data).
+
+    Args:
+        n: Number of sorted values.
+        percentile: Percentile value (0-100).
+
+    Returns:
+        Index into sorted array for the given percentile. Returns 0 for n <= 1.
+
+    Example:
+        >>> values = sorted([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        >>> values[percentile_index(len(values), 50)]  # median
+        0.5
+    """
+    if n <= 1:
+        return 0
+    # nearest-rank method: rank = ceil(p/100 * n), index = rank - 1
+    rank = math.ceil(percentile / 100.0 * n)
+    return max(0, min(rank - 1, n - 1))

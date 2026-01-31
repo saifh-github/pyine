@@ -104,23 +104,6 @@ _DEFAULT_LOG_BIN_MAX_SCORE = math.log1p(10_000)
 """Default bin_max_score for log normalization: log1p(10_000) is approximately 9.21."""
 
 
-def _percentile_index(n: int, percentile: float) -> int:
-    """Get 0-indexed position for percentile using nearest-rank method.
-
-    Args:
-        n: Number of sorted values.
-        percentile: Percentile value (0-100).
-
-    Returns:
-        Index into sorted array for the given percentile.
-    """
-    if n <= 1:
-        return 0
-    # nearest-rank method: rank = ceil(p/100 * n), index = rank - 1
-    rank = math.ceil(percentile / 100.0 * n)
-    return max(0, min(rank - 1, n - 1))
-
-
 class DifficultyEstimator:
     """Computes difficulty metrics from sample metadata.
 
@@ -474,6 +457,25 @@ class DifficultyEstimator:
                 self._track_secondary_value(secondary_source, raw_secondary, reward_total)
         return metrics
 
+    def get_bin_stats(self) -> list[stats_utils.RunningStats]:
+        """Return per-bin reward stats (list indexed by bin_idx)."""
+        return self._bin_reward_stats
+
+    def get_bin_edges(self) -> list[float]:
+        """Return bin edges."""
+        return self._bin_edges
+
+    def get_bin_term_stats(self) -> dict[str, list[stats_utils.RunningStats]]:
+        """Return per-term per-bin stats."""
+        return self._bin_term_reward_stats
+
+    def get_histogram_data(self) -> dict[str, list[float] | list[list[float]]]:
+        """Return raw values for histogram logging."""
+        return {
+            "score_values": self._score_values,
+            "bin_reward_values": self._bin_reward_values,
+        }
+
     def get_run_summaries(self) -> dict[str, reward_types.MetricValue]:
         """Get aggregated difficulty metrics for run-level logging.
 
@@ -498,14 +500,14 @@ class DifficultyEstimator:
         if self._score_values:
             sorted_values = sorted(self._score_values)
             n = len(sorted_values)
-            metrics["score/median"] = sorted_values[_percentile_index(n, 50)]
-            metrics["score/p90"] = sorted_values[_percentile_index(n, 90)]
-            metrics["score/p99"] = sorted_values[_percentile_index(n, 99)]
+            metrics["score/median"] = sorted_values[stats_utils.percentile_index(n, 50)]
+            metrics["score/p90"] = sorted_values[stats_utils.percentile_index(n, 90)]
+            metrics["score/p99"] = sorted_values[stats_utils.percentile_index(n, 99)]
             # recommended percentile-based bin edges for calibrating future runs;
             # these edges divide the observed distribution into equal-mass bins
             for edge_idx in range(self._config.num_difficulty_bins + 1):
                 pct = int(edge_idx * 100 / self._config.num_difficulty_bins)
-                metrics[f"score/recommended_edge_{edge_idx}"] = sorted_values[_percentile_index(n, pct)]
+                metrics[f"score/recommended_edge_{edge_idx}"] = sorted_values[stats_utils.percentile_index(n, pct)]
         if self._score_stats.count > 0:
             # correlation and slope between difficulty and reward (catches trends bins can hide)
             metrics.update(self._corr_stats.to_metrics(prefix="reward"))
@@ -515,16 +517,12 @@ class DifficultyEstimator:
                 if source in self._secondary_stats:
                     metrics.update(self._secondary_stats[source].to_metrics(prefix=f"secondary/{source}"))
         # bin edges (critical for interpretability)
-        # convention: inf edges are logged as -1.0 (sentinel value)
         # the has_overflow_bin flag indicates whether the last bin is an overflow bin
         has_overflow = self._bin_edges[-1] == float("inf")
         metrics["num_bins"] = len(self._bin_edges) - 1
         metrics["has_overflow_bin"] = int(has_overflow)
         for edge_idx, edge in enumerate(self._bin_edges):
-            if edge == float("inf"):
-                metrics[f"bin_edge_{edge_idx}"] = -1.0  # sentinel: -1.0 means infinity
-            else:
-                metrics[f"bin_edge_{edge_idx}"] = edge
+            metrics[f"bin_edge_{edge_idx}"] = edge
         # per-bin reward stats
         for bin_idx, bin_stats in enumerate(self._bin_reward_stats):
             if bin_stats.count > 0:
@@ -540,9 +538,9 @@ class DifficultyEstimator:
                     bin_vals = sorted(self._bin_reward_values[bin_idx])
                     if bin_vals:
                         bin_n = len(bin_vals)
-                        metrics[f"{prefix}/reward_p10"] = bin_vals[_percentile_index(bin_n, 10)]
-                        metrics[f"{prefix}/reward_p50"] = bin_vals[_percentile_index(bin_n, 50)]
-                        metrics[f"{prefix}/reward_p90"] = bin_vals[_percentile_index(bin_n, 90)]
+                        metrics[f"{prefix}/reward_p10"] = bin_vals[stats_utils.percentile_index(bin_n, 10)]
+                        metrics[f"{prefix}/reward_p50"] = bin_vals[stats_utils.percentile_index(bin_n, 50)]
+                        metrics[f"{prefix}/reward_p90"] = bin_vals[stats_utils.percentile_index(bin_n, 90)]
         # per-term per-bin reward stats (if enabled)
         for term_name, term_bin_stats in self._bin_term_reward_stats.items():
             for bin_idx, bin_stats in enumerate(term_bin_stats):
