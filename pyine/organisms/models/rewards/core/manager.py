@@ -149,9 +149,6 @@ class RewardManager:
         self._reward_term_stats: dict[str, stats_utils.RunningStats] = {
             spec.name: stats_utils.RunningStats() for spec in config.terms if spec.enabled
         }
-        # batch-level reward accumulators
-        self._batch_reward_mean_stats = stats_utils.RunningStats()
-        self._batch_reward_std_stats = stats_utils.RunningStats()
 
         category_config = config.logging.category_extraction_config
         self._category_extractor: pyine.evals.utils.SampleCategoryExtractor | None = (
@@ -681,8 +678,6 @@ class RewardManager:
         for key in self._reward_term_stats:
             self._reward_term_stats[key] = stats_utils.RunningStats()
         self._reward_category_stats.clear()
-        self._batch_reward_mean_stats = stats_utils.RunningStats()
-        self._batch_reward_std_stats = stats_utils.RunningStats()
         self._reward_total_values = []
         self._reward_total_values_count = 0
         if self._parsing_stats is not None:
@@ -744,6 +739,8 @@ class RewardManager:
             hist_data = self._difficulty_estimator.get_histogram_data()
             kwargs["difficulty_score_values"] = hist_data["score_values"]
             kwargs["bin_reward_values"] = hist_data["bin_reward_values"]
+            kwargs["secondary_stats"] = self._difficulty_estimator.get_secondary_stats()
+            kwargs["secondary_corr_stats"] = self._difficulty_estimator.get_secondary_corr_stats()
         # parsing category stats (if enabled)
         if self._parsing_stats and self._category_extractor:
             parsing_config = self._config.parsing
@@ -1490,36 +1487,24 @@ class RewardManager:
         answer_enabled = enabled_fields in ("both", "final_only")
         # use cached token lengths (computed in _update_parsing_stats)
         cache = self._token_count_cache
-        metrics: dict[str, reward_types.MetricValue] = {
-            "parsing/output_length_chars": len(parsed.raw),
-        }
+        metrics: dict[str, reward_types.MetricValue] = {}
         # add token length if token tracking is enabled
         if cache is not None:
             output_tokens = cache.get(reward_types.LengthSource.model_output)
             if output_tokens is not None:
                 metrics["parsing/output_length_tokens"] = output_tokens
-        # is_malformed only meaningful when capture_diagnostics is enabled
-        # note: use int (0/1) instead of bool for better W&B scalar display
-        if self._config.parsing and self._config.parsing.capture_diagnostics:
-            metrics["parsing/is_malformed"] = int(parsed.fields.get("is_malformed", "false") == "true")
         if reasoning_enabled:
             has_reasoning = bool(parsed.reasoning)  # treat empty string as missing
-            metrics["parsing/has_reasoning"] = int(has_reasoning)
-            if has_reasoning:
-                metrics["parsing/reasoning_length_chars"] = len(parsed.reasoning)  # type: ignore[arg-type]
-                if cache is not None:
-                    reasoning_tokens = cache.get(reward_types.LengthSource.parsed_reasoning)
-                    if reasoning_tokens is not None:
-                        metrics["parsing/reasoning_length_tokens"] = reasoning_tokens
+            if has_reasoning and cache is not None:
+                reasoning_tokens = cache.get(reward_types.LengthSource.parsed_reasoning)
+                if reasoning_tokens is not None:
+                    metrics["parsing/reasoning_length_tokens"] = reasoning_tokens
         if answer_enabled:
             has_answer = bool(parsed.final_answer)  # treat empty string as missing
-            metrics["parsing/has_answer"] = int(has_answer)
-            if has_answer:
-                metrics["parsing/answer_length_chars"] = len(parsed.final_answer)  # type: ignore[arg-type]
-                if cache is not None:
-                    answer_tokens = cache.get(reward_types.LengthSource.parsed_final_answer)
-                    if answer_tokens is not None:
-                        metrics["parsing/answer_length_tokens"] = answer_tokens
+            if has_answer and cache is not None:
+                answer_tokens = cache.get(reward_types.LengthSource.parsed_final_answer)
+                if answer_tokens is not None:
+                    metrics["parsing/answer_length_tokens"] = answer_tokens
         return metrics
 
     def _maybe_log_sample(
@@ -1735,16 +1720,9 @@ class RewardManager:
             return
         batch_mean = batch_stats.mean()
         batch_std = batch_stats.std()
-        # update rolling stats
-        self._batch_reward_mean_stats.update(batch_mean)
-        self._batch_reward_std_stats.update(batch_std)
         self._logger.log_batch_stats(
             batch_mean=batch_mean,
             batch_std=batch_std,
-            batch_mean_rolling_mean=self._batch_reward_mean_stats.mean(),
-            batch_mean_rolling_std=self._batch_reward_mean_stats.std(),
-            batch_std_rolling_mean=self._batch_reward_std_stats.mean(),
-            batch_std_rolling_std=self._batch_reward_std_stats.std(),
             batch_count=self._get_global_batch_count(),
         )
 
@@ -1786,9 +1764,6 @@ class RewardManager:
             "reward_total_stats": self._reward_total_stats.as_state(),
             "reward_term_stats": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
             "reward_category_stats": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
-            # batch-level reward accumulators
-            "batch_reward_mean_stats": self._batch_reward_mean_stats.as_state(),
-            "batch_reward_std_stats": self._batch_reward_std_stats.as_state(),
             # histogram values for checkpoint persistence
             "reward_total_values": self._reward_total_values,
             "reward_total_values_count": self._reward_total_values_count,
@@ -1808,8 +1783,7 @@ class RewardManager:
         Args:
             state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
                 step, epoch, global_generation_counts, global_batch_counts, local_generation_counts,
-                total_global_generation_count, total_global_batch_count, batch_reward_mean_stats,
-                batch_reward_std_stats, and optionally parsing_stats.
+                total_global_generation_count, total_global_batch_count, and optionally parsing_stats.
 
         Note:
             _current_prefix will be set by trainer via set_key_prefix() after loading state.
@@ -1835,9 +1809,6 @@ class RewardManager:
         self._reward_category_stats.clear()
         for name, cat_state in state["reward_category_stats"].items():
             self._reward_category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
-        # batch-level reward accumulators
-        self._batch_reward_mean_stats = stats_utils.RunningStats.from_state(state["batch_reward_mean_stats"])
-        self._batch_reward_std_stats = stats_utils.RunningStats.from_state(state["batch_reward_std_stats"])
         # histogram values (optional, for checkpoint persistence)
         self._reward_total_values = list(state.get("reward_total_values", []))
         self._reward_total_values_count = int(state.get("reward_total_values_count", 0))

@@ -322,7 +322,6 @@ When `emit_metrics=True` (default), verbosity scaling emits:
 - `verbosity/factor`: the computed scaling factor;
 - `verbosity/token_count`: token count considered for the sample;
 - `verbosity/pre_scaling_reward`: reward before scaling;
-- `verbosity/post_scaling_reward`: reward after scaling;
 - In relative mode: `verbosity/group_mean`, `verbosity/group_std`, `verbosity/z_score`.
 
 ## Creating Custom Terms
@@ -502,9 +501,7 @@ within the same trainer step (e.g. gradient accumulation).
 Note: Batch-level metrics are only emitted when `LoggingConfig.log_batch_stats=True`.
 
 - `{prefix}/reward/batch/mean`: mean reward across the batch;
-- `{prefix}/reward/batch/std`: standard deviation of rewards in the batch;
-- `{prefix}/reward/batch/mean_rolling/*`: rolling statistics of batch means;
-- `{prefix}/reward/batch/std_rolling/*`: rolling statistics of batch std devs.
+- `{prefix}/reward/batch/std`: standard deviation of rewards in the batch.
 
 **Run-level summaries** (indexed to `step_metric_key`, default `train/global_step`): These metrics
 are logged when flush_stats() is called (e.g. at phase transitions).

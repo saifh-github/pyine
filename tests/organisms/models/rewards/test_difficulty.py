@@ -188,8 +188,8 @@ class TestCodeOverrideHandling:
 class TestRunSummaries:
     """Tests for run-level summary computation."""
 
-    def test_run_summaries_include_bin_edges(self) -> None:
-        """Run summaries should include bin edges for interpretability."""
+    def test_run_summaries_basic_metrics(self) -> None:
+        """Run summaries should include score stats and per-bin reward stats."""
         sample_data = _make_sample_data(trace_step_count=50)
         config = reward_configs.DifficultyConfig(
             enabled=True,
@@ -199,10 +199,8 @@ class TestRunSummaries:
         estimator = difficulty_module.DifficultyEstimator(config)
         estimator.compute(sample_data, reward_total=0.5)
         summaries = estimator.get_run_summaries()
-        assert "num_bins" in summaries
-        assert "bin_edge_0" in summaries
-        assert "has_overflow_bin" in summaries
-        assert summaries["num_bins"] == len(estimator._bin_edges) - 1
+        assert "score/count" in summaries
+        assert summaries["score/count"] == 1
 
     def test_run_summaries_correlation(self) -> None:
         """Run summaries should include correlation between difficulty and reward."""
@@ -236,8 +234,6 @@ class TestRunSummaries:
         summaries = estimator.get_run_summaries()
         assert summaries["score/count"] == 0
         assert summaries["override_skip_ratio"] == pytest.approx(1.0)
-        assert "num_bins" in summaries
-        assert "bin_edge_0" in summaries
 
     def test_run_summaries_percentiles(self) -> None:
         """Run summaries should include percentiles when track_percentiles is enabled."""
@@ -366,7 +362,7 @@ class TestSecondarySources:
         assert metrics["difficulty/raw/halstead_effort"] == 100.0
 
     def test_secondary_sources_correlation_tracked(self) -> None:
-        """Secondary sources should have correlation tracked in run summaries."""
+        """Secondary sources should have correlation tracked via getters (for table logging)."""
         config = reward_configs.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
@@ -376,9 +372,13 @@ class TestSecondarySources:
         for step_count, code_len, reward in [(10, 20, 0.9), (50, 100, 0.5), (100, 200, 0.2)]:
             sample_data = _make_sample_data(trace_step_count=step_count, code="x" * code_len)
             estimator.compute(sample_data, reward_total=reward)
-        summaries = estimator.get_run_summaries()
-        assert "secondary/code_length/reward/correlation" in summaries
-        assert "secondary/code_length/reward/slope" in summaries
+        # secondary stats are now accessed via getters (for table logging), not run summaries
+        secondary_stats = estimator.get_secondary_stats()
+        secondary_corr_stats = estimator.get_secondary_corr_stats()
+        assert "code_length" in secondary_stats
+        assert "code_length" in secondary_corr_stats
+        assert secondary_stats["code_length"].count == 3
+        assert secondary_corr_stats["code_length"].correlation() is not None
 
 
 class TestStateSerialization:

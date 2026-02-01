@@ -208,7 +208,6 @@ class VerbosityScaler:
             metrics["verbosity/token_count"] = token_count
             metrics["verbosity/factor"] = factor
             metrics["verbosity/pre_scaling_reward"] = aggregated_reward
-            metrics["verbosity/post_scaling_reward"] = scaled_total
             if self._config.skip_negative_rewards:
                 metrics["verbosity/skipped_negative"] = int(skipped)
         return scaled_total, metrics
@@ -291,7 +290,6 @@ class VerbosityScaler:
                     metrics["verbosity/z_score"] = (float(count) - group_mean) / group_std
                 metrics["verbosity/factor"] = effective_factor
                 metrics["verbosity/pre_scaling_reward"] = reward
-                metrics["verbosity/post_scaling_reward"] = scaled_total
                 if self._config.skip_negative_rewards:
                     metrics["verbosity/skipped_negative"] = int(skipped)
             all_metrics.append(metrics)

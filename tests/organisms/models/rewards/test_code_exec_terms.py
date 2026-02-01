@@ -389,13 +389,13 @@ class TestSoftMatchTerm:
         assert result.value == 1.0
         assert result.metrics["is_match"] == 1
 
-    def test_metrics_include_lengths(self) -> None:
+    def test_metrics_include_match_and_flip(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
         term = soft_match_term.SoftMatchTerm(config)
         ctx = make_code_exec_sample_context(expected="test", predicted="value")
         result = term(ctx)
-        assert result.metrics["expected_length"] == 4
-        assert result.metrics["predicted_length"] == 5
+        assert "is_match" in result.metrics
+        assert "reward_flipped" in result.metrics
 
     def test_raises_when_eval_data_missing(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
@@ -448,7 +448,6 @@ class TestSoftMatchTerm:
         result = term(ctx)
         assert result.value == 1.0
         assert result.metrics["is_match"] == 1
-        assert result.metrics["used_precomputed"] == 1
         assert "mismatch_reason" not in result.metrics  # no reason when precomputed
 
     def test_raises_when_precomputed_soft_match_result_has_invalid_type(self) -> None:
@@ -475,7 +474,6 @@ class TestSoftMatchTerm:
         result = term(ctx)
         assert result.value == 1.0
         assert result.metrics["is_match"] == 1
-        assert result.metrics["used_precomputed"] == 0
 
 
 class TestSoftMatchTermFactory:

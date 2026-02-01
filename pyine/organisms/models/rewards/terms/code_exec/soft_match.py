@@ -113,7 +113,6 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
                     f"got: {type(eval_data.soft_match_result)}"
                 )
             is_match = eval_data.soft_match_result
-            used_precomputed = True
         else:
             compare_result = code_exec_utils.compute_soft_match(
                 expected=eval_data.expected,
@@ -121,7 +120,6 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
                 options=self._config.compare_options,
             )
             is_match = compare_result.equal
-            used_precomputed = False
             if not is_match and compare_result.reason:
                 mismatch_reason = compare_result.reason[:200]
         flip = code_exec_utils.get_flip_decision(sample_ctx)
@@ -133,10 +131,7 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
         )
         metrics: dict[str, reward_types.MetricValue] = {
             "is_match": int(is_match),
-            "used_precomputed": int(used_precomputed),
             "reward_flipped": int(flip),
-            "expected_length": len(eval_data.expected),
-            "predicted_length": len(eval_data.predicted),
         }
         if mismatch_reason:
             metrics["mismatch_reason"] = mismatch_reason

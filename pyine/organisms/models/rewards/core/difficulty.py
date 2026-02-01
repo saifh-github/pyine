@@ -476,6 +476,14 @@ class DifficultyEstimator:
             "bin_reward_values": self._bin_reward_values,
         }
 
+    def get_secondary_stats(self) -> dict[str, stats_utils.RunningStats]:
+        """Return raw secondary source statistics for table logging."""
+        return dict(self._secondary_stats)
+
+    def get_secondary_corr_stats(self) -> dict[str, stats_utils.RunningCorrStats]:
+        """Return secondary source correlation statistics for table logging."""
+        return dict(self._secondary_corr_stats)
+
     def get_run_summaries(self) -> dict[str, reward_types.MetricValue]:
         """Get aggregated difficulty metrics for run-level logging.
 
@@ -511,18 +519,6 @@ class DifficultyEstimator:
         if self._score_stats.count > 0:
             # correlation and slope between difficulty and reward (catches trends bins can hide)
             metrics.update(self._corr_stats.to_metrics(prefix="reward"))
-            # secondary source stats and correlations
-            for source, corr_stats in self._secondary_corr_stats.items():
-                metrics.update(corr_stats.to_metrics(prefix=f"secondary/{source}/reward"))
-                if source in self._secondary_stats:
-                    metrics.update(self._secondary_stats[source].to_metrics(prefix=f"secondary/{source}"))
-        # bin edges (critical for interpretability)
-        # the has_overflow_bin flag indicates whether the last bin is an overflow bin
-        has_overflow = self._bin_edges[-1] == float("inf")
-        metrics["num_bins"] = len(self._bin_edges) - 1
-        metrics["has_overflow_bin"] = int(has_overflow)
-        for edge_idx, edge in enumerate(self._bin_edges):
-            metrics[f"bin_edge_{edge_idx}"] = edge
         # per-bin reward stats
         for bin_idx, bin_stats in enumerate(self._bin_reward_stats):
             if bin_stats.count > 0:

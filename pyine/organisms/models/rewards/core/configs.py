@@ -466,7 +466,7 @@ class LoggingConfig(reward_types.BaseConfig):
     log_tables: bool = True
     """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
     log_batch_stats: bool = True
-    """Whether to log per-batch total reward statistics (mean/std and rolling aggregates).
+    """Whether to log per-batch total reward statistics (mean/std).
 
     The overhead is minimal since batch stats are gathered alongside per-sample global generation
     counts in a single distributed collective operation.

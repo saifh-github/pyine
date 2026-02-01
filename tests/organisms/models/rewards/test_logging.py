@@ -371,15 +371,15 @@ class TestTableConstructionHelpers:
 
     def test_build_parsing_category_table(self) -> None:
         category_stats = [
-            ("cat_a", {"count": 10, "output_length_chars_mean": 100.0, "missing_reasoning_ratio": 0.1}),
-            ("cat_b", {"count": 20, "output_length_chars_mean": 200.0}),
+            ("cat_a", {"count": 10, "output_length_tokens_mean": 20.0, "missing_reasoning_ratio": 0.1}),
+            ("cat_b", {"count": 20, "output_length_tokens_mean": 40.0}),
         ]
         table = reward_logging._build_parsing_category_table(category_stats)
         assert table.columns[0] == "category"
         assert table.columns[1] == "count"
         assert len(table.data) == 2
         # columns are dynamically built from union of keys
-        assert "output_length_chars_mean" in table.columns
+        assert "output_length_tokens_mean" in table.columns
         assert "missing_reasoning_ratio" in table.columns
 
     def test_build_difficulty_bin_table_validates_bin_edges(self) -> None:
@@ -445,10 +445,10 @@ class TestScalarSuppressionPatterns:
         logger = reward_logging.WandBRewardLogger(object())
         # all parsing/categories/* scalars are suppressed when flag is True
         assert logger._is_suppressed_scalar(
-            "parsing/categories/code_type/output_length_chars/mean", has_parsing_category_table=True
+            "parsing/categories/code_type/output_length_tokens/mean", has_parsing_category_table=True
         )
         assert logger._is_suppressed_scalar(
-            "parsing/categories/code_type/output_length_chars/std", has_parsing_category_table=True
+            "parsing/categories/code_type/output_length_tokens/std", has_parsing_category_table=True
         )
         assert logger._is_suppressed_scalar(
             "parsing/categories/code_type/reasoning_length_tokens/count", has_parsing_category_table=True
@@ -459,14 +459,14 @@ class TestScalarSuppressionPatterns:
         assert logger._is_suppressed_scalar("parsing/categories/predict_type/count", has_parsing_category_table=True)
         # nested category names with slashes
         assert logger._is_suppressed_scalar(
-            "parsing/categories/code_type/original/output_length_chars/mean",
+            "parsing/categories/code_type/original/output_length_tokens/mean",
             has_parsing_category_table=True,
         )
         # any new metrics would also be suppressed
         assert logger._is_suppressed_scalar("parsing/categories/foo/some_new_metric", has_parsing_category_table=True)
         # NOT suppressed when has_parsing_category_table=False
         assert not logger._is_suppressed_scalar(
-            "parsing/categories/code_type/output_length_chars/mean", has_parsing_category_table=False
+            "parsing/categories/code_type/output_length_tokens/mean", has_parsing_category_table=False
         )
 
     def test_difficulty_bin_scalars_are_suppressed_when_flag_is_true(self) -> None:
@@ -495,7 +495,7 @@ class TestScalarSuppressionPatterns:
     def test_global_parsing_scalars_are_not_suppressed(self) -> None:
         logger = reward_logging.WandBRewardLogger(object())
         # global parsing scalars are never suppressed (only per-category are)
-        assert not logger._is_suppressed_scalar("parsing/output_length_chars_mean", has_parsing_category_table=True)
+        assert not logger._is_suppressed_scalar("parsing/output_length_tokens_mean", has_parsing_category_table=True)
         assert not logger._is_suppressed_scalar("parsing/missing_reasoning_ratio", has_parsing_category_table=True)
 
 
@@ -710,3 +710,97 @@ class TestInMemoryRewardLoggerStructuredData:
         bin_edges.append(2.0)
         assert stored_stats[0]["count"] == 1  # still 1
         assert len(stored_edges) == 4  # still 4
+
+
+class TestSecondarySourceTable:
+    """Tests for secondary difficulty source summary table emission."""
+
+    def test_log_phase_summaries_emits_secondary_source_table_when_stats_exist(self) -> None:
+        """Verify secondary_source_summary table is emitted when secondary stats have data."""
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # create secondary stats with data
+        secondary_stats = {"source_a": stats_utils.RunningStats(), "source_b": stats_utils.RunningStats()}
+        secondary_stats["source_a"].update(0.5)
+        secondary_stats["source_a"].update(0.7)
+        secondary_stats["source_b"].update(0.3)
+        # create correlation stats
+        secondary_corr_stats = {"source_a": stats_utils.RunningCorrStats()}
+        secondary_corr_stats["source_a"].update(0.5, 0.8)
+        secondary_corr_stats["source_a"].update(0.7, 0.9)
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            secondary_stats=secondary_stats,
+            secondary_corr_stats=secondary_corr_stats,
+        )
+        assert len(logged_payloads) == 1
+        payload = logged_payloads[0]
+        assert "difficulty/run/secondary_source_summary" in payload
+        table = payload["difficulty/run/secondary_source_summary"]
+        assert isinstance(table, wandb.Table)
+        assert "source" in table.columns
+        assert "mean" in table.columns
+        assert "reward_correlation" in table.columns
+        assert len(table.data) == 2  # two sources
+
+    def test_log_phase_summaries_skips_secondary_source_table_when_empty(self) -> None:
+        """Verify secondary_source_summary table is not emitted when stats are empty."""
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # empty secondary stats
+        secondary_stats = {"source_a": stats_utils.RunningStats()}  # count=0
+        secondary_corr_stats = {"source_a": stats_utils.RunningCorrStats()}  # count=0
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            secondary_stats=secondary_stats,
+            secondary_corr_stats=secondary_corr_stats,
+        )
+        assert len(logged_payloads) == 1
+        payload = logged_payloads[0]
+        # table should NOT be emitted when all stats are empty
+        assert "difficulty/run/secondary_source_summary" not in payload
+
+    def test_in_memory_logger_stores_secondary_stats_as_snapshot(self) -> None:
+        """Verify InMemoryRewardLogger stores secondary stats for testing parity."""
+        logger = reward_logging.InMemoryRewardLogger()
+        # create secondary stats with data
+        secondary_stats = {"source_a": stats_utils.RunningStats()}
+        secondary_stats["source_a"].update(0.5)
+        secondary_corr_stats = {"source_a": stats_utils.RunningCorrStats()}
+        secondary_corr_stats["source_a"].update(0.5, 0.8)
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            secondary_stats=secondary_stats,
+            secondary_corr_stats=secondary_corr_stats,
+        )
+        assert len(logger.runs) == 1
+        run_entry = logger.runs[0]
+        # verify secondary stats stored as state dicts
+        assert "secondary_stats" in run_entry
+        assert "source_a" in run_entry["secondary_stats"]
+        assert run_entry["secondary_stats"]["source_a"]["count"] == 1
+        # verify secondary corr stats stored as state dicts
+        assert "secondary_corr_stats" in run_entry
+        assert "source_a" in run_entry["secondary_corr_stats"]
+        assert run_entry["secondary_corr_stats"]["source_a"]["count"] == 1
+        # verify mutation of original doesn't affect snapshot
+        secondary_stats["source_a"].update(100.0)
+        assert run_entry["secondary_stats"]["source_a"]["count"] == 1  # still 1

@@ -392,7 +392,6 @@ class TestMetricsEmission:
         assert "verbosity/factor" in metrics
         assert "verbosity/token_count" in metrics
         assert "verbosity/pre_scaling_reward" in metrics
-        assert "verbosity/post_scaling_reward" in metrics
 
     def test_relative_mode_emits_group_metrics(self) -> None:
         """Relative mode should emit group statistics metrics."""

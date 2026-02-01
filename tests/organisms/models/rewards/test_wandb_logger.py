@@ -415,10 +415,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=1.0,
             batch_std=0.1,
-            batch_mean_rolling_mean=1.0,
-            batch_mean_rolling_std=0.05,
-            batch_std_rolling_mean=0.1,
-            batch_std_rolling_std=0.01,
             batch_count=1,
         )
         calls = mock_define_metric.call_args_list
@@ -447,10 +443,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=1.0,
             batch_std=0.1,
-            batch_mean_rolling_mean=1.0,
-            batch_mean_rolling_std=0.05,
-            batch_std_rolling_mean=0.1,
-            batch_std_rolling_std=0.01,
             batch_count=1,
         )
         first_call_count = mock_define_metric.call_count
@@ -458,10 +450,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=2.0,
             batch_std=0.2,
-            batch_mean_rolling_mean=1.5,
-            batch_mean_rolling_std=0.1,
-            batch_std_rolling_mean=0.15,
-            batch_std_rolling_std=0.02,
             batch_count=2,
         )
         assert mock_define_metric.call_count == first_call_count, (
@@ -482,10 +470,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=1.0,
             batch_std=0.1,
-            batch_mean_rolling_mean=1.0,
-            batch_mean_rolling_std=0.05,
-            batch_std_rolling_mean=0.1,
-            batch_std_rolling_std=0.01,
             batch_count=1,
         )
         batch_call_count = mock_define_metric.call_count
@@ -505,10 +489,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=1.5,
             batch_std=0.2,
-            batch_mean_rolling_mean=1.4,
-            batch_mean_rolling_std=0.1,
-            batch_std_rolling_mean=0.18,
-            batch_std_rolling_std=0.02,
             batch_count=42,
         )
         assert len(fake_run.logged) == 1
@@ -605,10 +585,6 @@ class TestWandBDefineMetric:
         logger.log_batch_stats(
             batch_mean=1.0,
             batch_std=0.1,
-            batch_mean_rolling_mean=1.0,
-            batch_mean_rolling_std=0.05,
-            batch_std_rolling_mean=0.1,
-            batch_std_rolling_std=0.01,
             batch_count=1,
         )
         logger.log_phase_summaries(

@@ -53,8 +53,8 @@ class TestParsingStatsLogging:
         assert len(logger_obj.runs) == 1
         assert "parsing_summaries" not in logger_obj.runs[0]
 
-    def test_parsing_stats_track_lengths(self) -> None:
-        """Verify output_length_chars, reasoning_length_chars, answer_length_chars accumulate correctly."""
+    def test_parsing_stats_track_counts(self) -> None:
+        """Verify parsing stats track sample counts and ratios."""
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
                 pyine.organisms.models.rewards.core.configs.RewardTermSpec(
@@ -78,10 +78,9 @@ class TestParsingStatsLogging:
         manager.compute(ctx1, log=False)
         metrics = manager.get_parsing_metrics()
         assert metrics["count"] == 1.0
-        assert metrics["output_length_chars/mean"] > 0
-        # reasoning was present
-        assert metrics["reasoning_length_chars/mean"] > 0
-        assert metrics["answer_length_chars/mean"] > 0
+        # char-length metrics were removed; only ratios remain
+        assert metrics["missing_reasoning_ratio"] == 0.0
+        assert metrics["missing_answer_ratio"] == 0.0
 
     def test_parsing_stats_track_missing_counts(self) -> None:
         """Verify missing_reasoning_ratio and missing_answer_ratio are computed correctly."""
@@ -194,9 +193,9 @@ class TestParsingStatsLogging:
         assert "parsing_summaries" in run_entry
         parsing_summaries = run_entry["parsing_summaries"]
         assert isinstance(parsing_summaries, dict)
-        # keys should have parsing/ prefix
-        assert "parsing/output_length_chars/mean" in parsing_summaries
+        # keys should have parsing/ prefix; char-length metrics removed, ratios remain
         assert "parsing/count" in parsing_summaries
+        assert "parsing/missing_reasoning_ratio" in parsing_summaries
 
     def test_parsing_stats_checkpoint_roundtrip(self) -> None:
         """Verify get_state/load_state preserves all parsing stats including category-wise."""
@@ -254,11 +253,8 @@ class TestParsingStatsLogging:
         restored.load_state(state)
         restored_metrics = restored.get_parsing_metrics()
         restored_category_metrics = restored.get_parsing_category_metrics()
-        # verify global stats
+        # verify global stats (char-length metrics removed)
         assert restored_metrics["count"] == original_metrics["count"]
-        assert restored_metrics["output_length_chars/mean"] == pytest.approx(
-            original_metrics["output_length_chars/mean"]
-        )
         assert restored_metrics["missing_reasoning_ratio"] == pytest.approx(original_metrics["missing_reasoning_ratio"])
         assert restored_metrics["malformed_ratio"] == pytest.approx(original_metrics["malformed_ratio"])
         # verify category stats
@@ -292,7 +288,7 @@ class TestParsingStatsLogging:
         assert manager.get_parsing_metrics() == {}
 
     def test_per_sample_parsing_metrics_logged(self) -> None:
-        """Verify per-sample parsing metrics (lengths, booleans) are in logger.log_sample() calls."""
+        """Verify per-sample logging works correctly."""
         logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
         config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
             terms=[
@@ -319,14 +315,10 @@ class TestParsingStatsLogging:
         manager.compute(ctx)
         assert len(logger_obj.samples) == 1
         sample_entry = logger_obj.samples[0]
-        metrics = sample_entry["reward_metrics"]
-        assert isinstance(metrics, dict)
-        # per-sample parsing metrics should be present
-        assert "parsing/output_length_chars" in metrics
-        assert "parsing/has_reasoning" in metrics
-        assert "parsing/has_answer" in metrics
-        assert metrics["parsing/has_reasoning"]
-        assert metrics["parsing/has_answer"]
+        # sample should have basic info logged
+        assert "sample_id" in sample_entry
+        assert sample_entry["sample_id"] == "s1"
+        # per-sample char length and boolean parsing metrics were removed
 
     def test_per_sample_parsing_metrics_respect_log_every_n_generations(self) -> None:
         """Verify per-sample metrics follow log_every_n_generations frequency."""
@@ -435,23 +427,14 @@ class TestParsingStatsIntegration:
             sample_data=rewards_conftest.make_sample_data("s3"),
         )
         manager.compute(ctx3)
-        # verify per-sample metrics were logged (separate parsing/ prefix)
+        # verify per-sample metrics were logged
         assert len(logger_obj.samples) == 3
+        # per-sample char length and boolean metrics removed; verify samples were logged
         sample1_metrics = logger_obj.samples[0]["reward_metrics"]
-        assert "parsing/output_length_chars" in sample1_metrics
-        assert "parsing/has_reasoning" in sample1_metrics
-        assert "parsing/has_answer" in sample1_metrics
-        assert sample1_metrics["parsing/has_reasoning"]
-        assert sample1_metrics["parsing/has_answer"]
-        sample2_metrics = logger_obj.samples[1]["reward_metrics"]
-        assert not sample2_metrics["parsing/has_reasoning"]
-        assert sample2_metrics["parsing/has_answer"]
-        sample3_metrics = logger_obj.samples[2]["reward_metrics"]
-        assert not sample3_metrics["parsing/has_answer"]
-        # verify run-level parsing metrics before flush
+        assert isinstance(sample1_metrics, dict)
+        # verify run-level parsing metrics before flush (char lengths removed)
         parsing_metrics = manager.get_parsing_metrics()
         assert parsing_metrics["count"] == 3.0
-        assert parsing_metrics["output_length_chars/mean"] > 0
         assert "missing_reasoning_ratio" in parsing_metrics
         assert "missing_answer_ratio" in parsing_metrics
         # 2 of 3 missing reasoning (samples 2 and 3)
@@ -465,7 +448,7 @@ class TestParsingStatsIntegration:
         assert "parsing_summaries" in run_entry
         parsing_summaries = run_entry["parsing_summaries"]
         assert isinstance(parsing_summaries, dict)
-        assert "parsing/output_length_chars/mean" in parsing_summaries
+        # char-length metrics removed; ratios remain
         assert "parsing/missing_reasoning_ratio" in parsing_summaries
         # verify reset after flush
         assert manager.get_parsing_metrics() == {}
@@ -632,8 +615,7 @@ class TestTokenLengthTracking:
         )
         manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
-        # char metrics present, token metrics absent
-        assert "output_length_chars/mean" in metrics
+        # char metrics removed, token metrics absent when tracking disabled
         assert "output_length_tokens/mean" not in metrics
 
     def test_token_tracking_with_openai_tokenizer(self) -> None:
@@ -660,15 +642,12 @@ class TestTokenLengthTracking:
         )
         manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
-        # both char and token metrics should be present
-        assert "output_length_chars/mean" in metrics
+        # char metrics removed, only token metrics present
         assert "output_length_tokens/mean" in metrics
-        assert "reasoning_length_chars/mean" in metrics
         assert "reasoning_length_tokens/mean" in metrics
-        assert "answer_length_chars/mean" in metrics
         assert "answer_length_tokens/mean" in metrics
-        # token counts should be less than char counts for normal text
-        assert metrics["output_length_tokens/mean"] < metrics["output_length_chars/mean"]
+        # verify token counts are positive
+        assert metrics["output_length_tokens/mean"] > 0
 
     def test_token_tracking_with_hf_tokenizer(self) -> None:
         """Verify token lengths are tracked when using HuggingFace tokenizer."""
@@ -707,8 +686,7 @@ class TestTokenLengthTracking:
         )
         manager.compute(ctx, log=False)
         metrics = manager.get_parsing_metrics()
-        # both char and token metrics should be present
-        assert "output_length_chars/mean" in metrics
+        # char metrics removed, only token metrics present
         assert "output_length_tokens/mean" in metrics
         # token count should be > 0
         assert metrics["output_length_tokens/mean"] > 0
@@ -761,10 +739,8 @@ class TestTokenLengthTracking:
         manager.compute(ctx)
         assert len(logger_obj.samples) == 1
         sample_metrics = logger_obj.samples[0]["reward_metrics"]
-        # both char and token metrics should be present in per-sample log
-        assert "parsing/output_length_chars" in sample_metrics
+        # char metrics removed; only token metrics present in per-sample log
         assert "parsing/output_length_tokens" in sample_metrics
-        assert "parsing/reasoning_length_chars" in sample_metrics
         assert "parsing/reasoning_length_tokens" in sample_metrics
 
 
@@ -775,20 +751,16 @@ class TestParsingStatsAccumulatorMerge:
         """Verify merge() correctly combines token length stats."""
         acc1 = reward_types.ParsingStatsAccumulator.new()
         acc2 = reward_types.ParsingStatsAccumulator.new()
-        # add some data to both accumulators
-        acc1.output_length_chars.update(100.0)
+        # add some data to both accumulators (char stats removed, only tokens)
         acc1.output_length_tokens.update(20.0)
         acc1.total_count = 1
-        acc2.output_length_chars.update(200.0)
         acc2.output_length_tokens.update(40.0)
         acc2.total_count = 1
         # merge
         acc1.merge(acc2)
         # verify merged stats
         assert acc1.total_count == 2
-        assert acc1.output_length_chars.count == 2
         assert acc1.output_length_tokens.count == 2
-        assert acc1.output_length_chars.mean() == pytest.approx(150.0)
         assert acc1.output_length_tokens.mean() == pytest.approx(30.0)
 
     def test_merge_category_token_stats(self) -> None:

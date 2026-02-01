@@ -28,9 +28,7 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
     Note: Batch-level metrics are only emitted when `LoggingConfig.log_batch_stats=True`.
 
     - `{prefix}/reward/batch/mean`: mean reward across the batch;
-    - `{prefix}/reward/batch/std`: standard deviation of rewards in the batch;
-    - `{prefix}/reward/batch/mean_rolling/*`: rolling statistics of batch means;
-    - `{prefix}/reward/batch/std_rolling/*`: rolling statistics of batch std devs.
+    - `{prefix}/reward/batch/std`: standard deviation of rewards in the batch.
 
 **Run-level summaries** (indexed to `step_metric_key`, default `train/global_step`):
     These metrics are logged when flush_stats() is called (e.g., at phase transitions).
@@ -224,6 +222,29 @@ def _build_parsing_category_table(
         for col in columns[2:]:  # skip "category" and "count"
             row.append(stats.get(col))  # None if missing
         table.add_data(*row)  # type: ignore[reportUnknownMemberType]
+    return table
+
+
+def _build_secondary_source_table(
+    secondary_stats: dict[str, stats_utils.RunningStats],
+    secondary_corr_stats: dict[str, stats_utils.RunningCorrStats],
+) -> wandb.Table:
+    """Build W&B table for secondary difficulty source statistics."""
+    columns = ["source", "mean", "std", "min", "max", "count", "reward_correlation", "reward_slope"]
+    table = wandb.Table(columns=columns)
+    for source in sorted(set(secondary_stats.keys()) | set(secondary_corr_stats.keys())):
+        raw = secondary_stats.get(source)
+        corr = secondary_corr_stats.get(source)
+        table.add_data(  # type: ignore[reportUnknownMemberType]
+            source,
+            raw.mean() if raw and raw.count > 0 else None,
+            raw.std() if raw and raw.count > 0 else None,
+            raw.min if raw and raw.count > 0 else None,
+            raw.max if raw and raw.count > 0 else None,
+            raw.count if raw else 0,
+            corr.correlation() if corr and corr.count > 1 else None,
+            corr.slope() if corr and corr.count > 1 else None,
+        )
     return table
 
 
@@ -443,6 +464,12 @@ class InMemoryRewardLogger:
             record["difficulty_score_values"] = list(kwargs["difficulty_score_values"])
         if "bin_reward_values" in kwargs:
             record["bin_reward_values"] = [list(vals) for vals in kwargs["bin_reward_values"]]
+        if "secondary_stats" in kwargs:
+            record["secondary_stats"] = {name: stats.as_state() for name, stats in kwargs["secondary_stats"].items()}
+        if "secondary_corr_stats" in kwargs:
+            record["secondary_corr_stats"] = {
+                name: stats.as_state() for name, stats in kwargs["secondary_corr_stats"].items()
+            }
         self.runs.append(record)
 
     def log_batch_stats(
@@ -450,10 +477,6 @@ class InMemoryRewardLogger:
         *,
         batch_mean: float,
         batch_std: float,
-        batch_mean_rolling_mean: float,
-        batch_mean_rolling_std: float,
-        batch_std_rolling_mean: float,
-        batch_std_rolling_std: float,
         batch_count: int | None = None,
     ) -> None:
         """Record batch-level reward statistics in memory."""
@@ -462,10 +485,6 @@ class InMemoryRewardLogger:
                 "batch_count": batch_count,
                 "batch_mean": batch_mean,
                 "batch_std": batch_std,
-                "batch_mean_rolling_mean": batch_mean_rolling_mean,
-                "batch_mean_rolling_std": batch_mean_rolling_std,
-                "batch_std_rolling_mean": batch_std_rolling_mean,
-                "batch_std_rolling_std": batch_std_rolling_std,
             }
         )
 
@@ -899,10 +918,6 @@ class WandBRewardLogger:
         *,
         batch_mean: float,
         batch_std: float,
-        batch_mean_rolling_mean: float,
-        batch_mean_rolling_std: float,
-        batch_std_rolling_mean: float,
-        batch_std_rolling_std: float,
         batch_count: int | None = None,
     ) -> None:
         """Log batch-level reward statistics to W&B.
@@ -913,20 +928,12 @@ class WandBRewardLogger:
         Args:
             batch_mean: Mean reward for the current batch.
             batch_std: Std dev of rewards for the current batch.
-            batch_mean_rolling_mean: Rolling mean of batch means.
-            batch_mean_rolling_std: Rolling std of batch means.
-            batch_std_rolling_mean: Rolling mean of batch std devs.
-            batch_std_rolling_std: Rolling std of batch std devs.
             batch_count: Monotonic batch counter (1-indexed) used as x-axis for batch metrics.
         """
         self._define_batch_step_metrics()  # deferred initialization
         payload: dict[str, float] = {
             "reward/batch/mean": batch_mean,
             "reward/batch/std": batch_std,
-            "reward/batch/mean_rolling/mean": batch_mean_rolling_mean,
-            "reward/batch/mean_rolling/std": batch_mean_rolling_std,
-            "reward/batch/std_rolling/mean": batch_std_rolling_mean,
-            "reward/batch/std_rolling/std": batch_std_rolling_std,
         }
         prefixed: dict[str, object] = self._prefix_payload(payload)
         if batch_count is not None:
@@ -1029,6 +1036,15 @@ class WandBRewardLogger:
             table = _build_parsing_category_table(kwargs["parsing_category_stats"])
             if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
                 prefixed[self._prefix_key("parsing/run/category_summary")] = table
+        # secondary difficulty sources table
+        secondary_stats = kwargs.get("secondary_stats", {})
+        secondary_corr_stats = kwargs.get("secondary_corr_stats", {})
+        has_secondary_data = any(rs.count > 0 for rs in secondary_stats.values()) or any(
+            cs.count > 1 for cs in secondary_corr_stats.values()
+        )
+        if has_secondary_data:
+            secondary_table = _build_secondary_source_table(secondary_stats, secondary_corr_stats)
+            prefixed[self._prefix_key("difficulty/run/secondary_source_summary")] = secondary_table
         # emit histograms (always)
         if "reward_total_values" in kwargs and kwargs["reward_total_values"]:
             hist = wandb.Histogram(kwargs["reward_total_values"], num_bins=self._histogram_num_bins)

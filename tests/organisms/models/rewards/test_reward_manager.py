@@ -322,20 +322,11 @@ class TestRewardManager:
         first = logger_obj.batch_stats[0]
         assert first["batch_mean"] == pytest.approx(1.5)
         assert first["batch_std"] == pytest.approx(0.5)
-        assert first["batch_mean_rolling_mean"] == pytest.approx(1.5)
-        assert first["batch_mean_rolling_std"] == pytest.approx(0.0)
-        assert first["batch_std_rolling_mean"] == pytest.approx(0.5)
-        assert first["batch_std_rolling_std"] == pytest.approx(0.0)
-
         second = logger_obj.batch_stats[1]
         assert second["batch_mean"] == pytest.approx(3.5)
         assert second["batch_std"] == pytest.approx(0.5)
-        assert second["batch_mean_rolling_mean"] == pytest.approx(2.5)
-        assert second["batch_mean_rolling_std"] == pytest.approx(1.0)
-        assert second["batch_std_rolling_mean"] == pytest.approx(0.5)
-        assert second["batch_std_rolling_std"] == pytest.approx(0.0)
 
-    def test_state_includes_monotonic_and_batch_stats(self) -> None:
+    def test_state_includes_monotonic_counter(self) -> None:
         registry = pyine.organisms.models.rewards.core.registry.RewardRegistry()
 
         def factory(
@@ -376,8 +367,7 @@ class TestRewardManager:
         )
         state = manager.get_state()
         assert state["total_global_generation_count"] == 2
-        assert state["batch_reward_mean_stats"]["count"] == 1
-        assert state["batch_reward_std_stats"]["count"] == 1
+        # rolling batch stats removed; state no longer contains batch_reward_mean_stats/batch_reward_std_stats
 
     def test_table_rows_include_reward_breakdown(self) -> None:
         logging_config = pyine.organisms.models.rewards.core.configs.LoggingConfig(
