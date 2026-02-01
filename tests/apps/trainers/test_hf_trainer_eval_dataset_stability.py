@@ -62,7 +62,8 @@ def test_v0_rl_valid_traces_stable_across_epochs(
     monkeypatch.setenv("WANDB_DIR", str(tmp_path / "wandb"))
     import datasets as hf_datasets  # local import to respect cache env vars
 
-    hf_datasets.config.HF_DATASETS_CACHE = str(hf_cache_dir)
+    # use monkeypatch.setattr to ensure the HF cache setting is restored after the test
+    monkeypatch.setattr(hf_datasets.config, "HF_DATASETS_CACHE", str(hf_cache_dir))
     fake_lmdb_path = tmp_path / "fake.lmdb"
     fake_lmdb_path.mkdir(parents=True, exist_ok=True)
     fake_cfg = tests.utils.fake_dataset_readers.FakeTraceDataConfig(
