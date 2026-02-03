@@ -17,6 +17,7 @@ from pyine.organisms.datamodules.samples.common import (
     SampleData,
     SamplePredictTypeProbMap,
     SampleTransformStrategy,
+    append_parser_tag,
     get_code_type_set_from_str,
     get_rng,
 )
@@ -425,10 +426,18 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         sample_idxs: list[int] | None = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,
+        subset_name: str | None = None,
     ) -> typing.Iterator[dict[str, typing.Any]]:
         """Yields dict samples from a SampleBuilder instance.
 
         Kept static/top-level-friendly for to keep pickling happy in `get_hf_messages_dataset`.
+
+        Args:
+            sample_builder_config: Configuration for instantiating the sample builder.
+            sample_idxs: Optional list of sample indices to iterate over.
+            instantiate_kwargs: Optional kwargs passed to sample_builder_config.instantiate().
+            raw_transform_fn: Optional transform function applied to each sample dict.
+            subset_name: Optional subset name to append as a parser tag to samples.
         """
         sample_builder = sample_builder_config.instantiate(**(instantiate_kwargs or {}))
         sample_idxs = sample_idxs or list(range(len(sample_builder)))
@@ -436,6 +445,11 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             sample_data = sample_builder[sample_idx]
             assert isinstance(sample_data, SampleData)
             sample_dict = sample_data._asdict()
+            if subset_name is not None:
+                sample_dict["comma_separated_tags"] = append_parser_tag(
+                    sample_dict.get("comma_separated_tags", ""),
+                    subset_name,
+                )
             if raw_transform_fn is not None:
                 sample_dict = raw_transform_fn(sample_dict)
             yield sample_dict
@@ -448,6 +462,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         keep_in_memory: bool = False,
         num_workers: int | None = None,
+        subset_name: str | None = None,
     ) -> hf_datasets.Dataset:
         """Generates and returns a huggingface messages dataset using a SampleBuilder instance."""
         dataset: hf_datasets.Dataset = hf_datasets.Dataset.from_generator(  # type: ignore[reportUnknownMemberType]
@@ -455,6 +470,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
             gen_kwargs={
                 "sample_builder_config": self,
                 "instantiate_kwargs": instantiate_kwargs,
+                "subset_name": subset_name if subset_name is not None else str(named_split),
             },
             split=named_split,
             keep_in_memory=keep_in_memory,

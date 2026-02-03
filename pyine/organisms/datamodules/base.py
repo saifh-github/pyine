@@ -607,14 +607,22 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
     def get_parser(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
-        """Returns a data parser object for a given subset name."""
+    ) -> pyine.organisms.datamodules.samples.SampleDataParser:
+        """Returns a data parser object for a given subset name.
+
+        The returned parser is wrapped with SampleSubsetTagWrapper to append a
+        `parser:<subset_name>` tag to each sample's comma_separated_tags field.
+        """
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
         assert subset_name is not None, "subset name must be specified"
         if subset_name not in self._subset_parsers:
             raise ValueError(f"parser for subset {subset_name} is not defined")
-        return self._instantiate_parser_if_needed(subset_name)
+        base_parser = self._instantiate_parser_if_needed(subset_name)
+        return pyine.organisms.datamodules.samples.SampleSubsetTagWrapper(
+            wrapped_dataset=base_parser,
+            subset_name=subset_name,
+        )
 
     @typing.override
     def get_hf_messages_dataset(

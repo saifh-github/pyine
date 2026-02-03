@@ -504,7 +504,7 @@ class ShortcutBiasDataModule(
     def get_parser(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
+    ) -> pyine.organisms.datamodules.samples.SampleDataParser:
         """Returns a data parser, wrapped with identifier modification if needed.
 
         For derived hint subsets (`_with_hints`, `_without_hints`), traces that appear in BOTH
@@ -522,7 +522,7 @@ class ShortcutBiasDataModule(
             subset_name: Name of the subset to get parser for.
 
         Returns:
-            Sample builder, optionally wrapped with identifier modification.
+            Data parser with subset tagging, optionally wrapped with identifier modification.
         """
         base_parser = super().get_parser(subset_name)
         if not self._is_setup_complete():

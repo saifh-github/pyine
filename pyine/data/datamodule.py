@@ -523,11 +523,20 @@ class ConversationDataParserConfig(BaseDataParserConfig):
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         keep_in_memory: bool = False,
         num_workers: int | None = None,
+        subset_name: str | None = None,
     ) -> hf_datasets.Dataset:
         """Generates and returns a HuggingFace messages dataset using an instantiated parser.
 
         This function exists for users that might not want to use raw data loaders directly, and
         would prefer using already-prepared message data for huggingface-based experiments.
+
+        Args:
+            named_split: The HuggingFace named split to use for the dataset.
+            raw_transform_fn: Optional transform function to apply to each sample.
+            instantiate_kwargs: Optional kwargs passed to the parser's instantiate method.
+            keep_in_memory: Whether to keep the dataset in memory.
+            num_workers: Number of workers for parallel processing.
+            subset_name: Optional subset name for tagging samples with their source parser.
 
         Returns:
              The HuggingFace messages dataset object.
@@ -630,6 +639,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
                 instantiate_kwargs=parser_kwargs,
                 keep_in_memory=self.keep_generated_datasets_in_memory,
                 num_workers=self.message_generator_num_workers,
+                subset_name=subset_name,
             )
 
         # otherwise, acquire a lock (for potential ddp runs) and check if it needs to be generated
@@ -654,6 +664,7 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
                 instantiate_kwargs=parser_kwargs,
                 keep_in_memory=self.keep_generated_datasets_in_memory,
                 num_workers=self.message_generator_num_workers,
+                subset_name=subset_name,
             )
             tmp_path = dataset_path.parent / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
             try:

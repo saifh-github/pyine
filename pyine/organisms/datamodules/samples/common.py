@@ -20,6 +20,7 @@ import typing
 
 import numpy as np
 import pydantic
+import torch.utils.data
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
@@ -38,8 +39,10 @@ __all__ = [
     "SamplePredictTypeProbMap",
     "SampleTransformStrategy",
     "SampleData",
+    "SampleSubsetTagWrapper",
     "TraceToSampleCodeTypeMapping",
     "TraceDatasetToSampleCodeTypeMappings",
+    "append_parser_tag",
     "check_trace_code_is_test_case_specific",
     "convert_to_comma_separated_tags",
     "get_all_supported_code_type_sets",
@@ -417,6 +420,77 @@ type SampleDataParser = pyine.data.datamodule.BaseDataParserClass[SampleData]
 """Type of the dataset reader used to read traces from LMDB datasets."""
 type SampleDataLoader = pyine.data.datamodule.BaseDataLoaderClass[typing.Any]  # TODO: add a sample batch class?
 """Type of the data loader used to batch trace sample data from the dataset parser."""
+
+
+def append_parser_tag(
+    tags: str,
+    subset_name: str,
+) -> str:
+    """Append parser tag to comma-separated tags, avoiding duplicates.
+
+    Args:
+        tags: Existing comma-separated tags string (may be empty).
+        subset_name: The subset/parser name to add as a tag.
+
+    Returns:
+        Updated tags string with `parser:<subset_name>` appended.
+    """
+    tag = f"parser:{subset_name}"
+    if not tags:
+        return tag
+    if tag in tags.split(","):
+        return tags  # already present, no duplicate
+    return f"{tags},{tag}"
+
+
+class SampleSubsetTagWrapper(torch.utils.data.Dataset[SampleData]):
+    """Wrapper that adds parser/subset name tags to samples.
+
+    This wrapper intercepts sample access and appends a `parser:<subset_name>` tag
+    to the comma_separated_tags field of each sample.
+    """
+
+    def __init__(
+        self,
+        wrapped_dataset: SampleDataParser,
+        subset_name: str,
+    ) -> None:
+        """Initialize the wrapper.
+
+        Args:
+            wrapped_dataset: The underlying dataset to wrap.
+            subset_name: The subset/parser name to add as a tag.
+        """
+        self._wrapped = wrapped_dataset
+        self._subset_name = subset_name
+
+    def __getattr__(
+        self,
+        name: str,
+    ) -> typing.Any:
+        """Forward attribute access to wrapped dataset."""
+        return getattr(self._wrapped, name)
+
+    def __len__(self) -> int:
+        """Return the length of the wrapped dataset."""
+        return len(self._wrapped)  # type: ignore[arg-type]
+
+    def __iter__(self) -> typing.Iterator[SampleData]:
+        """Iterate over samples, adding parser tag to each."""
+        for sample in self._wrapped:
+            new_tags = append_parser_tag(sample.comma_separated_tags, self._subset_name)
+            yield sample._replace(comma_separated_tags=new_tags)
+
+    def __getitem__(
+        self,
+        index: int,
+    ) -> SampleData:
+        """Get a sample by index, adding parser tag."""
+        sample = self._wrapped[index]
+        new_tags = append_parser_tag(sample.comma_separated_tags, self._subset_name)
+        return sample._replace(comma_separated_tags=new_tags)
+
+
 type StrictProbability = typing.Annotated[pydantic.StrictFloat, pydantic.Field(ge=0.0, le=1.0)]
 """Type for probabilities (floats between 0 and 1)."""
 type SamplePredictTypeProbMap = dict[SamplePredictType, StrictProbability]

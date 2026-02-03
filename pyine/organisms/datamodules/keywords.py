@@ -746,14 +746,14 @@ class KeywordBiasDataModule(
     def get_parser(
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
-    ) -> pyine.organisms.datamodules.samples.SampleBuilder:
+    ) -> pyine.organisms.datamodules.samples.SampleDataParser:
         """Returns a data parser wrapped with a keyword manipulator.
 
         Args:
             subset_name: Name of the subset to get parser for.
 
         Returns:
-            Sample builder wrapped with keyword bias handling. The wrapper:
+            Data parser with subset tagging, wrapped with keyword bias handling. The wrapper:
             - Always adds keyword metadata tags to samples
             - In counterfactual mode for `_with_keyword` subsets: injects keyword into samples lacking it
             - In counterfactual mode for `_without_keyword` subsets: refactors keyword out of samples having it
@@ -772,9 +772,14 @@ class KeywordBiasDataModule(
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
         assert isinstance(self._metadata, KeywordTraceDatasetMetadata)
         # compute which trace IDs in this subset have the keyword
-        subset_trace_ids = frozenset(t.identifier for t in base_parser.orig_traces)
+        # base_parser has orig_traces via __getattr__ forwarding to wrapped SampleBuilder
+        orig_traces = typing.cast(
+            "list[pyine.data.traces.dataset_utils.TraceMetadata]",
+            base_parser.orig_traces,  # type: ignore[attr-defined]
+        )
+        subset_trace_ids: frozenset[str] = frozenset(t.identifier for t in orig_traces)
         ids_with_keyword = self._metadata.trace_ids_with_keyword & subset_trace_ids
-        ids_without_keyword = subset_trace_ids - ids_with_keyword
+        ids_without_keyword: frozenset[str] = subset_trace_ids - ids_with_keyword
         # determine which IDs to inject/refactor based on strategy and subset
         inject_trace_ids: frozenset[str] = frozenset()
         refactor_trace_ids: frozenset[str] = frozenset()

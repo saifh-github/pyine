@@ -6,6 +6,7 @@ import pytest
 from pyine.organisms.datamodules.samples.common import (
     SampleCodeType,
     SampleCodeTypeSet,
+    SampleData,
     SamplePredictType,
     SampleTransformStrategy,
 )
@@ -242,3 +243,147 @@ class TestGetDefaultCodeTypeProbMap:
     def test_total_probability_is_one(self) -> None:
         default_map = get_default_code_type_prob_map()
         assert sum(default_map.values()) == 1.0
+
+
+class TestSampleBuilderIterTagInjection:
+    """Tests for tag injection in _sample_builder_iter."""
+
+    @pytest.fixture
+    def mock_sample(self) -> SampleData:
+        return SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="def solution(x):\n    return 2 * x\n",
+            description="Doubles the input",
+            entrypoint="solution",
+            first_line=0,
+            last_line=2,
+            inputs="(5,)",
+            expected_output="10",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=3,
+            comma_separated_tags="existing:tag",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+
+    def test_subset_name_tag_injected(
+        self,
+        mock_sample: SampleData,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify subset_name is injected into comma_separated_tags."""
+        captured_sample = mock_sample
+
+        class MockSampleBuilder:
+            def __len__(self) -> int:
+                return 1
+
+            def __getitem__(
+                self,
+                idx: int,
+            ) -> SampleData:
+                return captured_sample
+
+        def mock_instantiate(
+            self: SampleBuilderConfig,
+            **kwargs: object,
+        ) -> MockSampleBuilder:
+            return MockSampleBuilder()
+
+        monkeypatch.setattr(SampleBuilderConfig, "instantiate", mock_instantiate)
+        config = SampleBuilderConfig()
+        results = list(
+            SampleBuilderConfig._sample_builder_iter(
+                sample_builder_config=config,
+                subset_name="valid_with_hints",
+            )
+        )
+        assert len(results) == 1
+        assert "parser:valid_with_hints" in results[0]["comma_separated_tags"]
+        assert "existing:tag" in results[0]["comma_separated_tags"]
+
+    def test_no_tag_when_subset_name_none(
+        self,
+        mock_sample: SampleData,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify no tag added when subset_name is None."""
+        captured_sample = mock_sample
+
+        class MockSampleBuilder:
+            def __len__(self) -> int:
+                return 1
+
+            def __getitem__(
+                self,
+                idx: int,
+            ) -> SampleData:
+                return captured_sample
+
+        def mock_instantiate(
+            self: SampleBuilderConfig,
+            **kwargs: object,
+        ) -> MockSampleBuilder:
+            return MockSampleBuilder()
+
+        monkeypatch.setattr(SampleBuilderConfig, "instantiate", mock_instantiate)
+        config = SampleBuilderConfig()
+        results = list(
+            SampleBuilderConfig._sample_builder_iter(
+                sample_builder_config=config,
+                subset_name=None,
+            )
+        )
+        assert len(results) == 1
+        assert "parser:" not in results[0]["comma_separated_tags"]
+        assert results[0]["comma_separated_tags"] == "existing:tag"
+
+    def test_empty_tags_gets_parser_tag(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify parser tag is added even when comma_separated_tags is empty."""
+        sample_with_empty_tags = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+
+        class MockSampleBuilder:
+            def __len__(self) -> int:
+                return 1
+
+            def __getitem__(
+                self,
+                idx: int,
+            ) -> SampleData:
+                return sample_with_empty_tags
+
+        def mock_instantiate(
+            self: SampleBuilderConfig,
+            **kwargs: object,
+        ) -> MockSampleBuilder:
+            return MockSampleBuilder()
+
+        monkeypatch.setattr(SampleBuilderConfig, "instantiate", mock_instantiate)
+        config = SampleBuilderConfig()
+        results = list(
+            SampleBuilderConfig._sample_builder_iter(
+                sample_builder_config=config,
+                subset_name="train",
+            )
+        )
+        assert len(results) == 1
+        assert results[0]["comma_separated_tags"] == "parser:train"

@@ -8,7 +8,9 @@ from pyine.organisms.datamodules.samples.common import (
     SampleCodeTypeSet,
     SampleData,
     SamplePredictType,
+    SampleSubsetTagWrapper,
     SampleTransformStrategy,
+    append_parser_tag,
     convert_to_comma_separated_tags,
     draw_type,
     get_all_supported_code_type_sets,
@@ -515,3 +517,108 @@ class TestGetRng:
         vals1 = [rng1.random() for _ in range(10)]
         vals2 = [rng2.random() for _ in range(10)]
         assert vals1 == vals2
+
+
+class TestAppendParserTag:
+    """Tests for the append_parser_tag function."""
+
+    def test_empty_tags(self) -> None:
+        result = append_parser_tag("", "train")
+        assert result == "parser:train"
+
+    def test_existing_tags(self) -> None:
+        result = append_parser_tag("subset:TACO,code_type:hinted", "valid")
+        assert result == "subset:TACO,code_type:hinted,parser:valid"
+
+    def test_duplicate_prevention(self) -> None:
+        tags = "parser:train,other:tag"
+        result = append_parser_tag(tags, "train")
+        assert result == tags  # no duplicate added
+
+    def test_different_subset_name_appended(self) -> None:
+        tags = "parser:train"
+        result = append_parser_tag(tags, "valid")
+        assert result == "parser:train,parser:valid"
+
+
+class TestSampleSubsetTagWrapper:
+    """Tests for the SampleSubsetTagWrapper class."""
+
+    @pytest.fixture
+    def mock_sample(self) -> SampleData:
+        return SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="def solution(x):\n    return 2 * x\n",
+            description="Doubles the input",
+            entrypoint="solution",
+            first_line=0,
+            last_line=2,
+            inputs="(5,)",
+            expected_output="10",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=3,
+            comma_separated_tags="existing:tag",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+
+    @pytest.fixture
+    def mock_dataset(
+        self,
+        mock_sample: SampleData,
+    ) -> list[SampleData]:
+        return [mock_sample, mock_sample._replace(identifier="FAKE/test/p000002/s0001/t0000")]
+
+    def test_getitem_adds_tag(
+        self,
+        mock_dataset: list[SampleData],
+    ) -> None:
+        wrapper = SampleSubsetTagWrapper(mock_dataset, "valid_with_hints")  # type: ignore[arg-type]
+        sample = wrapper[0]
+        assert "parser:valid_with_hints" in sample.comma_separated_tags
+        assert "existing:tag" in sample.comma_separated_tags
+
+    def test_iter_adds_tag(
+        self,
+        mock_dataset: list[SampleData],
+    ) -> None:
+        wrapper = SampleSubsetTagWrapper(mock_dataset, "train")  # type: ignore[arg-type]
+        for sample in wrapper:
+            assert "parser:train" in sample.comma_separated_tags
+            assert "existing:tag" in sample.comma_separated_tags
+
+    def test_len_forwarded(
+        self,
+        mock_dataset: list[SampleData],
+    ) -> None:
+        wrapper = SampleSubsetTagWrapper(mock_dataset, "test")  # type: ignore[arg-type]
+        assert len(wrapper) == len(mock_dataset)
+
+    def test_getattr_forwarded(
+        self,
+        mock_dataset: list[SampleData],
+    ) -> None:
+        wrapper = SampleSubsetTagWrapper(mock_dataset, "test")  # type: ignore[arg-type]
+        assert wrapper.count(mock_dataset[0]) == 1  # list.count is forwarded
+
+    def test_empty_tags_gets_tag(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        wrapper = SampleSubsetTagWrapper([sample], "valid")  # type: ignore[arg-type]
+        result = wrapper[0]
+        assert result.comma_separated_tags == "parser:valid"
