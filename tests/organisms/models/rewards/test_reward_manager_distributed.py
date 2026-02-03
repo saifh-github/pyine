@@ -19,6 +19,8 @@ import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
+pytestmark = pytest.mark.slow
+
 
 def _init_distributed_process(rank: int, world_size: int, backend: str = "gloo") -> None:
     """Initialize torch.distributed for a worker process.

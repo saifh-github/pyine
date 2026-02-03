@@ -59,6 +59,7 @@ def test_dataset_paths(
     assert found_dataset_path == path_b
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("input_val", [0, 1, 2])
 def test_delta_generation_with_raised_exception(input_val: int) -> None:
     """Test delta generation from trace steps with raised exceptions."""
@@ -101,6 +102,7 @@ print("all done")
         assert not trace_result.stdout
 
 
+@pytest.mark.slow
 def test_delta_generation_with_generator_expr() -> None:
     """Test delta generation from trace steps with generator expressions."""
     example_snippet = """\
@@ -136,6 +138,7 @@ print(f"The result is: {int(res)}")
     assert trace_result.stdout == "The result is: 3156\n"
 
 
+@pytest.mark.slow
 def test_delta_generation_with_exception_propagation() -> None:
     """Test delta generation from trace steps with exception propagation."""
     example_snippet = """\

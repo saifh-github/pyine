@@ -12,6 +12,8 @@ from pyine.organisms.datamodules.samples.filtering import (
 )
 from tests.utils.fake_dataset_readers import FakeTraceDataConfig, FakeTraceDatasetReader
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def small_fake_reader() -> FakeTraceDatasetReader:

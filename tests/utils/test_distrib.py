@@ -102,6 +102,7 @@ def _barrier_worker(
     pyine.utils.distrib.barrier()
 
 
+@pytest.mark.slow
 def test_barrier_fallback_rendezvous(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:

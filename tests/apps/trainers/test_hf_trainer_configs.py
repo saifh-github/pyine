@@ -75,6 +75,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only_dry_run(
     )
 
 
+@pytest.mark.slow
 def test_register_hydra_configs_registers_sweepers(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

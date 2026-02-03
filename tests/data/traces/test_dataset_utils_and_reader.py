@@ -473,6 +473,7 @@ def test_iterator_problems_metadata_is_consistent(tmp_path: pathlib.Path) -> Non
         assert path.suffix == ".json"
 
 
+@pytest.mark.slow
 def test_fake_dataset_reader_length(tmp_path: pathlib.Path) -> None:
     """Test that FakeTraceDatasetReader has correct length."""
     reader = fake_dataset_readers.FakeTraceDatasetReader(

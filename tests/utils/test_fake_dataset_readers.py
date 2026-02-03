@@ -9,6 +9,8 @@ from tests.utils.fake_dataset_readers import (
     FakeTraceDatasetReader,
 )
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture()
 def small_config() -> FakeTraceDataConfig:

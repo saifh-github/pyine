@@ -65,6 +65,7 @@ sys.exit(13)
     assert result.exception.message == "13"
 
 
+@pytest.mark.slow
 def test_code_exec_with_timeout() -> None:
     """Test that code execution with a timeout works as expected."""
     code = """\
@@ -355,6 +356,7 @@ print(f"{len(something)=}")
     assert result_with_caps.stdout == "len(something)=1000\n"
 
 
+@pytest.mark.slow
 def test_safe_vs_unsafe_tracing() -> None:
     """Test that safe tracing provides the same results as unsafe tracing."""
     code = """\
@@ -389,6 +391,7 @@ def func(b: str) -> int:
         assert safe_step.local_variables == unsafe_step.local_variables
 
 
+@pytest.mark.slow
 def test_class_method_entrypoint_executes() -> None:
     """Ensure dotted entrypoint names execute without requiring error fallbacks."""
 

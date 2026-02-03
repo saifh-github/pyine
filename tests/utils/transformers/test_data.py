@@ -134,6 +134,7 @@ def test_apply_model_template_to_messages_basic(
     assert out_ds["text"] == expected_texts
 
 
+@pytest.mark.slow
 def test_prepare_examples_from_conversations_cache_roundtrip(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
