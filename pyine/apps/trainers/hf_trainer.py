@@ -186,10 +186,26 @@ def rl_train(
     logger.info("Starting RL training setup...")
 
     # 1. Setup model and tokenizer
+    # For DeepSpeed Zero3: Load the BASE model here, not from checkpoint. The checkpoint weights
+    # (sharded across ranks) are restored later by trainer.train(resume_from_checkpoint=...) via
+    # DeepSpeed's deepspeed_load_checkpoint(). Loading from checkpoint_path would fail on non-rank-0
+    # nodes because only rank 0 has the consolidated safetensors files.
+    # For non-DeepSpeed: Load directly from checkpoint if resuming, since all weights are accessible.
     logger.info("instantiating model and tokenizer...")
-    checkpoint_path = resume_artifacts.checkpoint_path if resume_artifacts else None
-    model = config.get_model(checkpoint_path=checkpoint_path)
-    tokenizer = config.get_tokenizer(checkpoint_path=checkpoint_path)
+    is_deepspeed = pyine.apps.trainers.common._is_deepspeed_enabled()  # type: ignore[reportPrivateUsage]
+    if resume_artifacts is not None and is_deepspeed:
+        logger.info("DeepSpeed detected: loading base model (checkpoint restore handled by trainer)")
+        model_checkpoint_path = None  # DeepSpeed handles checkpoint restore via trainer.train()
+        tokenizer_checkpoint_path = None  # Load from base model for consistency
+    elif resume_artifacts is not None:
+        logger.info("Non-DeepSpeed resume: loading model directly from checkpoint")
+        model_checkpoint_path = resume_artifacts.checkpoint_path
+        tokenizer_checkpoint_path = resume_artifacts.checkpoint_path
+    else:
+        model_checkpoint_path = None
+        tokenizer_checkpoint_path = None
+    model = config.get_model(checkpoint_path=model_checkpoint_path)
+    tokenizer = config.get_tokenizer(checkpoint_path=tokenizer_checkpoint_path)
 
     # 2. Prepare RL dataset from datamodule
     # Use the datamodule's native RL dataset method which reuses existing infrastructure
@@ -427,6 +443,14 @@ async def main(
 
 
 if __name__ == "__main__":
+    # DeepSpeed's native launcher passes --local_rank=N as a CLI argument, but Hydra
+    # doesn't recognize it. Filter it out since distributed training already uses
+    # LOCAL_RANK environment variable (set by DeepSpeed/torchrun). This is a no-op
+    # when using accelerate's standard launcher which only sets env vars.
+    # TODO: to be removed when deepspeed++ will be handle in different ways or no conflict with hydra
+    import sys
+
+    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
 
     def _register_combined_hydra_configs(
         *args: typing.Any,

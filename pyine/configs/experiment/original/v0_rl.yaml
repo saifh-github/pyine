@@ -9,12 +9,12 @@
 
 defaults:
   - override /config: base
-  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to13
   - override /config/grpo_config: train_default
   - _self_
 
 runtime:
-  exp_name: original/v0_rl
+  exp_name: original/v0_rl.yaml
   run_name: "${runtime.exp_name}"
   # run_group not specified, can be added online later
   # notes not specified, can be added online later
@@ -40,6 +40,8 @@ config:
 
   # throughput logging (tracks samples/sec and steps/sec for train and eval)
   throughput_logging: {}  # set to null to disable
+
+  resume_incompatibility_policy: warn
 
   # Model settings (same as SFT v0)
   auto_model_config:
@@ -101,6 +103,7 @@ config:
           transform_strategy: never
       valid:
         filtering_config:
+          max_traces_per_solution: 1  # limit number of traces per solution (for smaller dataset)
           max_code_line_count: 250  # limit code line count (for smaller+easier dataset)
           max_code_line_length: 250  # limit code line length (for smaller+easier dataset)
           max_code_length: 2500  # limit total code length (for smaller+easier dataset)
@@ -142,25 +145,25 @@ config:
     do_predict: False
     # note: report_to is set dynamically by the trainer based on wandb availability
     # ------------
-    per_device_train_batch_size: 1  # GRPO typically uses smaller batch sizes
-    per_device_eval_batch_size: 24  # Larger eval batch (from prototype train_grpo.py)
-    gradient_accumulation_steps: 8  # Effective batch size = 1 × 8 = 8 (from prototype)
-    learning_rate: 1e-5  # Lower than SFT (2e-4) for RL stability
+    per_device_train_batch_size: 4  # GRPO typically uses smaller batch sizes
+    per_device_eval_batch_size: 5  # Larger eval batch (from prototype train_grpo.py)
+    gradient_accumulation_steps: 6
+    learning_rate: 5e-6  # Lower than SFT (2e-4) for RL stability
     weight_decay: 0.0
-    lr_scheduler_type: "cosine"
-    warmup_ratio: 0.05
-    gradient_checkpointing: False
+    lr_scheduler_type: "constant"
+    warmup_ratio: 0.0
+    gradient_checkpointing: True
     gradient_checkpointing_kwargs:
       use_reentrant: False
     optim: "adamw_torch_fused"
     max_grad_norm: 1.0
     # ------------
-    num_train_epochs: 3
-    max_steps: -1  # Use epochs instead
-    logging_steps: 5  # From prototype train_grpo.py
+    num_train_epochs: 1
+    max_steps: -1 # alternative to num_train_epochs
+    logging_steps: 1  # From prototype train_grpo.py
     eval_on_start: True  # Evaluate before training starts (from prototype)
     eval_strategy: "steps"
-    eval_steps: 500
+    eval_steps: 10
     save_strategy: "steps"
     save_steps: 500  # From prototype train_grpo.py
     save_total_limit: 3
@@ -168,20 +171,20 @@ config:
     dataloader_pin_memory: False
     # ------------
     # GRPO-specific parameters (from prototype train_grpo.py)
-    num_generations: 8  # Generate 8 samples per prompt for exploration
+    num_generations: 16  # Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
     num_generations_eval: 1  # Use fewer generations during eval to save compute
-    max_completion_length: 2048  # Allow longer completions for complex code execution
+    max_completion_length: 10000  # Allow longer completions for complex code execution
     max_prompt_length: 3000  # truncate prompts beyond this length (last-resort)
-    temperature: 0.7
+    temperature: 1.0
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient
-    scale_rewards: "group" # If to scale rewards by "group" (default) "batch" or "none"
+    scale_rewards: "none" # If to scale rewards by "group" (default) "batch" or "none"
     use_vllm: true  # Prototype uses true, but requires manual vLLM server setup
     vllm_importance_sampling_correction: true
     vllm_mode: "colocate"  # "server" (default) or "colocate"
     # vLLM configuration for colocated mode
-    vllm_gpu_memory_utilization: 0.2 # (default 0.3) Control the GPU memory utilization for vLLM.
-    vllm_max_model_length: 8072 # (optional): Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus `max_completion_length`; if omitted, it is inferred from the model config.
+    vllm_gpu_memory_utilization: 0.15 # (default 0.3) Control the GPU memory utilization for vLLM.
+    vllm_max_model_length: 13000 # (optional): Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus `max_completion_length`; if omitted, it is inferred from the model config.
     vllm_tensor_parallel_size: 1 # (optional, defaults to `1`) Control the tensor parallel size for vLLM. If the model fits in a single GPU, set it to `1`, will use data parallelism.
     vllm_enable_sleep_mode: False # (default False) Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but waking the engine adds host–device transfer latency.
     # vLLM configuration for server mode
@@ -257,15 +260,21 @@ config:
       main_process_only: true
       gather_distributed_summaries: true
       barrier_before_finalize: true
+      category_extraction_config:  # optional category extraction config
+        enabled_fields:
+          - "tags"
+        tag_prefixes:  # list of tag prefixes that should be extracted as categories
+          - "difficulty"
+          - "total_steps"
 
   # LoRA configuration (same as SFT v0)
-  lora_config:
-    r: 16
-    lora_alpha: 32
-    lora_dropout: 0.1
-    bias: none
-    task_type: CAUSAL_LM
-    target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
+  #lora_config:
+  #  r: 8
+  #  lora_alpha: 16
+  #  lora_dropout: 0.1
+  #  bias: none
+  #  task_type: CAUSAL_LM
+  #  target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
 
   # Evaluation settings (same as SFT v0)
   evals_config:

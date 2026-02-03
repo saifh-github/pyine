@@ -1,0 +1,16 @@
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  deepspeed_config_file: 'pyine/configs/accelerate/deepspeed++_config.json'
+  deepspeed_multinode_launcher: 'nossh'
+  deepspeed_hostfile: 'pyine/configs/accelerate/hostfile'
+  zero3_init_flag: true
+distributed_type: DEEPSPEED
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+num_machines: 4
+num_processes: 32
+rdzv_backend: static
+same_network: true
+use_cpu: false

@@ -1,0 +1,25 @@
+# @package _global_
+
+# RL training config for 30B model - inherits from v0_rl.yaml with overrides
+# Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl_30B
+
+defaults:
+  - original/v0_rl
+  - _self_
+
+runtime:
+  exp_name: original/RL_HT_37
+  run_name: "${runtime.exp_name}"
+
+config:
+  base_model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+
+  grpo_config:
+    # Smaller batch sizes for larger model
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 2
+    gradient_accumulation_steps: 12
+    eval_steps: 5
+    # vLLM configuration adjusted for 30B model
+    vllm_gpu_memory_utilization: 0.3
+    vllm_tensor_parallel_size: 4

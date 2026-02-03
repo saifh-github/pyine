@@ -1,0 +1,20 @@
+# @package _global_
+
+# RL training config for 30B model - inherits from v0_rl.yaml with overrides
+# Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl_30B
+
+defaults:
+  - original/v0_rl
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1
+  - _self_
+
+runtime:
+  exp_name: original/v0_rl_profiling_eval
+  run_name: "${runtime.exp_name}"
+
+config:
+  grpo_config:
+    per_device_train_batch_size: 2  # GRPO typically uses smaller batch sizes
+    per_device_eval_batch_size: 4  # Larger eval batch (from prototype train_grpo.py)
+    max_steps: 1 # alternative to num_train_epochs
+    eval_on_start: True  # Evaluate before training starts (from prototype)

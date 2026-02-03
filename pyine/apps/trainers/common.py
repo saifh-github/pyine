@@ -598,25 +598,21 @@ class ResumeArtifacts(pydantic.BaseModel):
         current_config: AppMainConfig,
         previous_config: dict[str, typing.Any] | AppMainConfig,
     ) -> None:
+        import deepdiff
+
         current_payload = current_config.normalize_for_resume_overlap_check()
         previous_payload = current_config.normalize_for_resume_overlap_check(previous_config)
-        if current_payload == previous_payload:
-            return
-        diff_keys: list[str] = []
-        previous_keys = set(previous_payload.keys())
-        for key, current_value in current_payload.items():
-            if key not in previous_payload:
-                diff_keys.append(key)
-                continue
-            if previous_payload[key] != current_value:
-                diff_keys.append(key)
-        for key in previous_keys:
-            if key not in current_payload:
-                diff_keys.append(key)
-        diff_keys = sorted(set(diff_keys))
-        diff_keys_str = ", ".join(diff_keys)
+        # TODO: config matching/validation needs to be adapted to properly ignore differences due to
+        # pydantic runtime fields vs config fields, which is currently causing false positives at resume
+
+        # Use deepdiff for comparison (handles order-independent list comparison and type coercion)
+        diff = deepdiff.DeepDiff(previous_payload, current_payload, verbose_level=2, ignore_order=True)
+        if not diff:
+            return  # configs match
+
         raise ValueError(
-            f"resume configuration mismatch detected; differing top-level fields: {diff_keys_str}. "
+            f"resume configuration mismatch detected:\n"
+            f"{diff.pretty()}\n"  # type: ignore[reportUnknownMemberType]
             "Ensure the resumed launch matches the original configuration (except for resume settings).",
         )
 
