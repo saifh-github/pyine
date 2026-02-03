@@ -15,6 +15,9 @@ import typing
 import hydra
 import hydra_zen
 import matplotlib.pyplot as plt
+import pydantic
+import rich.console
+import rich.syntax
 import tqdm
 
 import pyine.apps.trainers.hf_rl_trainer_configs
@@ -129,6 +132,32 @@ def format_dict_string(
         formatted = json.dumps(parsed, indent=2)
         return format_long_string(formatted, max_length), True
     return format_long_string(value, max_length), False
+
+
+def display_pydantic_config(
+    config: pydantic.BaseModel,
+    title: str | None = "Configuration",
+    theme: str = "monokai",
+) -> None:
+    """Display a pydantic model config with syntax-highlighted JSON.
+
+    Uses rich to render the config as indented, colorized JSON output that's easy to read
+    in Jupyter notebooks or terminal environments.
+
+    Args:
+        config: The pydantic model to display.
+        title: Optional title to show above the config. Set to None to skip.
+        theme: Syntax highlighting theme (e.g., "monokai", "dracula", "github-dark").
+
+    Example:
+        >>> display_pydantic_config(datamodule.config, title="Datamodule Config")
+    """
+    config_json = config.model_dump_json(indent=2)
+    console = rich.console.Console()
+    if title:
+        console.print(f"[bold]{title}[/bold]")
+    syntax = rich.syntax.Syntax(config_json, "json", theme=theme, line_numbers=False)
+    console.print(syntax)
 
 
 def collect_sample_metadata_rows(
