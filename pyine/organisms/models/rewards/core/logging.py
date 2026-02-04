@@ -18,7 +18,6 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
     - `{prefix}/reward/terms/*`: per-term weighted reward values;
     - `{prefix}/reward/metrics/*`: term-emitted metrics (containing other useful information);
     - `{prefix}/reward/raw_terms/*`: pre-clipping, pre-weighting reward term values;
-    - `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer).
 
 **Batch-level metrics** (indexed to `{prefix}/batch_count`):
     These metrics are logged once per compute_batch call (when enabled) and use batch_count as the x-axis.
@@ -36,6 +35,7 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
     - `{prefix}/reward/run/total/{mean,std,min,max,count}`: accumulated total reward statistics;
     - `{prefix}/reward/run/terms/{term}/{mean,std,min,max,count}`: per-term reward statistics;
     - `{prefix}/reward/run/categories/{category}/{mean,std,min,max,count}`: per-category reward statistics;
+    - `{prefix}/parsing/*`: aggregated parsing statistics (lengths, missing ratios);
     - `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
     - `{prefix}/failures/failure_count`: count of failed generations in the phase.
     - `{prefix}/difficulty/run/*`: aggregated difficulty diagnostics (when enabled).
@@ -497,7 +497,7 @@ class WandBRewardLogger:
     Metric Indexing:
         This logger configures WandB to use different x-axes for different metric types:
 
-        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*, etc.) are indexed
+        - **Per-generation metrics** (reward/total, reward/terms/*, reward/metrics/*, etc.) are indexed
           to `{prefix}/generation_count`, ensuring each logged generation has a unique x-coordinate.
 
         - **Batch-level metrics** (reward/batch/*) are indexed to `{prefix}/batch_count`, ensuring
@@ -637,7 +637,7 @@ class WandBRewardLogger:
         """Define WandB step metrics and summaries for per-generation reward logging.
 
         This configures WandB to use `generation_count` as the x-axis for per-generation
-        reward and parsing metrics, instead of the default `train/global_step`. This prevents
+        reward metrics, instead of the default `train/global_step`. This prevents
         WandB from aggregating values when multiple generations are logged within the same
         trainer step (e.g., with gradient accumulation or multiple generations per prompt).
 
@@ -655,7 +655,6 @@ class WandBRewardLogger:
 
         Metrics covered:
         - {prefix}/reward/total, {prefix}/reward/terms/*, {prefix}/reward/metrics/* -> mean
-        - {prefix}/parsing/* -> mean
         - {prefix}/categories/* -> mean
 
         Batch-level metrics (reward/batch/*) and run-level summaries (reward/run/*) are
@@ -677,7 +676,6 @@ class WandBRewardLogger:
             ("reward/terms/*", "mean"),
             ("reward/metrics/*", "mean"),
             ("reward/raw_terms/*", "mean"),
-            ("parsing/*", "mean"),
         ]
         step_metric_key = f"{prefix}/generation_count"
         for suffix, summary in metric_suffixes:
@@ -726,6 +724,7 @@ class WandBRewardLogger:
 
         Metrics covered:
         - {prefix}/reward/run/* -> last (already summaries, keep final value)
+        - {prefix}/parsing/* -> last (already summaries, keep final value)
         - {prefix}/failures/* -> last (per-phase failure stats, keep final value)
         """
         prefix = self._key_prefix.rstrip("/")
@@ -735,7 +734,7 @@ class WandBRewardLogger:
         if wandb.run is None:
             return
         # run-level metric suffixes (use "last" since they're already aggregated summaries)
-        metric_suffixes = ["reward/run/*", "failures/*", "difficulty/run/*"]
+        metric_suffixes = ["reward/run/*", "parsing/*", "failures/*", "difficulty/run/*"]
         for suffix in metric_suffixes:
             pattern = f"{prefix}/{suffix}"
             wandb.define_metric(pattern, step_metric=self._step_metric_key, summary="last")

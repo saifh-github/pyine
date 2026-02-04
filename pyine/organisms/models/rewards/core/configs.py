@@ -437,7 +437,7 @@ class LoggingConfig(reward_types.BaseConfig):
     Metric Indexing:
         Different metric types are indexed to different x-axes in WandB:
 
-        - **Per-generation metrics** (reward/total, reward/terms/*, parsing/*) are indexed to
+        - **Per-generation metrics** (reward/total, reward/terms/*, reward/metrics/*) are indexed to
           `{prefix}/generation_count`. This ensures each logged generation has a unique x-coordinate,
           avoiding aggregation issues when multiple generations are logged within the same trainer
           step (e.g., with gradient accumulation or multiple generations per prompt in GRPO).
@@ -446,7 +446,7 @@ class LoggingConfig(reward_types.BaseConfig):
           ensures each logged batch has a unique x-coordinate, avoiding aggregation issues when
           multiple batches are processed within the same trainer step (e.g., gradient accumulation).
 
-        - **Run-level summaries** (reward/run/*) are indexed to `step_metric_key` (default:
+        - **Run-level summaries** (reward/run/*, parsing/*) are indexed to `step_metric_key` (default:
           "train/global_step"), which should be an optimizer-step-related index.
 
         The logger automatically configures these step metrics via `wandb.define_metric()`.
@@ -462,7 +462,7 @@ class LoggingConfig(reward_types.BaseConfig):
     log_terms: bool = True
     """Whether to include per-term weighted values in logs."""
     log_metrics: bool = True
-    """Whether to include term-emitted and parsing metrics in logs."""
+    """Whether to include term-emitted metrics in per-sample logs."""
     log_tables: bool = True
     """Whether to log per-sample reward breakdowns to a W&B table (if supported by logger)."""
     log_batch_stats: bool = True

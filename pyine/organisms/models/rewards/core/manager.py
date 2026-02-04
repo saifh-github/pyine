@@ -1469,44 +1469,6 @@ class RewardManager:
             categories = self._category_extractor.extract_categories(sample_data_dict)
         self._parsing_stats.update(sample_ctx.parsed, self._token_count_cache, categories)
 
-    def _compute_sample_parsing_metrics(
-        self,
-        sample_ctx: reward_types.SampleContext,
-    ) -> dict[str, reward_types.MetricValue]:
-        """Compute per-sample parsing metrics for logging.
-
-        Only emits metrics for fields that are enabled in the parsing config.
-        Uses cached token lengths from _update_parsing_stats() to avoid recomputation.
-        """
-        if sample_ctx.parsed is None:
-            return {}
-        parsed = sample_ctx.parsed
-        # determine which fields are enabled
-        enabled_fields = self._config.parsing.enabled_fields if self._config.parsing else "both"
-        reasoning_enabled = enabled_fields in ("both", "reasoning_only")
-        answer_enabled = enabled_fields in ("both", "final_only")
-        # use cached token lengths (computed in _update_parsing_stats)
-        cache = self._token_count_cache
-        metrics: dict[str, reward_types.MetricValue] = {}
-        # add token length if token tracking is enabled
-        if cache is not None:
-            output_tokens = cache.get(reward_types.LengthSource.model_output)
-            if output_tokens is not None:
-                metrics["parsing/output_length_tokens"] = output_tokens
-        if reasoning_enabled:
-            has_reasoning = bool(parsed.reasoning)  # treat empty string as missing
-            if has_reasoning and cache is not None:
-                reasoning_tokens = cache.get(reward_types.LengthSource.parsed_reasoning)
-                if reasoning_tokens is not None:
-                    metrics["parsing/reasoning_length_tokens"] = reasoning_tokens
-        if answer_enabled:
-            has_answer = bool(parsed.final_answer)  # treat empty string as missing
-            if has_answer and cache is not None:
-                answer_tokens = cache.get(reward_types.LengthSource.parsed_final_answer)
-                if answer_tokens is not None:
-                    metrics["parsing/answer_length_tokens"] = answer_tokens
-        return metrics
-
     def _maybe_log_sample(
         self,
         output: reward_types.RewardOutput,
@@ -1577,11 +1539,6 @@ class RewardManager:
         if should_extract_categories:
             sample_data_dict = sample_ctx.sample_data._asdict()
             categories = self._category_extractor.extract_categories(sample_data_dict)
-        # add parsing metrics after scoping
-        if self._config.logging.log_metrics:
-            if self._config.parsing is not None and sample_ctx.parsed is not None:
-                parsing_metrics = self._compute_sample_parsing_metrics(sample_ctx)
-                scoped_metrics.update(parsing_metrics)
         # extract expensive table fields only when adding a row
         reasoning: str | None = None
         final_answer: str | None = None

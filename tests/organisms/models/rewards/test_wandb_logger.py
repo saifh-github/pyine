@@ -372,7 +372,6 @@ class TestWandBDefineMetric:
             "train/reward/total",
             "train/reward/terms/*",
             "train/reward/metrics/*",
-            "train/parsing/*",
         ]
         for expected in expected_patterns:
             assert any(expected in p for p in generation_patterns_found), (

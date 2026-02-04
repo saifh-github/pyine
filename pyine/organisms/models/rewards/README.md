@@ -490,7 +490,6 @@ generations per prompt in GRPO).
 - `{prefix}/reward/terms/*`: per-term weighted reward values;
 - `{prefix}/reward/metrics/*`: term-emitted metrics (containing other useful information);
 - `{prefix}/reward/raw_terms/*`: pre-clipping, pre-weighting reward term values;
-- `{prefix}/parsing/*`: parsing-related metrics (e.g., reasoning_length_tokens, has_answer);
 - `{prefix}/categories/*`: category-wise metrics (if a category extractor is configured).
 
 **Batch-level metrics** (indexed to `{prefix}/batch_count`): These metrics are logged once per
@@ -509,6 +508,7 @@ are logged when flush_stats() is called (e.g. at phase transitions).
 - `{prefix}/reward/run/total/{mean,std,min,max,count}`: accumulated total reward statistics;
 - `{prefix}/reward/run/terms/{term}/{mean,std,min,max,count}`: per-term reward statistics;
 - `{prefix}/reward/run/categories/{category}/{mean,std,min,max,count}`: per-category reward statistics;
+- `{prefix}/parsing/*`: aggregated parsing statistics (lengths, missing ratios);
 - `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
 - `{prefix}/failures/failure_count`: count of failed generations in the phase.
 - `{prefix}/difficulty/run/*`: aggregated difficulty diagnostics (when enabled).

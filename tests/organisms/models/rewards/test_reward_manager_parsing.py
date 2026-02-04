@@ -739,9 +739,9 @@ class TestTokenLengthTracking:
         manager.compute(ctx)
         assert len(logger_obj.samples) == 1
         sample_metrics = logger_obj.samples[0]["reward_metrics"]
-        # char metrics removed; only token metrics present in per-sample log
-        assert "parsing/output_length_tokens" in sample_metrics
-        assert "parsing/reasoning_length_tokens" in sample_metrics
+        # parsing length metrics are run-level only; per-sample log should omit them
+        assert "parsing/output_length_tokens" not in sample_metrics
+        assert "parsing/reasoning_length_tokens" not in sample_metrics
 
 
 class TestParsingStatsAccumulatorMerge:

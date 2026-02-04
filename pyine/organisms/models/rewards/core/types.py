@@ -760,8 +760,8 @@ class RewardLogger(typing.Protocol):
             rank: Global rank of the process logging this sample (0-indexed).
             total: Total reward value, or None to omit from logging.
             terms: Per-term weighted reward values (optional).
-            metrics: Per-sample metrics (optional) including term-emitted metrics, parsing
-                metrics (under `parsing/*`), and category labels (under `categories/*`).
+            metrics: Per-sample metrics (optional) including term-emitted metrics and category
+                labels (under `categories/*`).
             raw_terms: Per-term raw (pre-clipping, pre-weighting) reward values (optional).
             step: Optional logging step.
             prompt: Optional prompt text for table logging.

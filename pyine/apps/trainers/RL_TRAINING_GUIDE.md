@@ -613,13 +613,13 @@ Run-level metrics logged include:
 - `{prefix}/reward/run/total/mean`, `std`, `min`, `max`, `count` - Total reward stats
 - `{prefix}/reward/run/terms/{term}/mean`, etc. - Per-term reward stats
 - `{prefix}/reward/run/categories/{category}/mean`, etc. - Per-category reward stats (if `category_extraction_config` is set)
+- `{prefix}/parsing/*` - Aggregated parsing stats (lengths, missing ratios)
 
 Per-sample metrics (when `log_every_n_generations` triggers):
 
 - `{prefix}/reward/total` - Sample reward total
 - `{prefix}/reward/terms/{term}` - Per-term weighted values
 - `{prefix}/reward/metrics/{term}/{metric}` - Per-term emitted metrics
-- `{prefix}/parsing/{metric}` - Parsing metrics (when parsing is enabled)
 - `{prefix}/categories/{category}` - Category indicators (when `category_extraction_config` is set)
 
 Where `{prefix}` is `train` or `eval`.
