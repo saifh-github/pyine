@@ -246,6 +246,13 @@ class AnnotationOptions(pydantic.BaseModel):
         default=None,
         description="Tag filter rule for potential annotations; if None, everything is considered.",
     )
+    test_data_cache_source_path: pathlib.Path | None = pydantic.Field(
+        default=None,
+        description=(
+            "Optional override path to the source dataset used to build the test case cache. "
+            "If provided, it will replace the dataset path stored in trace metadata."
+        ),
+    )
 
     # ---------- prompt result logging settings ----------
 
@@ -904,7 +911,10 @@ async def annotate_trace_dataset(
     if (config.augment_config.is_misleading_enabled or is_mislead_prompt) and not config.has_test_data_cache():
         logger.info("preparing or reloading coding problem test data cache for target dataset")
         try:
-            cache = pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(dataset)
+            cache = pyine.organisms.datamodules.utils.caching.CodingProblemTestDataCache.build_from_dataset(
+                dataset,
+                override_dataset_path=config.test_data_cache_source_path,
+            )
         except ValueError as exc:
             raise ValueError(f"failed to build coding problem test data cache from dataset metadata: {exc}") from exc
         config.set_test_data_cache(cache)

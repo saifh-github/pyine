@@ -63,6 +63,8 @@ class CodingProblemTestDataCache:
         *,
         dataset_name: str,
         dataset_path: pathlib.Path,
+        expected_dataset_hash: str | None = None,
+        metadata_dataset_path: pathlib.Path | str | None = None,
         random_seed: int | None = 0,
         use_cache_storage: bool = True,
     ) -> None:
@@ -70,6 +72,13 @@ class CodingProblemTestDataCache:
         self.dataset_name = dataset_name
         self.dataset_path = dataset_path
         self.dataset_hash = pyine.utils.reprod.compute_hash(self.dataset_path)
+        if expected_dataset_hash is not None and self.dataset_hash != expected_dataset_hash:
+            metadata_path_label = str(metadata_dataset_path) if metadata_dataset_path is not None else "unknown"
+            logger.warning(
+                f"dataset hash mismatch for '{self.dataset_name}' (continuing anyway):"
+                f"\n\texpected={expected_dataset_hash}\n\tgot={self.dataset_hash} "
+                f"\n\tmetadata_path={metadata_path_label}\n\toverride_path={self.dataset_path}"
+            )
         self._rng = np.random.RandomState(random_seed)
         self._cache: dict[
             pyine.data.traces.dataset_utils.CodingProblemIdentifier,
@@ -164,6 +173,9 @@ class CodingProblemTestDataCache:
     def build_from_dataset(
         cls,
         dataset_reader: pyine.data.traces.dataset_reader.DatasetProtocol,
+        *,
+        override_dataset_path: pathlib.Path | str | None = None,
+        verify_hash: bool = True,
     ) -> "CodingProblemTestDataCache":
         """Construct a cache of test case data from dataset metadata (if possible)."""
         assert isinstance(dataset_reader.metadata, dict), f"unexpected metadata type: {type(dataset_reader.metadata)}"
@@ -172,6 +184,27 @@ class CodingProblemTestDataCache:
         parent_info = typing.cast("dict[str, typing.Any]", parent_info)
         dataset_name = parent_info.get("dataset_name")
         dataset_path = parent_info.get("dataset_path")
+        expected_hash: str | None = None
+        if verify_hash:
+            expected_hash_value = parent_info.get("dataset_hash")
+            if isinstance(expected_hash_value, str):
+                expected_hash = expected_hash_value
+            elif isinstance(dataset_reader, pyine.data.traces.dataset_reader.DatasetCollection):
+                component_hashes: set[str] = set()
+                for component in dataset_reader.component_readers:
+                    assert isinstance(component.metadata, dict)
+                    component_parent = component.metadata.get("parent_dataset", {})
+                    if not isinstance(component_parent, dict):
+                        continue
+                    component_hash = component_parent.get("dataset_hash")  # type: ignore
+                    if isinstance(component_hash, str):
+                        component_hashes.add(component_hash)
+                if len(component_hashes) > 1:
+                    raise ValueError(
+                        "dataset collection contains multiple parent dataset hashes; cannot verify a single cache"
+                    )
+                if len(component_hashes) == 1:
+                    expected_hash = next(iter(component_hashes))
         if isinstance(dataset_path, list):
             dataset_path_list = typing.cast("list[str | pathlib.Path]", dataset_path)
             if len(dataset_path_list) == 0:
@@ -181,11 +214,21 @@ class CodingProblemTestDataCache:
             dataset_path = dataset_path_list[0]
         if isinstance(dataset_path, str):
             dataset_path = pathlib.Path(dataset_path)
+        metadata_dataset_path = dataset_path
+        if override_dataset_path is not None:
+            dataset_path = (
+                pathlib.Path(override_dataset_path) if isinstance(override_dataset_path, str) else override_dataset_path
+            )
         if not isinstance(dataset_name, str) or not isinstance(dataset_path, pathlib.Path):
             raise ValueError("dataset metadata missing parent dataset information required to build cache")
         if not dataset_path.exists():
             raise ValueError(f"dataset path '{dataset_path}' does not exist, cannot build cache")
-        return cls(dataset_name=dataset_name, dataset_path=dataset_path)
+        return cls(
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            expected_dataset_hash=expected_hash,
+            metadata_dataset_path=metadata_dataset_path,
+        )
 
     def sample_alternative_test_case(
         self,

@@ -318,6 +318,15 @@ def _async_main_wrapper(
     help="Tag filter rule to skip items before prompting.",
 )
 @click.option(
+    "--test-data-source-path",
+    type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
+    default=None,
+    help=(
+        "Override the source dataset path used to build the test case cache. "
+        "Useful when trace dataset metadata points to a different machine."
+    ),
+)
+@click.option(
     "--db-path",
     type=click.Path(dir_okay=False, path_type=pathlib.Path),
     default=None,
@@ -431,6 +440,7 @@ async def main(
     target_split_subset: str | None,
     target_indices: str | None,
     base_filter_rule: str | None,
+    test_data_source_path: pathlib.Path | None,
     db_path: pathlib.Path | None,
     min_results_per_item: int,
     max_result_age: str | None,
@@ -609,6 +619,7 @@ async def main(
         prompt_config=prompt_config,
         target_indices=indices_list,
         base_filter_rule=base_filter_rule,
+        test_data_cache_source_path=test_data_source_path,
         db_path=db_path,
         min_results_per_item=min_results_per_item,
         max_result_age=max_age_td,
