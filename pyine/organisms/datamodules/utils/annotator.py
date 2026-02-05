@@ -553,6 +553,8 @@ def _default_input_variables_builder(
             match_inputs_signature=config.augment_config.misleading_test_match_signatures,
             match_outputs_signature=config.augment_config.misleading_test_match_signatures,
             sample_from_top_k=config.augment_config.misleading_test_top_k_candidates,
+            banned_inputs=trace.inputs,
+            banned_outputs=trace.expected_output,
         )
         if test_case is not None:
             assert test_case.test_idx != trace_id.test_idx

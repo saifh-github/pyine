@@ -235,11 +235,12 @@ class CodingProblemTestDataCache:
         trace_id: pyine.data.traces.dataset_utils.TraceIdentifier,
         max_inputs_length_delta: int | None = None,
         max_outputs_length_delta: int | None = None,
-        must_be_different: bool = True,
         match_inputs_signature: bool = True,
         match_outputs_signature: bool = True,
         sample_from_top_k: int | None = None,
         rng: np.random.RandomState | None = None,  # if none, will use internal one
+        banned_inputs: typing.Any | None = None,
+        banned_outputs: typing.Any | None = None,
     ) -> CachedTestData | None:
         """Return an alternative test case to the one used in the provided trace.
 
@@ -254,12 +255,12 @@ class CodingProblemTestDataCache:
                 original test case and those of the returned alternative test case.
             max_outputs_length_delta: Maximum allowed length difference between the outputs of the
                 original test case and those of the returned alternative test case.
-            must_be_different: Whether to require the returned alternative test case to be different
-                from the original test case (in terms both of exact inputs and outputs).
             match_inputs_signature: Whether to match the input signature of the original test case.
             match_outputs_signature: Whether to match the output signature of the original test case.
             sample_from_top_k: If provided, only sample from the top-k candidates.
             rng: Random number generator to use for sampling. If None, will use the internal one.
+            banned_inputs: Optional explicit inputs to exclude when filtering candidates.
+            banned_outputs: Optional explicit outputs to exclude when filtering candidates.
 
         Returns:
             The alternative test case, or None if no valid alternative test case was found.
@@ -272,10 +273,20 @@ class CodingProblemTestDataCache:
         orig_test_idx = trace_id.test_idx
         assert isinstance(orig_test_idx, int) and len(self._cache[problem_id]) > orig_test_idx
         orig_test_case = self._cache[problem_id][orig_test_idx]
+        # initialize candidate list with all test cases, except the originally used one (by index)
         candidates = [c for c in self._cache[problem_id] if c.test_idx != orig_test_idx]
-        if must_be_different:
+        # discard all candidate test cases whose inputs/outputs match the original one
+        candidates = [
+            c for c in candidates if c.inputs != orig_test_case.inputs and c.outputs != orig_test_case.outputs
+        ]
+        if banned_inputs is not None or banned_outputs is not None:
+            # also discard all candidate test cases whose inputs/outputs are banned
+            # (note: double-verification w/ trace inputs/outputs may help avoid stale cache issues here)
             candidates = [
-                c for c in candidates if c.inputs != orig_test_case.inputs and c.outputs != orig_test_case.outputs
+                c
+                for c in candidates
+                if (banned_inputs is None or c.inputs != banned_inputs)
+                and (banned_outputs is None or c.outputs != banned_outputs)
             ]
         if match_inputs_signature:
             candidates = [c for c in candidates if c.inputs_signature == orig_test_case.inputs_signature]
