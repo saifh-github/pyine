@@ -10,6 +10,7 @@ import orjson
 import pydantic
 import pytest
 
+import pyine.prompts.result_db as result_db
 from pyine.prompts.result_db import (
     CreationMeta,
     PromptResultDB,
@@ -687,3 +688,134 @@ def test_get_tags(db: PromptResultDB) -> None:
     # breakdown=False still works (default)
     tags = db.get_tags(identifier=["id1", "id2"], breakdown=False)
     assert tags == [["a", "b"], ["c"], [], ["d", "e", "f"]]
+
+
+def test_get_by_identifiers(db: PromptResultDB) -> None:
+    # empty db returns empty dict for all requested identifiers
+    result = db.get_by_identifiers(["id1", "id2"])
+    assert result == {"id1": [], "id2": []}
+    # empty identifiers list returns empty dict
+    assert db.get_by_identifiers([]) == {}
+    # insert test data
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt_version="v1", prompt="p1", result="r1")
+    db.store(identifier="id1", group="g1", prompt_name="pn1", prompt_version="v2", prompt="p2", result="r2")
+    db.store(identifier="id2", group="g1", prompt_name="pn1", prompt_version="v1", prompt="p3", result="r3")
+    db.store(identifier="id3", group="g2", prompt_name="pn2", prompt_version="v1", prompt="p4", result="r4")
+    # fetch multiple identifiers in one call
+    result = db.get_by_identifiers(["id1", "id2", "id3"])
+    assert len(result) == 3
+    assert len(result["id1"]) == 2
+    assert len(result["id2"]) == 1
+    assert len(result["id3"]) == 1
+    assert result["id1"][0].result == "r1"
+    assert result["id1"][1].result == "r2"
+    assert result["id2"][0].result == "r3"
+    assert result["id3"][0].result == "r4"
+    # records within each identifier are ordered by creation time
+    assert result["id1"][0].creation_meta.created_at <= result["id1"][1].creation_meta.created_at
+    # filter by prompt_name
+    result = db.get_by_identifiers(["id1", "id2", "id3"], prompt_name="pn1")
+    assert len(result["id1"]) == 2
+    assert len(result["id2"]) == 1
+    assert len(result["id3"]) == 0  # id3 has pn2, not pn1
+    # filter by prompt_name and prompt_version
+    result = db.get_by_identifiers(["id1", "id2"], prompt_name="pn1", prompt_version="v1")
+    assert len(result["id1"]) == 1
+    assert len(result["id2"]) == 1
+    assert result["id1"][0].prompt_version == "v1"
+    # nonexistent identifiers return empty lists
+    result = db.get_by_identifiers(["id1", "nonexistent"])
+    assert len(result["id1"]) == 2
+    assert result["nonexistent"] == []
+    # error case: prompt_version without prompt_name
+    with pytest.raises(ValueError):
+        db.get_by_identifiers(["id1"], prompt_version="v1")
+
+
+def test_get_by_identifiers_deduplicates(db: PromptResultDB) -> None:
+    db.store(identifier="id1", prompt="p1", result="r1")
+    db.store(identifier="id2", prompt="p2", result="r2")
+    result = db.get_by_identifiers(["id1", "id1", "id2"])
+    assert set(result.keys()) == {"id1", "id2"}
+    assert len(result["id1"]) == 1
+    assert result["id1"][0].result == "r1"
+    assert len(result["id2"]) == 1
+
+
+def test_get_by_identifiers_chunks_over_limit(db: PromptResultDB, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(result_db, "_SQLITE_MAX_VARIABLE_NUMBER", 3)
+    db.store(identifier="id1", prompt="p1", result="r1")
+    db.store(identifier="id2", prompt="p2", result="r2")
+    db.store(identifier="id3", prompt="p3", result="r3")
+    db.store(identifier="id4", prompt="p4", result="r4")
+    db.store(identifier="id5", prompt="p5", result="r5")
+    result = db.get_by_identifiers(["id1", "id2", "id3", "id4", "id5"])
+    assert len(result) == 5
+    assert result["id1"][0].result == "r1"
+    assert result["id2"][0].result == "r2"
+    assert result["id3"][0].result == "r3"
+    assert result["id4"][0].result == "r4"
+    assert result["id5"][0].result == "r5"
+
+
+def test_get_by_identifiers_with_tags(db: PromptResultDB) -> None:
+    db.store(identifier="id1", prompt="p", result="r1", tags=["ok"])
+    db.store(identifier="id1", prompt="p", result="r2", tags=["wip:yes"])
+    db.store(identifier="id2", prompt="p", result="r3", tags=["ok"])
+    # without tag filter, get all records
+    result = db.get_by_identifiers(["id1", "id2"])
+    assert len(result["id1"]) == 2
+    assert len(result["id2"]) == 1
+    # with tag filter, exclude wip records
+    result = db.get_by_identifiers(["id1", "id2"], tag_filter_rule="-wip:*")
+    assert len(result["id1"]) == 1
+    assert result["id1"][0].result == "r1"
+    assert len(result["id2"]) == 1
+
+
+def test_get_by_identifiers_with_max_age(db: PromptResultDB) -> None:
+    old_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2))
+    new_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC))
+    db.store(identifier="id1", prompt="p", result="old", creation_meta=old_cm)
+    db.store(identifier="id1", prompt="p", result="new", creation_meta=new_cm)
+    db.store(identifier="id2", prompt="p", result="old2", creation_meta=old_cm)
+    # with max_result_age, only get recent records
+    result = db.get_by_identifiers(["id1", "id2"], max_result_age=datetime.timedelta(hours=1))
+    assert len(result["id1"]) == 1
+    assert result["id1"][0].result == "new"
+    assert len(result["id2"]) == 0  # only old record, excluded by age
+
+
+def test_has_records(db: PromptResultDB) -> None:
+    # empty db
+    assert db.has_records("nonexistent") is False
+    # insert test data
+    db.store(identifier="id1", prompt_name="pn1", prompt_version="v1", prompt="p", result="r")
+    db.store(identifier="id2", prompt_name="pn1", prompt_version="v1", prompt="p", result="r", tags=["wip:yes"])
+    db.store(identifier="id2", prompt_name="pn1", prompt_version="v1", prompt="p", result="r", tags=["ok"])
+    # basic existence check
+    assert db.has_records("id1") is True
+    assert db.has_records("id2") is True
+    assert db.has_records("nonexistent") is False
+    # filter by prompt_name
+    assert db.has_records("id1", prompt_name="pn1") is True
+    assert db.has_records("id1", prompt_name="pn2") is False
+    # filter by prompt_name and prompt_version
+    assert db.has_records("id1", prompt_name="pn1", prompt_version="v1") is True
+    assert db.has_records("id1", prompt_name="pn1", prompt_version="v2") is False
+    # filter by tags
+    assert db.has_records("id2", tag_filter_rule="-wip:*") is True  # has "ok" record
+    assert db.has_records("id1", tag_filter_rule="-wip:*") is True  # no wip tag
+    # error case: prompt_version without prompt_name
+    with pytest.raises(ValueError):
+        db.has_records("id1", prompt_version="v1")
+
+
+def test_has_records_with_max_age(db: PromptResultDB) -> None:
+    old_cm = CreationMeta(created_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2))
+    db.store(identifier="old_only", prompt="p", result="r", creation_meta=old_cm)
+    db.store(identifier="has_new", prompt="p", result="old", creation_meta=old_cm)
+    db.store(identifier="has_new", prompt="p", result="new")  # recent
+    # with max_result_age
+    assert db.has_records("old_only", max_result_age=datetime.timedelta(hours=1)) is False
+    assert db.has_records("has_new", max_result_age=datetime.timedelta(hours=1)) is True

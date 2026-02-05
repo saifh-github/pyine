@@ -24,6 +24,8 @@ from pyine.prompts.types import PromptChainBuildConfig, PromptNameType, PromptVe
 
 logger = logging.getLogger(__name__)
 
+_SQLITE_MAX_VARIABLE_NUMBER = 999
+
 
 def _reload_metadata(raw: str | None) -> dict[str, pydantic.JsonValue]:
     """Load a JSON string into a dictionary of JSON values, falling back to an empty dict."""
@@ -305,6 +307,139 @@ class PromptResultDB:
             params.append(cutoff.isoformat())
         sql.append("ORDER BY created_at ASC, id ASC")  # ordered by iso utc time
         return self._get_records(sql, params, tag_filter_rule)
+
+    def get_by_identifiers(
+        self,
+        identifiers: typing.Sequence[str],
+        *,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
+        tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
+    ) -> dict[str, list[PromptResultRecord]]:
+        """Fetch entries for multiple identifiers in a single database query.
+
+        This is more efficient than calling `get_by_identifier` in a loop when you need
+        to fetch records for many identifiers, as it reduces the number of database
+        round-trips from N to 1 for typical batches (large batches may be chunked).
+
+        Args:
+            identifiers: Sequence of identifiers to search for.
+            prompt_name: Optional prompt template name to filter by.
+            prompt_version: Optional prompt version to filter by (requires prompt_name).
+            tag_filter_rule: Optional rule string for filtering by tags. See the
+                `pyine.data.utils.filter_rules` module for more details.
+            max_result_age: Optional maximum age of results to return.
+
+        Returns:
+            Dictionary mapping each identifier to its list of matching PromptResultRecord
+            objects. Identifiers with no matches will have empty lists. Records for each
+            identifier are ordered by creation time. Duplicate identifiers are ignored.
+
+        Example:
+            >>> records_by_id = db.get_by_identifiers(["trace_001", "trace_002", "trace_003"])
+            >>> for identifier, records in records_by_id.items():
+            ...     print(f"{identifier}: {len(records)} records")
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+        deduped_identifiers = list(dict.fromkeys(identifiers))
+        if not deduped_identifiers:
+            return {}
+        # initialize result dict with empty lists for all requested identifiers
+        result: dict[str, list[PromptResultRecord]] = {ident: [] for ident in deduped_identifiers}
+        extra_params_count = 0
+        if prompt_name is not None:
+            extra_params_count += 1
+        if prompt_version is not None:
+            extra_params_count += 1
+        if max_result_age is not None:
+            extra_params_count += 1
+        chunk_size = _SQLITE_MAX_VARIABLE_NUMBER - extra_params_count
+        if chunk_size < 1:
+            raise ValueError("too many query parameters for SQLite variable limit")
+        cutoff = None
+        if max_result_age is not None:
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
+        for start_idx in range(0, len(deduped_identifiers), chunk_size):
+            chunk = deduped_identifiers[start_idx : start_idx + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            sql = [f"SELECT * FROM items WHERE identifier IN ({placeholders})"]  # noqa: S608
+            params: list[typing.Any] = list(chunk)
+            if prompt_name is not None:
+                sql.append("AND prompt_name = ?")
+                params.append(prompt_name)
+            if prompt_version is not None:
+                sql.append("AND prompt_version = ?")
+                params.append(prompt_version)
+            if max_result_age is not None:
+                sql.append("AND created_at > ?")
+                params.append(cutoff.isoformat() if cutoff is not None else "")
+            sql.append("ORDER BY identifier ASC, created_at ASC, id ASC")
+            records = self._get_records(sql, params, tag_filter_rule)
+            for record in records:
+                if record.identifier in result:
+                    result[record.identifier].append(record)
+        return result
+
+    def has_records(
+        self,
+        identifier: str,
+        *,
+        prompt_name: PromptNameType | None = None,
+        prompt_version: PromptVersionType | None = None,
+        tag_filter_rule: str | None = None,
+        max_result_age: datetime.timedelta | None = None,
+    ) -> bool:
+        """Check if any records exist for the given identifier with optional filtering.
+
+        This is more efficient than `get_by_identifier` when you only need to check
+        existence, as it uses a lightweight query and stops at the first match.
+
+        Args:
+            identifier: The identifier to search for.
+            prompt_name: Optional prompt template name to filter by.
+            prompt_version: Optional prompt version to filter by (requires prompt_name).
+            tag_filter_rule: Optional rule string for filtering by tags. Note: when
+                tag_filter_rule is provided, this method must fetch records to apply
+                the filter, reducing efficiency gains.
+            max_result_age: Optional maximum age of results to check.
+
+        Returns:
+            True if at least one matching record exists, False otherwise.
+        """
+        if prompt_name is None and prompt_version is not None:
+            raise ValueError("prompt_version specified without prompt_name")
+        # when tag filtering is needed, we must fetch records (can't filter in SQL)
+        if tag_filter_rule is not None:
+            records = self.get_by_identifier(
+                identifier,
+                prompt_name=prompt_name,
+                prompt_version=prompt_version,
+                tag_filter_rule=tag_filter_rule,
+                max_result_age=max_result_age,
+            )
+            return len(records) > 0
+        # otherwise, use efficient LIMIT query
+        sql = ["SELECT 1 FROM items WHERE identifier = ?"]
+        params: list[typing.Any] = [identifier]
+        if prompt_name is not None:
+            sql.append("AND prompt_name = ?")
+            params.append(prompt_name)
+        if prompt_version is not None:
+            sql.append("AND prompt_version = ?")
+            params.append(prompt_version)
+        if max_result_age is not None:
+            cutoff = datetime.datetime.now(datetime.UTC) - max_result_age
+            sql.append("AND created_at > ?")
+            params.append(cutoff.isoformat())
+        sql.append("LIMIT 1")  # stop after first match
+        conn = self._connect()
+        try:
+            row = conn.execute(" ".join(sql), params).fetchone()
+            return row is not None
+        finally:
+            conn.close()
 
     def get_by_group(
         self,

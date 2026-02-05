@@ -51,6 +51,10 @@ __all__ = [
     "get_prompt_names_relevant_to_sample_code_types",
     "draw_type",
     "get_rng",
+    "get_records_matching_code_type",
+    "has_record_for_code_type",
+    "get_records_matching_code_type_batch",
+    "check_code_type_availability_batch",
 ]
 
 
@@ -820,3 +824,138 @@ def _get_supported_trace_sample_code_types_from_prompt_result_db(
         )
         for key, matched_tags_list in prompt_result_tags.items()
     }
+
+
+def get_records_matching_code_type(
+    identifier: str,
+    target_code_type: SampleCodeTypeSet,
+    prompt_result_db: pyine.prompts.PromptResultDB,
+    *,
+    prompt_name: pyine.prompts.PromptNameType | None = None,
+) -> list[pyine.prompts.PromptResultRecord]:
+    """Fetch prompt result records that match an exact code type set.
+
+    This is a convenience function that fetches records for an identifier and filters them to only
+    include those whose tags produce the exact target code type set.
+
+    Args:
+        identifier: The identifier to search for (e.g., trace ID or solution ID).
+        target_code_type: The exact code type set to match (e.g., `{obfuscated, hinted}`).
+        prompt_result_db: The prompt result database to query.
+        prompt_name: Optional prompt name to filter by.
+
+    Returns:
+        List of PromptResultRecord objects whose tags match the target code type exactly.
+
+    Example:
+        >>> target = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated, SampleCodeType.hinted}))
+        >>> records = get_records_matching_code_type("trace_001", target, db)
+    """
+    records = prompt_result_db.get_by_identifier(identifier, prompt_name=prompt_name)
+    return [rec for rec in records if SampleCodeTypeSet.create_from_tags(rec.tags) == target_code_type]
+
+
+def has_record_for_code_type(
+    identifier: str,
+    target_code_type: SampleCodeTypeSet,
+    prompt_result_db: pyine.prompts.PromptResultDB,
+    *,
+    prompt_name: pyine.prompts.PromptNameType | None = None,
+) -> bool:
+    """Check if any prompt result record exists for the given code type set.
+
+    This avoids building a full filtered list when you only need an existence check, as it
+    short-circuits the code-type comparison once a match is found. Note that the underlying
+    database query still fetches all records for the identifier.
+
+    Args:
+        identifier: The identifier to search for (e.g., trace ID or solution ID).
+        target_code_type: The exact code type set to match.
+        prompt_result_db: The prompt result database to query.
+        prompt_name: Optional prompt name to filter by.
+
+    Returns:
+        True if at least one record exists with tags matching the target code type.
+
+    Example:
+        >>> target = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        >>> if has_record_for_code_type("trace_001", target, db):
+        ...     print("Hinted version available in prompt DB")
+    """
+    records = prompt_result_db.get_by_identifier(identifier, prompt_name=prompt_name)
+    return any(SampleCodeTypeSet.create_from_tags(rec.tags) == target_code_type for rec in records)
+
+
+def get_records_matching_code_type_batch(
+    identifiers: typing.Sequence[str],
+    target_code_type: SampleCodeTypeSet,
+    prompt_result_db: pyine.prompts.PromptResultDB,
+    *,
+    prompt_name: pyine.prompts.PromptNameType | None = None,
+) -> dict[str, list[pyine.prompts.PromptResultRecord]]:
+    """Fetch prompt result records matching a code type set for multiple identifiers.
+
+    This is more efficient than calling `get_records_matching_code_type` in a loop, as it uses a
+    single database query for all identifiers.
+
+    Args:
+        identifiers: Sequence of identifiers to search for.
+        target_code_type: The exact code type set to match.
+        prompt_result_db: The prompt result database to query.
+        prompt_name: Optional prompt name to filter by.
+
+    Returns:
+        Dictionary mapping each identifier to its list of matching records.
+        Identifiers with no matching records will have empty lists.
+
+    Example:
+        >>> target = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        >>> records_by_id = get_records_matching_code_type_batch(["trace_001", "trace_002"], target, db)
+    """
+    if not identifiers:
+        return {}
+    all_records_by_id = prompt_result_db.get_by_identifiers(
+        identifiers,
+        prompt_name=prompt_name,
+    )
+    # filter each identifier's records to only include those matching target code type
+    return {
+        ident: [rec for rec in records if SampleCodeTypeSet.create_from_tags(rec.tags) == target_code_type]
+        for ident, records in all_records_by_id.items()
+    }
+
+
+def check_code_type_availability_batch(
+    identifiers: typing.Sequence[str],
+    target_code_type: SampleCodeTypeSet,
+    prompt_result_db: pyine.prompts.PromptResultDB,
+    *,
+    prompt_name: pyine.prompts.PromptNameType | None = None,
+) -> dict[str, bool]:
+    """Check code type availability for multiple identifiers in a single query.
+
+    This is useful for completeness checks in counterfactual evaluation, where you need to verify
+    that prompt-DB can provide a specific code type for multiple traces.
+
+    Args:
+        identifiers: Sequence of identifiers to check.
+        target_code_type: The exact code type set to check for.
+        prompt_result_db: The prompt result database to query.
+        prompt_name: Optional prompt name to filter by.
+
+    Returns:
+        Dictionary mapping each identifier to a boolean indicating whether any
+        record exists with the target code type.
+
+    Example:
+        >>> target = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        >>> availability = check_code_type_availability_batch(["trace_001", "trace_002", "trace_003"], target, db)
+        >>> available_ids = [id for id, avail in availability.items() if avail]
+    """
+    records_by_id = get_records_matching_code_type_batch(
+        identifiers,
+        target_code_type,
+        prompt_result_db,
+        prompt_name=prompt_name,
+    )
+    return {ident: len(records) > 0 for ident, records in records_by_id.items()}

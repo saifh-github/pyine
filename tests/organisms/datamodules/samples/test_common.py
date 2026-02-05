@@ -1,7 +1,14 @@
 """Tests for common types, enums, and utilities in the samples module."""
 
+import typing
+
 import numpy as np
 import pytest
+
+if typing.TYPE_CHECKING:
+    import pathlib
+
+    from pyine.prompts import PromptResultDB
 
 from pyine.organisms.datamodules.samples.common import (
     SampleCodeType,
@@ -622,3 +629,138 @@ class TestSampleSubsetTagWrapper:
         wrapper = SampleSubsetTagWrapper([sample], "valid")  # type: ignore[arg-type]
         result = wrapper[0]
         assert result.comma_separated_tags == "parser:valid"
+
+
+class TestCodeTypeHelpers:
+    """Tests for the prompt result DB code-type helper functions."""
+
+    @pytest.fixture
+    def db(self, tmp_path: "pathlib.Path") -> "PromptResultDB":
+        from pyine.prompts import PromptResultDB
+
+        return PromptResultDB(db_path=tmp_path / "test_code_type.sqlite")
+
+    def test_get_records_matching_code_type_empty_db(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import get_records_matching_code_type
+
+        target = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        result = get_records_matching_code_type("trace_001", target, db)
+        assert result == []
+
+    def test_get_records_matching_code_type_exact_match(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import get_records_matching_code_type
+
+        # store records with different code types
+        db.store(
+            identifier="trace_001",
+            prompt="p",
+            result="hinted_result",
+            tags=["augment:hinted"],
+        )
+        db.store(
+            identifier="trace_001",
+            prompt="p",
+            result="obfuscated_result",
+            tags=["augment:obfuscated"],
+        )
+        db.store(
+            identifier="trace_001",
+            prompt="p",
+            result="obfuscated_hinted_result",
+            tags=["augment:obfuscated", "augment:hinted"],
+        )
+        # fetch only hinted records
+        target_hinted = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        result = get_records_matching_code_type("trace_001", target_hinted, db)
+        assert len(result) == 1
+        assert result[0].result == "hinted_result"
+        # fetch only obfuscated+hinted records
+        target_multi = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated, SampleCodeType.hinted}))
+        result = get_records_matching_code_type("trace_001", target_multi, db)
+        assert len(result) == 1
+        assert result[0].result == "obfuscated_hinted_result"
+
+    def test_has_record_for_code_type(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import has_record_for_code_type
+
+        db.store(
+            identifier="trace_002",
+            prompt="p",
+            result="r",
+            tags=["augment:misleading"],
+        )
+        # check existence
+        target_misleading = SampleCodeTypeSet(frozenset({SampleCodeType.misleading}))
+        assert has_record_for_code_type("trace_002", target_misleading, db) is True
+        target_hinted = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        assert has_record_for_code_type("trace_002", target_hinted, db) is False
+        # nonexistent identifier
+        assert has_record_for_code_type("nonexistent", target_misleading, db) is False
+
+    def test_get_records_matching_code_type_batch(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import get_records_matching_code_type_batch
+
+        # store records for multiple identifiers
+        db.store(identifier="id1", prompt="p", result="r1", tags=["augment:hinted"])
+        db.store(identifier="id1", prompt="p", result="r2", tags=["augment:obfuscated"])
+        db.store(identifier="id2", prompt="p", result="r3", tags=["augment:hinted"])
+        db.store(identifier="id3", prompt="p", result="r4", tags=["augment:misleading"])
+        target_hinted = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        result = get_records_matching_code_type_batch(["id1", "id2", "id3"], target_hinted, db)
+        assert len(result["id1"]) == 1
+        assert result["id1"][0].result == "r1"
+        assert len(result["id2"]) == 1
+        assert result["id2"][0].result == "r3"
+        assert len(result["id3"]) == 0  # no hinted records for id3
+
+    def test_get_records_matching_code_type_batch_empty_list(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import get_records_matching_code_type_batch
+
+        target = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        result = get_records_matching_code_type_batch([], target, db)
+        assert result == {}
+
+    def test_check_code_type_availability_batch(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import check_code_type_availability_batch
+
+        db.store(identifier="id1", prompt="p", result="r", tags=["augment:hinted"])
+        db.store(identifier="id2", prompt="p", result="r", tags=["augment:misleading"])
+        db.store(identifier="id3", prompt="p", result="r", tags=["augment:hinted"])
+        target_hinted = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        availability = check_code_type_availability_batch(["id1", "id2", "id3", "id4"], target_hinted, db)
+        assert availability["id1"] is True
+        assert availability["id2"] is False
+        assert availability["id3"] is True
+        assert availability["id4"] is False
+
+    def test_code_type_helpers_with_prompt_name_filter(self, db: "PromptResultDB") -> None:
+        from pyine.organisms.datamodules.samples.common import (
+            get_records_matching_code_type,
+            has_record_for_code_type,
+        )
+
+        db.store(
+            identifier="trace_003",
+            prompt_name="hints_docs",
+            prompt="p",
+            result="hinted_docs",
+            tags=["augment:hinted"],
+        )
+        db.store(
+            identifier="trace_003",
+            prompt_name="other_prompt",
+            prompt="p",
+            result="hinted_other",
+            tags=["augment:hinted"],
+        )
+        target_hinted = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        # without prompt_name filter, get both
+        result = get_records_matching_code_type("trace_003", target_hinted, db)
+        assert len(result) == 2
+        # with prompt_name filter, get only one
+        result = get_records_matching_code_type("trace_003", target_hinted, db, prompt_name="hints_docs")
+        assert len(result) == 1
+        assert result[0].result == "hinted_docs"
+        # has_record_for_code_type with filter
+        assert has_record_for_code_type("trace_003", target_hinted, db, prompt_name="hints_docs") is True
+        assert has_record_for_code_type("trace_003", target_hinted, db, prompt_name="nonexistent") is False
