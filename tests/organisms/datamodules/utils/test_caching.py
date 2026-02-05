@@ -128,10 +128,7 @@ class TestSampling:
             solution_idx=0,
             test_idx=0,  # original is index 0
         )
-        alt = cache.sample_alternative_test_case(
-            trace_id=trace_id,
-            must_be_different=True,
-        )
+        alt = cache.sample_alternative_test_case(trace_id=trace_id)
         assert alt is not None
         assert alt.test_idx != 0
 
