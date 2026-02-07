@@ -13,6 +13,7 @@ import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.common
+import pyine.organisms.datamodules.samples.configs
 import pyine.organisms.datamodules.shortcuts as shortcuts_mod
 import pyine.organisms.datamodules.shortcuts_configs
 import pyine.utils.reprod
@@ -566,7 +567,7 @@ class TestCreateHintSplitDerivedSubsetsPresenceSplit:
             for i in range(8)
         ]
         subset_traces = {"valid": valid_traces, "test": test_traces}
-        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
         assert "valid_hinted" in derived
         assert "valid_hintless" in derived
         assert "test_hinted" in derived
@@ -627,7 +628,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
 
         all_traces = [trace_with_hint, trace_without_hint, trace_unpaired]
         subset_traces = {"valid": all_traces}
-        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
         # only complete groups should be included (family_1 has both hinted and hintless)
         assert len(derived["valid_hinted"].traces) == 1
         assert len(derived["valid_hintless"].traces) == 1
@@ -655,7 +656,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             trace.trace_id.get_augmentless_identifier.return_value = f"family_{idx}"
             traces.append(trace)
         subset_traces = {"valid": traces}
-        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
         # no complete groups (all hinted, no hintless traces in any group)
         assert len(derived["valid_hinted"].traces) == 0
         assert len(derived["valid_hintless"].traces) == 0
@@ -670,7 +671,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
         )
         stub.verbose = False
         subset_traces = {"valid": []}
-        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
         assert derived["valid_hinted"].derivation_type == "counterfactual"
         assert derived["valid_hintless"].derivation_type == "counterfactual"
 
@@ -1529,3 +1530,134 @@ class TestPromptDbAnchorPairing:
         group_key = ("fam1", "original")
         # anchor should be "a_trace" (first after sort), regardless of input order
         assert str(groups[group_key].prompt_db_anchor.trace_id) == "a_trace"
+
+
+class TestDerivedSubsetPreFiltering:
+    """Tests for pre-filtering traces before hint partitioning."""
+
+    def test_derived_subsets_have_disabled_filtering_hint_presence(
+        self,
+        fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path],
+    ) -> None:
+        """Derived subsets should have all filtering disabled (hint_presence_split)."""
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            evaluation_strategy=EvaluationStrategy.hint_presence_split,
+            instantiate_parsers_at_setup=False,
+        )
+        for derived_name in ["valid_hinted", "valid_hintless"]:
+            parser_config = config._resolve_dataparser_config(derived_name)
+            params = parser_config.get_params_dict()
+            filtering_dict = params.get("filtering_config", {})
+            if isinstance(filtering_dict, dict):
+                filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(**filtering_dict)
+            else:
+                filtering = filtering_dict
+            assert not filtering.any_filtering_enabled, f"{derived_name} should have disabled filtering"
+
+    def test_derived_subsets_have_disabled_filtering_counterfactual(
+        self,
+        fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path],
+    ) -> None:
+        """Derived subsets should have all filtering disabled (counterfactual)."""
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            evaluation_strategy=EvaluationStrategy.counterfactual,
+            instantiate_parsers_at_setup=False,
+        )
+        for derived_name in ["valid_hinted", "valid_hintless"]:
+            parser_config = config._resolve_dataparser_config(derived_name)
+            params = parser_config.get_params_dict()
+            filtering_dict = params.get("filtering_config", {})
+            if isinstance(filtering_dict, dict):
+                filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(**filtering_dict)
+            else:
+                filtering = filtering_dict
+            assert not filtering.any_filtering_enabled, f"{derived_name} should have disabled filtering"
+
+    def test_parent_filtering_preserved_for_non_derived(
+        self,
+        fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path],
+    ) -> None:
+        """Parent eval subset should keep its own filtering config."""
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            instantiate_parsers_at_setup=False,
+        )
+        parser_config = config._resolve_dataparser_config("valid")
+        params = parser_config.get_params_dict()
+        filtering_dict = params.get("filtering_config", {})
+        if isinstance(filtering_dict, dict):
+            filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(**filtering_dict)
+        else:
+            filtering = filtering_dict
+        # parent "valid" should use default filtering (which has active filters)
+        assert filtering.any_filtering_enabled
+
+    def test_create_disabled_returns_no_active_filters(self) -> None:
+        """TraceFilteringConfig.create_disabled() should produce a valid config with no active filters."""
+        disabled = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig.create_disabled()
+        assert not disabled.any_filtering_enabled
+        assert disabled.use_token_lengths is False
+        assert disabled.tokenizer_model_id is None
+        assert disabled.tokenizer_path is None
+
+
+class TestCounterfactualPairingInvariant:
+    """Tests for the counterfactual family alignment invariant."""
+
+    def test_raises_on_mismatched_partitions(self, mocker: MockerFixture) -> None:
+        """Pre-filter invariant should raise ValueError when partitions have different families."""
+        stub = _make_stub_shortcuts_datamodule(
+            evaluation_strategy=EvaluationStrategy.counterfactual,
+            eval_hint_types=(HintType.helpful,),
+        )
+        base_trace_id = _MockTraceId("test/p0001/s0001/t0001")
+        trace_hinted = _MockTraceMeta(
+            "t1",
+            _MockTraceId("t1", augment_category="hints_docs", is_hinted=True),
+        )
+        trace_hinted.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        trace_hintless = _MockTraceMeta(
+            "t2",
+            _MockTraceId("t2", is_hinted=False),
+        )
+        trace_hintless.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        # extra hintless trace from a DIFFERENT family (only in hintless, not in hinted)
+        other_base = _MockTraceId("test/p0002/s0001/t0001")
+        trace_extra = _MockTraceMeta(
+            "t3",
+            _MockTraceId("t3", is_hinted=False),
+        )
+        trace_extra.trace_id.get_augmentless_identifier = lambda: other_base
+
+        # monkeypatch _partition_traces_by_hint_strategy to return mismatched partitions
+        def _fake_partition(
+            self_arg: typing.Any,
+            traces: typing.Any,
+            prompt_db: typing.Any = None,
+            eval_subset_name: typing.Any = None,
+        ) -> dict[str, list[typing.Any]]:
+            return {
+                "hintless": [trace_hintless, trace_extra],  # has extra family
+                "hinted": [trace_hinted],  # missing the extra family
+                "misleading": [],
+            }
+
+        mocker.patch.object(
+            shortcuts_mod.ShortcutBiasDataModule,
+            "_partition_traces_by_hint_strategy",
+            _fake_partition,
+        )
+        subset_traces = {"valid": [trace_hinted, trace_hintless, trace_extra]}
+        with pytest.raises(ValueError, match="counterfactual pairing broken"):
+            stub._create_hint_split_derived_subsets(subset_traces)

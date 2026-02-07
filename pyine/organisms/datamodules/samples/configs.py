@@ -116,6 +116,30 @@ class TraceFilteringConfig(pydantic.BaseModel):
     Uses pyine.utils.tokenizers.get_hf_tokenizer(). Mutually exclusive with tokenizer_model_id.
     """
 
+    @classmethod
+    def create_disabled(cls) -> TraceFilteringConfig:
+        """Returns a config with ALL filters explicitly disabled.
+
+        This is used for derived eval subsets where pre-filtering has already been applied
+        to the parent traces, so no further filtering should occur. It is also used as a
+        fallback when the parent's filtering config cannot be resolved (e.g., in test stubs).
+        """
+        return cls(
+            seed=None,
+            max_trace_families=None,
+            max_traces_per_family=None,
+            max_traces_per_solution=None,
+            max_traces_per_problem=None,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+            use_token_lengths=False,
+            tokenizer_model_id=None,
+            tokenizer_path=None,
+        )
+
     @property
     def any_filtering_enabled(self) -> bool:
         """Returns whether any filtering is enabled in this config."""
@@ -135,7 +159,13 @@ class TraceFilteringConfig(pydantic.BaseModel):
     def _validate_and_resolve(self) -> TraceFilteringConfig:
         """Validates the content of the config beyond basic validation."""
         if not self.any_filtering_enabled:
-            logger.warning("TraceFilteringConfig has no active filters; all traces will pass filtering")
+            # only warn if the config looks like it was intended to filter (has a seed or
+            # tokenizer set); a fully-disabled config (e.g. from create_disabled()) is silent
+            has_filtering_intent = (
+                self.seed is not None or self.tokenizer_model_id is not None or self.tokenizer_path is not None
+            )
+            if has_filtering_intent:
+                logger.warning("TraceFilteringConfig has no active filters; all traces will pass filtering")
         # validate token-based filtering configuration
         has_token_length_filter = (
             self.max_code_line_length is not None

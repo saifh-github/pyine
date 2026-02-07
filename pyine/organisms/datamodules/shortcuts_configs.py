@@ -23,7 +23,7 @@ import pyine.evals.common
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
 import pyine.utils.pydantic
-from pyine.organisms.datamodules.samples.configs import HintType
+from pyine.organisms.datamodules.samples.configs import HintType, TraceFilteringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -247,43 +247,51 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
         This override ensures subset_names are extended BEFORE the base class resolves
         parser/loader configs, avoiding missing config errors for derived eval subsets.
 
-        IMPORTANT: All derived subsets share the same filtering config as their parent
-        to ensure counterfactual evaluation works correctly.
+        IMPORTANT: All derived subsets have filtering unconditionally disabled. The parent's
+        filtering config is applied once before partitioning (in ``_create_hint_split_derived_subsets``),
+        so per-subset re-filtering is not needed and would break counterfactual pairing.
         """
         # first, extend subset_names with hint-split eval subsets
         extended_names = list(self.subset_names)
         dataparser_overrides = dict(self.dataparser_config_overrides)
+        # derived subsets use disabled filtering because pre-filtering is applied before
+        # partitioning in _create_hint_split_derived_subsets; this prevents re-filtering
+        # from independently removing traces and breaking counterfactual pairing
+        derived_filtering = TraceFilteringConfig.create_disabled().model_dump()
         for eval_name in self.eval_subset_names:
-            parent_override = dataparser_overrides.get(eval_name, {})
-            parent_filtering = parent_override.get("filtering_config", {})
             # create subset for each configured hint type
             for hint_type in self.eval_hint_types:
                 subset_name = f"{eval_name}_hinted" if hint_type == HintType.helpful else f"{eval_name}_misleading"
                 if subset_name not in extended_names:
                     extended_names.append(subset_name)
-                if "selection_config" not in dataparser_overrides.get(subset_name, {}):
-                    dataparser_overrides[subset_name] = {
-                        **dataparser_overrides.get(subset_name, {}),
-                        "filtering_config": parent_filtering,
+                existing = dataparser_overrides.get(subset_name, {})
+                if "selection_config" not in existing:
+                    existing = {
+                        **existing,
                         "selection_config": {
                             "require_hint_type": hint_type,  # HintType, converted to SampleCodeType in selection
                             "allow_db_lookups": True,
                             "fallback_to_orig": False,  # REQUIRED - enforced by validator
                         },
                     }
+                # unconditionally disable filtering for derived subsets; pre-filtering
+                # is applied once before partitioning, so per-subset filtering must not run
+                dataparser_overrides[subset_name] = {**existing, "filtering_config": derived_filtering}
             # create _hintless subset (always created for baseline comparison)
             hintless_name = f"{eval_name}_hintless"
             if hintless_name not in extended_names:
                 extended_names.append(hintless_name)
-            if "selection_config" not in dataparser_overrides.get(hintless_name, {}):
-                dataparser_overrides[hintless_name] = {
-                    **dataparser_overrides.get(hintless_name, {}),
-                    "filtering_config": parent_filtering,
+            existing = dataparser_overrides.get(hintless_name, {})
+            if "selection_config" not in existing:
+                existing = {
+                    **existing,
                     "selection_config": {
                         "skip_code_type_selection": True,
                         "fallback_to_orig": False,
                     },
                 }
+            # unconditionally disable filtering (same reason as above)
+            dataparser_overrides[hintless_name] = {**existing, "filtering_config": derived_filtering}
         object.__setattr__(self, "subset_names", tuple(extended_names))
         object.__setattr__(self, "dataparser_config_overrides", dataparser_overrides)
         # now call parent validation (which resolves parser/loader configs)
