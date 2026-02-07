@@ -13,6 +13,7 @@ import collections
 import logging
 import typing
 
+import datasets as hf_datasets
 import transformers
 import trl
 
@@ -220,12 +221,17 @@ def rl_train(
     eval_ds = None
     if config.grpo_config.do_eval:
         logger.info("preparing validation dataset...")
-        eval_ds = datamodule.get_hf_messages_dataset(
-            subset_name="valid",
-            append_answer=False,  # no answers for RL
-            merge_system_with_user=True,  # to adjust depending on whether we want system messages too
-            keep_original_data=True,  # needed to compute rewards
-        )
+        valid_subset_names = list(config.datamodule_config.valid_subset_names)
+        valid_datasets = [
+            datamodule.get_hf_messages_dataset(
+                subset_name=subset_name,
+                append_answer=False,  # no answers for RL
+                merge_system_with_user=True,  # to adjust depending on whether we want system messages too
+                keep_original_data=True,  # needed to compute rewards
+            )
+            for subset_name in valid_subset_names
+        ]
+        eval_ds = valid_datasets[0] if len(valid_datasets) == 1 else hf_datasets.concatenate_datasets(valid_datasets)
 
     # 3. Create reward function
     logger.info("creating reward function with RewardManager...")
