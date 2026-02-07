@@ -14,8 +14,11 @@ import pyine.data.utils.splits
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.samples.configs
+import pyine.organisms.datamodules.samples.filtering
 import pyine.organisms.datamodules.shortcuts as shortcuts_mod
 import pyine.organisms.datamodules.shortcuts_configs
+import pyine.prompts
+import pyine.prompts.names
 import pyine.utils.reprod
 import pyine.utils.transformers
 import tests.env_checks
@@ -706,6 +709,72 @@ def _assert_non_leaking_assignments(
             traces_to_subsets[trace.identifier] = subset_name
 
 
+def _get_prefiltered_traces(
+    config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
+    subset_traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+    subset_name: str,
+) -> list[pyine.data.traces.dataset_utils.TraceMetadata]:
+    parent_filtering_dict = (
+        config._resolve_dataparser_config(subset_name).get_params_dict().get("filtering_config", {})  # type: ignore[reportPrivateUsage]
+    )
+    if parent_filtering_dict is None:
+        parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig()
+    elif isinstance(parent_filtering_dict, dict):
+        parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(**parent_filtering_dict)
+    else:
+        parent_filtering = parent_filtering_dict
+    if not parent_filtering.any_filtering_enabled:
+        return subset_traces
+    filtering_results = pyine.organisms.datamodules.samples.filtering.filter_traces(
+        traces=subset_traces,
+        epoch=0,
+        filtering_config=parent_filtering,
+    )
+    kept_ids = {trace.identifier for trace in filtering_results.kept_traces}
+    return [trace for trace in subset_traces if trace.identifier in kept_ids]
+
+
+def _select_hintless_original_groups(
+    traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+    max_groups: int,
+) -> list[tuple[str, pyine.data.traces.dataset_utils.TraceMetadata]]:
+    groups: dict[
+        tuple[str, str | tuple[str, ...]],
+        dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]],
+    ] = {}
+    for trace in traces:
+        code_types = pyine.organisms.datamodules.samples.common.get_code_type_set_from_str(
+            trace.trace_id.augment_category
+        )
+        type_set = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(code_types)
+        if not type_set.can_receive_any_hints():
+            continue
+        base_key = type_set.get_counterfactual_grouping_key()
+        family_id = str(trace.trace_id.get_augmentless_identifier())
+        group_key = (family_id, base_key)
+        if group_key not in groups:
+            groups[group_key] = {"hintless": [], "hinted": [], "misleading": []}
+        if trace.trace_id.is_hinted:
+            groups[group_key]["hinted"].append(trace)
+        elif trace.trace_id.is_misleading:
+            groups[group_key]["misleading"].append(trace)
+        else:
+            groups[group_key]["hintless"].append(trace)
+    candidates: list[tuple[str, pyine.data.traces.dataset_utils.TraceMetadata]] = []
+    for group_key in sorted(groups.keys()):
+        family_id, base_key = group_key
+        group = groups[group_key]
+        if base_key != "original":
+            continue
+        if not group["hintless"] or group["hinted"] or group["misleading"]:
+            continue
+        group["hintless"].sort(key=lambda trace: str(trace.trace_id))
+        candidates.append((family_id, group["hintless"][0]))
+        if len(candidates) >= max_groups:
+            break
+    return candidates
+
+
 @pytest.fixture
 def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig:
     return pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
@@ -845,6 +914,184 @@ def test_shortcuts_datamodule_predefined_split(
         valid_sample = valid_parser[0]
     if train_sample is not None or valid_sample is not None:
         assert train_sample != valid_sample
+    dm.teardown()
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.skipif(
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
+    reason="TACO traces dataset is missing, cannot diagnose counterfactual subsets",
+)
+@pytest.mark.skipif(
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    reason="TACO traces dataset split is missing, cannot diagnose counterfactual subsets",
+)
+def test_shortcuts_counterfactual_subsets_seeded_prompt_db(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pyine.utils.reprod.load_dotenv()
+    prompt_db = pyine.prompts.PromptResultDB(tmp_path / "prompt_results.sqlite")
+    monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: prompt_db)
+    config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+        lmdb_paths=[
+            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
+        ],
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
+        evaluation_strategy=EvaluationStrategy.counterfactual,
+        eval_hint_types=(HintType.helpful, HintType.misleading),
+        dataparser_config_overrides={
+            "valid": {
+                "filtering_config": {
+                    "max_traces_per_solution": 1,
+                    "max_code_line_count": 250,
+                    "max_code_line_length": 250,
+                    "max_code_length": 2500,
+                    "max_args_length": 500,
+                },
+                "selection_config": {
+                    "code_type_prob_map": {
+                        "original": 1.0,
+                    },
+                    "samples_per_family": 1,
+                    "draw_attempts": 5,
+                    "fallback_to_orig": True,
+                },
+            },
+        },
+        min_samples_hinted=0,
+        min_samples_misleading=0,
+        min_samples_hintless=0,
+    )
+    dm = config.instantiate_datamodule(verbose=True)
+    if dm._is_metadata_prepared():
+        dm._clear_prepared_metadata()
+    dm.prepare_data()
+    metadata = dm._load_prepared_metadata()
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
+    valid_traces = _get_prefiltered_traces(config, metadata.subset_traces["valid"], "valid")
+    seed_targets = _select_hintless_original_groups(valid_traces, max_groups=8)
+    if len(seed_targets) < 2:
+        pytest.skip("not enough hintless original groups available for deterministic prompt-db seeding")
+    for _family_id, trace in seed_targets:
+        trace_id_str = str(trace.trace_id)
+        prompt_db.store(
+            identifier=trace_id_str,
+            prompt="helpful hint",
+            result="helpful result",
+            prompt_name=pyine.prompts.names.PromptNames.HINTS_DOCS,
+            tags=["augment:hinted"],
+        )
+        prompt_db.store(
+            identifier=trace_id_str,
+            prompt="misleading hint",
+            result="misleading result",
+            prompt_name=pyine.prompts.names.PromptNames.ISSUES_DOCS,
+            tags=["augment:misleading"],
+        )
+    dm._clear_prepared_metadata()
+    dm.prepare_data()
+    metadata = dm._load_prepared_metadata()
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
+    hinted_families = {
+        str(trace.trace_id.get_augmentless_identifier()) for trace in metadata.get_subset_traces("valid_hinted")
+    }
+    misleading_families = {
+        str(trace.trace_id.get_augmentless_identifier()) for trace in metadata.get_subset_traces("valid_misleading")
+    }
+    hintless_families = {
+        str(trace.trace_id.get_augmentless_identifier()) for trace in metadata.get_subset_traces("valid_hintless")
+    }
+    seeded_family_ids = {family_id for family_id, _trace in seed_targets}
+    assert seeded_family_ids.issubset(hinted_families)
+    assert seeded_family_ids.issubset(misleading_families)
+    assert seeded_family_ids.issubset(hintless_families)
+    dm.teardown()
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.dataset
+@pytest.mark.skipif(
+    tests.env_checks.TACO_TRACES_DATASET_MISSING,
+    reason="TACO traces dataset is missing, cannot diagnose counterfactual subsets",
+)
+@pytest.mark.skipif(
+    tests.env_checks.TACO_TRACES_DATASET_SPLIT_MISSING,
+    reason="TACO traces dataset split is missing, cannot diagnose counterfactual subsets",
+)
+def test_shortcuts_counterfactual_subsets_missing_misleading_prompt_db(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pyine.utils.reprod.load_dotenv()
+    prompt_db = pyine.prompts.PromptResultDB(tmp_path / "prompt_results.sqlite")
+    monkeypatch.setattr(pyine.prompts, "get_framework_db", lambda: prompt_db)
+    config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+        lmdb_paths=[
+            pyine.data.traces.dataset_utils.get_latest_dataset_path("TACO"),
+        ],
+        split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
+        evaluation_strategy=EvaluationStrategy.counterfactual,
+        eval_hint_types=(HintType.helpful, HintType.misleading),
+        dataparser_config_overrides={
+            "valid": {
+                "filtering_config": {
+                    "max_traces_per_solution": 1,
+                    "max_code_line_count": 250,
+                    "max_code_line_length": 250,
+                    "max_code_length": 2500,
+                    "max_args_length": 500,
+                },
+                "selection_config": {
+                    "code_type_prob_map": {
+                        "original": 1.0,
+                    },
+                    "samples_per_family": 1,
+                    "draw_attempts": 5,
+                    "fallback_to_orig": True,
+                },
+            },
+        },
+        min_samples_hinted=0,
+        min_samples_misleading=0,
+        min_samples_hintless=0,
+    )
+    dm = config.instantiate_datamodule(verbose=True)
+    if dm._is_metadata_prepared():
+        dm._clear_prepared_metadata()
+    dm.prepare_data()
+    metadata = dm._load_prepared_metadata()
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
+    valid_traces = _get_prefiltered_traces(config, metadata.subset_traces["valid"], "valid")
+    seed_targets = _select_hintless_original_groups(valid_traces, max_groups=8)
+    if len(seed_targets) < 2:
+        pytest.skip("not enough hintless original groups available for deterministic prompt-db seeding")
+    for _family_id, trace in seed_targets:
+        trace_id_str = str(trace.trace_id)
+        prompt_db.store(
+            identifier=trace_id_str,
+            prompt="helpful hint",
+            result="helpful result",
+            prompt_name=pyine.prompts.names.PromptNames.HINTS_DOCS,
+            tags=["augment:hinted"],
+        )
+    dm._clear_prepared_metadata()
+    dm.prepare_data()
+    metadata = dm._load_prepared_metadata()
+    assert isinstance(metadata, pyine.data.traces.dataset_utils.TraceDatasetMetadata)
+    derived_families = {
+        str(trace.trace_id.get_augmentless_identifier())
+        for trace in (
+            metadata.get_subset_traces("valid_hintless")
+            + metadata.get_subset_traces("valid_hinted")
+            + metadata.get_subset_traces("valid_misleading")
+        )
+    }
+    seeded_family_ids = {family_id for family_id, _trace in seed_targets}
+    assert seeded_family_ids.isdisjoint(derived_families)
     dm.teardown()
 
 
