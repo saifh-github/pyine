@@ -196,9 +196,13 @@ def collect_sample_metadata_rows(
     for sample_idx in sample_idx_iter:
         sample = builder[sample_idx]
         tag_list = [tag for tag in sample.comma_separated_tags.split(",") if tag]
+        base_id = sample.identifier.split("::")[0]
+        family_id = base_id.split("/a:")[0] if "/a:" in base_id else base_id
         row: dict[str, typing.Any] = {
             "subset": subset_name,
             "identifier": sample.identifier,
+            "base_id": base_id,
+            "family_id": family_id,
             "code_line_count": len(sample.code.splitlines()),
             "code_target_line_span": sample.last_line - sample.first_line,
             "description_word_count": len(sample.description.split()),
