@@ -11,6 +11,7 @@ from pyine.organisms.datamodules.samples.common import (
     SampleTransformStrategy,
 )
 from pyine.organisms.datamodules.samples.configs import (
+    HintType,
     SampleBuilderConfig,
     SampleSelectionConfig,
     SampleTransformConfig,
@@ -133,6 +134,39 @@ class TestSampleSelectionConfig:
         vals1 = [rng1.random() for _ in range(10)]
         vals2 = [rng2.random() for _ in range(10)]
         assert vals1 == vals2
+
+    def test_require_hint_type_rejects_samples_per_family_gt_1(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="samples_per_family"):
+            SampleSelectionConfig(
+                require_hint_type=HintType.helpful,
+                fallback_to_orig=False,
+                samples_per_family=2,
+            )
+
+    def test_skip_code_type_selection_rejects_samples_per_family_gt_1(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="samples_per_family"):
+            SampleSelectionConfig(
+                skip_code_type_selection=True,
+                samples_per_family=3,
+            )
+
+    def test_require_hint_type_accepts_samples_per_family_1(self) -> None:
+        cfg = SampleSelectionConfig(
+            require_hint_type=HintType.helpful,
+            fallback_to_orig=False,
+            samples_per_family=1,
+        )
+        assert cfg.samples_per_family == 1
+
+    def test_hint_type_available_without_shortcuts_configs(self) -> None:
+        """HintType is directly importable from configs without shortcuts_configs side-effects."""
+        assert HintType.helpful is not None
+        assert HintType.misleading is not None
+        cfg = SampleSelectionConfig(
+            require_hint_type=HintType.helpful,
+            fallback_to_orig=False,
+        )
+        assert cfg.require_hint_type == HintType.helpful
 
 
 class TestSampleTransformConfig:
@@ -296,11 +330,11 @@ class TestSampleBuilderIterTagInjection:
         results = list(
             SampleBuilderConfig._sample_builder_iter(
                 sample_builder_config=config,
-                subset_name="valid_with_hints",
+                subset_name="valid_hinted",
             )
         )
         assert len(results) == 1
-        assert "parser:valid_with_hints" in results[0]["comma_separated_tags"]
+        assert "parser:valid_hinted" in results[0]["comma_separated_tags"]
         assert "existing:tag" in results[0]["comma_separated_tags"]
 
     def test_no_tag_when_subset_name_none(

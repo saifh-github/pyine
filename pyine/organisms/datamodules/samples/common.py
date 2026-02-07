@@ -55,6 +55,8 @@ __all__ = [
     "has_record_for_code_type",
     "get_records_matching_code_type_batch",
     "check_code_type_availability_batch",
+    "hint_type_to_sample_code_type",
+    "strip_id_suffix",
 ]
 
 
@@ -178,6 +180,132 @@ class SampleCodeTypeSet:
         """Returns True if the set contains the bugged sample code type."""
         return self.has(SampleCodeType.bugged)
 
+    def get_hintable_base_augments(self) -> frozenset[SampleCodeType]:
+        """Return base augments that can be combined with hints for prompt-DB lookup.
+
+        Extracts non-hint augments like {obfuscated}, {bugged} that can form valid combinations
+        with hint types (e.g., {obfuscated, hinted}).
+
+        Returns empty frozenset when:
+        - trace contains `stubbed`, as {stubbed, X, hinted} is always invalid;
+        - trace is `{original}` (use `is_original` property to identify this special case);
+        - trace is hint-only (`{hinted}`, `{misleading}`): no base augments to preserve.
+
+        Examples:
+            SampleCodeTypeSet({obfuscated, hinted}).get_hintable_base_augments()
+            -> frozenset({obfuscated})  # hinted is STRIPPED, returns base only
+
+            SampleCodeTypeSet({obfuscated, bugged}).get_hintable_base_augments()
+            -> frozenset({obfuscated, bugged})  # no hints to strip
+
+            SampleCodeTypeSet({original}).get_hintable_base_augments()
+            -> frozenset()  # SPECIAL CASE: confirm via is_original property
+
+            SampleCodeTypeSet({stubbed}).get_hintable_base_augments()
+            -> frozenset()  # stubbed cannot combine with hints
+
+            SampleCodeTypeSet({stubbed, obfuscated}).get_hintable_base_augments()
+            -> frozenset()  # contains stubbed, entire trace is hint-incompatible
+
+            SampleCodeTypeSet({hinted}).get_hintable_base_augments()
+            -> frozenset()  # hint-only trace, no base augments
+        """
+        if SampleCodeType.stubbed in self.types:
+            return frozenset()
+        hint_types = {SampleCodeType.hinted, SampleCodeType.misleading}
+        cannot_combine_with_hints = {SampleCodeType.original, SampleCodeType.stubbed}
+        excluded = hint_types | cannot_combine_with_hints
+        return frozenset(t for t in self.types if t not in excluded)
+
+    def can_receive_hint_type(self, target_hint_type: SampleCodeType) -> bool:
+        """Check if this code type set can receive a specific new hint type.
+
+        Returns True only for traces that have NO existing hints AND are hint-compatible. Cross-hint
+        augmentation is NOT allowed because:
+        - `{hinted, misleading}` is an invalid code type combination;
+        - for hint-only traces, the result would be potentially overlapping hints (unreliable).
+
+        Args:
+            target_hint_type: The hint type to potentially add (i.e. 'hinted' or 'misleading').
+
+        Returns True if:
+        - the trace has NO preexisting hints (neither hinted nor misleading);
+        - the trace does NOT contain stubbed (it's hard to tell if hints would still work/apply);
+        - the trace is {original} OR has valid base augments.
+
+        Returns False if:
+        - the trace already has ANY hint type (hinted or misleading);
+        - the trace contains stubbed (stubbed + hints is invalid).
+
+        Examples:
+            SampleCodeTypeSet({original}).can_receive_hint_type(hinted) -> True
+            SampleCodeTypeSet({obfuscated}).can_receive_hint_type(hinted) -> True
+            SampleCodeTypeSet({obfuscated, hinted}).can_receive_hint_type(hinted) -> False
+            SampleCodeTypeSet({obfuscated, hinted}).can_receive_hint_type(misleading) -> False
+            SampleCodeTypeSet({hinted}).can_receive_hint_type(misleading) -> False
+            SampleCodeTypeSet({stubbed}).can_receive_hint_type(hinted) -> False
+            SampleCodeTypeSet({stubbed, obfuscated}).can_receive_hint_type(hinted) -> False
+        """
+        if SampleCodeType.hinted in self.types or SampleCodeType.misleading in self.types:
+            return False
+        if SampleCodeType.stubbed in self.types:
+            return False
+        if self.is_original:
+            return True
+        return bool(self.get_hintable_base_augments())
+
+    def can_receive_any_hints(self) -> bool:
+        """Check if this code type set can receive ANY hints via prompt-DB.
+
+        Delegates to can_receive_hint_type() since all hint types have identical
+        eligibility rules.
+
+        Examples:
+            SampleCodeTypeSet({original}).can_receive_any_hints() -> True
+            SampleCodeTypeSet({obfuscated}).can_receive_any_hints() -> True
+            SampleCodeTypeSet({hinted}).can_receive_any_hints() -> False
+            SampleCodeTypeSet({obfuscated, hinted}).can_receive_any_hints() -> False
+            SampleCodeTypeSet({stubbed}).can_receive_any_hints() -> False
+        """
+        return self.can_receive_hint_type(SampleCodeType.hinted)
+
+    def get_counterfactual_grouping_key(self) -> tuple[str, ...] | str:
+        """Get grouping key for counterfactual evaluations.
+
+        Used to group traces for counterfactual comparisons, ensuring each group compares traces
+        with the same base augments.
+
+        Returns a hashable key that identifies the base augment identity:
+        - "original" for {original} traces AND hint-only traces ({hinted}, {misleading});
+        - "stubbed" for traces containing stubbed (hint-incompatible);
+        - tuple of sorted augment names for other traces.
+
+        IMPORTANT: hint-only traces like {hinted} are treated as "original" because they are
+        semantically "original code + hints". This ensures {original} and {hinted} are grouped
+        together for counterfactual pairing.
+
+        Examples:
+            SampleCodeTypeSet({original}).get_counterfactual_grouping_key() -> "original"
+            SampleCodeTypeSet({hinted}).get_counterfactual_grouping_key() -> "original"
+            SampleCodeTypeSet({misleading}).get_counterfactual_grouping_key() -> "original"
+            SampleCodeTypeSet({obfuscated}).get_counterfactual_grouping_key() -> ("obfuscated",)
+            SampleCodeTypeSet({obfuscated, bugged}).get_counterfactual_grouping_key() -> ("bugged", "obfuscated")
+            SampleCodeTypeSet({obfuscated, hinted}).get_counterfactual_grouping_key() -> ("obfuscated",)
+            SampleCodeTypeSet({stubbed}).get_counterfactual_grouping_key() -> "stubbed"
+            SampleCodeTypeSet({stubbed, obfuscated}).get_counterfactual_grouping_key() -> "stubbed"
+        """
+        # stubbed traces are hint-incompatible, group separately
+        if SampleCodeType.stubbed in self.types:
+            return "stubbed"
+        if self.is_original:
+            return "original"
+        base_augs = self.get_hintable_base_augments()
+        if not base_augs:
+            # hint-only traces ({hinted}, {misleading}) have no base augments
+            # but are semantically "original + hints", so group with original
+            return "original"
+        return tuple(sorted(t.value for t in base_augs))
+
     @staticmethod
     def create_from_tags(tags: typing.Iterable[str]) -> SampleCodeTypeSet:
         """Creates a sample code type set from the given tags."""
@@ -240,6 +368,53 @@ def check_trace_code_is_test_case_specific(
 ) -> bool:
     """Returns whether the given trace is tied to a particular test case (due to e.g. hints)."""
     return SampleCodeTypeSet.create_from_trace(trace).has_any(_CODE_TYPES_THAT_TARGET_SPECIFIC_TESTS)
+
+
+def hint_type_to_sample_code_type(
+    hint_type: typing.Any,  # pyine.organisms.datamodules.samples.configs.HintType (late import)
+) -> SampleCodeType:
+    """Map HintType enum to corresponding SampleCodeType for internal use.
+
+    This handles the naming mismatch between the two enums:
+    - HintType.helpful -> SampleCodeType.hinted
+    - HintType.misleading -> SampleCodeType.misleading
+
+    Args:
+        hint_type: The HintType value to convert (from samples.configs module).
+
+    Returns:
+        The corresponding SampleCodeType value.
+
+    Raises:
+        ValueError: If hint_type is not a valid HintType.
+    """
+    # import here to avoid circular imports (configs.py imports common.py)
+    import pyine.organisms.datamodules.samples.configs
+
+    if hint_type == pyine.organisms.datamodules.samples.configs.HintType.helpful:
+        return SampleCodeType.hinted
+    if hint_type == pyine.organisms.datamodules.samples.configs.HintType.misleading:
+        return SampleCodeType.misleading
+    raise ValueError(f"Unknown hint type: {hint_type}")
+
+
+def strip_id_suffix(identifier: str) -> str:
+    """Remove the hint partition suffix from an identifier string.
+
+    IMPORTANT: This should ONLY be applied to `SampleData.identifier` (string), NEVER to
+    `TraceIdentifier` objects. The suffix is added by `SampleHintIdentifierWrapper` for cache
+    uniqueness; this helper removes it before LMDB/prompt-DB lookups.
+
+    Args:
+        identifier: string identifier, possibly with "::hinted", "::misleading", or "::hintless" suffix.
+
+    Returns:
+        Identifier with suffix stripped (or unchanged if no suffix present).
+    """
+    for suffix in ("::hinted", "::misleading", "::hintless"):
+        if identifier.endswith(suffix):
+            return identifier[: -len(suffix)]
+    return identifier
 
 
 def get_all_supported_code_type_sets() -> list[SampleCodeTypeSet]:
@@ -411,7 +586,7 @@ class SampleData(typing.NamedTuple):
 
     def get_trace_id(self) -> pyine.data.traces.dataset_utils.TraceIdentifier:
         """Returns the trace identifier object for this trace."""
-        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(self.identifier)
+        return pyine.data.traces.dataset_utils.TraceIdentifier.from_string(strip_id_suffix(self.identifier))
 
     def get_tag_list(self) -> list[str]:
         """Returns the list of tags for this trace in its original format (one tag = one item)."""

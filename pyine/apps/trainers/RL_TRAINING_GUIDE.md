@@ -136,8 +136,9 @@ config:
     use_tokenized_dataset_cache: true
     cache_lock_timeout_seconds: 1800.0
     message_generator_num_workers: 4
-    min_samples_with_hints: 0
-    min_samples_without_hints: 0
+    min_samples_hinted: 0
+    min_samples_misleading: 0
+    min_samples_hintless: 0
 
   # GRPO training arguments
   grpo_config:
@@ -879,3 +880,5 @@ config:
 - TRL Documentation: https://huggingface.co/docs/trl
 - GRPO Paper: https://arxiv.org/abs/2402.03300
 - Experimentation Guide: `EXPERIMENTATION_GUIDE.md` (main repo)
+- Prompt naming conventions for hints/bugs: [`pyine/organisms/README.md`](../../organisms/README.md)
+  (see ShortcutBiasDataModule section)

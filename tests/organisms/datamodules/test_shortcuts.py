@@ -1,12 +1,13 @@
 import pathlib
 import types
 import typing
-from unittest import mock
 
 import datasets as hf_datasets
+import numpy as np
 import pytest
 import torch
 import transformers
+from pytest_mock import MockerFixture
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
@@ -21,7 +22,10 @@ from pyine.organisms.datamodules.shortcuts_configs import EvaluationStrategy, Hi
 
 
 class _MockTraceId:
-    """Mock TraceIdentifier for unit testing."""
+    """Mock TraceIdentifier for unit testing.
+
+    Provides all properties needed for `SampleCodeTypeSet.create_from_trace()` validation.
+    """
 
     def __init__(
         self,
@@ -29,11 +33,15 @@ class _MockTraceId:
         augment_category: str | None = None,
         is_hinted: bool = False,
         is_misleading: bool = False,
+        is_obfuscated: bool = False,
+        is_bugged: bool = False,
     ) -> None:
         self._identifier = identifier
         self._augment_category = augment_category
         self._is_hinted = is_hinted
         self._is_misleading = is_misleading
+        self._is_obfuscated = is_obfuscated
+        self._is_bugged = is_bugged
 
     @property
     def is_augmented(self) -> bool:
@@ -46,6 +54,14 @@ class _MockTraceId:
     @property
     def is_misleading(self) -> bool:
         return self._is_misleading
+
+    @property
+    def is_obfuscated(self) -> bool:
+        return self._is_obfuscated
+
+    @property
+    def is_bugged(self) -> bool:
+        return self._is_bugged
 
     @property
     def augment_category(self) -> str | None:
@@ -83,17 +99,19 @@ class _MockTraceMeta:
 
 def _make_stub_shortcuts_datamodule(
     evaluation_strategy: EvaluationStrategy = EvaluationStrategy.hint_presence_split,
-    hint_type: HintType = HintType.helpful,
+    eval_hint_types: tuple[HintType, ...] = (HintType.helpful,),
     eval_subset_names: tuple[str, ...] = ("valid",),
 ) -> shortcuts_mod.ShortcutBiasDataModule:
     """Create a stub shortcuts datamodule for unit testing."""
     stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
     stub.config = types.SimpleNamespace(
         evaluation_strategy=evaluation_strategy,
-        hint_type=hint_type,
+        eval_hint_types=eval_hint_types,
         eval_subset_names=eval_subset_names,
-        min_samples_with_hints=0,
-        min_samples_without_hints=0,
+        min_samples_hinted=0,
+        min_samples_misleading=0,
+        min_samples_hintless=0,
+        split_seed=0,  # needed for counterfactual RNG initialization
     )
     stub.verbose = False
     return stub
@@ -163,39 +181,39 @@ class TestGetBaseAugments:
 class TestCheckPromptDatabaseForHint:
     """Tests for _check_prompt_db_for_hint helper method."""
 
-    def test_returns_true_when_helpful_hint_in_db(self) -> None:
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+    def test_returns_true_when_helpful_hint_in_db(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.helpful,))
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
-        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db = mocker.MagicMock()
         # return a record with hinted code type tag
-        mock_record = mock.MagicMock()
+        mock_record = mocker.MagicMock()
         mock_record.tags = ["augment:hinted"]
         mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
 
-    def test_returns_false_when_no_hint_in_db(self) -> None:
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+    def test_returns_false_when_no_hint_in_db(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.helpful,))
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
-        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db = mocker.MagicMock()
         mock_prompt_db.get_by_identifier.return_value = []
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
 
-    def test_returns_false_when_record_has_wrong_tags(self) -> None:
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+    def test_returns_false_when_record_has_wrong_tags(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.helpful,))
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
-        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db = mocker.MagicMock()
         # return a record but with wrong/no code type tag
-        mock_record = mock.MagicMock()
+        mock_record = mocker.MagicMock()
         mock_record.tags = ["some_other_tag"]
         mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
 
-    def test_checks_misleading_prompts_for_misleading_hint_type(self) -> None:
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.misleading)
+    def test_checks_misleading_prompts_for_misleading_hint_type(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.misleading,))
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
-        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db = mocker.MagicMock()
         # return a record with misleading code type tag
-        mock_record = mock.MagicMock()
+        mock_record = mocker.MagicMock()
         mock_record.tags = ["augment:misleading"]
         mock_prompt_db.get_by_identifier.return_value = [mock_record]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
@@ -204,19 +222,19 @@ class TestCheckPromptDatabaseForHint:
         all_prompt_names = [call[1].get("prompt_name") for call in mock_prompt_db.get_by_identifier.call_args_list]
         assert any("issues" in str(pn).lower() for pn in all_prompt_names if pn)
 
-    def test_augmented_trace_looks_for_augmented_hinted_code(self) -> None:
+    def test_augmented_trace_looks_for_augmented_hinted_code(self, mocker: MockerFixture) -> None:
         """Test that an obfuscated trace looks for obfuscated_hinted, not just hinted."""
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.helpful,))
         # trace with obfuscated augment
         trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001", augment_category="obfuscated")
-        mock_prompt_db = mock.MagicMock()
+        mock_prompt_db = mocker.MagicMock()
         # record with just "hinted" should NOT match (we need obfuscated_hinted)
-        mock_record_hinted_only = mock.MagicMock()
+        mock_record_hinted_only = mocker.MagicMock()
         mock_record_hinted_only.tags = ["augment:hinted"]
         mock_prompt_db.get_by_identifier.return_value = [mock_record_hinted_only]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is False
         # record with "obfuscated_hinted" SHOULD match
-        mock_record_obfuscated_hinted = mock.MagicMock()
+        mock_record_obfuscated_hinted = mocker.MagicMock()
         mock_record_obfuscated_hinted.tags = ["augment:obfuscated_hinted"]
         mock_prompt_db.get_by_identifier.return_value = [mock_record_obfuscated_hinted]
         assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db) is True
@@ -258,65 +276,6 @@ class TestShouldUsePromptDatabaseForHints:
         assert dm._should_use_prompt_db_for_hints() is True
 
 
-class TestBuildTraceFamilyPairingMap:
-    """Tests for _build_trace_family_pairing_map method."""
-
-    def test_groups_traces_by_family_and_augments(self) -> None:
-        dm = _make_stub_shortcuts_datamodule(hint_type=HintType.helpful)
-        # two traces from same family (same augmentless identifier), different hint status
-        base_trace_id = _MockTraceId("test/p0001/s0001/t0001")
-        trace_no_hint = _MockTraceMeta(
-            identifier="test/p0001/s0001/t0001",
-            trace_id=_MockTraceId("test/p0001/s0001/t0001", is_hinted=False),
-        )
-        trace_with_hint = _MockTraceMeta(
-            identifier="test/p0001/s0001/t0001/a:hints_docs:000",
-            trace_id=_MockTraceId(
-                "test/p0001/s0001/t0001/a:hints_docs:000",
-                augment_category="hints_docs",
-                is_hinted=True,
-            ),
-        )
-        trace_with_hint.trace_id.get_augmentless_identifier = lambda: base_trace_id
-        trace_no_hint.trace_id.get_augmentless_identifier = lambda: base_trace_id
-        family_map = dm._build_trace_family_pairing_map([trace_no_hint, trace_with_hint])
-        family_key = str(base_trace_id)
-        assert family_key in family_map
-        # both traces have empty base_augments (hints are filtered out)
-        empty_augments = frozenset()
-        assert empty_augments in family_map[family_key]
-        pair_info = family_map[family_key][empty_augments]
-        assert "with_hint" in pair_info
-        assert "without_hint" in pair_info
-
-    def test_separate_family_for_different_base_augments(self) -> None:
-        dm = _make_stub_shortcuts_datamodule()
-        base_trace_id = _MockTraceId("test/p0001/s0001/t0001")
-        # trace with obfuscated augment (non-hint)
-        trace_obfuscated = _MockTraceMeta(
-            identifier="test/p0001/s0001/t0001/a:obfuscated:000",
-            trace_id=_MockTraceId(
-                "test/p0001/s0001/t0001/a:obfuscated:000",
-                augment_category="obfuscated",
-                is_hinted=False,
-            ),
-        )
-        trace_obfuscated.trace_id.get_augmentless_identifier = lambda: base_trace_id
-        # trace without augment
-        trace_plain = _MockTraceMeta(
-            identifier="test/p0001/s0001/t0001",
-            trace_id=_MockTraceId("test/p0001/s0001/t0001", is_hinted=False),
-        )
-        trace_plain.trace_id.get_augmentless_identifier = lambda: base_trace_id
-        family_map = dm._build_trace_family_pairing_map([trace_obfuscated, trace_plain])
-        family_key = str(base_trace_id)
-        assert family_key in family_map
-        # should have two different base_augment keys
-        assert len(family_map[family_key]) == 2
-        assert frozenset() in family_map[family_key]  # plain trace
-        assert frozenset({"obfuscated"}) in family_map[family_key]  # obfuscated trace
-
-
 class TestPartitionTracesByHintStrategy:
     """Tests for _partition_traces_by_hint_strategy method."""
 
@@ -331,12 +290,11 @@ class TestPartitionTracesByHintStrategy:
             _MockTraceMeta("t4", _MockTraceId("t4", augment_category="obfuscated", is_hinted=False)),
         ]
         all_traces = traces_with + traces_without
-        family_map = {}  # not used for hint_presence_split
-        with_hints, without_hints = dm._partition_traces_by_hint_strategy(all_traces, family_map)
-        assert len(with_hints) == 2
-        assert len(without_hints) == 2
-        assert {t.identifier for t in with_hints} == {"t1", "t2"}
-        assert {t.identifier for t in without_hints} == {"t3", "t4"}
+        result = dm._partition_traces_by_hint_strategy(all_traces)
+        assert len(result["hinted"]) == 2
+        assert len(result["hintless"]) == 2
+        assert {t.identifier for t in result["hinted"]} == {"t1", "t2"}
+        assert {t.identifier for t in result["hintless"]} == {"t3", "t4"}
 
     def test_counterfactual_only_includes_paired_traces(self) -> None:
         dm = _make_stub_shortcuts_datamodule(evaluation_strategy=EvaluationStrategy.counterfactual)
@@ -360,29 +318,19 @@ class TestPartitionTracesByHintStrategy:
         )
         trace_unpaired.trace_id.get_augmentless_identifier = lambda: other_base
         all_traces = [trace_with_hint, trace_without_hint, trace_unpaired]
-        # build family map with paired traces
-        family_map = {
-            str(base_trace_id): {
-                frozenset(): {
-                    "with_hint": trace_with_hint,
-                    "without_hint": trace_without_hint,
-                }
-            },
-            str(other_base): {
-                frozenset(): {
-                    "without_hint": trace_unpaired,
-                }  # incomplete pair
-            },
-        }
-        with_hints, without_hints = dm._partition_traces_by_hint_strategy(all_traces, family_map)
+        result = dm._partition_traces_by_hint_strategy(all_traces)
         # only paired traces should be included
-        assert len(with_hints) == 1
-        assert len(without_hints) == 1
-        assert with_hints[0].identifier == "t1"
-        assert without_hints[0].identifier == "t2"
+        assert len(result["hinted"]) == 1
+        assert len(result["hintless"]) == 1
+        assert result["hinted"][0].identifier == "t1"
+        assert result["hintless"][0].identifier == "t2"
 
     def test_counterfactual_equal_counts_with_multiple_same_family_traces(self) -> None:
-        """Test counterfactual mode produces equal counts when multiple traces share family_id."""
+        """Test counterfactual mode produces equal counts when multiple traces share family_id.
+
+        The new group-first counterfactual implementation builds groups from traces directly
+        (ignoring family_map) and picks traces deterministically by sorting.
+        """
         dm = _make_stub_shortcuts_datamodule(evaluation_strategy=EvaluationStrategy.counterfactual)
         base_trace_id = _MockTraceId("test/p0001/s0001/t0001")
         # one hinted trace
@@ -403,20 +351,12 @@ class TestPartitionTracesByHintStrategy:
         )
         trace_hintless2.trace_id.get_augmentless_identifier = lambda: base_trace_id
         all_traces = [trace_hinted, trace_hintless1, trace_hintless2]
-        # family map: only stores ONE hintless trace (t3 overwrites t2)
-        family_map = {
-            str(base_trace_id): {
-                frozenset(): {
-                    "with_hint": trace_hinted,
-                    "without_hint": trace_hintless2,  # only one stored
-                }
-            },
-        }
-        with_hints, without_hints = dm._partition_traces_by_hint_strategy(all_traces, family_map)
+        result = dm._partition_traces_by_hint_strategy(all_traces)
         # counterfactual should produce exactly equal counts (1:1 pairing)
-        assert len(with_hints) == len(without_hints) == 1
-        assert with_hints[0].identifier == "t1"
-        assert without_hints[0].identifier == "t3"  # the registered pair member, not all hintless traces
+        assert len(result["hinted"]) == len(result["hintless"]) == 1
+        assert result["hinted"][0].identifier == "t1"
+        # seeded rng selects from sorted hintless traces (t2, t3)
+        assert result["hintless"][0].identifier in {"t2", "t3"}
 
 
 @pytest.fixture
@@ -456,8 +396,8 @@ class TestShortcutBiasDataModuleConfigValidateAndResolve:
     ) -> None:
         lmdb_path, split_path = fake_lmdb_and_split
         config = self._make_minimal_config(lmdb_path, split_path, eval_subset_names=("valid",))
-        assert "valid_with_hints" in config.subset_names
-        assert "valid_without_hints" in config.subset_names
+        assert "valid_hinted" in config.subset_names
+        assert "valid_hintless" in config.subset_names
         # base subsets should still be present
         assert "train" in config.subset_names
         assert "valid" in config.subset_names
@@ -465,12 +405,12 @@ class TestShortcutBiasDataModuleConfigValidateAndResolve:
     def test_extends_multiple_eval_subsets(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
         lmdb_path, split_path = fake_lmdb_and_split
         config = self._make_minimal_config(lmdb_path, split_path, eval_subset_names=("valid", "test"))
-        assert "valid_with_hints" in config.subset_names
-        assert "valid_without_hints" in config.subset_names
-        assert "test_with_hints" in config.subset_names
-        assert "test_without_hints" in config.subset_names
+        assert "valid_hinted" in config.subset_names
+        assert "valid_hintless" in config.subset_names
+        assert "test_hinted" in config.subset_names
+        assert "test_hintless" in config.subset_names
 
-    def test_with_hints_subset_selects_misleading_code_type_when_configured(
+    def test_misleading_subset_selects_misleading_code_type_when_configured(
         self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
     ) -> None:
         lmdb_path, split_path = fake_lmdb_and_split
@@ -478,17 +418,19 @@ class TestShortcutBiasDataModuleConfigValidateAndResolve:
             lmdb_paths=[str(lmdb_path)],
             split_file_path=str(split_path),
             eval_subset_names=("valid",),
-            hint_type=HintType.misleading,
+            eval_hint_types=(HintType.misleading,),
             instantiate_parsers_at_setup=False,
         )
-        parser_config = config._resolve_dataparser_config("valid_with_hints")
+        # when eval_hint_types=(HintType.misleading,), we get valid_misleading subset
+        parser_config = config._resolve_dataparser_config("valid_misleading")
         params = parser_config.get_params_dict()
         selection_config = params["selection_config"]
+        # check that require_hint_type is set to misleading
         if isinstance(selection_config, dict):
-            prob_map = typing.cast("dict[str, typing.Any]", selection_config)["code_type_prob_map"]
+            require_hint_type = selection_config.get("require_hint_type")
         else:
-            prob_map = typing.cast("typing.Any", selection_config).code_type_prob_map
-        assert prob_map == {"original": 0.0, "misleading": 1.0}
+            require_hint_type = getattr(selection_config, "require_hint_type", None)
+        assert require_hint_type == HintType.misleading
 
 
 class TestShortcutBiasDataModuleConfigParentSubsetResolution:
@@ -512,9 +454,9 @@ class TestShortcutBiasDataModuleConfigParentSubsetResolution:
     ) -> None:
         lmdb_path, split_path = fake_lmdb_and_split
         config = self._make_minimal_config(lmdb_path, split_path, eval_subset_names=("valid", "test"))
-        assert config._get_parent_subset_name("valid_with_hints") == "valid"
-        assert config._get_parent_subset_name("valid_without_hints") == "valid"
-        assert config._get_parent_subset_name("test_with_hints") == "test"
+        assert config._get_parent_subset_name("valid_hinted") == "valid"
+        assert config._get_parent_subset_name("valid_hintless") == "valid"
+        assert config._get_parent_subset_name("test_hinted") == "test"
         assert config._get_parent_subset_name("train") == "train"  # not a derived subset
         assert config._get_parent_subset_name("valid") == "valid"  # base eval subset
 
@@ -522,72 +464,75 @@ class TestShortcutBiasDataModuleConfigParentSubsetResolution:
 class TestValidateSampleCounts:
     """Tests for _validate_sample_counts method."""
 
-    def test_raises_when_too_few_with_hints(self) -> None:
+    def test_raises_when_too_few_hinted(self, mocker: MockerFixture) -> None:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
-            min_samples_with_hints=10,
-            min_samples_without_hints=0,
+            min_samples_hinted=10,
+            min_samples_misleading=0,
+            min_samples_hintless=0,
         )
         dm.verbose = False
         subset_traces: dict[str, list[typing.Any]] = {"valid": []}
         derived_subsets = {
-            "valid_with_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hinted": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
                 traces=[],  # 0 traces, below minimum
                 derivation_type="hint_presence_split",
             ),
-            "valid_without_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hintless": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
-                traces=[mock.MagicMock() for _ in range(100)],
+                traces=[mocker.MagicMock() for _ in range(100)],
                 derivation_type="hint_presence_split",
             ),
         }
         with pytest.raises(ValueError, match="has only 0 samples"):
             dm._validate_sample_counts(subset_traces, derived_subsets)
 
-    def test_raises_when_too_few_without_hints(self) -> None:
+    def test_raises_when_too_few_hintless(self, mocker: MockerFixture) -> None:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
-            min_samples_with_hints=0,
-            min_samples_without_hints=50,
+            min_samples_hinted=0,
+            min_samples_misleading=0,
+            min_samples_hintless=50,
         )
         dm.verbose = False
         subset_traces: dict[str, list[typing.Any]] = {"valid": []}
         derived_subsets = {
-            "valid_with_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hinted": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
-                traces=[mock.MagicMock() for _ in range(20)],
+                traces=[mocker.MagicMock() for _ in range(20)],
                 derivation_type="hint_presence_split",
             ),
-            "valid_without_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hintless": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
-                traces=[mock.MagicMock() for _ in range(10)],  # below minimum
+                traces=[mocker.MagicMock() for _ in range(10)],  # below minimum
                 derivation_type="hint_presence_split",
             ),
         }
         with pytest.raises(ValueError, match="has only 10 samples"):
             dm._validate_sample_counts(subset_traces, derived_subsets)
 
-    def test_passes_when_counts_meet_minimum(self) -> None:
+    def test_passes_when_counts_meet_minimum(self, mocker: MockerFixture) -> None:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
-            min_samples_with_hints=5,
-            min_samples_without_hints=10,
+            min_samples_hinted=5,
+            min_samples_misleading=0,
+            min_samples_hintless=10,
         )
         dm.verbose = False
         subset_traces: dict[str, list[typing.Any]] = {"valid": []}
         derived_subsets = {
-            "valid_with_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hinted": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
-                traces=[mock.MagicMock() for _ in range(10)],
+                traces=[mocker.MagicMock() for _ in range(10)],
                 derivation_type="hint_presence_split",
             ),
-            "valid_without_hints": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+            "valid_hintless": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
                 parent_subset="valid",
-                traces=[mock.MagicMock() for _ in range(20)],
+                traces=[mocker.MagicMock() for _ in range(20)],
                 derivation_type="hint_presence_split",
             ),
         }
@@ -597,204 +542,137 @@ class TestValidateSampleCounts:
 class TestCreateHintSplitDerivedSubsetsPresenceSplit:
     """Tests for _create_hint_split_derived_subsets in hint_presence_split mode."""
 
-    def test_creates_derived_subsets_for_each_eval_subset(self) -> None:
+    def test_creates_derived_subsets_for_each_eval_subset(self, mocker: MockerFixture) -> None:
         stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.hint_presence_split,
-            hint_type=HintType.helpful,
+            eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid", "test"),
         )
         stub.verbose = False
         # create mock traces with some having hints
         valid_traces = [
-            mock.MagicMock(
+            mocker.MagicMock(
                 identifier=f"v{i}",
-                trace_id=mock.MagicMock(is_hinted=(i < 3), is_misleading=False),
+                trace_id=mocker.MagicMock(is_hinted=(i < 3), is_misleading=False),
             )
             for i in range(10)
         ]
         test_traces = [
-            mock.MagicMock(
+            mocker.MagicMock(
                 identifier=f"t{i}",
-                trace_id=mock.MagicMock(is_hinted=(i < 2), is_misleading=False),
+                trace_id=mocker.MagicMock(is_hinted=(i < 2), is_misleading=False),
             )
             for i in range(8)
         ]
         subset_traces = {"valid": valid_traces, "test": test_traces}
-        family_map: dict[str, dict[typing.Any, dict[str, typing.Any]]] = {}  # empty for hint_presence_split
-        derived = stub._create_hint_split_derived_subsets(subset_traces, family_map)
-        assert "valid_with_hints" in derived
-        assert "valid_without_hints" in derived
-        assert "test_with_hints" in derived
-        assert "test_without_hints" in derived
-        assert derived["valid_with_hints"].parent_subset == "valid"
-        assert derived["test_without_hints"].parent_subset == "test"
-        assert len(derived["valid_with_hints"].traces) == 3
-        assert len(derived["valid_without_hints"].traces) == 7
-        assert len(derived["test_with_hints"].traces) == 2
-        assert len(derived["test_without_hints"].traces) == 6
+        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        assert "valid_hinted" in derived
+        assert "valid_hintless" in derived
+        assert "test_hinted" in derived
+        assert "test_hintless" in derived
+        assert derived["valid_hinted"].parent_subset == "valid"
+        assert derived["test_hintless"].parent_subset == "test"
+        assert len(derived["valid_hinted"].traces) == 3
+        assert len(derived["valid_hintless"].traces) == 7
+        assert len(derived["test_hinted"].traces) == 2
+        assert len(derived["test_hintless"].traces) == 6
 
 
 class TestCreateHintSplitDerivedSubsetsCounterfactual:
     """Tests for _create_hint_split_derived_subsets in counterfactual mode."""
 
-    def test_counterfactual_only_includes_paired_traces(self) -> None:
+    def test_counterfactual_only_includes_paired_traces(self, mocker: MockerFixture) -> None:
+        """Test that counterfactual mode only includes complete groups.
+
+        The new group-first implementation:
+        1. Groups traces by (family_id, base_augment_key)
+        2. Filters to complete groups (hintless + hinted available)
+        3. Applies distribution control (defaults to {"original": 1.0})
+        4. Picks traces deterministically from selected groups
+        """
         stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
-            hint_type=HintType.helpful,
+            eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            split_seed=0,  # needed for counterfactual RNG initialization
         )
         stub.verbose = False
         # create mock trace_ids with proper augmentless identifier
         base_family_id = "ds/train/p000001/s0001/t0001"
 
-        def make_mock_trace(identifier: str, is_hinted: bool, is_augmented: bool, augment_cats: list[str]) -> mock.Mock:
-            trace = mock.MagicMock()
+        def make_mock_trace(
+            identifier: str,
+            is_hinted: bool,
+            augment_category: str | None = None,
+        ) -> typing.Any:
+            trace = mocker.MagicMock()
             trace.identifier = identifier
             trace.trace_id.is_hinted = is_hinted
             trace.trace_id.is_misleading = False
-            trace.trace_id.is_augmented = is_augmented
-            trace.trace_id.split_augment_categories = augment_cats
+            trace.trace_id.augment_category = augment_category
             trace.trace_id.get_augmentless_identifier.return_value = base_family_id
             return trace
 
-        # paired traces (same family, same base augments, one with hint one without)
-        trace_with_hint = make_mock_trace(
-            "t1", is_hinted=True, is_augmented=True, augment_cats=["hints_docs", "obfuscated"]
-        )
-        trace_without_hint = make_mock_trace("t2", is_hinted=False, is_augmented=True, augment_cats=["obfuscated"])
-        # unpaired trace (different family)
-        trace_unpaired = make_mock_trace("t3", is_hinted=True, is_augmented=True, augment_cats=["hints_docs"])
-        # different family
+        # paired traces (same family, original base augment)
+        # "hints_docs" -> hinted code type with base_augment_key = "original"
+        trace_with_hint = make_mock_trace("t1", is_hinted=True, augment_category="hints_docs")
+        # None -> original code type with base_augment_key = "original"
+        trace_without_hint = make_mock_trace("t2", is_hinted=False, augment_category=None)
+
+        # unpaired trace (different family, only has hinted - no hintless pair)
+        trace_unpaired = make_mock_trace("t3", is_hinted=True, augment_category="hints_docs")
         trace_unpaired.trace_id.get_augmentless_identifier.return_value = "ds/train/p000002/s0001/t0001"
 
         all_traces = [trace_with_hint, trace_without_hint, trace_unpaired]
-        # build family map with paired traces
-        family_map = {
-            base_family_id: {
-                frozenset({"obfuscated"}): {  # base augments excluding hints
-                    "with_hint": trace_with_hint,
-                    "without_hint": trace_without_hint,
-                }
-            },
-            "ds/train/p000002/s0001/t0001": {
-                frozenset(): {
-                    "with_hint": trace_unpaired,
-                }  # incomplete pair - no without_hint
-            },
-        }
         subset_traces = {"valid": all_traces}
-        derived = stub._create_hint_split_derived_subsets(subset_traces, family_map)
-        # only paired traces should be included in counterfactual mode
-        assert len(derived["valid_with_hints"].traces) == 1
-        assert len(derived["valid_without_hints"].traces) == 1
-        assert derived["valid_with_hints"].traces[0].identifier == "t1"
-        assert derived["valid_without_hints"].traces[0].identifier == "t2"
+        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        # only complete groups should be included (family_1 has both hinted and hintless)
+        assert len(derived["valid_hinted"].traces) == 1
+        assert len(derived["valid_hintless"].traces) == 1
+        assert derived["valid_hinted"].traces[0].identifier == "t1"
+        assert derived["valid_hintless"].traces[0].identifier == "t2"
 
-    def test_counterfactual_excludes_all_when_no_pairs(self) -> None:
+    def test_counterfactual_excludes_all_when_no_pairs(self, mocker: MockerFixture) -> None:
         stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
-            hint_type=HintType.helpful,
+            eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            split_seed=0,  # needed for counterfactual RNG initialization
         )
         stub.verbose = False
-        # create traces with no complete pairs
-        traces = [
-            mock.MagicMock(
-                identifier=f"t{i}",
-                trace_id=mock.MagicMock(
-                    is_hinted=True,
-                    is_misleading=False,
-                    is_augmented=False,
-                    get_augmentless_identifier=mock.MagicMock(return_value=f"family_{i}"),
-                ),
-            )
-            for i in range(3)
-        ]
-        # empty family map = no pairs
-        family_map: dict[str, dict[frozenset[str], dict[str, typing.Any]]] = {}
+        # create traces with no complete pairs - all hinted, no hintless traces
+        traces = []
+        for idx in range(3):
+            trace = mocker.MagicMock()
+            trace.identifier = f"t{idx}"
+            trace.trace_id.is_hinted = True
+            trace.trace_id.is_misleading = False
+            trace.trace_id.is_augmented = True
+            trace.trace_id.augment_category = "hints_docs"  # required for get_code_type_set_from_str
+            trace.trace_id.get_augmentless_identifier.return_value = f"family_{idx}"
+            traces.append(trace)
         subset_traces = {"valid": traces}
-        derived = stub._create_hint_split_derived_subsets(subset_traces, family_map)
-        assert len(derived["valid_with_hints"].traces) == 0
-        assert len(derived["valid_without_hints"].traces) == 0
+        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        # no complete groups (all hinted, no hintless traces in any group)
+        assert len(derived["valid_hinted"].traces) == 0
+        assert len(derived["valid_hintless"].traces) == 0
 
     def test_counterfactual_derivation_type_is_set(self) -> None:
         stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
-            hint_type=HintType.helpful,
+            eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            split_seed=0,  # needed for counterfactual RNG initialization
         )
         stub.verbose = False
         subset_traces = {"valid": []}
-        family_map: dict[str, dict[frozenset[str], dict[str, typing.Any]]] = {}
-        derived = stub._create_hint_split_derived_subsets(subset_traces, family_map)
-        assert derived["valid_with_hints"].derivation_type == "counterfactual"
-        assert derived["valid_without_hints"].derivation_type == "counterfactual"
-
-
-class TestBuildTraceFamilyPairingMapCounterfactual:
-    """Tests for _build_trace_family_pairing_map method in counterfactual scenarios."""
-
-    def test_groups_traces_by_family_and_base_augments(self) -> None:
-        stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
-        stub.config = types.SimpleNamespace(hint_type=HintType.helpful)
-        family_id = "ds/train/p000001/s0001/t0001"
-
-        def make_trace(identifier: str, is_hinted: bool, augment_cats: list[str]) -> mock.Mock:
-            trace = mock.MagicMock()
-            trace.identifier = identifier
-            trace.trace_id.is_hinted = is_hinted
-            trace.trace_id.is_misleading = False
-            trace.trace_id.is_augmented = len(augment_cats) > 0
-            trace.trace_id.split_augment_categories = augment_cats
-            trace.trace_id.get_augmentless_identifier.return_value = family_id
-            return trace
-
-        traces = [
-            make_trace("t1", is_hinted=True, augment_cats=["hints_docs", "obfuscated"]),
-            make_trace("t2", is_hinted=False, augment_cats=["obfuscated"]),
-        ]
-        family_map = stub._build_trace_family_pairing_map(traces)
-        assert family_id in family_map
-        # base augments for both should be {"obfuscated"} (hints_docs removed)
-        base_augments = frozenset({"obfuscated"})
-        assert base_augments in family_map[family_id]
-        assert "with_hint" in family_map[family_id][base_augments]
-        assert "without_hint" in family_map[family_id][base_augments]
-
-    def test_multiple_families_are_tracked_separately(self) -> None:
-        stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
-        stub.config = types.SimpleNamespace(hint_type=HintType.helpful)
-        family1 = "ds/train/p000001/s0001/t0001"
-        family2 = "ds/train/p000002/s0001/t0001"
-
-        def make_trace(identifier: str, family: str, is_hinted: bool) -> mock.Mock:
-            trace = mock.MagicMock()
-            trace.identifier = identifier
-            trace.trace_id.is_hinted = is_hinted
-            trace.trace_id.is_misleading = False
-            trace.trace_id.is_augmented = False
-            trace.trace_id.split_augment_categories = []
-            trace.trace_id.get_augmentless_identifier.return_value = family
-            return trace
-
-        traces = [
-            make_trace("t1", family1, is_hinted=True),
-            make_trace("t2", family1, is_hinted=False),
-            make_trace("t3", family2, is_hinted=True),
-        ]
-        family_map = stub._build_trace_family_pairing_map(traces)
-        assert family1 in family_map
-        assert family2 in family_map
-        # family1 has complete pair
-        assert "with_hint" in family_map[family1][frozenset()]
-        assert "without_hint" in family_map[family1][frozenset()]
-        # family2 only has with_hint
-        assert "with_hint" in family_map[family2][frozenset()]
-        assert "without_hint" not in family_map[family2][frozenset()]
+        derived = stub._create_hint_split_derived_subsets(subset_traces)
+        assert derived["valid_hinted"].derivation_type == "counterfactual"
+        assert derived["valid_hintless"].derivation_type == "counterfactual"
 
 
 def _normalize_whitespace(text: str) -> str:
@@ -854,8 +732,8 @@ def shortcuts_dm_config() -> pyine.organisms.datamodules.shortcuts_configs.Short
         max_solution_count=100,
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
         # disable sample count validation for tests (TACO may not have hinted traces)
-        min_samples_with_hints=0,
-        min_samples_without_hints=0,
+        min_samples_hinted=0,
+        min_samples_hintless=0,
     )
 
 
@@ -1131,11 +1009,11 @@ class TestSampleHintIdentifierWrapper:
         wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=mock_dataset,  # type: ignore[arg-type]
             overlapping_trace_ids=overlapping_ids,
-            hint_suffix="with_hint",
+            hint_suffix="hinted",
         )
         # trace_1 should have suffix added
         result1 = wrapper[0]
-        assert result1.identifier == "trace_1::with_hint"
+        assert result1.identifier == "trace_1::hinted"
         # trace_2 should NOT have suffix (not overlapping)
         result2 = wrapper[1]
         assert result2.identifier == "trace_2"
@@ -1146,7 +1024,7 @@ class TestSampleHintIdentifierWrapper:
         wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=[sample],  # type: ignore[arg-type]
             overlapping_trace_ids=frozenset(["other_trace"]),
-            hint_suffix="without_hint",
+            hint_suffix="hintless",
         )
         result = wrapper[0]
         assert result.identifier == "trace_3"  # unchanged
@@ -1155,38 +1033,38 @@ class TestSampleHintIdentifierWrapper:
         """Same trace with different suffixes should have unique identifiers."""
         sample = _make_sample_data("shared_trace")
         overlapping = frozenset(["shared_trace"])
-        wrapper_with = shortcuts_mod.SampleHintIdentifierWrapper(
+        wrapper_hinted = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=[sample],  # type: ignore[arg-type]
             overlapping_trace_ids=overlapping,
-            hint_suffix="with_hint",
+            hint_suffix="hinted",
         )
-        wrapper_without = shortcuts_mod.SampleHintIdentifierWrapper(
+        wrapper_hintless = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=[sample],  # type: ignore[arg-type]
             overlapping_trace_ids=overlapping,
-            hint_suffix="without_hint",
+            hint_suffix="hintless",
         )
-        assert wrapper_with[0].identifier == "shared_trace::with_hint"
-        assert wrapper_without[0].identifier == "shared_trace::without_hint"
-        assert wrapper_with[0].identifier != wrapper_without[0].identifier
+        assert wrapper_hinted[0].identifier == "shared_trace::hinted"
+        assert wrapper_hintless[0].identifier == "shared_trace::hintless"
+        assert wrapper_hinted[0].identifier != wrapper_hintless[0].identifier
 
-    def test_get_stats_includes_wrapper_info(self) -> None:
+    def test_get_stats_includes_wrapper_info(self, mocker: MockerFixture) -> None:
         """Wrapper stats should include overlapping trace count and suffix."""
-        mock_wrapped = mock.Mock()
+        mock_wrapped = mocker.Mock()
         mock_wrapped.get_stats.return_value = {"base_stat": 42}
         wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=mock_wrapped,
             overlapping_trace_ids=frozenset(["a", "b", "c"]),
-            hint_suffix="with_hint",
+            hint_suffix="hinted",
         )
         stats = wrapper.get_stats()
         assert stats["overlapping_trace_count"] == 3
-        assert stats["hint_suffix"] == "::with_hint"
+        assert stats["hint_suffix"] == "::hinted"
         assert stats["base_stat"] == 42
 
-    def test_len_matches_wrapped_dataset(self) -> None:
+    def test_len_matches_wrapped_dataset(self, mocker: MockerFixture) -> None:
         """Wrapper length should match underlying dataset."""
-        mock_wrapped = mock.Mock()
-        mock_wrapped.__len__ = mock.Mock(return_value=5)
+        mock_wrapped = mocker.Mock()
+        mock_wrapped.__len__ = mocker.Mock(return_value=5)
         wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
             wrapped_dataset=mock_wrapped,
             overlapping_trace_ids=frozenset(),
@@ -1194,9 +1072,9 @@ class TestSampleHintIdentifierWrapper:
         )
         assert len(wrapper) == 5
 
-    def test_forwards_unknown_attributes_to_wrapped(self) -> None:
+    def test_forwards_unknown_attributes_to_wrapped(self, mocker: MockerFixture) -> None:
         """Wrapper should forward unknown attribute access to wrapped dataset."""
-        mock_wrapped = mock.Mock()
+        mock_wrapped = mocker.Mock()
         mock_wrapped.selection_config = {"code_type_prob_map": {"hinted": 1.0}}
         mock_wrapped.some_custom_attr = "custom_value"
         wrapper = shortcuts_mod.SampleHintIdentifierWrapper(
@@ -1213,18 +1091,18 @@ class TestGetOverlappingTraceIds:
     """Tests for the _get_overlapping_trace_ids method."""
 
     def test_returns_intersection_of_derived_subsets(self) -> None:
-        """Should return trace IDs present in both with_hints and without_hints."""
+        """Should return trace IDs present in both hinted and hintless partitions."""
         dm = _make_stub_shortcuts_datamodule()
         trace_meta_a = _make_mock_trace_metadata("trace_a")
         trace_meta_b = _make_mock_trace_metadata("trace_b")
         trace_meta_c = _make_mock_trace_metadata("trace_c")
         dm._metadata = types.SimpleNamespace(
             derived_subsets={
-                "valid_with_hints": types.SimpleNamespace(traces=[trace_meta_a, trace_meta_b]),
-                "valid_without_hints": types.SimpleNamespace(traces=[trace_meta_b, trace_meta_c]),
+                "valid_hinted": types.SimpleNamespace(traces=[trace_meta_a, trace_meta_b]),
+                "valid_hintless": types.SimpleNamespace(traces=[trace_meta_b, trace_meta_c]),
             }
         )
-        result = dm._get_overlapping_trace_ids("valid")
+        result = dm._get_overlapping_trace_ids("valid", "hinted")
         assert result == frozenset(["trace_b"])
 
     def test_returns_empty_when_no_overlap(self) -> None:
@@ -1234,21 +1112,420 @@ class TestGetOverlappingTraceIds:
         trace_meta_b = _make_mock_trace_metadata("trace_b")
         dm._metadata = types.SimpleNamespace(
             derived_subsets={
-                "valid_with_hints": types.SimpleNamespace(traces=[trace_meta_a]),
-                "valid_without_hints": types.SimpleNamespace(traces=[trace_meta_b]),
+                "valid_hinted": types.SimpleNamespace(traces=[trace_meta_a]),
+                "valid_hintless": types.SimpleNamespace(traces=[trace_meta_b]),
             }
         )
-        result = dm._get_overlapping_trace_ids("valid")
+        result = dm._get_overlapping_trace_ids("valid", "hinted")
         assert result == frozenset()
 
     def test_returns_empty_when_derived_subset_missing(self) -> None:
         """Should return empty set when derived subsets don't exist."""
         dm = _make_stub_shortcuts_datamodule()
         dm._metadata = types.SimpleNamespace(derived_subsets={})
-        result = dm._get_overlapping_trace_ids("valid")
+        result = dm._get_overlapping_trace_ids("valid", "hinted")
         assert result == frozenset()
 
 
 def _make_mock_trace_metadata(identifier: str) -> types.SimpleNamespace:
     """Helper to create mock trace metadata with identifier."""
     return types.SimpleNamespace(identifier=identifier)
+
+
+class TestCounterfactualGroupIsComplete:
+    """Tests for CounterfactualGroup.is_complete()."""
+
+    def test_complete_with_hintless_and_hinted(self, mocker: MockerFixture) -> None:
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="f1",
+            base_augment_key="original",
+            hintless_traces=[mocker.MagicMock()],
+            hinted_traces=[mocker.MagicMock()],
+        )
+        assert group.is_complete((HintType.helpful,)) is True
+
+    def test_incomplete_without_hintless(self, mocker: MockerFixture) -> None:
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="f1",
+            base_augment_key="original",
+            hinted_traces=[mocker.MagicMock()],
+        )
+        assert group.is_complete((HintType.helpful,)) is False
+
+    def test_complete_via_prompt_db_anchor(self, mocker: MockerFixture) -> None:
+        anchor = mocker.MagicMock()
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="f1",
+            base_augment_key="original",
+            hintless_traces=[anchor],
+            prompt_db_anchor=anchor,
+            prompt_db_has_helpful=True,
+        )
+        assert group.is_complete((HintType.helpful,)) is True
+
+    def test_complete_with_multiple_hint_types(self, mocker: MockerFixture) -> None:
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="f1",
+            base_augment_key="original",
+            hintless_traces=[mocker.MagicMock()],
+            hinted_traces=[mocker.MagicMock()],
+            misleading_traces=[mocker.MagicMock()],
+        )
+        assert group.is_complete((HintType.helpful, HintType.misleading)) is True
+
+    def test_incomplete_when_missing_one_of_multiple_hint_types(self, mocker: MockerFixture) -> None:
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="f1",
+            base_augment_key="original",
+            hintless_traces=[mocker.MagicMock()],
+            hinted_traces=[mocker.MagicMock()],
+        )
+        assert group.is_complete((HintType.helpful, HintType.misleading)) is False
+
+
+class TestBuildCounterfactualGroups:
+    """Tests for _build_counterfactual_groups()."""
+
+    @pytest.fixture
+    def make_trace(self, mocker: MockerFixture) -> typing.Callable[..., typing.Any]:
+        """Fixture factory for creating mock traces."""
+
+        def _factory(
+            identifier: str,
+            augment_category: str | None = None,
+            is_hinted: bool = False,
+            is_misleading: bool = False,
+            family_id: str = "ds/train/p000001/s0001/t0001",
+        ) -> typing.Any:
+            trace = mocker.MagicMock()
+            trace.identifier = identifier
+            trace.trace_id.is_hinted = is_hinted
+            trace.trace_id.is_misleading = is_misleading
+            trace.trace_id.augment_category = augment_category
+            trace.trace_id.get_augmentless_identifier.return_value = family_id
+            trace.trace_id.__str__ = mocker.Mock(return_value=identifier)
+            return trace
+
+        return _factory
+
+    def test_groups_by_family_and_base_key(self, make_trace: typing.Callable[..., typing.Any]) -> None:
+        trace_orig = make_trace("t1", augment_category=None)
+        trace_hinted = make_trace("t2", augment_category="hinted", is_hinted=True)
+        groups = shortcuts_mod._build_counterfactual_groups(
+            traces=[trace_orig, trace_hinted],
+            prompt_db=None,
+            eval_hint_types=(HintType.helpful,),
+            check_prompt_db_fn=lambda *_args: False,
+        )
+        group_key = ("ds/train/p000001/s0001/t0001", "original")
+        assert group_key in groups
+        assert len(groups[group_key].hintless_traces) == 1
+        assert len(groups[group_key].hinted_traces) == 1
+
+    def test_raises_on_invalid_lmdb_both_hints(self, make_trace: typing.Callable[..., typing.Any]) -> None:
+        trace_bad = make_trace("t1", augment_category="hinted", is_hinted=True, is_misleading=True)
+        with pytest.raises(ValueError, match="(?i)invalid LMDB state"):
+            shortcuts_mod._build_counterfactual_groups(
+                traces=[trace_bad],
+                prompt_db=None,
+                eval_hint_types=(HintType.helpful,),
+                check_prompt_db_fn=lambda *_args: False,
+            )
+
+    def test_routes_hintless_correctly(self, make_trace: typing.Callable[..., typing.Any]) -> None:
+        trace = make_trace("t1", augment_category=None)
+        groups = shortcuts_mod._build_counterfactual_groups(
+            traces=[trace],
+            prompt_db=None,
+            eval_hint_types=(HintType.helpful,),
+            check_prompt_db_fn=lambda *_args: False,
+        )
+        group_key = ("ds/train/p000001/s0001/t0001", "original")
+        assert len(groups[group_key].hintless_traces) == 1
+        assert len(groups[group_key].hinted_traces) == 0
+
+    def test_checks_prompt_db_availability(
+        self,
+        mocker: MockerFixture,
+        make_trace: typing.Callable[..., typing.Any],
+    ) -> None:
+        trace = make_trace("t1", augment_category=None)
+        mock_db = mocker.MagicMock()
+        groups = shortcuts_mod._build_counterfactual_groups(
+            traces=[trace],
+            prompt_db=mock_db,
+            eval_hint_types=(HintType.helpful,),
+            check_prompt_db_fn=lambda *_args: True,
+        )
+        group_key = ("ds/train/p000001/s0001/t0001", "original")
+        assert groups[group_key].prompt_db_anchor is trace
+        assert groups[group_key].prompt_db_has_helpful is True
+
+    def test_traces_sorted_within_groups(self, make_trace: typing.Callable[..., typing.Any]) -> None:
+        trace_z = make_trace("z_trace", augment_category=None)
+        trace_a = make_trace("a_trace", augment_category=None)
+        groups = shortcuts_mod._build_counterfactual_groups(
+            traces=[trace_z, trace_a],
+            prompt_db=None,
+            eval_hint_types=(HintType.helpful,),
+            check_prompt_db_fn=lambda *_args: False,
+        )
+        group_key = ("ds/train/p000001/s0001/t0001", "original")
+        hintless = groups[group_key].hintless_traces
+        assert str(hintless[0].trace_id) == "a_trace"
+        assert str(hintless[1].trace_id) == "z_trace"
+
+
+class TestSampleGroupsByDistribution:
+    """Tests for _sample_groups_by_distribution()."""
+
+    @pytest.fixture
+    def make_group(
+        self,
+        mocker: MockerFixture,
+    ) -> typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup]:
+        """Fixture factory for creating CounterfactualGroup objects."""
+
+        def _factory(
+            family_id: str,
+            base_key: str | tuple[str, ...] = "original",
+        ) -> shortcuts_mod.CounterfactualGroup:
+            return shortcuts_mod.CounterfactualGroup(
+                family_id=family_id,
+                base_augment_key=base_key,
+                hintless_traces=[mocker.MagicMock()],
+                hinted_traces=[mocker.MagicMock()],
+            )
+
+        return _factory
+
+    def test_respects_proportions(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        groups = [make_group(f"orig_{idx}", "original") for idx in range(6)] + [
+            make_group(f"obf_{idx}", ("obfuscated",)) for idx in range(6)
+        ]
+        rng = np.random.default_rng(42)
+        result = shortcuts_mod._sample_groups_by_distribution(groups, {"original": 0.5, "obfuscated": 0.5}, rng)
+        orig_count = sum(1 for g in result if g.base_augment_key == "original")
+        obf_count = sum(1 for g in result if g.base_augment_key == ("obfuscated",))
+        assert orig_count == obf_count
+        assert orig_count + obf_count == len(result)
+
+    def test_reproducible_with_seed(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        groups = [make_group(f"g_{idx}") for idx in range(10)]
+        rng1 = np.random.default_rng(99)
+        rng2 = np.random.default_rng(99)
+        result1 = shortcuts_mod._sample_groups_by_distribution(groups, {"original": 1.0}, rng1)
+        result2 = shortcuts_mod._sample_groups_by_distribution(groups, {"original": 1.0}, rng2)
+        ids1 = [g.family_id for g in result1]
+        ids2 = [g.family_id for g in result2]
+        assert ids1 == ids2
+
+    def test_empty_input_returns_empty(self) -> None:
+        rng = np.random.default_rng(42)
+        result = shortcuts_mod._sample_groups_by_distribution([], {"original": 1.0}, rng)
+        assert result == []
+
+    def test_shortage_limits_to_bottleneck(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        groups = [make_group(f"orig_{idx}", "original") for idx in range(10)] + [
+            make_group("obf_0", ("obfuscated",)),  # only 1 obfuscated
+        ]
+        rng = np.random.default_rng(42)
+        result = shortcuts_mod._sample_groups_by_distribution(groups, {"original": 0.5, "obfuscated": 0.5}, rng)
+        # obfuscated bottleneck: 1 / 0.5 = 2 total max
+        assert len(result) <= 2
+
+    def test_deduplicates_families_across_buckets(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """Same family in multiple buckets -> kept only in one bucket."""
+        groups = [
+            make_group("shared_fam", "original"),
+            make_group("shared_fam", ("obfuscated",)),
+            make_group("orig_only", "original"),
+            make_group("obf_only", ("obfuscated",)),
+        ]
+        rng = np.random.default_rng(42)
+        result = shortcuts_mod._sample_groups_by_distribution(
+            groups,
+            {"original": 0.7, "obfuscated": 0.3},
+            rng,
+        )
+        family_ids = [g.family_id for g in result]
+        # shared_fam should appear at most once
+        assert family_ids.count("shared_fam") <= 1
+
+    def test_dedup_equal_probs_preserves_distribution(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """Equal probability + shared families -> both buckets remain non-empty."""
+        # 4 families in both buckets, 2 unique per bucket; if dedup were deterministic by
+        # key name, all shared families would go to one bucket, emptying the other.
+        groups = [
+            make_group("shared_0", "original"),
+            make_group("shared_0", ("obfuscated",)),
+            make_group("shared_1", "original"),
+            make_group("shared_1", ("obfuscated",)),
+            make_group("shared_2", "original"),
+            make_group("shared_2", ("obfuscated",)),
+            make_group("shared_3", "original"),
+            make_group("shared_3", ("obfuscated",)),
+            make_group("orig_only", "original"),
+            make_group("obf_only", ("obfuscated",)),
+        ]
+        rng = np.random.default_rng(42)
+        result = shortcuts_mod._sample_groups_by_distribution(
+            groups,
+            {"original": 0.5, "obfuscated": 0.5},
+            rng,
+        )
+        # result should be non-empty (distribution is achievable)
+        assert len(result) > 0
+        orig_count = sum(1 for g in result if g.base_augment_key == "original")
+        obf_count = sum(1 for g in result if g.base_augment_key != "original")
+        # equal proportions should be maintained
+        assert orig_count == obf_count
+        # no family appears more than once
+        family_ids = [g.family_id for g in result]
+        assert len(family_ids) == len(set(family_ids))
+
+    def test_all_shared_families_no_unique_per_bucket(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """All families shared, no unique per bucket -> repair prevents empty buckets."""
+        # every family appears in both buckets -- with independent draws, an unlucky seed
+        # could assign all to one bucket. The repair should guarantee both are populated.
+        groups = [make_group(f"shared_{idx}", "original") for idx in range(4)] + [
+            make_group(f"shared_{idx}", ("obfuscated",)) for idx in range(4)
+        ]
+        # test across many seeds to ensure the guarantee holds deterministically
+        for seed in range(50):
+            rng = np.random.default_rng(seed)
+            result = shortcuts_mod._sample_groups_by_distribution(
+                groups,
+                {"original": 0.5, "obfuscated": 0.5},
+                rng,
+            )
+            assert len(result) > 0, f"empty result with seed={seed}"
+            orig_count = sum(1 for g in result if g.base_augment_key == "original")
+            obf_count = sum(1 for g in result if g.base_augment_key != "original")
+            assert orig_count > 0, f"zero original with seed={seed}"
+            assert obf_count > 0, f"zero obfuscated with seed={seed}"
+            assert orig_count == obf_count, f"unequal counts with seed={seed}"
+
+    def test_repair_accounts_for_unique_families_in_donor(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """Unique family in donor bucket allows stealing its shared family."""
+        # orig_only is unique to "original", shared is in both.
+        # if the draw assigns shared to "original", obfuscated is starved.
+        # the repair should move shared to obfuscated (original still has orig_only).
+        groups = [
+            make_group("orig_only", "original"),
+            make_group("shared", "original"),
+            make_group("shared", ("obfuscated",)),
+        ]
+        for seed in range(50):
+            rng = np.random.default_rng(seed)
+            result = shortcuts_mod._sample_groups_by_distribution(
+                groups,
+                {"original": 0.5, "obfuscated": 0.5},
+                rng,
+            )
+            assert len(result) > 0, f"empty result with seed={seed}"
+            orig = [g for g in result if g.base_augment_key == "original"]
+            obf = [g for g in result if g.base_augment_key != "original"]
+            assert len(orig) > 0, f"zero original with seed={seed}"
+            assert len(obf) > 0, f"zero obfuscated with seed={seed}"
+
+    def test_multi_augment_groups_logged(
+        self,
+        make_group: typing.Callable[[str, str | tuple[str, ...]], shortcuts_mod.CounterfactualGroup],
+        mocker: MockerFixture,
+    ) -> None:
+        """Multi-augment base groups are skipped with a warning."""
+        multi_aug_group = shortcuts_mod.CounterfactualGroup(
+            family_id="multi_fam",
+            base_augment_key=("obfuscated", "bugged"),
+            hintless_traces=[mocker.MagicMock()],
+            hinted_traces=[mocker.MagicMock()],
+        )
+        groups = [make_group("normal_fam", "original"), multi_aug_group]
+        rng = np.random.default_rng(42)
+        mock_warn = mocker.patch.object(shortcuts_mod.logger, "warning")
+        result = shortcuts_mod._sample_groups_by_distribution(groups, {"original": 1.0}, rng)
+        assert len(result) == 1  # only normal_fam
+        assert any("multi-augment" in str(call) for call in mock_warn.call_args_list)
+
+
+class TestPromptDbAnchorPairing:
+    """Tests for the 'same trace across subsets' invariant with prompt-DB."""
+
+    @pytest.fixture
+    def make_trace(
+        self,
+        mocker: MockerFixture,
+    ) -> typing.Callable[[str], typing.Any]:
+        """Fixture factory for creating mock traces."""
+
+        def _factory(identifier: str) -> typing.Any:
+            trace = mocker.MagicMock()
+            trace.trace_id.__str__ = mocker.Mock(return_value=identifier)
+            trace.trace_id.get_augmentless_identifier.return_value = "fam1"
+            trace.trace_id.augment_category = None
+            trace.trace_id.is_hinted = False
+            trace.trace_id.is_misleading = False
+            return trace
+
+        return _factory
+
+    def test_prompt_db_anchor_used_for_hintless_and_hinted(
+        self,
+        make_trace: typing.Callable[[str], typing.Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """When prompt-DB provides hints, hintless and hinted subsets use the same trace."""
+        anchor = make_trace("anchor_trace")
+        rng = np.random.default_rng(42)
+        subsets = shortcuts_mod.build_counterfactual_eval_subsets(
+            traces=[anchor],
+            eval_hint_types=(HintType.helpful,),
+            code_type_prob_map={"original": 1.0},
+            rng=rng,
+            prompt_db=mocker.MagicMock(),
+            check_prompt_db_fn=lambda *_args: True,
+        )
+        assert len(subsets["hintless"]) == 1
+        assert len(subsets["hinted"]) == 1
+        assert subsets["hintless"][0] is subsets["hinted"][0]  # same object
+
+    def test_prompt_db_anchor_deterministic_after_sort(
+        self,
+        make_trace: typing.Callable[[str], typing.Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Prompt-DB anchor is chosen from sorted order, not input order."""
+        trace_a = make_trace("a_trace")
+        trace_z = make_trace("z_trace")
+        # pass in reverse order: z first, a second
+        groups = shortcuts_mod._build_counterfactual_groups(
+            traces=[trace_z, trace_a],
+            prompt_db=mocker.MagicMock(),
+            eval_hint_types=(HintType.helpful,),
+            check_prompt_db_fn=lambda *_args: True,
+        )
+        group_key = ("fam1", "original")
+        # anchor should be "a_trace" (first after sort), regardless of input order
+        assert str(groups[group_key].prompt_db_anchor.trace_id) == "a_trace"

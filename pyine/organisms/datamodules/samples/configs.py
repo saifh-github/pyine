@@ -1,5 +1,8 @@
 """Defines configuration classes for sample selection, filtering, and transformation."""
 
+from __future__ import annotations
+
+import enum
 import logging
 import typing
 
@@ -23,6 +26,7 @@ from pyine.organisms.datamodules.samples.common import (
 )
 
 __all__ = [
+    "HintType",
     "TraceFilteringConfig",
     "SampleSelectionConfig",
     "SampleTransformConfig",
@@ -31,6 +35,18 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+class HintType(enum.StrEnum):
+    """Type of hints to target for evaluation subset creation.
+
+    This determines which hint category is used for pairing traces in evaluation subsets.
+    """
+
+    helpful = enum.auto()
+    """Target traces with helpful execution hints (is_hinted=True)."""
+    misleading = enum.auto()
+    """Target traces with misleading hints (is_misleading=True)."""
 
 
 class TraceFilteringConfig(pydantic.BaseModel):
@@ -116,7 +132,7 @@ class TraceFilteringConfig(pydantic.BaseModel):
         )
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "TraceFilteringConfig":
+    def _validate_and_resolve(self) -> TraceFilteringConfig:
         """Validates the content of the config beyond basic validation."""
         if not self.any_filtering_enabled:
             logger.warning("TraceFilteringConfig has no active filters; all traces will pass filtering")
@@ -219,13 +235,101 @@ class SampleSelectionConfig(pydantic.BaseModel):
     family will be skipped and no sample will be generated using it. If True but the original code
     snippet is NOT present in the trace family, the trace family will be skipped as well.
     """
+    require_hint_type: HintType | None = None
+    """Require selected traces to contain this hint type in their code type set.
+
+    When set, only traces whose code type set CONTAINS the specified hint type are selected. This
+    preserves base augments: a trace with `{obfuscated, hinted}` would be selected, and it would
+    stay as `{obfuscated, hinted}`.
+
+    ACCEPTED VALUES:
+    - `HintType.helpful`: select traces with helpful execution hints;
+    - `HintType.misleading`: select traces with misleading hints;
+    - `None` (default): disable this mode, use normal probability-based selection.
+
+    INTERNAL MAPPING (handled automatically):
+    - `HintType.helpful` -> matches traces containing `SampleCodeType.hinted`;
+    - `HintType.misleading` -> matches traces containing `SampleCodeType.misleading`.
+
+    MATCHING BEHAVIOR:
+    - `{hinted}` matches when require_hint_type=HintType.helpful;
+    - `{obfuscated, hinted}` also matches (base augment preserved);
+    - `{obfuscated}` does not match (doesn't contain the required hint type).
+
+    If no LMDB trace matches, falls back to prompt-DB lookup for `{base_augments + hint_type}`.
+
+    BASE FILTERING via `code_type_prob_map`: when `code_type_prob_map` is also set, it acts as a
+    pre-filtering step on base types. Examples:
+    - `{"original": 1.0}` -> only consider non-augmented (original) traces, then look for hints;
+    - `{"obfuscated": 1.0}` -> only consider obfuscated traces, then look for hints.
+    ...this enables counterfactual subsets with specific base augment requirements.
+
+    RESTRICTIONS (enforced by validator):
+    - `fallback_to_orig` MUST be False (would contaminate hinted subsets with hintless samples);
+    - Mutually exclusive with `skip_code_type_selection`.
+
+    NOTE: This field is auto-populated by `ShortcutBiasDataModuleConfig._validate_and_resolve()`
+    for derived eval subsets (`_hinted`, `_misleading`). Users configure the parent-level
+    `eval_hint_types` on the shortcuts config, and this field is filled in automatically. We also
+    generally assume that `samples_per_family=1` is typical for evaluation subsets.
+    """
+    skip_code_type_selection: bool = False
+    """If True, skip code type selection and accept each trace's existing type as-is.
+
+    Used for pre-filtered subsets (like _hintless) where traces have already been partitioned
+    and no further code type matching or drawing is needed. The trace's own code type set is
+    passed through unchanged.
+
+    IMPORTANT: selection is DETERMINISTIC (sort-then-index, no RNG) to ensure counterfactual
+    pairing consistency. The same trace within a family is always selected regardless of which
+    derived subset (_hintless, _hinted, _misleading) is being processed. This is achieved by:
+    1. sorting traces by trace_id (deterministic order);
+    2. selecting trace at index `sample_idx % len(traces)`.
+
+    NOTE: this field is auto-populated by `ShortcutBiasDataModuleConfig._validate_and_resolve()`
+    for derived eval subsets (`_hintless`). Users configure the parent-level `eval_hint_types`
+    on the shortcuts config, and this field is filled in automatically.
+
+    Mutually exclusive with require_hint_type.
+
+    Intended use: evaluation subsets where samples_per_family=1 is typical.
+    """
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "SampleSelectionConfig":
+    def _validate_and_resolve(self) -> SampleSelectionConfig:
         """Validates the content of the config beyond basic validation."""
         prob_map_total = sum(self.code_type_prob_map.values())
         if not np.isclose(prob_map_total, 1.0):
             raise ValueError(f"total probability map values must be 1.0; got: {prob_map_total}")
+        # check mutual exclusivity of selection modes
+        if self.skip_code_type_selection and self.require_hint_type is not None:
+            raise ValueError(
+                "Cannot use both skip_code_type_selection=True and require_hint_type. "
+                "These are mutually exclusive selection modes:\n"
+                "  - skip_code_type_selection=True: For _hintless subsets where traces are "
+                "pre-filtered and we preserve their existing code type as-is.\n"
+                "  - require_hint_type: For _hinted/_misleading subsets where we "
+                "select traces containing a specific hint type."
+            )
+        # when require_hint_type is set, enforce restrictions
+        if self.require_hint_type is not None:
+            # reject if fallback_to_orig is True (would corrupt eval)
+            if self.fallback_to_orig:
+                raise ValueError(
+                    "Cannot use fallback_to_orig=True with require_hint_type. "
+                    "Falling back to original traces would produce hintless samples "
+                    "in hinted/misleading evaluation subsets, corrupting the eval. "
+                    "Set fallback_to_orig=False for evaluation subsets."
+                )
+            # code_type_prob_map is allowed as a base filter
+        # reject samples_per_family > 1 with eval modes (pairing would drift)
+        if (self.require_hint_type is not None or self.skip_code_type_selection) and self.samples_per_family > 1:
+            raise ValueError(
+                f"samples_per_family={self.samples_per_family} is not supported with "
+                f"require_hint_type or skip_code_type_selection. Eval selection modes use "
+                f"different strategies (deterministic vs RNG-based), so pairing across "
+                f"derived subsets is only valid with samples_per_family=1."
+            )
         return self
 
     @pydantic.field_validator("code_type_prob_map", mode="before")
@@ -349,7 +453,7 @@ class SampleTransformConfig(pydantic.BaseModel):
     """Probability map used to determine potential output sample types in random/hybrid transform strategies."""
 
     @pydantic.model_validator(mode="after")
-    def _validate_and_resolve(self) -> "SampleTransformConfig":
+    def _validate_and_resolve(self) -> SampleTransformConfig:
         """Validates the content of the config beyond basic validation."""
         if self.transform_strategy != SampleTransformStrategy.never and not self.predict_type_prob_map:
             raise ValueError("prediction type prob map must be provided when using partial samples generation")
@@ -422,7 +526,7 @@ class SampleBuilderConfig(pyine.data.datamodule.ConversationDataParserConfig):
 
     @staticmethod
     def _sample_builder_iter(
-        sample_builder_config: "SampleBuilderConfig",
+        sample_builder_config: SampleBuilderConfig,
         sample_idxs: list[int] | None = None,
         instantiate_kwargs: dict[str, typing.Any] | None = None,
         raw_transform_fn: (typing.Callable[[dict[str, typing.Any]], typing.Any] | None) = None,

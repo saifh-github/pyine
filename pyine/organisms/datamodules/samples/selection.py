@@ -7,12 +7,15 @@ import numpy as np
 import pyine.data.traces.dataset_utils
 import pyine.prompts
 from pyine.organisms.datamodules.samples.common import (
+    SampleCodeType,
     SampleCodeTypeSet,
     TraceDatasetToSampleCodeTypeMappings,
     TraceToSampleCodeTypeMapping,
     draw_type,
+    get_code_type_set_from_str,
+    hint_type_to_sample_code_type,
 )
-from pyine.organisms.datamodules.samples.configs import SampleSelectionConfig
+from pyine.organisms.datamodules.samples.configs import SampleSelectionConfig, get_default_code_type_prob_map
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +124,14 @@ def _find_db_match_for_target_type(
     trace_data: list[TraceToSampleCodeTypeMapping],
     prompt_result_db: pyine.prompts.PromptResultDB,
     rng: np.random.Generator,
-) -> pyine.prompts.PromptResultRecord:
+) -> pyine.prompts.PromptResultRecord | None:
     """Finds a record that matches the given target type using the prompt result db.
 
-    Will use the given generator to pick a record among all records that match the target type. If
-    no compatible record is found, raises a ValueError.
+    Will use the given generator to pick a record among all records that match the target type.
+    Returns None if no compatible record is found.
+
+    Uses deterministic pre-sort before random selection to ensure reproducibility across
+    different DB engines or query plans.
     """
     potential_choices: list[pyine.prompts.PromptResultRecord] = []
     records_fetched_no_match: list[tuple[str, list[str]]] = []  # for debug logging
@@ -151,9 +157,204 @@ def _find_db_match_for_target_type(
                 f"prompt DB has records for target type {target_type} keys, but none matched; "
                 f"sample non-matching tags: {records_fetched_no_match[:3]}"
             )
-        raise ValueError(f"no trace found for target type {target_type}")
+        return None
+    # sort deterministically BEFORE random selection for DB-engine-stable reproducibility
+    # (sorting does NOT bias uniform random selection, it just ensures stable input order)
+    potential_choices.sort(key=lambda r: (r.identifier, r.creation_meta.created_at.isoformat()))
     picked_idx = rng.choice(len(potential_choices))
     return potential_choices[picked_idx]
+
+
+def _filter_traces_by_base_type(
+    trace_data: list[TraceToSampleCodeTypeMapping],
+    code_type_prob_map: dict[SampleCodeTypeSet | str, float],
+) -> list[TraceToSampleCodeTypeMapping]:
+    """Filter traces to only include those matching the specified hintable base types.
+
+    When used with require_hint_type, this allows creating counterfactual subsets with specific
+    hintable base augment requirements (e.g., only original traces).
+
+    Args:
+        trace_data: List of trace-to-code-type mappings for the family.
+        code_type_prob_map: Map of base type names to probs. Only types with prob > 0 are considered.
+            Keys must be simple base types ("original", "obfuscated", etc.), not compound or hint types.
+
+    Returns:
+        Filtered list of traces matching at least one allowed base type.
+
+    Raises:
+        ValueError: If a hint type ("hinted", "misleading") or "stubbed" is in code_type_prob_map.
+        NotImplementedError: If a multi-augment base type is encountered.
+    """
+    hint_type_names = {"hinted", "misleading"}
+    hint_incompatible_types = {"stubbed"}  # fail fast instead of silent empty filter
+    # validate and normalize allowed base keys
+    allowed_base_keys: set[tuple[str, ...] | str] = set()
+    for key, prob in code_type_prob_map.items():
+        if prob <= 0:
+            continue
+        key_str = str(key) if not isinstance(key, str) else key
+        # reject hint types -- they don't make sense as base type filters
+        if key_str in hint_type_names:
+            raise ValueError(
+                f"Hint type '{key_str}' in code_type_prob_map is not valid for base type filtering. "
+                f"Use only base types like 'original', 'obfuscated', 'bugged'."
+            )
+        # reject stubbed -- cannot produce complete groups (stubbed + hints is invalid)
+        if key_str in hint_incompatible_types:
+            raise ValueError(
+                f"'{key_str}' in code_type_prob_map cannot be used for hint-based selection. "
+                f"Stubbed traces cannot receive hints (stubbed + hints is invalid)."
+            )
+        # parse key to validate it's a valid code type
+        try:
+            parsed_set = SampleCodeTypeSet(get_code_type_set_from_str(key_str))
+        except ValueError as exc:
+            raise ValueError(f"Invalid code type key '{key_str}' in code_type_prob_map: {exc}") from exc
+        # reject if parsed set contains hint types (e.g., "obfuscated_hinted")
+        if SampleCodeType.hinted in parsed_set.types or SampleCodeType.misleading in parsed_set.types:
+            raise ValueError(
+                f"Code type '{key_str}' contains hint types, which is not valid for base type filtering. "
+                f"Use only base types like 'original', 'obfuscated', 'bugged'."
+            )
+        # compute base augment key to check for multi-augment or hint types
+        base_key = parsed_set.get_counterfactual_grouping_key()
+        # reject multi-augment base types (tuple with len > 1)
+        if isinstance(base_key, tuple) and len(base_key) > 1:
+            raise NotImplementedError(
+                f"Multi-augment base type '{key_str}' (base_key={base_key}) in code_type_prob_map "
+                f"is not supported. Only simple base types like 'original', 'obfuscated' are allowed."
+            )
+        allowed_base_keys.add(base_key)
+    filtered: list[TraceToSampleCodeTypeMapping] = []
+    for trace in trace_data:
+        trace_base_key = trace.trace_sample_code_types.get_counterfactual_grouping_key()
+        if trace_base_key in allowed_base_keys:
+            filtered.append(trace)
+    return filtered
+
+
+def _find_lmdb_trace_with_hint_type(
+    hint_type: SampleCodeType,
+    trace_data: list[TraceToSampleCodeTypeMapping],
+    rng: np.random.Generator,
+) -> tuple[pyine.data.traces.dataset_utils.TraceMetadata, SampleCodeTypeSet] | None:
+    """Find a trace whose LMDB-native code type contains the specified hint type.
+
+    Only checks ``trace_sample_code_types`` (what the trace natively is in LMDB), NOT
+    ``db_supported_sample_code_types`` (prompt-DB hints). Callers should fall back to
+    ``_try_prompt_db_hint_lookup`` when this returns None.
+
+    Selection uses seeded random for reproducibility without systematic bias.
+
+    Args:
+        hint_type: The hint type to search for (hinted or misleading).
+        trace_data: List of trace-to-code-type mappings for the family.
+        rng: Seeded random generator for reproducible selection.
+
+    Returns:
+        (trace_meta, native_code_type) tuple if match found, None otherwise.
+    """
+    matching_traces: list[tuple[pyine.data.traces.dataset_utils.TraceMetadata, SampleCodeTypeSet]] = []
+    for trace in trace_data:
+        if trace.trace_sample_code_types.has(hint_type):
+            matching_traces.append((trace.target_trace_meta, trace.trace_sample_code_types))
+    if not matching_traces:
+        return None
+    # sort deterministically BEFORE random selection for reproducibility across different input orderings
+    matching_traces.sort(key=lambda t: str(t[0].trace_id))
+    picked_idx = rng.choice(len(matching_traces))
+    return matching_traces[picked_idx]
+
+
+def _try_prompt_db_hint_lookup(
+    selection_config: SampleSelectionConfig,
+    trace: TraceToSampleCodeTypeMapping,
+    rng: np.random.Generator,
+    prompt_result_db: pyine.prompts.PromptResultDB,
+    output_selections: list["SelectedSample"],
+    parent_id: pyine.data.traces.dataset_utils.TraceIdentifier,
+    trace_data: TraceDatasetToSampleCodeTypeMappings,
+) -> bool:
+    """Try to find a hint via prompt-DB for a specific hintless trace.
+
+    The trace must NOT already contain hints (caller enforces via ``can_receive_hint_type``).
+    Determines the target hint type based on the trace's base augments:
+    - for {original} traces: look up {hinted} directly;
+    - for augmented traces (e.g. {obfuscated}): look up {base_augments + hint_type}.
+
+    No cross-fallback between base types; lookup is restricted to THIS trace only, not the whole
+    family. This ensures the base augment is preserved.
+
+    IMPORTANT: handles two edge cases safely:
+    1. record.identifier may be a solution ID (not trace ID) -- check and use parent_id;
+    2. the resolved trace ID may have been filtered out -- skip if not in trace_metadata_lut.
+
+    Args:
+        selection_config: The selection configuration.
+        trace: The specific trace to find hints for (lookup restricted to this trace).
+        rng: Seeded random generator for reproducible selection.
+        prompt_result_db: The prompt result database.
+        output_selections: List to append successful selections to.
+        parent_id: The family's parent trace identifier.
+        trace_data: Full trace dataset for metadata lookup.
+
+    Returns:
+        True if selection succeeded, False otherwise.
+    """
+    assert selection_config.require_hint_type is not None, "require_hint_type must be set"
+    hint_code_type = hint_type_to_sample_code_type(selection_config.require_hint_type)
+    assert trace.trace_sample_code_types.can_receive_hint_type(hint_code_type), (
+        f"trace {trace.target_trace_id} already has hints or is hint-incompatible; "
+        f"caller must filter via can_receive_hint_type before calling this function"
+    )
+    # determine target type based on trace's base augments
+    base_key = trace.trace_sample_code_types.get_counterfactual_grouping_key()
+    if base_key == "original":
+        # {original} traces look up {hinted} directly
+        target_type = SampleCodeTypeSet(frozenset({hint_code_type}))
+    elif base_key == "stubbed":
+        return False  # stubbed traces cannot receive hints
+    else:
+        # other traces look up {base_augments + hint_type}
+        base_augments = trace.trace_sample_code_types.get_hintable_base_augments()
+        if not base_augments:
+            return False  # shouldn't happen given base_key check above
+        try:
+            target_type = SampleCodeTypeSet(frozenset(base_augments | {hint_code_type}))
+        except ValueError:
+            return False  # invalid combination
+    # lookup restricted to THIS trace only (not whole family)
+    record = _find_db_match_for_target_type(
+        target_type=target_type,
+        trace_data=[trace],
+        prompt_result_db=prompt_result_db,
+        rng=rng,
+    )
+    if record is None:
+        return False
+    # safe identifier resolution
+    solution_id_str = str(parent_id.get_parent_identifier())
+    if record.identifier == solution_id_str:
+        record_tid = parent_id
+    else:
+        record_tid = pyine.data.traces.dataset_utils.TraceIdentifier.from_string(record.identifier)
+    # only append if trace is in the dataset (may have been filtered out)
+    if record_tid not in trace_data.trace_metadata_lut:
+        logger.debug(
+            f"skipping prompt-DB record {record.identifier}: resolved trace {record_tid} not in dataset (filtered out?)"
+        )
+        return False
+    output_selections.append(
+        SelectedSample(
+            parent_id=parent_id,
+            trace_id=record_tid,
+            trace_meta=trace_data.trace_metadata_lut[record_tid],
+            code_type=target_type,
+            code_override=record.result,
+        )
+    )
+    return True
 
 
 def select_samples_from_trace_families(
@@ -162,8 +363,30 @@ def select_samples_from_trace_families(
     selection_config: SampleSelectionConfig,
     prompt_result_db: pyine.prompts.PromptResultDB,
 ) -> SampleSelectionResults:
-    """Selects samples to generate from traces according to the specified strategy/options."""
-    # @@@@@@@@@@ TODO: add caching based on trace data hash, epoch, config, and prompt db hash
+    """Select samples from trace families according to the configured selection mode.
+
+    Iterates over trace families and selects one sample per family (up to ``samples_per_family``).
+    Three mutually exclusive selection modes are supported:
+
+    1. ``require_hint_type``: find traces containing a specific hint type. Tries LMDB-native
+       matches first (via ``_find_lmdb_trace_with_hint_type``), then falls back to prompt-DB
+       lookup (via ``_try_prompt_db_hint_lookup``) if ``allow_db_lookups`` is enabled.
+    2. ``skip_code_type_selection``: accept each trace's existing code type as-is, using
+       deterministic sort-then-index selection. Intended for derived subsets (e.g. ``_hintless``)
+       whose traces were already pre-partitioned upstream by ``build_counterfactual_eval_subsets``
+       or ``_partition_traces_by_hint_strategy`` -- no further filtering or drawing is needed.
+    3. ``code_type_prob_map`` draw (default): draw a target code type from the probability map,
+       then find a matching trace in LMDB or prompt-DB. Used for training.
+
+    Args:
+        trace_data: Pre-built family-level trace mappings with code type and DB availability info.
+        epoch: Current training epoch (seeds the RNG for reproducible selection).
+        selection_config: Configuration controlling which mode, probabilities, and fallbacks to use.
+        prompt_result_db: Prompt result database for augmented code lookups.
+
+    Returns:
+        Selection results including chosen samples and statistics (failed, DB-backed, fallback counts).
+    """
     rng = selection_config.get_rng(epoch)
     code_type_prob_map = selection_config.get_code_type_prob_map_resolved()
     output_selections: list[SelectedSample] = []
@@ -171,10 +394,97 @@ def select_samples_from_trace_families(
     samples_with_full_trace_support: int = 0
     samples_with_prompt_db_code: int = 0
     samples_with_parent_fallback: int = 0
+    families_with_no_hint_compatible_traces: int = 0  # for summary warning
     for parent_id, family_mapping in trace_data.trace_families.items():
         family_trace_data = list(family_mapping.values())
-        for _ in range(selection_config.samples_per_family):
+        # fail fast on empty family
+        if not family_trace_data:
+            for _ in range(selection_config.samples_per_family):
+                failed_selections += 1
+            continue
+        for sample_idx in range(selection_config.samples_per_family):
             got_selection = False
+            # mode 1: contains-match for hint type (seeded random, preserves base augments)
+            if selection_config.require_hint_type is not None:
+                # apply base type filtering if code_type_prob_map specifies non-default base types
+                raw_prob_map = selection_config.code_type_prob_map
+                default_prob_map = get_default_code_type_prob_map()
+                if raw_prob_map != default_prob_map:
+                    filtered_trace_data = _filter_traces_by_base_type(
+                        trace_data=family_trace_data,
+                        code_type_prob_map=raw_prob_map,
+                    )
+                else:
+                    filtered_trace_data = family_trace_data
+                # sort for reproducibility: input ordering from dict iteration must not affect RNG draws
+                filtered_trace_data = sorted(filtered_trace_data, key=lambda t: str(t.target_trace_id))
+                # map HintType to SampleCodeType for internal use
+                hint_code_type = hint_type_to_sample_code_type(selection_config.require_hint_type)
+                # try LMDB match first (seeded random selection)
+                match_result = _find_lmdb_trace_with_hint_type(
+                    hint_type=hint_code_type,
+                    trace_data=filtered_trace_data,
+                    rng=rng,
+                )
+                if match_result is not None:
+                    trace_meta, native_type = match_result
+                    output_selections.append(
+                        SelectedSample(
+                            parent_id=parent_id,
+                            trace_id=trace_meta.trace_id,
+                            trace_meta=trace_meta,
+                            code_type=native_type,
+                            code_override=None,
+                        )
+                    )
+                    samples_with_full_trace_support += 1
+                    got_selection = True
+                elif selection_config.allow_db_lookups:
+                    # no LMDB match, try prompt-DB lookup for filtered traces
+                    # use permuted indices to avoid systematic bias, then try each until one succeeds
+                    permuted_indices = rng.permutation(len(filtered_trace_data))
+                    for trace_idx in permuted_indices:
+                        trace: TraceToSampleCodeTypeMapping = filtered_trace_data[int(trace_idx)]
+                        if not trace.trace_sample_code_types.can_receive_hint_type(hint_code_type):
+                            continue  # skip hint-incompatible traces
+                        got_selection = _try_prompt_db_hint_lookup(
+                            selection_config=selection_config,
+                            trace=trace,
+                            rng=rng,
+                            prompt_result_db=prompt_result_db,
+                            output_selections=output_selections,
+                            parent_id=parent_id,
+                            trace_data=trace_data,
+                        )
+                        if got_selection:
+                            samples_with_prompt_db_code += 1
+                            break
+                    # count failures (summary warning emitted at end to avoid log spam)
+                    if not got_selection and sample_idx == 0:
+                        families_with_no_hint_compatible_traces += 1
+                if not got_selection:
+                    # note: fallback_to_orig is forbidden when require_hint_type is set (enforced by validator)
+                    failed_selections += 1
+                continue
+            # mode 2: native code type (DETERMINISTIC for counterfactual pairing)
+            if selection_config.skip_code_type_selection:
+                # deterministic selection: sort traces, pick by sample_idx
+                # this ensures the SAME trace is selected across derived subsets
+                sorted_traces = sorted(family_trace_data, key=lambda t: str(t.target_trace_id))
+                trace_entry = sorted_traces[sample_idx % len(sorted_traces)]
+                native_type = trace_entry.trace_sample_code_types
+                output_selections.append(
+                    SelectedSample(
+                        parent_id=parent_id,
+                        trace_id=trace_entry.target_trace_id,
+                        trace_meta=trace_entry.target_trace_meta,
+                        code_type=native_type,
+                        code_override=None,
+                    )
+                )
+                samples_with_full_trace_support += 1
+                continue
+            # mode 3: old code_type_prob_map draw logic (uses RNG, useful for training)
             for _ in range(selection_config.draw_attempts):
                 target_type = draw_type(code_type_prob_map, rng)
                 assert isinstance(target_type, SampleCodeTypeSet)
@@ -213,6 +523,9 @@ def select_samples_from_trace_families(
                         prompt_result_db=prompt_result_db,
                         rng=rng,
                     )
+                    if record is None:
+                        failed_selections += 1
+                        break  # counts said it exists but DB lookup found nothing
                     solution_id_str = str(parent_id.get_parent_identifier())
                     if record.identifier == solution_id_str:
                         record_tid = parent_id  # record is tied to the solution code, so get parent trace itself
@@ -249,7 +562,9 @@ def select_samples_from_trace_families(
                 got_selection = True
             if not got_selection:
                 failed_selections += 1
-
+    # emit summary warning at end (avoids per-family log spam)
+    if families_with_no_hint_compatible_traces > 0:
+        logger.warning(f"selection failed for {families_with_no_hint_compatible_traces} trace families")
     return SampleSelectionResults(
         orig_trace_data=trace_data,
         selection_config=selection_config,

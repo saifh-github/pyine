@@ -24,6 +24,8 @@ from pyine.organisms.datamodules.samples.common import (
     get_all_supported_code_type_sets_suffixes,
     get_code_type_set_from_str,
     get_rng,
+    hint_type_to_sample_code_type,
+    strip_id_suffix,
 )
 
 
@@ -400,13 +402,13 @@ class TestGetCodeTypeSetFromStr:
         assert result == frozenset({SampleCodeType.original})
 
     def test_subset_name_with_hints_suffix(self) -> None:
-        # subset names like "valid_with_hints" should detect hinted type
-        result = get_code_type_set_from_str("valid_with_hints")
+        # subset names like "valid_hinted" should detect hinted type
+        result = get_code_type_set_from_str("valid_hinted")
         assert SampleCodeType.hinted in result
-        # "without_hints" should NOT detect hinted (negation pattern)
-        result_without = get_code_type_set_from_str("valid_without_hints")
-        assert SampleCodeType.hinted not in result_without
-        assert result_without == frozenset({SampleCodeType.original})
+        # "hintless" should NOT detect hinted (no "hinted"/"hints" substring)
+        result_hintless = get_code_type_set_from_str("valid_hintless")
+        assert SampleCodeType.hinted not in result_hintless
+        assert result_hintless == frozenset({SampleCodeType.original})
 
     def test_negation_pattern_word_boundary(self) -> None:
         # "no_" as part of "notification_" should NOT negate the pattern
@@ -581,9 +583,9 @@ class TestSampleSubsetTagWrapper:
         self,
         mock_dataset: list[SampleData],
     ) -> None:
-        wrapper = SampleSubsetTagWrapper(mock_dataset, "valid_with_hints")  # type: ignore[arg-type]
+        wrapper = SampleSubsetTagWrapper(mock_dataset, "valid_hinted")  # type: ignore[arg-type]
         sample = wrapper[0]
-        assert "parser:valid_with_hints" in sample.comma_separated_tags
+        assert "parser:valid_hinted" in sample.comma_separated_tags
         assert "existing:tag" in sample.comma_separated_tags
 
     def test_iter_adds_tag(
@@ -764,3 +766,160 @@ class TestCodeTypeHelpers:
         # has_record_for_code_type with filter
         assert has_record_for_code_type("trace_003", target_hinted, db, prompt_name="hints_docs") is True
         assert has_record_for_code_type("trace_003", target_hinted, db, prompt_name="nonexistent") is False
+
+
+class TestStripIdSuffix:
+    """Tests for the strip_id_suffix function."""
+
+    def test_strips_hinted_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::hinted") == "TACO/train/p000001/s0000/t0000"
+
+    def test_strips_misleading_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::misleading") == "TACO/train/p000001/s0000/t0000"
+
+    def test_strips_hintless_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::hintless") == "TACO/train/p000001/s0000/t0000"
+
+    def test_passthrough_for_no_suffix(self) -> None:
+        identifier = "TACO/train/p000001/s0000/t0000"
+        assert strip_id_suffix(identifier) == identifier
+
+    def test_works_with_augmented_trace_ids(self) -> None:
+        augmented_id = "TACO/train/p000001/s0000/t0000/a:obfuscated+hints_docs:001::hinted"
+        assert strip_id_suffix(augmented_id) == "TACO/train/p000001/s0000/t0000/a:obfuscated+hints_docs:001"
+
+
+class TestGetHintableBaseAugments:
+    """Tests for SampleCodeTypeSet.get_hintable_base_augments()."""
+
+    def test_obfuscated_hinted_returns_obfuscated(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated, SampleCodeType.hinted}))
+        assert type_set.get_hintable_base_augments() == frozenset({SampleCodeType.obfuscated})
+
+    def test_original_returns_empty(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.original}))
+        assert type_set.get_hintable_base_augments() == frozenset()
+
+    def test_stubbed_returns_empty(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.stubbed}))
+        assert type_set.get_hintable_base_augments() == frozenset()
+
+    def test_stubbed_obfuscated_returns_empty(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.stubbed, SampleCodeType.obfuscated}))
+        assert type_set.get_hintable_base_augments() == frozenset()
+
+    def test_hinted_only_returns_empty(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        assert type_set.get_hintable_base_augments() == frozenset()
+
+
+class TestCanReceiveHintType:
+    """Tests for SampleCodeTypeSet.can_receive_hint_type()."""
+
+    def test_original_can_receive(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.original}))
+        assert type_set.can_receive_hint_type(SampleCodeType.hinted) is True
+
+    def test_obfuscated_can_receive(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated}))
+        assert type_set.can_receive_hint_type(SampleCodeType.hinted) is True
+
+    def test_obfuscated_hinted_cannot_receive(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated, SampleCodeType.hinted}))
+        assert type_set.can_receive_hint_type(SampleCodeType.hinted) is False
+
+    def test_cross_hint_blocked(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        assert type_set.can_receive_hint_type(SampleCodeType.misleading) is False
+
+    def test_stubbed_cannot_receive(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.stubbed}))
+        assert type_set.can_receive_hint_type(SampleCodeType.hinted) is False
+
+    def test_stubbed_obfuscated_cannot_receive(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.stubbed, SampleCodeType.obfuscated}))
+        assert type_set.can_receive_hint_type(SampleCodeType.hinted) is False
+
+
+class TestGetBaseAugmentKey:
+    """Tests for SampleCodeTypeSet.get_counterfactual_grouping_key()."""
+
+    def test_original_returns_original(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.original}))
+        assert type_set.get_counterfactual_grouping_key() == "original"
+
+    def test_hinted_returns_original(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.hinted}))
+        assert type_set.get_counterfactual_grouping_key() == "original"
+
+    def test_obfuscated_returns_tuple(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated}))
+        assert type_set.get_counterfactual_grouping_key() == ("obfuscated",)
+
+    def test_stubbed_returns_stubbed(self) -> None:
+        type_set = SampleCodeTypeSet(frozenset({SampleCodeType.stubbed}))
+        assert type_set.get_counterfactual_grouping_key() == "stubbed"
+
+
+class TestHintTypeToSampleCodeType:
+    """Tests for hint_type_to_sample_code_type()."""
+
+    def test_helpful_maps_to_hinted(self) -> None:
+        import pyine.organisms.datamodules.samples.configs
+
+        result = hint_type_to_sample_code_type(pyine.organisms.datamodules.samples.configs.HintType.helpful)
+        assert result == SampleCodeType.hinted
+
+    def test_misleading_maps_to_misleading(self) -> None:
+        import pyine.organisms.datamodules.samples.configs
+
+        result = hint_type_to_sample_code_type(pyine.organisms.datamodules.samples.configs.HintType.misleading)
+        assert result == SampleCodeType.misleading
+
+    def test_invalid_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Unknown hint type"):
+            hint_type_to_sample_code_type("invalid_type")  # type: ignore[arg-type]
+
+
+class TestGetTraceIdWithSuffix:
+    """Tests for SampleData.get_trace_id() with suffixed identifiers."""
+
+    def test_suffixed_identifier_returns_valid_trace_id(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000::hinted",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        trace_id = sample.get_trace_id()
+        assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"
+
+    def test_unsuffixed_identifier_works_as_before(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        trace_id = sample.get_trace_id()
+        assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"

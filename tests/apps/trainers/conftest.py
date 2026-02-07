@@ -311,8 +311,9 @@ def real_datamodule_config() -> pyine.organisms.datamodules.shortcuts.ShortcutBi
         seed=42,
         max_solution_count=20,
         as_pydantic=True,
-        min_samples_with_hints=0,  # disable validation for integration tests
-        min_samples_without_hints=0,  # disable validation for integration tests
+        min_samples_hinted=0,  # disable validation for integration tests
+        min_samples_misleading=0,  # disable validation for integration tests
+        min_samples_hintless=0,  # disable validation for integration tests
     )
 
 

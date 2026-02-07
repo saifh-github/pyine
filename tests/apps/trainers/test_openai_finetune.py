@@ -285,8 +285,9 @@ async def test_code_exec_eval_base_model_with_skip_fine_tuning(
         lmdb_paths=[latest_dataset_path],
         max_solution_count=2,
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
-        min_samples_with_hints=0,
-        min_samples_without_hints=0,
+        min_samples_hinted=0,
+        min_samples_misleading=0,
+        min_samples_hintless=0,
     )
     openai_client_config = pyine.utils.openai.OpenAIClientConfig()
     finetuner_params_config = pyine.utils.openai.OpenAIFineTunerParamsConfig(

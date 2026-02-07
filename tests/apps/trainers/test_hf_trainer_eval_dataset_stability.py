@@ -125,7 +125,7 @@ def test_v0_rl_valid_traces_stable_across_epochs(
             f"config.datamodule_config.split_file_path={split_path}",
             "config.datamodule_config.use_local_dataset_cache=false",
             "config.datamodule_config.keep_generated_datasets_in_memory=false",
-            "+config.datamodule_config.dataparser_config_overrides.valid.filtering_config.max_traces_per_solution=1",
+            "++config.datamodule_config.dataparser_config_overrides.valid.filtering_config.max_traces_per_solution=1",
             f"hydra.run.dir={run_dir}",
             "hydra.output_subdir=null",
             "hydra/job_logging=disabled",
