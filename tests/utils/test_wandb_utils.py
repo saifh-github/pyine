@@ -37,9 +37,11 @@ class _MockWandbRun:
         self,
         keys: list[str] | None = None,
     ) -> list[dict[str, typing.Any]]:
-        if keys and len(keys) == 1:
-            key = keys[0]
-            return list(self._per_key_data.get(key, []))
+        if keys:
+            # filter to requested keys; return rows that have at least one non-internal key
+            user_keys = [k for k in keys if not k.startswith("_")]
+            if len(user_keys) == 1:
+                return list(self._per_key_data.get(user_keys[0], []))
         return list(self._full_history)
 
 
@@ -88,7 +90,7 @@ class TestFetchSingleKeyHistory:
                 max_retries=0,
                 verbose=False,
             )
-            mock_scan.assert_called_once_with(keys=["reward"])
+            mock_scan.assert_called_once_with(keys=["reward", "_step"])
         assert len(result) == 1
         assert "reward" in result.columns
 
@@ -401,3 +403,82 @@ class TestFetchHistoryDf:
             mock_scan.assert_called_once_with()
         assert len(result) == 2
         assert "loss" in result.columns
+
+
+class TestBuildStepMapping:
+    def test_basic_mapping(self) -> None:
+        df = pd.DataFrame(
+            {
+                "_step": [0, 1, 2],
+                "train/global_step": [0, 100, 200],
+            }
+        )
+        mapping = wandb_utils.build_step_mapping(df, "train/global_step")
+        assert mapping[0] == 0
+        assert mapping[1] == 100
+        assert mapping[2] == 200
+
+    def test_repeated_step_key_values_not_dropped(self) -> None:
+        # train/global_step stays at 0 for _step=0..2 (e.g. gradient accumulation), then jumps to 200
+        df = pd.DataFrame(
+            {
+                "_step": [0, 1, 2, 3],
+                "train/global_step": [0, 0, 0, 200],
+            }
+        )
+        mapping = wandb_utils.build_step_mapping(df, "train/global_step")
+        # all _step values should be in the mapping (repeated values are legitimate)
+        assert set(mapping.index) == {0, 1, 2, 3}
+        assert mapping[1] == 0
+        assert mapping[2] == 0
+
+    def test_raw_step_df_used_over_history_df(self) -> None:
+        # history_df has forward-filled step_key at _step=1; raw_step_df does not
+        history_df = pd.DataFrame(
+            {
+                "_step": [0, 1, 2],
+                "train/global_step": [0.0, 0.0, 200.0],  # _step=1 is forward-filled
+            }
+        )
+        raw_step_df = pd.DataFrame(
+            {
+                "_step": [0, 2],
+                "train/global_step": [0.0, 200.0],  # only the actually logged values
+            }
+        )
+        mapping = wandb_utils.build_step_mapping(history_df, "train/global_step", raw_step_df=raw_step_df)
+        assert set(mapping.index) == {0, 2}  # raw data used, _step=1 not present
+        assert 1 not in mapping.index
+
+    def test_identity_step_key_returns_empty(self) -> None:
+        df = pd.DataFrame({"_step": [0, 1]})
+        mapping = wandb_utils.build_step_mapping(df, "_step")
+        assert mapping.empty
+
+    def test_missing_columns_returns_empty(self) -> None:
+        df = pd.DataFrame({"_step": [0, 1]})
+        mapping = wandb_utils.build_step_mapping(df, "train/global_step")
+        assert mapping.empty
+
+    def test_empty_dataframe_returns_empty(self) -> None:
+        df = pd.DataFrame(columns=["_step", "train/global_step"])
+        mapping = wandb_utils.build_step_mapping(df, "train/global_step")
+        assert mapping.empty
+
+
+class TestMergeDeduplication:
+    def test_duplicate_steps_deduplicated_before_merge(self) -> None:
+        # key A has duplicate _step=0; key B has unique steps
+        df_a = pd.DataFrame({"_step": [0, 0, 1], "loss": [1.0, 2.0, 0.5]})
+        df_b = pd.DataFrame({"_step": [0, 1], "acc": [0.7, 0.9]})
+        result = wandb_utils._merge_per_key_dataframes([df_a, df_b])
+        # should have 2 rows (steps 0, 1), not 3 (no cartesian product)
+        assert len(result) == 2
+        # last value for loss at step 0 should be kept
+        assert result.loc[result["_step"] == 0, "loss"].iloc[0] == 2.0
+
+    def test_no_duplicates_unchanged(self) -> None:
+        df_a = pd.DataFrame({"_step": [0, 1], "loss": [1.0, 0.5]})
+        df_b = pd.DataFrame({"_step": [1, 2], "acc": [0.8, 0.9]})
+        result = wandb_utils._merge_per_key_dataframes([df_a, df_b])
+        assert len(result) == 3  # steps 0, 1, 2

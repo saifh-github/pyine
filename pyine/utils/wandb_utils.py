@@ -214,6 +214,39 @@ def resolve_step_key(df: pd.DataFrame) -> str:
     raise ValueError("no step key found in history DataFrame")
 
 
+def build_step_mapping(
+    history_df: pd.DataFrame,
+    step_key: str,
+    raw_step_df: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Build a mapping from W&B ``_step`` to a resolved step key (e.g. ``train/global_step``).
+
+    When ``raw_step_df`` is provided, it is used as the source for the mapping — this avoids
+    issues with forward-filled values in ``history_df``. When not provided, ``history_df`` is
+    used directly (forward-filled values are included, which provides a reasonable approximation:
+    each ``_step`` maps to the last known ``step_key`` value at or before that point).
+
+    Args:
+        history_df: DataFrame from W&B history (may contain forward-filled values).
+        step_key: The resolved step key column name (e.g. "train/global_step").
+        raw_step_df: Optional DataFrame with raw (non-forward-filled) ``_step`` and ``step_key``
+            columns, e.g. from a dedicated ``fetch_history_df(run, keys=[step_key])`` call.
+
+    Returns:
+        A Series indexed by ``_step`` with ``step_key`` values. Empty if columns are missing.
+    """
+    if step_key == "_step":
+        return pd.Series(dtype=float)  # identity mapping not needed
+    source = raw_step_df if raw_step_df is not None else history_df
+    if "_step" not in source.columns or step_key not in source.columns:
+        return pd.Series(dtype=float)
+    df: pd.DataFrame = source[["_step", step_key]].dropna()  # pyright: ignore[reportUnknownMemberType]
+    if df.empty:
+        return pd.Series(dtype=float)
+    df = df.sort_values("_step").drop_duplicates(subset="_step", keep="last")
+    return df.set_index("_step")[step_key]
+
+
 def resolve_time_key(df: pd.DataFrame) -> str | None:
     """Find a wall-clock time key in a W&B history DataFrame.
 
@@ -260,7 +293,7 @@ def _fetch_single_key_history(
     """
     if full_fidelity:
         rows = _retry_on_failure(
-            lambda: list(run.scan_history(keys=[key])),
+            lambda: list(run.scan_history(keys=[key, "_step"])),
             max_retries=max_retries,
             verbose=verbose,
         )
@@ -283,6 +316,11 @@ def _merge_per_key_dataframes(
 ) -> pd.DataFrame:
     """Outer-merge multiple per-key DataFrames on ``_step``.
 
+    Each per-key DataFrame is first deduplicated on ``_step`` (keeping the last row per step) to
+    prevent cartesian products during the outer merge. This can happen when W&B logs multiple rows
+    at the same ``_step`` (e.g. with explicit ``step=`` calls). The ``keep="last"`` strategy
+    matches W&B's dashboard behavior where later writes overwrite earlier ones.
+
     After merging, columns listed in ``forward_fill_keys`` are forward-filled (sorted by ``_step``)
     so that monotonically non-decreasing axis columns (like ``train/global_step`` or ``_timestamp``)
     are available on every row. This ensures that sparse metrics get valid x-axis values even when
@@ -299,12 +337,15 @@ def _merge_per_key_dataframes(
     non_empty = [df for df in dataframes if not df.empty]
     if not non_empty:
         return pd.DataFrame(columns=["_step"])
-    if len(non_empty) == 1:
-        result = non_empty[0].sort_values("_step").reset_index(drop=True)
+    # deduplicate each per-key DataFrame on _step to prevent cartesian products during merge
+    # (can happen when W&B logs multiple rows at the same _step, e.g. with explicit step= calls)
+    deduped = [df.drop_duplicates(subset="_step", keep="last") if "_step" in df.columns else df for df in non_empty]
+    if len(deduped) == 1:
+        result = deduped[0].sort_values("_step").reset_index(drop=True)
     else:
         merged = functools.reduce(
             lambda left, right: pd.merge(left, right, on="_step", how="outer", suffixes=("", "_dup")),
-            non_empty,
+            deduped,
         )
         # coalesce duplicated internal columns (e.g. _timestamp, _timestamp_dup)
         for col in list(merged.columns):
@@ -481,7 +522,7 @@ def fetch_history_df(
 @typing.no_type_check  # wandb has poor typing
 def discover_metric_keys(
     run: wandb.apis.public.Run,
-    samples: int = 10,
+    samples: int = 100,
     max_retries: int = 3,
 ) -> dict[str, list[str]]:
     """Discover available metric keys in a W&B run, grouped by category.
@@ -565,7 +606,13 @@ def discover_metric_keys(
     ]
     # build set of all categorized keys to exclude from "other"
     categorized_keys = set(
-        reward_total_keys + reward_term_keys + reward_metric_keys + parsing_keys + trl_keys + step_keys
+        reward_total_keys
+        + reward_term_keys
+        + reward_metric_keys
+        + reward_categories_keys
+        + parsing_keys
+        + trl_keys
+        + step_keys
     )
     excluded_prefixes = ("completions/", "_")
     other_keys = [
