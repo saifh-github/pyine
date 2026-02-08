@@ -10,6 +10,7 @@ These utilities are designed to be lightweight and reusable across notebooks, an
 and other tools that need to interact with W&B data.
 """
 
+import functools
 import json
 import pathlib
 import re
@@ -28,6 +29,15 @@ wandb_comm_error = getattr(wandb_errors, "CommError", None) if wandb_errors is n
 if isinstance(wandb_comm_error, type) and issubclass(wandb_comm_error, Exception):
     _retryable_exceptions.append(wandb_comm_error)
 _RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = tuple(_retryable_exceptions)
+_INTERNAL_KEYS: tuple[str, ...] = ("_step", "_timestamp", "_runtime")
+# columns that are monotonically non-decreasing and should be forward-filled after per-key merges
+# so that every row has a valid value for step/time axes
+_FORWARD_FILL_KEYS: tuple[str, ...] = (
+    "global_step",
+    "train/global_step",
+    "_timestamp",
+    "_runtime",
+)
 
 
 def _retry_on_failure(
@@ -225,75 +235,246 @@ def resolve_time_key(df: pd.DataFrame) -> str | None:
     return None
 
 
+@typing.no_type_check
+def _fetch_single_key_history(
+    run: wandb.apis.public.Run,
+    key: str,
+    samples: int,
+    full_fidelity: bool,
+    max_retries: int,
+    verbose: bool,
+) -> pd.DataFrame:
+    """Fetch history for a single metric key from a W&B run.
+
+    Args:
+        run: The W&B Run object.
+        key: The metric key to fetch.
+        samples: Maximum number of samples (used when full_fidelity=False).
+        full_fidelity: If True, uses scan_history for complete data; otherwise uses sampled history.
+        max_retries: Maximum number of retry attempts on network failures.
+        verbose: Whether to print retry messages.
+
+    Returns:
+        DataFrame with ``_step`` and the requested key columns, or an empty DataFrame if the key
+        is not found.
+    """
+    if full_fidelity:
+        rows = _retry_on_failure(
+            lambda: list(run.scan_history(keys=[key])),
+            max_retries=max_retries,
+            verbose=verbose,
+        )
+        df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    else:
+        df = _retry_on_failure(
+            lambda: run.history(keys=[key], samples=samples, pandas=True),
+            max_retries=max_retries,
+            verbose=verbose,
+        )
+    if df.empty or key not in df.columns:
+        return pd.DataFrame()
+    keep_cols = [col for col in ["_step", key] if col in df.columns]
+    return df[keep_cols]
+
+
+def _merge_per_key_dataframes(
+    dataframes: list[pd.DataFrame],
+    forward_fill_keys: tuple[str, ...] = _FORWARD_FILL_KEYS,
+) -> pd.DataFrame:
+    """Outer-merge multiple per-key DataFrames on ``_step``.
+
+    After merging, columns listed in ``forward_fill_keys`` are forward-filled (sorted by ``_step``)
+    so that monotonically non-decreasing axis columns (like ``train/global_step`` or ``_timestamp``)
+    are available on every row. This ensures that sparse metrics get valid x-axis values even when
+    their ``_step`` values don't exactly overlap with the sampled step key.
+
+    Args:
+        dataframes: List of DataFrames, each containing ``_step`` and one or more metric columns.
+        forward_fill_keys: Column names to forward-fill after the merge.
+
+    Returns:
+        Merged DataFrame sorted by ``_step``, or an empty DataFrame with a ``_step`` column if all
+        inputs are empty.
+    """
+    non_empty = [df for df in dataframes if not df.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=["_step"])
+    if len(non_empty) == 1:
+        result = non_empty[0].sort_values("_step").reset_index(drop=True)
+    else:
+        merged = functools.reduce(
+            lambda left, right: pd.merge(left, right, on="_step", how="outer", suffixes=("", "_dup")),
+            non_empty,
+        )
+        # coalesce duplicated internal columns (e.g. _timestamp, _timestamp_dup)
+        for col in list(merged.columns):
+            if col.endswith("_dup"):
+                base_col = col.removesuffix("_dup")
+                if base_col in merged.columns:
+                    merged[base_col] = merged[base_col].combine_first(merged[col])
+                merged.drop(columns=[col], inplace=True)
+        result = merged.sort_values("_step").reset_index(drop=True)
+    # forward-fill monotonically non-decreasing axis columns so that every row with metric data
+    # also has a valid step/time value for plotting
+    ffill_cols = [col for col in forward_fill_keys if col in result.columns]
+    if ffill_cols:
+        result[ffill_cols] = result[ffill_cols].ffill()
+    return result
+
+
+def _get_query_cache_path(
+    base_path: pathlib.Path,
+    keys: list[str] | None,
+    samples: int,
+    full_fidelity: bool,
+) -> pathlib.Path:
+    """Derive a query-specific cache path by hashing the fetch parameters.
+
+    This ensures that different key sets, sample counts, or fidelity modes produce distinct cache
+    files. The hash is inserted before the file extension (e.g. ``cache.parquet`` becomes
+    ``cache.<hash>.parquet``).
+
+    Args:
+        base_path: The user-provided cache path (used as a stem).
+        keys: The requested metric keys (None for discovery mode).
+        samples: The number of samples requested.
+        full_fidelity: Whether full-fidelity mode is enabled.
+
+    Returns:
+        A path with a query-specific hash suffix inserted before the extension.
+    """
+    import pyine.utils.reprod
+
+    sorted_keys = tuple(sorted(keys)) if keys else ()
+    param_hash = pyine.utils.reprod.get_params_hash(sorted_keys, samples, full_fidelity)
+    short_hash = param_hash[:12]
+    return base_path.with_suffix(f".{short_hash}{base_path.suffix}")
+
+
 @typing.no_type_check  # wandb has poor typing
 def fetch_history_df(
     run: wandb.apis.public.Run,
     keys: list[str] | None = None,
     cache_path: str | pathlib.Path | None = None,
-    samples: int = 500,
+    samples: int = 10_000,
+    full_fidelity: bool = False,
     verbose: bool = True,
     max_retries: int = 3,
 ) -> pd.DataFrame:
     """Fetch W&B run history as a DataFrame with optional caching.
 
-    For specific keys, uses `scan_history` for full fidelity (no downsampling), then filters to
-    requested columns. For discovery mode (keys=None), uses `history(samples=N)` which may
-    downsample. W&B internal keys (`_step`, `_timestamp`, `_runtime`) are always included.
-
-    Note:
-        When keys are specified, we fetch all history first then filter columns. This is because
-        W&B's `scan_history(keys=[...])` only returns rows where ALL keys are present, which
-        fails when metrics are logged at different steps/intervals.
+    When ``keys`` are provided, each key is fetched independently via the ``sampledHistory``
+    endpoint (or ``scan_history`` when ``full_fidelity=True``), then the results are outer-merged
+    on ``_step``. This correctly handles metrics logged at different frequencies. When
+    ``keys=None`` (discovery mode), returns a sampled overview of all metrics.
 
     Args:
         run: The W&B Run object.
         keys: Specific keys to fetch. If None, fetches all with sampling.
-        cache_path: Optional path to cache results as parquet (useful for large runs).
-        samples: Number of samples when keys=None (discovery mode).
+        cache_path: Optional base path to cache results as parquet. A query-specific hash suffix
+            is inserted before the extension so that different key sets, sample counts, and
+            fidelity modes produce distinct cache files.
+        samples: Number of samples for history retrieval.
+        full_fidelity: If True and keys are provided, uses ``scan_history`` per key for complete
+            data (no downsampling). If True and keys is None, fetches the full raw history stream.
         verbose: Whether to print progress messages.
         max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
-        DataFrame with the run history. Internal keys (`_step`, `_timestamp`, `_runtime`) are
-        always included when available.
+        DataFrame with the run history. Internal keys (``_step``, ``_timestamp``, ``_runtime``)
+        are always included when available.
 
     Example:
         >>> run = get_wandb_run(run_id="abc123", project="my-project")
         >>> df = fetch_history_df(run, keys=["reward/total"])
         >>> print(f"Fetched {len(df)} rows")
     """
+    resolved_cache_path: pathlib.Path | None = None
     if cache_path is not None:
-        cache_path = pathlib.Path(cache_path)
-        if cache_path.exists():
+        resolved_cache_path = _get_query_cache_path(
+            pathlib.Path(cache_path),
+            keys=keys,
+            samples=samples,
+            full_fidelity=full_fidelity,
+        )
+        if resolved_cache_path.exists():
             if verbose:
-                print(f"Loading history from cache: {cache_path}")
-            return pd.read_parquet(cache_path)
-    if keys:
-        if verbose:
-            print(f"Fetching full history with scan_history (will filter to {len(keys)} keys)...")
-        history = _retry_on_failure(
-            lambda: list(run.scan_history()),
-            max_retries=max_retries,
-            verbose=verbose,
-        )
-        df = pd.DataFrame(history)
-        internal_keys = ["_step", "_timestamp", "_runtime"]
-        keys_with_internal = internal_keys + [k for k in keys if k not in internal_keys]
-        existing_keys = [k for k in keys_with_internal if k in df.columns]
-        df = df[existing_keys]
+                print(f"Loading history from cache: {resolved_cache_path}")
+            return pd.read_parquet(resolved_cache_path)
+    user_keys = list(dict.fromkeys(keys)) if keys else None
+    if user_keys:
+        # separate user metric keys from internal keys
+        fetch_keys = [k for k in user_keys if k not in _INTERNAL_KEYS]
+        requested_internal = [k for k in user_keys if k in _INTERNAL_KEYS]
+        if not fetch_keys:
+            # only internal keys requested — fall through to discovery mode, filter columns
+            if verbose:
+                print(f"Fetching sampled history ({samples} samples)...")
+            df = _retry_on_failure(
+                lambda: run.history(samples=samples),
+                max_retries=max_retries,
+                verbose=verbose,
+            )
+            keep = [k for k in requested_internal if k in df.columns]
+            if "_step" not in keep and "_step" in df.columns:
+                keep.insert(0, "_step")
+            df = df[keep] if keep else df
+        else:
+            # per-key fetching with merge on _step
+            per_key_dfs: list[pd.DataFrame] = []
+            total = len(fetch_keys)
+            for key_idx, key in enumerate(fetch_keys):
+                if verbose:
+                    print(f"  [{key_idx + 1}/{total}] Fetching '{key}'...", end="")
+                key_df = _fetch_single_key_history(
+                    run=run,
+                    key=key,
+                    samples=samples,
+                    full_fidelity=full_fidelity,
+                    max_retries=max_retries,
+                    verbose=verbose,
+                )
+                if verbose:
+                    print(f" {len(key_df)} rows")
+                per_key_dfs.append(key_df)
+            # also fetch internal time keys if they were requested or by default
+            time_keys_to_fetch = [k for k in ("_timestamp", "_runtime") if k not in fetch_keys]
+            for time_key in time_keys_to_fetch:
+                time_df = _fetch_single_key_history(
+                    run=run,
+                    key=time_key,
+                    samples=samples,
+                    full_fidelity=full_fidelity,
+                    max_retries=max_retries,
+                    verbose=False,
+                )
+                if not time_df.empty:
+                    per_key_dfs.append(time_df)
+            df = _merge_per_key_dataframes(per_key_dfs)
     else:
+        # discovery mode — no specific keys requested
+        if full_fidelity:
+            if verbose:
+                print("Fetching full history with scan_history...")
+            history = _retry_on_failure(
+                lambda: list(run.scan_history()),
+                max_retries=max_retries,
+                verbose=verbose,
+            )
+            df = pd.DataFrame(history)
+        else:
+            if verbose:
+                print(f"Fetching sampled history ({samples} samples)...")
+            df = _retry_on_failure(
+                lambda: run.history(samples=samples),
+                max_retries=max_retries,
+                verbose=verbose,
+            )
+    if resolved_cache_path is not None:
+        resolved_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(resolved_cache_path)
         if verbose:
-            print(f"Fetching sampled history ({samples} samples)...")
-        df = _retry_on_failure(
-            lambda: run.history(samples=samples),
-            max_retries=max_retries,
-            verbose=verbose,
-        )
-    if cache_path:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(cache_path)
-        if verbose:
-            print(f"Cached history to: {cache_path}")
+            print(f"Cached history to: {resolved_cache_path}")
     return df
 
 
@@ -365,11 +546,17 @@ def discover_metric_keys(
             "/frac_reward_zero_std",
             "/step_time",
             "/runtime",
-            "/samples_per_second",
-            "/steps_per_second",
             "profiling/",
         ],
-        exact=["train/reward", "eval/reward", "epoch"],
+        exact=[
+            "train/reward",
+            "train/samples_per_second",
+            "train/steps_per_second",
+            "eval/reward",
+            "eval/samples_per_second",
+            "eval/steps_per_second",
+            "epoch",
+        ],
     )
     known_step_key_suffixes = ["/epoch", "/batch_count", "/generation_count", "/global_step"]
     known_exact_step_keys = ["_step", "_timestamp", "_runtime"]
