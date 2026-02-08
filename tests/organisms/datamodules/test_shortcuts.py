@@ -1893,6 +1893,7 @@ class TestCounterfactualPairingInvariant:
             traces: typing.Any,
             prompt_db: typing.Any = None,
             eval_subset_name: typing.Any = None,
+            caps_filtering_config: typing.Any = None,
         ) -> dict[str, list[typing.Any]]:
             return {
                 "hintless": [trace_hintless, trace_extra],  # has extra family
@@ -1908,3 +1909,342 @@ class TestCounterfactualPairingInvariant:
         subset_traces = {"valid": [trace_hinted, trace_hintless, trace_extra]}
         with pytest.raises(ValueError, match="counterfactual pairing broken"):
             stub._create_hint_split_derived_subsets(subset_traces)
+
+
+class TestCapCompleteGroups:
+    """Tests for _cap_complete_groups()."""
+
+    @pytest.fixture
+    def make_group(
+        self,
+    ) -> typing.Callable[..., shortcuts_mod.CounterfactualGroup]:
+        """Fixture factory for creating CounterfactualGroup objects with mock traces."""
+
+        def _factory(
+            family_id: str,
+            base_key: str | tuple[str, ...] = "original",
+            has_prompt_db_anchor: bool = False,
+        ) -> shortcuts_mod.CounterfactualGroup:
+            hintless_trace = _MockTraceMeta(
+                identifier=f"{family_id}__hintless",
+                trace_id=_MockTraceId(
+                    f"{family_id}/t0001",
+                    augment_category=None,
+                ),
+            )
+            hintless_trace.trace_id.get_augmentless_identifier = lambda fid=family_id: _MockTraceId(fid)  # type: ignore[attr-defined]
+            hinted_trace = _MockTraceMeta(
+                identifier=f"{family_id}__hinted",
+                trace_id=_MockTraceId(
+                    f"{family_id}/t0001/a:hints_docs:000",
+                    augment_category="hints_docs",
+                    is_hinted=True,
+                ),
+            )
+            hinted_trace.trace_id.get_augmentless_identifier = lambda fid=family_id: _MockTraceId(fid)  # type: ignore[attr-defined]
+            anchor = hintless_trace if has_prompt_db_anchor else None
+            return shortcuts_mod.CounterfactualGroup(
+                family_id=family_id,
+                base_augment_key=base_key,
+                hintless_traces=[hintless_trace],
+                hinted_traces=[hinted_trace],
+                prompt_db_anchor=anchor,
+                prompt_db_has_helpful=has_prompt_db_anchor,
+            )
+
+        return _factory
+
+    def test_passthrough_when_no_cap_filters(
+        self,
+        make_group: typing.Callable[..., shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        groups = [make_group("ds/train/p0001/s0001")]
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig.create_disabled()
+        result = shortcuts_mod._cap_complete_groups(groups, caps_config)
+        assert result == groups
+
+    def test_caps_reduce_groups(
+        self,
+        mocker: MockerFixture,
+        make_group: typing.Callable[..., shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """Caps should reduce the number of groups when filter_traces removes representatives."""
+        group_a = make_group("ds/train/p0001/s0001")
+        group_b = make_group("ds/train/p0002/s0001")
+
+        # patch filter_traces to simulate capping: only keep first representative
+        def mock_filter_traces(
+            traces: typing.Any,
+            epoch: typing.Any,
+            filtering_config: typing.Any,
+        ) -> typing.Any:
+            result = mocker.MagicMock()
+            result.kept_traces = traces[:1]  # keep only first
+            return result
+
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=mock_filter_traces,
+        )
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        result = shortcuts_mod._cap_complete_groups([group_a, group_b], caps_config)
+        assert len(result) == 1
+
+    def test_prompt_db_anchor_preferred_as_representative(
+        self,
+        mocker: MockerFixture,
+        make_group: typing.Callable[..., shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """When prompt_db_anchor exists, it should be the representative."""
+        group = make_group("ds/train/p0001/s0001", has_prompt_db_anchor=True)
+        captured_reps: list[typing.Any] = []
+
+        def mock_filter_traces(
+            traces: typing.Any,
+            epoch: typing.Any,
+            filtering_config: typing.Any,
+        ) -> typing.Any:
+            captured_reps.extend(traces)
+            result = mocker.MagicMock()
+            result.kept_traces = traces
+            return result
+
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=mock_filter_traces,
+        )
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        shortcuts_mod._cap_complete_groups([group], caps_config)
+        # representative should be the prompt_db_anchor (hintless trace)
+        assert len(captured_reps) == 1
+        assert captured_reps[0] is group.prompt_db_anchor
+
+    def test_raises_on_no_hintless_traces(
+        self,
+    ) -> None:
+        """Should raise ValueError if a 'complete' group has no hintless traces."""
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="ds/train/p0001/s0001",
+            base_augment_key="original",
+            hintless_traces=[],
+        )
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        with pytest.raises(ValueError, match="no hintless traces"):
+            shortcuts_mod._cap_complete_groups([group], caps_config)
+
+    def test_raises_on_multi_augment_base_key(
+        self,
+    ) -> None:
+        """Should raise ValueError on multi-augment base keys."""
+        hintless = _MockTraceMeta(
+            identifier="t1",
+            trace_id=_MockTraceId("ds/train/p0001/s0001/t0001"),
+        )
+        group = shortcuts_mod.CounterfactualGroup(
+            family_id="ds/train/p0001/s0001",
+            base_augment_key=("obfuscated", "bugged"),
+            hintless_traces=[hintless],
+        )
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        with pytest.raises(ValueError, match="multi-augment base key"):
+            shortcuts_mod._cap_complete_groups([group], caps_config)
+
+    def test_deterministic_regardless_of_input_order(
+        self,
+        mocker: MockerFixture,
+        make_group: typing.Callable[..., shortcuts_mod.CounterfactualGroup],
+    ) -> None:
+        """Shuffling input order should produce the same result."""
+        groups = [make_group(f"ds/train/p{idx:04d}/s0001") for idx in range(5)]
+        kept_count = 3
+
+        def mock_filter_traces(
+            traces: typing.Any,
+            epoch: typing.Any,
+            filtering_config: typing.Any,
+        ) -> typing.Any:
+            result = mocker.MagicMock()
+            result.kept_traces = traces[:kept_count]
+            return result
+
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=mock_filter_traces,
+        )
+        caps_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_trace_families=kept_count,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        # original order
+        result_orig = shortcuts_mod._cap_complete_groups(list(groups), caps_config)
+        orig_ids = {g.family_id for g in result_orig}
+        # reversed order
+        result_rev = shortcuts_mod._cap_complete_groups(list(reversed(groups)), caps_config)
+        rev_ids = {g.family_id for g in result_rev}
+        assert orig_ids == rev_ids
+
+
+class TestTwoPhaseFiltering:
+    """Tests for two-phase filtering in counterfactual mode."""
+
+    def _make_counterfactual_traces(
+        self,
+        family_id: str,
+    ) -> list[typing.Any]:
+        """Create a complete counterfactual group's traces (hintless + hinted)."""
+        base_trace_id = _MockTraceId(family_id)
+        hintless = _MockTraceMeta(
+            f"{family_id}__hintless",
+            _MockTraceId(f"{family_id}/t0001", is_hinted=False),
+        )
+        hintless.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        hinted = _MockTraceMeta(
+            f"{family_id}__hinted",
+            _MockTraceId(f"{family_id}/t0001/a:hints_docs:000", augment_category="hints_docs", is_hinted=True),
+        )
+        hinted.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        return [hintless, hinted]
+
+    def _make_passthrough_filter(
+        self,
+        mocker: MockerFixture,
+        filter_calls: list[pyine.organisms.datamodules.samples.configs.TraceFilteringConfig],
+    ) -> typing.Callable[..., typing.Any]:
+        """Create a mock filter_traces that records configs and passes all traces through."""
+
+        def mock_filter(
+            traces: typing.Any,
+            epoch: typing.Any,
+            filtering_config: typing.Any,
+        ) -> typing.Any:
+            filter_calls.append(filtering_config)
+            result = mocker.MagicMock()
+            result.kept_traces = traces
+            result.orig_trace_count = len(traces)
+            result.filtered_trace_count = 0
+            return result
+
+        return mock_filter
+
+    def test_counterfactual_uses_quality_only_prefilter(self, mocker: MockerFixture) -> None:
+        """In counterfactual mode, pre-filtering should use quality-only config."""
+        stub = _make_stub_shortcuts_datamodule(
+            evaluation_strategy=EvaluationStrategy.counterfactual,
+            eval_hint_types=(HintType.helpful,),
+        )
+        traces = self._make_counterfactual_traces("ds/train/p0001/s0001")
+        subset_traces = {"valid": traces}
+        parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=500,
+        )
+        stub.config._resolve_dataparser_config = lambda name: types.SimpleNamespace(  # type: ignore[attr-defined]
+            get_params_dict=lambda: {"filtering_config": parent_filtering},
+        )
+        filter_calls: list[pyine.organisms.datamodules.samples.configs.TraceFilteringConfig] = []
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=self._make_passthrough_filter(mocker, filter_calls),
+        )
+        _derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
+        # first call should be quality-only (no cap filters)
+        assert len(filter_calls) >= 1
+        quality_call = filter_calls[0]
+        assert quality_call.max_trace_steps == 500  # quality preserved
+        assert quality_call.max_traces_per_solution is None  # caps removed
+        # second call should be caps-only (from _cap_complete_groups)
+        assert len(filter_calls) == 2
+        caps_call = filter_calls[1]
+        assert caps_call.max_traces_per_solution == 1  # caps preserved
+        assert caps_call.max_trace_steps is None  # quality removed
+
+    def test_hint_presence_split_uses_single_phase(self, mocker: MockerFixture) -> None:
+        """In hint_presence_split mode, all filters should be applied together."""
+        stub = _make_stub_shortcuts_datamodule(
+            evaluation_strategy=EvaluationStrategy.hint_presence_split,
+            eval_hint_types=(HintType.helpful,),
+        )
+        hinted_trace = _MockTraceMeta(
+            "t1",
+            _MockTraceId("t1", augment_category="hints_docs", is_hinted=True),
+        )
+        hintless_trace = _MockTraceMeta(
+            "t2",
+            _MockTraceId("t2", is_hinted=False),
+        )
+        subset_traces = {"valid": [hinted_trace, hintless_trace]}
+        parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_traces_per_solution=1,
+            max_trace_steps=500,
+        )
+        stub.config._resolve_dataparser_config = lambda name: types.SimpleNamespace(  # type: ignore[attr-defined]
+            get_params_dict=lambda: {"filtering_config": parent_filtering},
+        )
+        filter_calls: list[pyine.organisms.datamodules.samples.configs.TraceFilteringConfig] = []
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=self._make_passthrough_filter(mocker, filter_calls),
+        )
+        _derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
+        # single-phase: the full config (quality + caps together) should be passed
+        assert len(filter_calls) == 1
+        assert filter_calls[0].max_trace_steps == 500
+        assert filter_calls[0].max_traces_per_solution == 1
+
+    def test_counterfactual_no_caps_skips_cap_phase(self, mocker: MockerFixture) -> None:
+        """When parent config has no cap filters, caps phase should be skipped."""
+        stub = _make_stub_shortcuts_datamodule(
+            evaluation_strategy=EvaluationStrategy.counterfactual,
+            eval_hint_types=(HintType.helpful,),
+        )
+        traces = self._make_counterfactual_traces("ds/train/p0001/s0001")
+        subset_traces = {"valid": traces}
+        parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
+            max_trace_steps=500,
+            max_traces_per_solution=None,
+        )
+        stub.config._resolve_dataparser_config = lambda name: types.SimpleNamespace(  # type: ignore[attr-defined]
+            get_params_dict=lambda: {"filtering_config": parent_filtering},
+        )
+        filter_calls: list[pyine.organisms.datamodules.samples.configs.TraceFilteringConfig] = []
+        mocker.patch(
+            "pyine.organisms.datamodules.shortcuts.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=self._make_passthrough_filter(mocker, filter_calls),
+        )
+        _derived, _counts = stub._create_hint_split_derived_subsets(subset_traces)
+        # only quality filter call, no cap filter call
+        assert len(filter_calls) == 1
+        assert filter_calls[0].max_trace_steps == 500
+        assert filter_calls[0].max_traces_per_solution is None

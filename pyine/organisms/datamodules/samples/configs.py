@@ -140,6 +140,42 @@ class TraceFilteringConfig(pydantic.BaseModel):
             tokenizer_path=None,
         )
 
+    def create_quality_only(self) -> TraceFilteringConfig:
+        """Return a copy with cap filters disabled (only per-trace quality filters remain)."""
+        return self.model_copy(
+            update={
+                "max_trace_families": None,
+                "max_traces_per_family": None,
+                "max_traces_per_solution": None,
+                "max_traces_per_problem": None,
+            }
+        )
+
+    def create_caps_only(self) -> TraceFilteringConfig:
+        """Return a copy with quality filters disabled (only cap filters remain)."""
+        return self.model_copy(
+            update={
+                "max_trace_steps": None,
+                "max_code_line_count": None,
+                "max_code_line_length": None,
+                "max_code_length": None,
+                "max_args_length": None,
+                "use_token_lengths": False,
+                "tokenizer_model_id": None,
+                "tokenizer_path": None,
+            }
+        )
+
+    @property
+    def has_cap_filters(self) -> bool:
+        """Return whether any group-level cap filters are set."""
+        return (
+            self.max_trace_families is not None
+            or self.max_traces_per_family is not None
+            or self.max_traces_per_solution is not None
+            or self.max_traces_per_problem is not None
+        )
+
     @property
     def any_filtering_enabled(self) -> bool:
         """Returns whether any filtering is enabled in this config."""

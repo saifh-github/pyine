@@ -429,6 +429,87 @@ def _filter_to_complete_groups(
     return complete_groups
 
 
+def _cap_complete_groups(
+    complete_groups: list[CounterfactualGroup],
+    caps_config: pyine.organisms.datamodules.samples.configs.TraceFilteringConfig,
+) -> list[CounterfactualGroup]:
+    """Apply cap filters to complete counterfactual groups by reusing filter_traces().
+
+    For each group, picks a representative trace and passes all representatives through
+    filter_traces() with a caps-only config. Surviving representatives are mapped back
+    to their groups.
+
+    In counterfactual mode, caps operate at the GROUP level:
+    - max_traces_per_family: limits base-type variants per family (multiple groups from
+      the same family produce multiple reps with the same augmentless ID);
+    - max_traces_per_solution: limits counterfactual groups per solution (round-robin);
+    - max_traces_per_problem: limits counterfactual groups per problem (round-robin);
+    - max_trace_families: limits total distinct families (round-robin across problems).
+
+    The caps_config's own seed (via get_rng(epoch=0)) provides determinism.
+
+    Args:
+        complete_groups: Groups that passed completeness checks.
+        caps_config: Filtering config with only cap fields active.
+
+    Returns:
+        Subset of complete_groups that survived cap filtering.
+    """
+    if not caps_config.has_cap_filters:
+        return complete_groups
+    # sort for deterministic representative building (filter_traces uses dict insertion
+    # order for round-robin, so input order matters for reproducibility)
+    sorted_groups = sorted(
+        complete_groups,
+        key=lambda group: (group.family_id, str(group.base_augment_key)),
+    )
+    # build representative -> group mapping
+    representative_to_group_key: dict[str, tuple[str, str | tuple[str, ...]]] = {}
+    representatives: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+    for group in sorted_groups:
+        # multi-augment base keys should not appear here (config validator rejects them
+        # for counterfactual mode); treat as a data integrity error
+        try:
+            _normalize_base_key(group.base_augment_key)
+        except NotImplementedError as e:
+            raise ValueError(
+                f"unexpected multi-augment base key {group.base_augment_key!r} in "
+                f"counterfactual group {group.family_id!r}; this should have been "
+                f"rejected by config validation"
+            ) from e
+        # complete groups must have hintless traces (enforced by is_complete())
+        if not group.hintless_traces:
+            raise ValueError(
+                f"complete group {group.family_id!r} has no hintless traces; this violates the completeness invariant"
+            )
+        # prefer prompt_db_anchor as representative when present, since that's the trace
+        # actually used across derived subsets; otherwise fall back to first hintless trace
+        rep = group.prompt_db_anchor if group.prompt_db_anchor is not None else group.hintless_traces[0]
+        group_key = (group.family_id, group.base_augment_key)
+        if rep.identifier in representative_to_group_key:
+            raise ValueError(
+                f"duplicate representative identifier {rep.identifier} for groups "
+                f"{representative_to_group_key[rep.identifier]} and {group_key}"
+            )
+        representative_to_group_key[rep.identifier] = group_key
+        representatives.append(rep)
+    # run filter_traces with caps-only config (quality steps are all no-ops)
+    results = pyine.organisms.datamodules.samples.filtering.filter_traces(
+        traces=representatives,
+        epoch=0,
+        filtering_config=caps_config,
+    )
+    surviving_keys: set[tuple[str, str | tuple[str, ...]]] = {
+        representative_to_group_key[trace.identifier] for trace in results.kept_traces
+    }
+    capped = [group for group in complete_groups if (group.family_id, group.base_augment_key) in surviving_keys]
+    logger.info(
+        f"capped complete groups: {len(complete_groups)} -> {len(capped)} "
+        f"({len(complete_groups) - len(capped)} removed by cap filters)"
+    )
+    return capped
+
+
 def build_counterfactual_eval_subsets(
     traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
     eval_hint_types: tuple[HintType, ...],
@@ -438,12 +519,14 @@ def build_counterfactual_eval_subsets(
     check_prompt_db_fn: typing.Callable[
         [pyine.data.traces.dataset_utils.TraceIdentifier, pyine.prompts.PromptResultDB, HintType], bool
     ],
+    caps_filtering_config: pyine.organisms.datamodules.samples.configs.TraceFilteringConfig | None = None,
 ) -> dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]]:
     """Build counterfactual evaluation subsets with distribution control.
 
     FLOW (parent-driven selection):
     1. group traces by (family_id, base_augment_key);
     2. filter to COMPLETE groups (i.e. ones that can produce all required subsets);
+    2.5. apply group-level caps if configured (see ``_cap_complete_groups``);
     3. sample groups according to parent's code_type_prob_map;
     4. for each selected group, add one trace to each derived subset.
 
@@ -457,6 +540,8 @@ def build_counterfactual_eval_subsets(
         rng: Seeded random generator.
         prompt_db: Optional prompt result database.
         check_prompt_db_fn: Function to check prompt-DB hint availability.
+        caps_filtering_config: Optional caps-only filtering config to apply group-level caps
+            between completeness filtering and distribution sampling.
 
     Returns:
         Dict with keys "hinted", "misleading", "hintless" mapping to trace lists.
@@ -468,6 +553,12 @@ def build_counterfactual_eval_subsets(
     if not complete_groups:
         logger.warning("no complete counterfactual groups found; returning empty eval subsets")
         return {"hinted": [], "misleading": [], "hintless": []}
+    # step 2.5: apply caps to complete groups
+    if caps_filtering_config is not None:
+        complete_groups = _cap_complete_groups(complete_groups, caps_filtering_config)
+        if not complete_groups:
+            logger.warning("no complete groups survived cap filtering; returning empty eval subsets")
+            return {"hinted": [], "misleading": [], "hintless": []}
     # step 3: sample groups by distribution
     selected_groups = _sample_groups_by_distribution(complete_groups, code_type_prob_map, rng)
     # step 4: generate subsets from selected groups
@@ -869,26 +960,51 @@ class ShortcutBiasDataModule(
                     f"(nondeterministic); forcing seed=0 for eval pre-filtering"
                 )
                 parent_filtering = parent_filtering.model_copy(update={"seed": 0})
-            # run pre-filtering if any filtering is enabled
-            if parent_filtering.any_filtering_enabled:
-                filtering_results = pyine.organisms.datamodules.samples.filtering.filter_traces(
-                    traces=traces,
-                    epoch=0,
-                    filtering_config=parent_filtering,
+            # run pre-filtering: counterfactual mode uses two-phase (quality first, caps
+            # after completeness check via _cap_complete_groups); hint_presence_split uses
+            # single-phase (all filters applied together, no completeness requirement)
+            if self.config.evaluation_strategy == EvaluationStrategy.counterfactual:
+                quality_config = parent_filtering.create_quality_only()
+                caps_config = parent_filtering.create_caps_only() if parent_filtering.has_cap_filters else None
+                if quality_config.any_filtering_enabled:
+                    filtering_results = pyine.organisms.datamodules.samples.filtering.filter_traces(
+                        traces=traces,
+                        epoch=0,
+                        filtering_config=quality_config,
+                    )
+                    kept_ids = {t.identifier for t in filtering_results.kept_traces}
+                    traces = [t for t in traces if t.identifier in kept_ids]
+                    logger.info(
+                        f"quality-filtered {eval_subset_name}: {filtering_results.orig_trace_count} -> "
+                        f"{len(traces)} traces ({filtering_results.filtered_trace_count} removed)"
+                    )
+                filtered_parent_counts[eval_subset_name] = len(traces)
+                partitions = self._partition_traces_by_hint_strategy(
+                    traces,
+                    prompt_db,
+                    eval_subset_name=eval_subset_name,
+                    caps_filtering_config=caps_config,
                 )
-                kept_ids = {t.identifier for t in filtering_results.kept_traces}
-                traces = [t for t in traces if t.identifier in kept_ids]  # preserves stable ordering
-                logger.info(
-                    f"pre-filtered {eval_subset_name}: {filtering_results.orig_trace_count} -> "
-                    f"{len(traces)} traces ({filtering_results.filtered_trace_count} removed)"
+            else:
+                # hint_presence_split: single-phase filtering (existing behavior)
+                if parent_filtering.any_filtering_enabled:
+                    filtering_results = pyine.organisms.datamodules.samples.filtering.filter_traces(
+                        traces=traces,
+                        epoch=0,
+                        filtering_config=parent_filtering,
+                    )
+                    kept_ids = {t.identifier for t in filtering_results.kept_traces}
+                    traces = [t for t in traces if t.identifier in kept_ids]
+                    logger.info(
+                        f"pre-filtered {eval_subset_name}: {filtering_results.orig_trace_count} -> "
+                        f"{len(traces)} traces ({filtering_results.filtered_trace_count} removed)"
+                    )
+                filtered_parent_counts[eval_subset_name] = len(traces)
+                partitions = self._partition_traces_by_hint_strategy(
+                    traces,
+                    prompt_db,
+                    eval_subset_name=eval_subset_name,
                 )
-            filtered_parent_counts[eval_subset_name] = len(traces)
-            # partition the pre-filtered traces by hint strategy
-            partitions = self._partition_traces_by_hint_strategy(
-                traces,
-                prompt_db,
-                eval_subset_name=eval_subset_name,
-            )
             # counterfactual invariant: verify family alignment across configured partitions
             if self.config.evaluation_strategy == EvaluationStrategy.counterfactual:
                 configured_partitions = ["hintless"]
@@ -965,6 +1081,7 @@ class ShortcutBiasDataModule(
         traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
         prompt_db: pyine.prompts.PromptResultDB | None = None,
         eval_subset_name: str | None = None,
+        caps_filtering_config: pyine.organisms.datamodules.samples.configs.TraceFilteringConfig | None = None,
     ) -> dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]]:
         """Partition traces into hinted, misleading, and hintless lists based on evaluation strategy.
 
@@ -997,6 +1114,8 @@ class ShortcutBiasDataModule(
                 Used as fallback when LMDB trace augmentation is not present.
             eval_subset_name: The parent eval subset name (e.g., "valid"). Used in counterfactual
                 mode to read the parent's code_type_prob_map.
+            caps_filtering_config: Optional caps-only filtering config forwarded to
+                ``build_counterfactual_eval_subsets`` for group-level cap filtering.
 
         Returns:
             Dict with keys "hinted", "misleading", "hintless" mapping to trace lists.
@@ -1018,6 +1137,7 @@ class ShortcutBiasDataModule(
                 rng=rng,
                 prompt_db=prompt_db,
                 check_prompt_db_fn=self._check_prompt_db_for_hint,
+                caps_filtering_config=caps_filtering_config,
             )
         # hint_presence_split: simple partition based on whether trace has each hint type
         partitions: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]] = {

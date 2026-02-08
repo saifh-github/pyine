@@ -1,6 +1,7 @@
 """Tests for trace filtering logic in the samples module."""
 
 import collections
+import typing
 
 import pytest
 import pytest_mock
@@ -534,3 +535,116 @@ class TestTokenBasedFiltering:
         # (unless threshold is so low/high that both filter everything/nothing)
         assert results_chars.kept_trace_count >= 0
         assert results_tokens.kept_trace_count >= 0
+
+
+class TestTraceFilteringConfigSplitMethods:
+    """Tests for create_quality_only(), create_caps_only(), and has_cap_filters."""
+
+    pytestmark: typing.ClassVar[list[typing.Any]] = []
+
+    def test_create_quality_only_preserves_quality_fields(self) -> None:
+        cfg = TraceFilteringConfig(
+            seed=42,
+            max_trace_families=10,
+            max_traces_per_family=5,
+            max_traces_per_solution=3,
+            max_traces_per_problem=2,
+            max_trace_steps=500,
+            max_code_line_count=100,
+            max_code_line_length=200,
+            max_code_length=5000,
+            max_args_length=300,
+        )
+        quality = cfg.create_quality_only()
+        assert quality.max_trace_steps == 500
+        assert quality.max_code_line_count == 100
+        assert quality.max_code_line_length == 200
+        assert quality.max_code_length == 5000
+        assert quality.max_args_length == 300
+        assert quality.seed == 42
+
+    def test_create_quality_only_disables_cap_fields(self) -> None:
+        cfg = TraceFilteringConfig(
+            max_trace_families=10,
+            max_traces_per_family=5,
+            max_traces_per_solution=3,
+            max_traces_per_problem=2,
+        )
+        quality = cfg.create_quality_only()
+        assert quality.max_trace_families is None
+        assert quality.max_traces_per_family is None
+        assert quality.max_traces_per_solution is None
+        assert quality.max_traces_per_problem is None
+
+    def test_create_caps_only_preserves_cap_fields(self) -> None:
+        cfg = TraceFilteringConfig(
+            seed=42,
+            max_trace_families=10,
+            max_traces_per_family=5,
+            max_traces_per_solution=3,
+            max_traces_per_problem=2,
+            max_trace_steps=500,
+            max_code_line_count=100,
+        )
+        caps = cfg.create_caps_only()
+        assert caps.max_trace_families == 10
+        assert caps.max_traces_per_family == 5
+        assert caps.max_traces_per_solution == 3
+        assert caps.max_traces_per_problem == 2
+        assert caps.seed == 42
+
+    def test_create_caps_only_disables_quality_fields(self) -> None:
+        cfg = TraceFilteringConfig(
+            max_trace_steps=500,
+            max_code_line_count=100,
+            max_code_line_length=200,
+            max_code_length=5000,
+            max_args_length=300,
+            use_token_lengths=True,
+            tokenizer_model_id="gpt-4o",
+        )
+        caps = cfg.create_caps_only()
+        assert caps.max_trace_steps is None
+        assert caps.max_code_line_count is None
+        assert caps.max_code_line_length is None
+        assert caps.max_code_length is None
+        assert caps.max_args_length is None
+        assert caps.use_token_lengths is False
+        assert caps.tokenizer_model_id is None
+        assert caps.tokenizer_path is None
+
+    def test_has_cap_filters_true_when_caps_set(self) -> None:
+        assert TraceFilteringConfig(max_trace_families=5).has_cap_filters is True
+        assert TraceFilteringConfig(max_traces_per_family=2).has_cap_filters is True
+        assert TraceFilteringConfig(max_traces_per_solution=1).has_cap_filters is True
+        assert TraceFilteringConfig(max_traces_per_problem=3).has_cap_filters is True
+
+    def test_has_cap_filters_false_when_no_caps(self) -> None:
+        cfg = TraceFilteringConfig(max_trace_steps=500, max_code_length=1000)
+        assert cfg.has_cap_filters is False
+
+    def test_has_cap_filters_false_for_disabled(self) -> None:
+        assert TraceFilteringConfig.create_disabled().has_cap_filters is False
+
+    def test_round_trip_quality_plus_caps_cover_all_fields(self) -> None:
+        """Quality-only + caps-only together cover all original filter fields."""
+        cfg = TraceFilteringConfig(
+            seed=42,
+            max_trace_families=10,
+            max_traces_per_family=5,
+            max_traces_per_solution=3,
+            max_traces_per_problem=2,
+            max_trace_steps=500,
+            max_code_line_count=100,
+            max_code_line_length=200,
+            max_code_length=5000,
+            max_args_length=300,
+        )
+        quality = cfg.create_quality_only()
+        caps = cfg.create_caps_only()
+        # quality has no caps, caps has no quality
+        assert not quality.has_cap_filters
+        assert caps.max_trace_steps is None
+        # both retain the seed
+        assert quality.seed == cfg.seed
+        assert caps.seed == cfg.seed
