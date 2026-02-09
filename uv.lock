@@ -3240,7 +3240,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67.1,<5.0.0" },
     { name = "transformers", specifier = ">=4.55.4,<5.0.0" },
     { name = "trl", specifier = ">=0.27.1" },
-    { name = "trl", extras = ["vllm"], marker = "sys_platform != 'darwin' and extra == 'vllm'", specifier = ">=0.26.1" },
+    { name = "trl", extras = ["vllm"], marker = "sys_platform != 'darwin' and extra == 'vllm'", specifier = ">=0.27.1" },
     { name = "unidiff", specifier = ">=0.7.5,<0.8.0" },
     { name = "wandb", specifier = ">=0.23.1,<1.0.0" },
     { name = "wordcloud", marker = "extra == 'dev'", specifier = ">=1.9.4" },
