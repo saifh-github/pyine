@@ -91,11 +91,11 @@ config:
           max_args_length: 500  # limit inputs/outputs max length (for smaller+easier dataset)
         selection_config:
           code_type_prob_map:  # Must explicitly set all types to sum to 1.0
-            original: 1.0
-            hinted: 0.0
-            stubbed: 0.0
-            obfuscated_hinted: 0.0
-            obfuscated: 0.0
+            original: 0.75
+            hinted: 0.05
+            stubbed: 0.1
+            obfuscated_hinted: 0.05
+            obfuscated: 0.05
           samples_per_family: 1
           draw_attempts: 5
           fallback_to_orig: true
@@ -126,18 +126,21 @@ config:
         shuffle: true
     # Dataset settings
     keep_generated_datasets_in_memory: false
-    subset_names: [train, valid, test]
+    evaluation_strategy: counterfactual
+    eval_hint_types: [helpful]
     train_subset_names: [train]
-    valid_subset_names: [valid]
-    eval_subset_names: [train, valid]
+    valid_subset_names: [valid_hinted, valid_hintless]
+    eval_subset_names: [valid]
     instantiate_parsers_at_setup: false
     use_local_dataset_cache: true
     use_tokenized_dataset_cache: true
     cache_lock_timeout_seconds: 1800.0
-    message_generator_num_workers: 4
+    message_generator_num_workers: 8
     min_samples_hinted: 0
     min_samples_misleading: 0
     min_samples_hintless: 0
+    add_line_numbers: false  # whether to add line numbers to formatted code strings
+    add_block_markers: false  # whether to add block-of-interest markers to formatted code strings
 
   # GRPO training arguments (RL equivalent of training_args_config)
   grpo_config:
@@ -148,7 +151,7 @@ config:
     # ------------
     per_device_train_batch_size: 4  # GRPO typically uses smaller batch sizes
     per_device_eval_batch_size: 5  # Larger eval batch (from prototype train_grpo.py)
-    gradient_accumulation_steps: 8
+    gradient_accumulation_steps: 6
     learning_rate: 5e-6  # Lower than SFT (2e-4) for RL stability
     weight_decay: 0.0
     lr_scheduler_type: "constant"
@@ -253,20 +256,22 @@ config:
       enabled: true
       log_total: true
       log_terms: true
-      log_batch_stats: false  # disable per-batch stats (reduces metric clutter)
+      log_batch_stats: true
       log_metrics: true
       log_tables: true
-      log_every_n_generations: 30  # log sample metrics (scalars + table rows) every 30 generations
+      log_every_n_generations: 16  # log sample metrics (scalars + table rows) every 30 generations
       table_max_rows: 100  # flush table when buffer reaches this size
       main_process_only: true
       gather_distributed_summaries: true
       barrier_before_finalize: true
       category_extraction_config:  # optional category extraction config
         enabled_fields:
+          - "code_type"
           - "tags"
-        tag_prefixes:  # list of tag prefixes that should be extracted as categories
-          - "difficulty"
+        tag_prefixes:
+          - "parser"
           - "total_steps"
+          - "difficulty"
 
   # LoRA configuration (same as SFT v0)
   #lora_config:
