@@ -37,12 +37,25 @@ class TestDistributedRankFilter:
     ) -> None:
         monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "1")
         monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 3)
-        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 2)
+        monkeypatch.setattr("pyine.utils.distrib.get_local_rank", lambda default=None: 2)
         log_filter = logging_utils.DistributedRankFilter()
         record = _make_log_record("train start")
         assert log_filter.filter(record) is False
         assert record.msg == "train start"
         assert record.rank_info == ""
+
+    def test_filter_falls_back_to_global_rank_when_local_rank_unknown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When LOCAL_RANK is unavailable, suppression falls back to global rank."""
+        monkeypatch.setenv(logging_utils.REDUCE_NON_PRIMARY_LOG_LEVEL_ENV, "1")
+        monkeypatch.setattr("pyine.utils.distrib.get_world_size", lambda default=None: 4)
+        monkeypatch.setattr("pyine.utils.distrib.get_local_rank", lambda default=None: None)
+        monkeypatch.setattr("pyine.utils.distrib.get_global_rank", lambda default=None: 2)
+        log_filter = logging_utils.DistributedRankFilter()
+        record = _make_log_record("should be suppressed")
+        assert log_filter.filter(record) is False
 
     def test_filter_handles_unknown_rank(
         self,

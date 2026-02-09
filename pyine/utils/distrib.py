@@ -96,6 +96,8 @@ __all__ = [
     "get_world_size",
     "is_distributed",
     "is_local_main_process",
+    "has_explicit_global_rank",
+    "is_confirmed_global_main",
     "is_main_process",
     "is_per_node_prep_enabled",
     "local_barrier",
@@ -257,6 +259,44 @@ def is_distributed() -> bool:
     """Return whether the current execution appears to be distributed."""
     world_size = get_world_size(default=None)
     return world_size is not None and world_size > 1
+
+
+def has_explicit_global_rank() -> bool:
+    """Return True if a global rank is available from an authoritative source.
+
+    Returns True if torch.distributed is initialized or if a global-rank env var
+    (RANK, SLURM_PROCID, etc.) is explicitly set. Returns False when the only rank
+    information comes from LOCAL_RANK, which is ambiguous in multi-node setups
+    (every node's local-rank-0 would appear as global-rank-0).
+    """
+    rank = _get_torch_rank()
+    if rank is not None:
+        return True
+    rank = _read_first_env_int(_GLOBAL_RANK_ENV_KEYS)
+    return rank is not None and rank >= 0
+
+
+def is_confirmed_global_main() -> bool:
+    """Return True only when this process is confirmed to be the single global primary.
+
+    Unlike ``is_main_process()`` which can be fooled when ``get_global_rank()`` falls
+    back to LOCAL_RANK (every node's local-rank-0 looks like global-rank-0), this
+    function requires an authoritative global rank source. In multi-node setups where
+    only LOCAL_RANK is available, it conservatively returns False to avoid accidental
+    fan-out of globally-singleton operations (W&B init, fixed-name artifact writes).
+
+    For single-node runs (or when no distributed environment is detected), the function
+    falls back to ``is_local_main_process()`` since local == global in that case.
+
+    Use this for operations that must happen exactly once across all nodes. For per-node
+    operations, use ``is_local_main_process()`` instead.
+    """
+    if has_explicit_global_rank():
+        return is_main_process()
+    num_nodes = get_num_nodes(default=None)
+    if num_nodes in (None, 1):
+        return is_local_main_process()
+    return False
 
 
 def is_main_process(

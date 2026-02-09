@@ -410,6 +410,7 @@ def entrypoint_setup(
     wandb_init_kwargs: dict[str, typing.Any] | None = None,
     wandb_init_on_all_ranks: bool = False,
     persist_runtime_artifacts: bool = True,
+    persist_wandb_artifacts: bool = True,
     **extra_configs: typing.Any,
 ) -> None:
     """Sets up the framework (env vars, logging, rng) for reproducible experiments.
@@ -430,7 +431,12 @@ def entrypoint_setup(
             If `use_wandb_logging` is False, does nothing.
         wandb_init_on_all_ranks: whether wandb is initialized on all ranks (enables shared mode).
         persist_runtime_artifacts: whether to write configs/metadata artifacts to the runtime output
-            directory. Set to False for non-primary distributed ranks that should avoid disk writes.
+            directory. Set to False for non-local-primary ranks (local_rank != 0) that should avoid
+            disk writes.
+        persist_wandb_artifacts: whether to upload config artifacts to W&B. Set to False for
+            non-global-primary ranks that should not upload artifacts. Defaults to True to preserve
+            existing behavior for single-process callers. Note: upload only occurs when
+            ``persist_runtime_artifacts`` is also True (the files must exist on disk to upload).
         extra_configs: extra configs that are forwarded to this function (to be logged).
     """
     import pyine.utils.filesystem
@@ -445,6 +451,11 @@ def entrypoint_setup(
 
         if runtime_config is None:
             # setup logging with default settings if no config is provided (otherwise hydra handles it)
+            # NOTE: log_to_file=True writes to a shared pyine.log via RotatingFileHandler, which is
+            # not multiprocess-safe. In distributed mode, all local-rank-0 processes now emit INFO
+            # logs. This is only reached for non-Hydra runs (Hydra configures logging separately).
+            # If non-Hydra distributed runs are ever needed, consider gating file logging to
+            # global-rank-0 or adding rank to the filename.
             pyine.utils.logging.setup_logging(
                 level=os.environ.get("LOGLEVEL", logging.INFO),
                 log_to_file=True,
@@ -517,7 +528,7 @@ def entrypoint_setup(
         if persist_runtime_artifacts:
             # logging configs after wandb init means that we also log wandb run id w/ runtime stuff
             logged_config_file_paths = log_configs(runtime_config, app_config_dict)
-        if use_wandb_logging and persist_runtime_artifacts:
+        if use_wandb_logging and persist_wandb_artifacts and logged_config_file_paths:
             assert runtime_config.wandb_run_id is not None
             artifact_name = pyine.utils.filesystem.slugify(
                 text=f"{runtime_config.app_name}-{runtime_config.wandb_run.name}-configs",

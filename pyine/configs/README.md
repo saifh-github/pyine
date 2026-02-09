@@ -46,7 +46,10 @@ ______________________________________________________________________
 Hydra integrates a callback (`pyine.configs.callbacks.NonPrimaryRankCleanupCallback`) that
 automatically reroutes non-primary distributed ranks to a temporary output directory. By
 default it keeps Hydra's file logging enabled and preserves the temporary directory, which is
-often useful when debugging per-rank issues.
+often useful when debugging per-rank issues. On node-local filesystems (detected via
+`pyine.utils.filesystem.is_path_on_shared_filesystem`), each node's local-rank-0 process
+keeps the real output directory since each node has its own physical storage and rank-suffixed
+filenames avoid collisions.
 
 ______________________________________________________________________
 

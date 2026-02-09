@@ -13,7 +13,7 @@ class TestStdoutMilestones:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=True)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=True)
         callback = callbacks_module.StdoutMilestones(only_main_process=True)
         assert callback._should_print() is True
 
@@ -21,7 +21,7 @@ class TestStdoutMilestones:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback = callbacks_module.StdoutMilestones(only_main_process=True)
         assert callback._should_print() is False
 
@@ -29,7 +29,7 @@ class TestStdoutMilestones:
         self,
         mocker: pytest_mock.MockerFixture,
     ) -> None:
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback = callbacks_module.StdoutMilestones(only_main_process=False)
         assert callback._should_print() is True
 
@@ -147,7 +147,7 @@ class TestStdoutMilestones:
         mocker: typing.Any,
     ) -> None:
         """Test on_init_end doesn't print on worker process."""
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback.on_init_end(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -187,7 +187,7 @@ class TestStdoutMilestones:
         mocker: typing.Any,
     ) -> None:
         """Test on_train_begin doesn't print on worker process."""
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback.on_train_begin(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -263,7 +263,7 @@ class TestStdoutMilestones:
         mocker: typing.Any,
     ) -> None:
         """Test on_log doesn't print on worker process."""
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         logs = {"loss": 0.5}
         callback.on_log(args, state, control, logs=logs)
         mock_print_fn.assert_not_called()
@@ -345,7 +345,7 @@ class TestStdoutMilestones:
         mocker: typing.Any,
     ) -> None:
         """Test on_save doesn't print on worker process."""
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback.on_save(args, state, control)
         mock_print_fn.assert_not_called()
 
@@ -373,7 +373,7 @@ class TestStdoutMilestones:
         mocker: typing.Any,
     ) -> None:
         """Test on_train_end doesn't print on worker process."""
-        mocker.patch("pyine.utils.distrib.is_main_process", return_value=False)
+        mocker.patch("pyine.utils.distrib.is_local_main_process", return_value=False)
         callback.on_train_end(args, state, control)
         mock_print_fn.assert_not_called()
 

@@ -6,7 +6,11 @@ import transformers
 
 import pyine.utils.pydantic
 
+SAVE_ON_EACH_NODE_AUTO: typing.Final[str] = "auto"
+"""Sentinel value for TrainingArgsConfig.save_on_each_node that triggers runtime auto-detection."""
+
 __all__ = [
+    "SAVE_ON_EACH_NODE_AUTO",
     "TrainingArgsConfig",
     "GenerationConfig",
     "LoraConfig",
@@ -34,12 +38,17 @@ else:
         fn=transformers.TrainingArguments,
         name="TrainingArgsConfig",
         model_config=pydantic.ConfigDict(frozen=True, extra="forbid"),
+        type_overrides={
+            "save_on_each_node": bool | typing.Literal["auto"],
+        },
         default_overrides={
             # we use some updated defaults (low-impact, QoL stuff)
             "load_best_model_at_end": True,  # easy to forget, but important! (also force-saves best ckpt)
             "logging_first_step": True,  # good for plotting/sanity
             "log_level": "info",  # enable info-level logging for models by default
             "report_to": "none",  # disable by default, and enable at runtime if needed
+            # auto-detect whether to save checkpoints on each node (multi-node + local FS)
+            "save_on_each_node": SAVE_ON_EACH_NODE_AUTO,
             # we also need to replace some defaults that CANNOT be serialized (factories)
             "lr_scheduler_kwargs": {},  # same behavior as original default
             "include_for_metrics": [],  # same behavior as original default

@@ -24,10 +24,10 @@ class DistributedRankFilter(logging.Filter):
     """Logging filter that prefixes log messages with distributed rank information.
 
     When running in distributed mode (world size > 1), this filter prefixes log messages with a
-    `[rank X/Y]` tag indicating the current process rank and total world size. It can also suppress
-    log records emitted by non-primary ranks when their severity is below WARNING (opt out via
-    `PYINE_LOG_NON_PRIMARY_WARN_ONLY=0`). The prefix is injected exactly once per log record,
-    regardless of how many handlers process the record.
+    `[rank X/Y]` tag indicating the current process's global rank and total world size. It can also
+    suppress log records emitted by non-local-primary ranks (local_rank != 0) when their severity is
+    below WARNING (opt out via `PYINE_LOG_NON_PRIMARY_WARN_ONLY=0`). The prefix is injected exactly
+    once per log record, regardless of how many handlers process the record.
     """
 
     def __init__(
@@ -58,10 +58,13 @@ class DistributedRankFilter(logging.Filter):
         world_size = distrib_utils.get_world_size(default=None)
         if world_size is None or world_size <= 1:
             return True
-        rank = distrib_utils.get_global_rank(default=None)
-        if self._reduce_non_primary_log_level and rank not in (None, 0) and record.levelno < logging.WARNING:
+        local_rank = distrib_utils.get_local_rank(default=None)
+        if local_rank is None:
+            local_rank = distrib_utils.get_global_rank(default=None)  # fallback for launchers without LOCAL_RANK
+        if self._reduce_non_primary_log_level and local_rank not in (None, 0) and record.levelno < logging.WARNING:
             return False
-        rank_display = "?" if rank is None else str(rank)
+        global_rank = distrib_utils.get_global_rank(default=None)
+        rank_display = "?" if global_rank is None else str(global_rank)
         rank_token = f"[rank {rank_display}/{world_size}]"
         record.rank_info = rank_token
         if not getattr(record, "_pyine_rank_prefixed", False):

@@ -23,6 +23,7 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 import pyine.utils.distrib
+import pyine.utils.filesystem
 import pyine.utils.interrupts
 import pyine.utils.langchain
 import pyine.utils.portability
@@ -149,6 +150,37 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
             "  Option B: Train and predict in one run without vLLM (do_train=True, do_predict=True, "
             "vllm_provider_config=null)",
         )
+
+
+def resolve_save_on_each_node(
+    training_args_dict: dict[str, typing.Any],
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+) -> None:
+    """Resolve ``save_on_each_node='auto'`` based on multi-node and filesystem detection.
+
+    When the value is ``'auto'`` (the default in ``TrainingArgsConfig``), this function checks
+    whether the run is multi-node and the output directory is on node-local storage. If so,
+    ``save_on_each_node`` is set to True so that each node saves checkpoints locally; otherwise
+    it defaults to False (standard HF behavior).
+
+    Explicit ``True`` or ``False`` values are left unchanged.
+
+    Args:
+        training_args_dict: Mutable dict of training arguments (modified in-place).
+        runtime: Runtime config for the current run (used for output dir detection).
+    """
+    if training_args_dict.get("save_on_each_node") != pyine.utils.transformers.SAVE_ON_EACH_NODE_AUTO:
+        return
+    should_save = False
+    num_nodes = pyine.utils.distrib.get_num_nodes(default=1)
+    if num_nodes is not None and num_nodes > 1 and runtime is not None:
+        output_dir = training_args_dict.get("output_dir") or str(runtime.output_dir_path)
+        should_save = not pyine.utils.filesystem.is_path_on_shared_filesystem(output_dir)
+    training_args_dict["save_on_each_node"] = should_save
+    if should_save:
+        logger.info("auto-enabled save_on_each_node (multi-node + local FS detected)")
+    else:
+        logger.debug(f"resolved save_on_each_node to False (num_nodes={num_nodes})")
 
 
 class ModelTokenizerConfigBase(pydantic.BaseModel):
@@ -685,10 +717,11 @@ def prepare_resume_artifacts(
         logger.debug(f"will resume wandb run id: {resume_artifacts.wandb_resume_kwargs['id']}")
     elif config.use_wandb_logging:
         logger.debug("will create a new wandb run for resumed training")
-    if runtime is not None and persist_to_runtime:
-        assert runtime.output_dir_path.is_dir(), "invalid runtime config output dir"
+    if runtime is not None and pyine.utils.distrib.is_local_main_process():
         runtime.metadata["resumed_from_run_dir"] = str(resume_artifacts.run_dir)
         runtime.metadata["resume_checkpoint_path"] = str(resume_artifacts.checkpoint_path)
+    if runtime is not None and persist_to_runtime:
+        assert runtime.output_dir_path.is_dir(), "invalid runtime config output dir"
         file_mappings: list[tuple[pathlib.Path | None, str]] = [
             (resume_artifacts.previous_config_path, "previous_config.json"),
             (resume_artifacts.previous_runtime_path, "previous_runtime.json"),

@@ -104,6 +104,7 @@ def sft_train(
         training_args_dict["report_to"] = ["wandb"]
     else:
         training_args_dict["report_to"] = []  # explicitly disable to prevent auto-detection
+    pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)
 
     # note: if we want to support other trainers (e.g. TRL), update config dict+trainer w/ instantiable classes
     training_args = transformers.TrainingArguments(**training_args_dict)
@@ -273,6 +274,7 @@ def rl_train(
     # TRL's __post_init__ auto-computes steps_per_generation from generation_batch_size (or vice versa),
     # but doesn't allow both to be set simultaneously; remove steps_per_generation to avoid conflict
     grpo_config_dict.pop("steps_per_generation", None)
+    pyine.apps.trainers.common.resolve_save_on_each_node(grpo_config_dict, runtime)
     grpo_config = trl.GRPOConfig(**grpo_config_dict)  # type: ignore[reportPrivateImportUsage]
     trainer = trl.GRPOTrainer(  # type: ignore[reportPrivateImportUsage]
         model=model,
@@ -337,17 +339,18 @@ async def main(
     """
     pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
     pyine.apps.trainers.common.validate_training_prediction_vllm_compatibility(config)
-    persist_runtime_artifacts = pyine.utils.distrib.is_main_process()
+    persist_runtime_artifacts = pyine.utils.distrib.is_local_main_process()
+    is_global_main = pyine.utils.distrib.is_confirmed_global_main()
     resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
         config=config,
         runtime=runtime,
-        persist_to_runtime=persist_runtime_artifacts,
+        persist_to_runtime=is_global_main,  # fixed-name file copies stay global-rank-0 only
     )
     try:
         # initialize wandb on all ranks only if explicitly requested, otherwise
-        # only on main rank for efficiency. Keep persist_runtime_artifacts separate as it controls
-        # file I/O operations (configs, checkpoints) which should only happen on rank 0.
-        use_wandb_logging = config.use_wandb_logging and (config.wandb_init_on_all_ranks or persist_runtime_artifacts)
+        # only on global main rank for efficiency. Keep persist_runtime_artifacts separate as it
+        # controls file I/O operations (configs, metadata) which should happen on local-rank-0.
+        use_wandb_logging = config.use_wandb_logging and (config.wandb_init_on_all_ranks or is_global_main)
         wandb_init_kwargs = resume_artifacts.wandb_resume_kwargs if resume_artifacts and use_wandb_logging else None
         pyine.utils.reprod.entrypoint_setup(
             runtime_config=runtime,
@@ -356,6 +359,7 @@ async def main(
             wandb_init_kwargs=wandb_init_kwargs,
             wandb_init_on_all_ranks=config.wandb_init_on_all_ranks,
             persist_runtime_artifacts=persist_runtime_artifacts,
+            persist_wandb_artifacts=is_global_main,
         )
     except pyine.utils.reprod.DryRunExit:
         return

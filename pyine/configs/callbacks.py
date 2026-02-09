@@ -8,14 +8,20 @@ import hydra.experimental.callback
 import omegaconf
 
 import pyine.utils.distrib
+import pyine.utils.filesystem
 
 
 class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
-    """Hydra callback that prevents non-primary distributed ranks from writing artifacts to disk.
+    """Hydra callback that manages output directories for non-primary distributed ranks.
 
-    The callback re-routes Hydra's run directory to a temporary location, optionally disables
-    file-based logging, and may clean up the temporary directory once the job finishes. It
-    activates only when a non-zero distributed rank is detected by `pyine.utils.distrib`.
+    On shared filesystems, non-global-rank-0 processes have their Hydra run directory redirected
+    to a temporary location to avoid file collisions. On node-local filesystems, each node's
+    local-rank-0 process keeps the real output directory (since each node writes to its own
+    physical storage), while non-local-rank-0 processes are still redirected.
+
+    The callback optionally disables file-based logging and may clean up the temporary directory
+    once the job finishes. It activates only when a non-zero distributed rank is detected by
+    ``pyine.utils.distrib``.
     """
 
     def __init__(
@@ -26,6 +32,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         """Initializes the callback class."""
         self._cleanup_path: pathlib.Path | None = None
         self._detected_rank: int | None = None
+        self._redirected: bool = False
         self._logger = logging.getLogger(__name__)
         self._remove_temp_dir_on_exit = remove_temp_dir_on_exit
         self._disable_disk_logging = disable_disk_logging
@@ -39,8 +46,25 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         """Adjusts Hydra's configuration before the job starts."""
         rank_value = pyine.utils.distrib.get_global_rank(default=None)
         self._detected_rank = rank_value
+        self._redirected = False
         if pyine.utils.distrib.is_main_process(rank_value):
-            return  # this is the main process, keep the config as-is
+            if rank_value is None:
+                return  # not in distributed mode at all
+            if pyine.utils.distrib.has_explicit_global_rank():
+                return  # confirmed global-rank-0 from authoritative source (RANK env var / torch)
+            # global rank inferred from LOCAL_RANK fallback — ambiguous in multi-node
+            # (every node's local-rank-0 would look like global-rank-0); fall through
+            # to the FS-aware check below instead of trusting the inferred rank
+            self._logger.debug(
+                f"global rank {rank_value} inferred from LOCAL_RANK (no explicit RANK), "
+                "deferring to filesystem-aware check"
+            )
+        # on node-local filesystems, each node's local-rank-0 keeps the real output dir
+        # (rank-suffixed files avoid collisions, and each node has its own physical storage)
+        if self._is_local_primary_on_local_fs(config):
+            self._logger.debug(f"local FS detected for rank {rank_value}, keeping real output dir")
+            return
+        self._redirected = True
         temp_directory = pathlib.Path(tempfile.mkdtemp(prefix="pyine-hydra-rank-", dir=tempfile.gettempdir()))
         self._cleanup_path = temp_directory
         self._logger.debug(f"redirecting hydra outputs for rank {rank_value} to {temp_directory}")
@@ -75,7 +99,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         **kwargs: typing.Any,
     ) -> None:
         """Drops any file handlers that might have been attached before task execution."""
-        if self._is_main_process():
+        if not self._redirected:
             return
         runtime_output_dir = self._get_runtime_output_dir(config)
         if runtime_output_dir is not None:
@@ -91,7 +115,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         **kwargs: typing.Any,
     ) -> None:
         """Removes the temporary Hydra directory after the job completes."""
-        if self._is_main_process():
+        if not self._redirected:
             return
         cleanup_path = self._cleanup_path or self._get_runtime_output_dir(config)
         if cleanup_path is None:
@@ -106,9 +130,31 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
         self._cleanup_path = None
         self._detected_rank = None
 
-    def _is_main_process(self) -> bool:
-        """Returns whether the callback is running on the primary process (rank 0)."""
-        return pyine.utils.distrib.is_main_process(rank=self._detected_rank)
+    def _is_local_primary_on_local_fs(
+        self,
+        config: omegaconf.DictConfig,
+    ) -> bool:
+        """Return True if this process is local-rank-0 and the output dir is on local storage."""
+        local_rank = pyine.utils.distrib.get_local_rank(default=None)
+        if local_rank != 0:
+            return False
+        planned_dir = self._get_planned_run_dir(config)
+        if planned_dir is None:
+            return False  # can't determine → assume shared (conservative)
+        return not pyine.utils.filesystem.is_path_on_shared_filesystem(planned_dir)
+
+    @staticmethod
+    def _get_planned_run_dir(
+        config: omegaconf.DictConfig,
+    ) -> pathlib.Path | None:
+        """Extracts Hydra's planned run directory from the config, if resolvable."""
+        try:
+            run_dir = omegaconf.OmegaConf.select(config, "hydra.run.dir")
+        except omegaconf.errors.OmegaConfBaseException:
+            return None
+        if run_dir is None:
+            return None
+        return pathlib.Path(str(run_dir)).expanduser().resolve()
 
     @staticmethod
     def _get_runtime_output_dir(

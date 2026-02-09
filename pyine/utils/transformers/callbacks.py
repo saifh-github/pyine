@@ -35,7 +35,8 @@ __all__ = [
 class StdoutMilestones(transformers.TrainerCallback):
     """Prints training/eval milestones for the HuggingFace Trainer.
 
-    These milestones will be logged, but only on the main process (unless configured otherwise):
+    These milestones will be logged, but only on each node's local-rank-0 process (unless
+    configured otherwise):
       - init/train begin/end;
       - epoch begin/end;
       - periodic logs (loss, lr, etc.);
@@ -46,7 +47,9 @@ class StdoutMilestones(transformers.TrainerCallback):
     without changing the default Hugging Face Trainer logging behavior.
 
     Args:
-        only_main_process: If True, prints only when args.process_index == 0.
+        only_main_process: If True, prints only on local-rank-0 per node (via
+            ``is_local_main_process``). This differs from W&B-related callbacks which use
+            ``is_main_process`` (global-rank-0 only) since stdout milestones are per-node output.
         print_fn: Callable used for printing messages. Defaults to logging.info.
         print_config_at_start: If True, prints a short run/config header at train start.
     """
@@ -69,7 +72,7 @@ class StdoutMilestones(transformers.TrainerCallback):
         """Check if output should be printed on this process."""
         if not self.only_main_process:
             return True
-        return pyine.utils.distrib.is_main_process()
+        return pyine.utils.distrib.is_local_main_process()
 
     @staticmethod
     def _fmt_epoch(epoch: float | None) -> str:

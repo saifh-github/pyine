@@ -9,6 +9,7 @@ import pytest_mock
 import torch
 import transformers
 
+import pyine.apps.trainers.common
 import pyine.apps.trainers.hf_trainer
 import pyine.data.datamodule
 import pyine.evals.utils
@@ -1513,3 +1514,170 @@ def test_sft_train_attaches_gpu_stats_callback_when_configured(
     assert len(gpu_callbacks) == 1, (
         "GPUStatsLoggingCallback should be attached when config is set and wandb_run available"
     )
+
+
+@pytest.mark.asyncio
+async def test_main_local_rank0_non_global_rank0_gating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulate node 1's local-rank-0 (global != 0, local == 0).
+
+    Verify that persist_runtime_artifacts=True, persist_wandb_artifacts=False,
+    and use_wandb_logging=False are passed to entrypoint_setup.
+    """
+    captured_entrypoint_kwargs: dict[str, typing.Any] = {}
+    captured_resume_kwargs: dict[str, typing.Any] = {}
+
+    def fake_entrypoint_setup(
+        **kwargs: typing.Any,
+    ) -> None:
+        captured_entrypoint_kwargs.update(kwargs)
+
+    def fake_prepare_resume_artifacts(
+        **kwargs: typing.Any,
+    ) -> None:
+        captured_resume_kwargs.update(kwargs)
+        return
+
+    def fake_prepare_datamodule(
+        *_args: typing.Any,
+        **_kwargs: typing.Any,
+    ) -> typing.Any:
+        import unittest.mock
+
+        return unittest.mock.Mock(spec=pyine.data.datamodule.ConversationDataModule)
+
+    # simulate: local_rank=0 but not confirmed global main
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.distrib,
+        "is_confirmed_global_main",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.distrib,
+        "is_local_main_process",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.reprod,
+        "entrypoint_setup",
+        fake_entrypoint_setup,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.apps.trainers.common,
+        "prepare_resume_artifacts",
+        fake_prepare_resume_artifacts,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.apps.trainers.common,
+        "prepare_datamodule",
+        fake_prepare_datamodule,
+    )
+    monkeypatch.setattr(
+        pyine.apps.trainers.hf_trainer.pyine.utils.distrib,
+        "barrier",
+        lambda: None,
+    )
+
+    config = types.SimpleNamespace(
+        training_args_config=types.SimpleNamespace(do_train=False, do_predict=False),
+        use_wandb_logging=True,
+        wandb_init_on_all_ranks=False,
+        resume_from_run_dir=None,
+        is_resuming=lambda: False,
+        evals_config=types.SimpleNamespace(
+            category_extraction_config=None,
+            vllm_provider_config=None,
+        ),
+        get_model=lambda **_kwargs: "model",
+        get_tokenizer=lambda **_kwargs: "tokenizer",
+    )
+    runtime = types.SimpleNamespace(
+        wandb_run=None,
+        finalize=lambda: None,
+    )
+
+    await pyine.apps.trainers.hf_trainer.main(config=config, runtime=runtime)
+
+    # resume artifacts: persist_to_runtime should be False (not global main)
+    assert captured_resume_kwargs["persist_to_runtime"] is False
+    # entrypoint_setup: local-rank-0 writes files, but not wandb artifacts
+    assert captured_entrypoint_kwargs["persist_runtime_artifacts"] is True
+    assert captured_entrypoint_kwargs["persist_wandb_artifacts"] is False
+    # wandb logging should be False (not global main, wandb_init_on_all_ranks=False)
+    assert captured_entrypoint_kwargs["use_wandb_logging"] is False
+
+
+class TestResolveSaveOnEachNode:
+    def test_auto_resolves_to_false_single_node(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 1)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": "auto", "output_dir": str(tmp_path)}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=None)
+        assert args_dict["save_on_each_node"] is False
+
+    def test_auto_resolves_to_true_multinode_local_fs(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 2)
+        monkeypatch.setattr(
+            "pyine.utils.filesystem.is_path_on_shared_filesystem",
+            lambda _path: False,
+        )
+        runtime = types.SimpleNamespace(output_dir_path=tmp_path)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": "auto", "output_dir": str(tmp_path)}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=runtime)
+        assert args_dict["save_on_each_node"] is True
+
+    def test_auto_resolves_to_false_multinode_shared_fs(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 2)
+        monkeypatch.setattr(
+            "pyine.utils.filesystem.is_path_on_shared_filesystem",
+            lambda _path: True,
+        )
+        runtime = types.SimpleNamespace(output_dir_path=tmp_path)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": "auto", "output_dir": str(tmp_path)}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=runtime)
+        assert args_dict["save_on_each_node"] is False
+
+    def test_explicit_true_not_overridden(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 1)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": True}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=None)
+        assert args_dict["save_on_each_node"] is True
+
+    def test_explicit_false_not_overridden(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 2)
+        monkeypatch.setattr(
+            "pyine.utils.filesystem.is_path_on_shared_filesystem",
+            lambda _path: False,
+        )
+        runtime = types.SimpleNamespace(output_dir_path=tmp_path)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": False, "output_dir": str(tmp_path)}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=runtime)
+        assert args_dict["save_on_each_node"] is False
+
+    def test_auto_without_runtime_resolves_to_false(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("pyine.utils.distrib.get_num_nodes", lambda default=1: 2)
+        args_dict: dict[str, typing.Any] = {"save_on_each_node": "auto"}
+        pyine.apps.trainers.common.resolve_save_on_each_node(args_dict, runtime=None)
+        assert args_dict["save_on_each_node"] is False
