@@ -75,7 +75,7 @@ dev = [
     "pyright[nodejs]>=1.1.408",
 ]
 vllm = [
-    "trl[vllm]>=0.26.1; sys_platform != 'darwin'",  # can't install vLLM on MacOS
+    "trl[vllm]>=0.27.1; sys_platform != 'darwin'",  # can't install vLLM on MacOS
 ]
 flash_attn = [
     "flash-attn>=2.8.3; sys_platform == 'linux'",  # CUDA-only, Linux
