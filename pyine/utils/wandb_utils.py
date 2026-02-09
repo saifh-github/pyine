@@ -10,6 +10,7 @@ These utilities are designed to be lightweight and reusable across notebooks, an
 and other tools that need to interact with W&B data.
 """
 
+import contextlib
 import functools
 import json
 import pathlib
@@ -527,11 +528,12 @@ def discover_metric_keys(
 ) -> dict[str, list[str]]:
     """Discover available metric keys in a W&B run, grouped by category.
 
-    Samples a small portion of the run history to discover what metrics are logged.
+    Uses ``run.summary`` to get the complete list of logged keys (reliable even for sparse
+    metrics). Falls back to sampling history if the summary is unavailable.
 
     Args:
         run: The W&B Run object.
-        samples: Number of history samples to fetch for discovery.
+        samples: Number of history samples to fetch for discovery (used as fallback only).
         max_retries: Maximum number of retry attempts on network failures (default: 3).
 
     Returns:
@@ -544,12 +546,20 @@ def discover_metric_keys(
         >>> keys = discover_metric_keys(run)
         >>> print(f"Found {len(keys['reward_terms'])} reward term keys")
     """
-    sample_df = _retry_on_failure(
-        lambda: run.history(samples=samples),
-        max_retries=max_retries,
-        verbose=False,
-    )
-    all_keys: list[str] = list(sample_df.columns)
+    # use run.summary to get the complete list of logged keys (robust to sparse metrics that
+    # may not appear in a small sample of history rows)
+    summary_keys: list[str] = []
+    with contextlib.suppress(Exception):
+        summary_keys = list(run.summary.keys())
+    # fall back to sampled history if summary is unavailable or empty
+    if not summary_keys:
+        sample_df = _retry_on_failure(
+            lambda: run.history(samples=samples),
+            max_retries=max_retries,
+            verbose=False,
+        )
+        summary_keys = list(sample_df.columns)
+    all_keys: list[str] = summary_keys
 
     def _list_by_patterns(
         patterns: list[str],
@@ -567,8 +577,6 @@ def discover_metric_keys(
     reward_term_keys = _list_by_patterns(patterns=known_reward_term_key_parts)
     known_reward_metric_key_parts = ["reward/metrics/", "reward/run/metrics/"]
     reward_metric_keys = _list_by_patterns(patterns=known_reward_metric_key_parts)
-    known_reward_categories_key_parts = ["reward/categories/", "reward/run/categories/"]
-    reward_categories_keys = _list_by_patterns(patterns=known_reward_categories_key_parts)
     parsing_key_parts = ["/parsing/", "/failures/"]
     parsing_keys = _list_by_patterns(patterns=parsing_key_parts)
     trl_keys = _list_by_patterns(
@@ -606,13 +614,7 @@ def discover_metric_keys(
     ]
     # build set of all categorized keys to exclude from "other"
     categorized_keys = set(
-        reward_total_keys
-        + reward_term_keys
-        + reward_metric_keys
-        + reward_categories_keys
-        + parsing_keys
-        + trl_keys
-        + step_keys
+        reward_total_keys + reward_term_keys + reward_metric_keys + parsing_keys + trl_keys + step_keys
     )
     excluded_prefixes = ("completions/", "_")
     other_keys = [
@@ -622,7 +624,6 @@ def discover_metric_keys(
         "reward_total": sorted(reward_total_keys),
         "reward_terms": sorted(reward_term_keys),
         "reward_metrics": sorted(reward_metric_keys),
-        "reward_categories_keys": sorted(reward_categories_keys),
         "parsing": sorted(parsing_keys),
         "trl": sorted(trl_keys),
         "step_keys": sorted(step_keys),

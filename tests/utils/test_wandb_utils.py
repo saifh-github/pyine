@@ -16,10 +16,12 @@ class _MockWandbRun:
         per_key_data: dict[str, list[dict[str, typing.Any]]] | None = None,
         full_history: list[dict[str, typing.Any]] | None = None,
         sampled_df: pd.DataFrame | None = None,
+        summary: dict[str, typing.Any] | None = None,
     ) -> None:
         self._per_key_data = per_key_data or {}
         self._full_history = full_history or []
         self._sampled_df = sampled_df if sampled_df is not None else pd.DataFrame()
+        self.summary = summary if summary is not None else {}
 
     def history(
         self,
