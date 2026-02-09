@@ -3239,7 +3239,7 @@ requires-dist = [
     { name = "torch", specifier = ">=2.8.0,<3.0.0" },
     { name = "tqdm", specifier = ">=4.67.1,<5.0.0" },
     { name = "transformers", specifier = ">=4.55.4,<5.0.0" },
-    { name = "trl", specifier = ">=0.26.1" },
+    { name = "trl", specifier = ">=0.27.1" },
     { name = "trl", extras = ["vllm"], marker = "sys_platform != 'darwin' and extra == 'vllm'", specifier = ">=0.26.1" },
     { name = "unidiff", specifier = ">=0.7.5,<0.8.0" },
     { name = "wandb", specifier = ">=0.23.1,<1.0.0" },
@@ -4209,16 +4209,17 @@ wheels = [
 
 [[package]]
 name = "trl"
-version = "0.26.1"
+version = "0.27.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
+    { name = "packaging" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/7c/467c22f1bf6953e089343ac04ee61b7cc6fe07952f8151d31a63eae78d39/trl-0.26.1.tar.gz", hash = "sha256:8a6f41c9a2098164dd731d6a4befe1a7e50974de94e5d55fd846023826c23de7", size = 434832, upload-time = "2025-12-12T17:46:16.28Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/71/a470db929cb51f7f3f6ee33ccded1e88ee9ec83fe6070d4f6e48940bef3a/trl-0.27.2.tar.gz", hash = "sha256:b0a5b3ba4c28cf3736647b77925feccee8c542c509f63f4f5df070f3abe602df", size = 446950, upload-time = "2026-02-03T18:07:06.386Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/53/d468ae2aaffbbed8fa5979166ea59170039f1370d2dba982ea8cb9fd3886/trl-0.26.1-py3-none-any.whl", hash = "sha256:acadfdfa9da58345f3ff23407b9acaea62378eeb335967034b961b091cdd7d9f", size = 517360, upload-time = "2025-12-12T17:46:14.255Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/f7/21105a8b2bae423f9f7455aa2f4938ab3359c81e4b20b8436ac9255ebec9/trl-0.27.2-py3-none-any.whl", hash = "sha256:05fbaa257d5d55bc659d8470c4d189eb046c18332d34dbe679e595bd5d6553cc", size = 530912, upload-time = "2026-02-03T18:07:04.941Z" },
 ]
 
 [package.optional-dependencies]
