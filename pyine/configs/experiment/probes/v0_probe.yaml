@@ -1,0 +1,112 @@
+# @package _global_
+#
+# Probe training experiment: sweep architectures x layers
+#
+# Usage:
+#   Single GPU:  python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe
+#   Multi-GPU:   bash scripts/run_ddp.sh -- +experiment=probes/v0_probe
+
+defaults:
+  - override /config: base
+  - _self_
+
+runtime:
+  exp_name: probes/v0_probe
+  run_name: "${runtime.exp_name}"
+  tags:
+    - "model:${config.base_model}"
+    - "probe-training"
+  seed: 42
+  dry_run: false
+
+config:
+  _target_: pyine.apps.trainers.probe_trainer_configs.ProbeTrainerAppMainConfig
+
+  use_wandb_logging: true
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from checkpoint
+
+  # Dataset
+  dataset_path: /path/to/probe-dataset  # HF dataset with train/valid splits
+  text_field: messages
+  label_field: label
+  max_seq_length: 3000
+
+  # Training loop
+  num_epochs: 10
+  train_batch_size: 4
+  eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  logging_steps: 10
+  eval_steps: 50
+  dataloader_num_workers: 4
+  save_probes: true
+
+  auto_model_config:
+    use_cache: false
+    attn_implementation: "flash_attention_2"
+
+  # Probe configurations: sweep architectures x layers
+  probe_configs:
+    # --- Mean probes across layers ---
+    - name: mean_L8
+      architecture: mean
+      layer: 8
+      learning_rate: 1e-3
+    - name: mean_L16
+      architecture: mean
+      layer: 16
+      learning_rate: 1e-3
+    - name: mean_L24
+      architecture: mean
+      layer: 24
+      learning_rate: 1e-3
+
+    # --- Max probes ---
+    - name: max_L8
+      architecture: max
+      layer: 8
+      learning_rate: 1e-3
+    - name: max_L16
+      architecture: max
+      layer: 16
+      learning_rate: 1e-3
+    - name: max_L24
+      architecture: max
+      layer: 24
+      learning_rate: 1e-3
+
+    # --- Last-token probes ---
+    - name: last_L8
+      architecture: last_token
+      layer: 8
+      learning_rate: 1e-3
+    - name: last_L16
+      architecture: last_token
+      layer: 16
+      learning_rate: 1e-3
+    - name: last_L24
+      architecture: last_token
+      layer: 24
+      learning_rate: 1e-3
+
+    # --- Rolling-mean probe ---
+    - name: rolling_L16
+      architecture: rolling_mean
+      layer: 16
+      learning_rate: 1e-3
+      window_size: 32
+
+    # --- Softmax probe ---
+    - name: softmax_L16
+      architecture: softmax
+      layer: 16
+      learning_rate: 1e-3
+      temperature: 0.5
+
+    # --- Attention probe ---
+    - name: attn_L16
+      architecture: attention
+      layer: 16
+      learning_rate: 5e-4
+      attn_dim: 64
