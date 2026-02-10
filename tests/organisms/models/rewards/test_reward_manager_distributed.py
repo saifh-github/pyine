@@ -128,14 +128,19 @@ def _worker_gather_summaries_gpu(rank: int, world_size: int, result_queue: mp.Qu
     # each rank computes different number of rewards with different values
     # rank 0: 2 samples with reward 1.0 each
     # rank 1: 3 samples with reward 1.0 each
+    # note: must use a single compute_batch() call (not individual compute() calls) because
+    # each compute/compute_batch call triggers a distributed all_gather, so all ranks must
+    # call it the same number of times to avoid deadlock
     num_samples = 2 + rank
-    for i in range(num_samples):
-        ctx = manager.build_sample_context(
+    sample_ctxs = [
+        manager.build_sample_context(
             prompt="test",
             model_output="<final>ok</final>",
             sample_data=rewards_conftest.make_sample_data(f"s{rank}_{i}"),
         )
-        manager.compute(ctx, log=False)
+        for i in range(num_samples)
+    ]
+    manager.compute_batch(sample_ctxs, log=False)
     # flush stats (triggers gather on all ranks)
     manager.flush_stats()
     # only rank 0 should have logged the aggregated results
