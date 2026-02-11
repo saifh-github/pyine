@@ -141,6 +141,17 @@ config:
     min_samples_hintless: 0
     add_line_numbers: false  # whether to add line numbers to formatted code strings
     add_block_markers: false  # whether to add block-of-interest markers to formatted code strings
+    # if we want to IMPORT pregenerated output overrides from a previous run, uncomment these lines:
+    #pregenerated_outputs_lmdb_path: null # path to LMDB exported by DiskRewardLogger
+    #pregenerated_outputs_selection: latest # "latest" (highest gen count) or "best_reward"
+    #pregenerated_outputs_phase_prefix: "" # empty = load all phases (safe with problem-level splits)
+    #pregenerated_outputs_only_matched: false # true = only keep samples with a matching override
+
+  # if we want to EXPORT generations for later experiments, uncomment these lines:
+  # (note: )requires logging.enabled=true, logging.log_total=true, logging.main_process_only=true)
+  #generation_export_config:
+  #  output_path: ${runtime.output_dir_path}/generation_export.lmdb
+  #  log_every_n_generations: 1
 
   # GRPO training arguments (RL equivalent of training_args_config)
   grpo_config:
