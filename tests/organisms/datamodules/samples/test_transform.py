@@ -513,3 +513,99 @@ class TestTransformStrategies:
             if sample.predict_type == SamplePredictType.frame_variables:
                 got_partial = True
         assert got_partial, "hybrid strategy should produce partial samples for 'too long' traces"
+
+
+class TestDescriptionDisabledForCodeTypes:
+    """Tests for clearing descriptions based on code types."""
+
+    def test_description_cleared_for_obfuscated(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        selection = make_selected_sample(
+            small_fake_reader,
+            0,
+            code_type=SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated})),
+        )
+        trace_data = small_fake_reader[0]
+        cfg = SampleTransformConfig(
+            transform_strategy=SampleTransformStrategy.never,
+            predict_type_prob_map={},
+        )
+        rng = np.random.default_rng(0)
+        sample = generate_sample(
+            code_type_selection_result=selection,
+            trace_data=trace_data,
+            code_summary="Should be removed",
+            transform_config=cfg,
+            rng=rng,
+        )
+        assert sample is not None
+        assert sample.description == ""
+
+    def test_description_kept_for_original(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        selection = make_selected_sample(
+            small_fake_reader,
+            0,
+            code_type=SampleCodeTypeSet(frozenset({SampleCodeType.original})),
+        )
+        trace_data = small_fake_reader[0]
+        cfg = SampleTransformConfig(
+            transform_strategy=SampleTransformStrategy.never,
+            predict_type_prob_map={},
+        )
+        rng = np.random.default_rng(0)
+        sample = generate_sample(
+            code_type_selection_result=selection,
+            trace_data=trace_data,
+            code_summary="Should be kept",
+            transform_config=cfg,
+            rng=rng,
+        )
+        assert sample is not None
+        assert sample.description == "Should be kept"
+
+    def test_description_kept_when_config_has_empty_frozenset(self, small_fake_reader: FakeTraceDatasetReader) -> None:
+        selection = make_selected_sample(
+            small_fake_reader,
+            0,
+            code_type=SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated})),
+        )
+        trace_data = small_fake_reader[0]
+        cfg = SampleTransformConfig(
+            transform_strategy=SampleTransformStrategy.never,
+            predict_type_prob_map={},
+            code_types_without_description=frozenset(),
+        )
+        rng = np.random.default_rng(0)
+        sample = generate_sample(
+            code_type_selection_result=selection,
+            trace_data=trace_data,
+            code_summary="Should be kept even for obfuscated",
+            transform_config=cfg,
+            rng=rng,
+        )
+        assert sample is not None
+        assert sample.description == "Should be kept even for obfuscated"
+
+    def test_description_cleared_for_multi_augmented_with_obfuscated(
+        self,
+        small_fake_reader: FakeTraceDatasetReader,
+    ) -> None:
+        selection = make_selected_sample(
+            small_fake_reader,
+            0,
+            code_type=SampleCodeTypeSet(frozenset({SampleCodeType.obfuscated, SampleCodeType.hinted})),
+        )
+        trace_data = small_fake_reader[0]
+        cfg = SampleTransformConfig(
+            transform_strategy=SampleTransformStrategy.never,
+            predict_type_prob_map={},
+        )
+        rng = np.random.default_rng(0)
+        sample = generate_sample(
+            code_type_selection_result=selection,
+            trace_data=trace_data,
+            code_summary="Should be removed for obfuscated+hinted",
+            transform_config=cfg,
+            rng=rng,
+        )
+        assert sample is not None
+        assert sample.description == ""

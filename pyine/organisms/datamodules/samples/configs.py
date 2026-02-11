@@ -517,6 +517,12 @@ class SampleTransformConfig(pydantic.BaseModel):
         default_factory=lambda: typing.cast("SamplePredictTypeProbMap", {}),
     )
     """Probability map used to determine potential output sample types in random/hybrid transform strategies."""
+    code_types_without_description: frozenset[SampleCodeType] = frozenset({SampleCodeType.obfuscated})
+    """Code types for which the description should be cleared (set to empty string).
+
+    When a sample's code type set contains ANY type listed here, the description will be
+    replaced with an empty string in the generated SampleData. Defaults to {obfuscated}.
+    """
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> SampleTransformConfig:

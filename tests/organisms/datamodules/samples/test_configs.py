@@ -240,6 +240,21 @@ class TestSampleTransformConfig:
 
         assert cfg.get_max_partial_trace_steps(FakeTrace()) == 50
 
+    def test_code_types_without_description_defaults_to_obfuscated(self) -> None:
+        cfg = SampleTransformConfig()
+        assert cfg.code_types_without_description == frozenset({SampleCodeType.obfuscated})
+
+    def test_code_types_without_description_accepts_valid_code_types(self) -> None:
+        cfg = SampleTransformConfig(
+            code_types_without_description=frozenset({SampleCodeType.obfuscated, SampleCodeType.bugged}),
+        )
+        assert SampleCodeType.obfuscated in cfg.code_types_without_description
+        assert SampleCodeType.bugged in cfg.code_types_without_description
+
+    def test_code_types_without_description_accepts_empty(self) -> None:
+        cfg = SampleTransformConfig(code_types_without_description=frozenset())
+        assert cfg.code_types_without_description == frozenset()
+
 
 class TestSampleBuilderConfig:
     """Tests for SampleBuilderConfig."""

@@ -78,6 +78,9 @@ def generate_sample(
     """
     assert trace_data.identifier is not None, "trace identifier is required"
     assert trace_data.identifier == code_type_selection_result.trace_meta.identifier, "trace identifier mismatch"
+    if transform_config.code_types_without_description:
+        if code_type_selection_result.code_type.has_any(transform_config.code_types_without_description):
+            code_summary = None
     pred_type_selection_result = _select_predict_type(
         code_type_selection_result=code_type_selection_result,
         trace_data=trace_data,
