@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import collections
 import collections.abc
+import dataclasses
 import logging
 import pathlib
 import sys
@@ -62,6 +63,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
         ) = None,
         prompt_result_db_path: str | None = None,  # if none, will use framework default
         pregenerated_outputs: dict[str, str] | None = None,
+        only_with_pregenerated_output: bool = False,
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces.
 
@@ -82,8 +84,14 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                 default database is used.
             pregenerated_outputs: Optional mapping from sample identifiers to pregenerated model
                 output strings, used to override normal sample construction with e.g. pseudolabels.
+            only_with_pregenerated_output: If True, only keep samples whose trace identifier
+                has a matching entry in ``pregenerated_outputs``. Requires ``pregenerated_outputs``
+                to be set.
         """
         self._pregenerated_outputs = pregenerated_outputs
+        self._only_with_pregenerated_output = only_with_pregenerated_output
+        if only_with_pregenerated_output and pregenerated_outputs is None:
+            raise ValueError("only_with_pregenerated_output=True requires pregenerated_outputs to be set")
         self._curr_epoch: int = 0
         if filtering_config is None:
             filtering_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig()
@@ -215,6 +223,20 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             f" {self.selection_results.samples_with_parent_fallback} with parent fallback,"
             f" and {self.selection_results.failed_selections} failed selection attempts"
         )
+        if self._only_with_pregenerated_output and self._pregenerated_outputs is not None:
+            pre_filter_count = len(self.selection_results.samples)
+            filtered_samples = [
+                sample
+                for sample in self.selection_results.samples
+                if str(sample.trace_id) in self._pregenerated_outputs
+            ]
+            self.selection_results = dataclasses.replace(
+                self.selection_results,
+                samples=filtered_samples,
+            )
+            logger.info(
+                f"pregenerated output filter: kept {len(self.selection_results.samples)} of {pre_filter_count} samples"
+            )
         code_type_counts = collections.Counter([s.code_type for s in self.selection_results.samples])
         code_type_counts_str = "\n\t".join([f"{k}: {c}" for k, c in code_type_counts.items()])
         logger.debug(f"selected sample code types:\n\t{code_type_counts_str}")

@@ -95,21 +95,31 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
 
     # --------------- PREGENERATED OUTPUT CONFIGURATION ---------------
 
-    pregenerated_outputs_lmdb_path: pathlib.Path | None = pydantic.Field(
-        default=None,
-        description="Path to an LMDB of pregenerated model outputs to use instead of groundtruth.",
-    )
-    pregenerated_outputs_selection: typing.Literal["latest", "best_reward"] = pydantic.Field(
-        default="latest",
-        description="Strategy for selecting among multiple pregenerated completions per sample_id.",
-    )
-    pregenerated_outputs_phase_prefix: str = pydantic.Field(
-        default="",
-        description=(
-            "Phase prefix to filter exported records (e.g. 'train/', 'eval/'). "
-            "Empty string (default) loads all phases without filtering."
-        ),
-    )
+    pregenerated_outputs_lmdb_path: pathlib.Path | None = None
+    """Path to an LMDB dataset of pregenerated model outputs to use instead of groundtruth.
+
+    When set, the LMDB is read at ``setup()`` time and matching sample identifiers have their
+    ``expected_output`` replaced with the pregenerated completion. The LMDB is expected to have
+    been written by e.g. ``DiskRewardLogger`` during a prior RL run.
+    """
+    pregenerated_outputs_selection: typing.Literal["latest", "best_reward"] = "latest"
+    """Strategy for selecting among multiple pregenerated completions per sample_id.
+
+    ``"latest"`` picks the entry with the highest generation count; ``"best_reward"`` picks the
+    entry with the highest ``reward_total`` (requires all records to have a non-None reward_total).
+    """
+    pregenerated_outputs_phase_prefix: str = ""
+    """Phase prefix to filter exported LMDB records (e.g. ``'train/'``, ``'eval/'``).
+
+    Empty string (default) loads all phases without filtering. This is safe when problem-level
+    splits prevent cross-phase sample ID collisions (which should always be the case).
+    """
+    pregenerated_outputs_only_matched: bool = False
+    """If True, only produce samples that have a matching pregenerated output.
+
+    Samples without a match are filtered out after selection. Requires
+    ``pregenerated_outputs_lmdb_path`` to be set.
+    """
 
     @pydantic.field_validator("pregenerated_outputs_phase_prefix")
     @classmethod
@@ -121,6 +131,13 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
         if not value:
             return ""
         return pyine.utils.parsing.normalize_path_prefix(value)
+
+    @pydantic.model_validator(mode="after")
+    def _validate_pregenerated_outputs_config(self) -> BiasDataModuleBaseConfig:
+        """Validate that pregenerated output settings are consistent."""
+        if self.pregenerated_outputs_only_matched and self.pregenerated_outputs_lmdb_path is None:
+            raise ValueError("pregenerated_outputs_only_matched=True requires pregenerated_outputs_lmdb_path to be set")
+        return self
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
@@ -577,6 +594,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         }
         if self._pregenerated_outputs is not None:
             kwargs["pregenerated_outputs"] = self._pregenerated_outputs
+            kwargs["only_with_pregenerated_output"] = self.config.pregenerated_outputs_only_matched
         return kwargs
 
     # --------------- PARSER INSTANTIATION METHODS ---------------
