@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import logging
 import typing
+from collections.abc import Callable
 
 import torch
 
-if typing.TYPE_CHECKING:
-    from collections.abc import Callable
-
 logger = logging.getLogger(__name__)
+
+# Forward hooks return objects with a .remove() method.
+# torch.utils.hooks.RemovableHook is not exported in the PyTorch stubs,
+# so we define a minimal protocol to type the hooks list.
+_ForwardHookFn = Callable[
+    [torch.nn.Module, tuple[torch.Tensor, ...], torch.Tensor | tuple[torch.Tensor, ...]],
+    None,
+]
+
+
+class _RemovableHook(typing.Protocol):
+    def remove(self) -> None: ...
 
 
 class ActivationExtractor:
@@ -22,11 +32,13 @@ class ActivationExtractor:
         target_layers: list[int],
         activation_dtype: torch.dtype | None = None,
     ) -> None:
-        self._hooks: list[torch.utils.hooks.RemovableHook] = []
+        self._hooks: list[_RemovableHook] = []
         self._activations: dict[int, torch.Tensor] = {}
         self._activation_dtype = activation_dtype
 
-        num_layers = model.config.num_hidden_layers
+        # model.config.num_hidden_layers is a standard interface on HuggingFace PreTrainedModel
+        # and compatible mock models; not defined on nn.Module itself.
+        num_layers = typing.cast("int", model.config.num_hidden_layers)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         for layer_idx in target_layers:
             if layer_idx < 0 or layer_idx >= num_layers:
                 raise ValueError(f"Layer {layer_idx} out of range [0, {num_layers})")
@@ -39,21 +51,15 @@ class ActivationExtractor:
         """Resolve transformer block by index.
 
         Primary path: ``model.model.layers[i]`` (Llama/Qwen/Mistral).
-        Falls back to common alternatives.
+        Falls back to common alternatives via ``get_submodule``.
         """
-        # Standard: model.model.layers[i]
-        try:
-            return model.model.layers[layer_idx]
-        except (AttributeError, IndexError):
-            pass
-        # Fallbacks
-        for path_template in [
-            f"transformer.h.{layer_idx}",
+        for path in [
             f"model.layers.{layer_idx}",
+            f"transformer.h.{layer_idx}",
             f"gpt_neox.layers.{layer_idx}",
         ]:
             try:
-                return model.get_submodule(path_template)
+                return model.get_submodule(path)
             except (AttributeError, KeyError):
                 continue
         raise ValueError(
@@ -62,30 +68,40 @@ class ActivationExtractor:
         )
 
     @staticmethod
-    def _normalize_layer_output(output: object, layer_idx: int) -> torch.Tensor:
+    def _normalize_layer_output(
+        output: torch.Tensor | tuple[torch.Tensor, ...],
+        layer_idx: int,
+    ) -> torch.Tensor:
         """Extract hidden states from a transformer block's output.
 
         Handles raw tensors, tuples, and ``BaseModelOutput``-like objects.
         Validates the result is 3D ``(batch, seq_len, hidden_dim)``.
         """
+        h: torch.Tensor
         if isinstance(output, torch.Tensor):
             h = output
-        elif isinstance(output, tuple):
-            h = output[0]
-        elif hasattr(output, "last_hidden_state"):
-            h = output.last_hidden_state
-        elif hasattr(output, "__getitem__"):
+        elif isinstance(output, tuple):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime duck-typing safety
             h = output[0]
         else:
-            raise TypeError(f"Unexpected output type {type(output)} from layer {layer_idx}")
+            # Duck-typing fallback for BaseModelOutput-like objects
+            # (not covered by the declared type annotation, but needed at runtime)
+            lhs = getattr(output, "last_hidden_state", None)
+            if isinstance(lhs, torch.Tensor):
+                h = lhs
+            else:
+                raise TypeError(f"Unexpected output type {type(output)} from layer {layer_idx}")
         if h.ndim != 3:
             raise ValueError(
                 f"Expected 3D activation (batch, seq_len, hidden_dim) from layer {layer_idx}, got shape {h.shape}"
             )
         return h
 
-    def _make_hook(self, layer_idx: int) -> Callable:
-        def hook_fn(module: torch.nn.Module, input: tuple[torch.Tensor, ...], output: object) -> None:
+    def _make_hook(self, layer_idx: int) -> _ForwardHookFn:
+        def hook_fn(
+            module: torch.nn.Module,
+            input: tuple[torch.Tensor, ...],
+            output: torch.Tensor | tuple[torch.Tensor, ...],
+        ) -> None:
             h = self._normalize_layer_output(output, layer_idx).detach()
             if self._activation_dtype is not None:
                 h = h.to(self._activation_dtype)

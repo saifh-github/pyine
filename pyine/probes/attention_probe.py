@@ -21,11 +21,10 @@ class AttentionProbe(BaseProbe):
     def __init__(self, config: ProbeConfig) -> None:
         super().__init__(config)
         attn_dim = config.attn_dim
-        hidden_dim = config.hidden_dim
 
-        self.W_q = torch.nn.Linear(hidden_dim, attn_dim, bias=False)
+        self.W_q = torch.nn.Linear(self.hidden_dim, attn_dim, bias=False)
         self.Q_global = torch.nn.Parameter(torch.randn(attn_dim))
-        self.W_v = torch.nn.Linear(hidden_dim, 1, bias=False)
+        self.W_v = torch.nn.Linear(self.hidden_dim, 1, bias=False)
         self._scale = math.sqrt(attn_dim)
 
     def forward(

@@ -7,7 +7,7 @@ import typing
 import torch
 
 if typing.TYPE_CHECKING:
-    from pyine.probes.base import ProbeConfig
+    from pyine.probes.base import BaseProbe, ProbeConfig
 
 # Avoid circular import at module level; build_probe is imported lazily.
 
@@ -20,7 +20,7 @@ class ProbeCollection(torch.nn.Module):
     """
 
     def __init__(self, probe_configs: list[ProbeConfig], hidden_dim: int) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # nn.Module stub
         from pyine.probes import build_probe
 
         self._probe_configs: dict[str, ProbeConfig] = {}
@@ -46,14 +46,15 @@ class ProbeCollection(torch.nn.Module):
             ``{probe_name: (batch, 1) logits}``
         """
         results: dict[str, torch.Tensor] = {}
-        for name, probe in self.probes.items():
+        for name, module in self.probes.items():
+            probe = typing.cast("BaseProbe", module)
             h = activations[probe.config.layer]
             results[name] = probe(h, attention_mask)
         return results
 
-    def get_parameter_groups(self) -> list[dict]:
+    def get_parameter_groups(self) -> list[dict[str, list[torch.nn.Parameter] | float]]:
         """Per-probe parameter groups with individual learning rates."""
-        groups: list[dict] = []
+        groups: list[dict[str, list[torch.nn.Parameter] | float]] = []
         for name, probe in self.probes.items():
             pc = self._probe_configs[name]
             params = list(probe.parameters())

@@ -13,7 +13,7 @@ class RollingMeanProbe(BaseProbe):
 
     def __init__(self, config: ProbeConfig) -> None:
         super().__init__(config)
-        self.head = torch.nn.Linear(config.hidden_dim, 1)
+        self.head = torch.nn.Linear(self.hidden_dim, 1)
         self.window_size = config.window_size
 
     def forward(

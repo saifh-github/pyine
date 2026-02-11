@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import typing
 from pathlib import Path
 
 import datasets
@@ -18,6 +19,16 @@ import pyine.configs.schemas
 import pyine.evals.common
 from pyine.probes.collection import ProbeCollection
 from pyine.probes.extraction import ActivationExtractor
+
+if typing.TYPE_CHECKING:
+    import numpy as np
+    import numpy.typing as npt
+    from accelerate import Accelerator
+
+    from pyine.probes.base import BaseProbe
+
+    _DL = torch.utils.data.DataLoader[dict[str, torch.Tensor]]
+    _PreparedResult = tuple[ProbeCollection, torch.optim.AdamW, _DL, _DL]
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +48,9 @@ def validate_probe_dataset(
         raise ValueError(f"text_field '{text_field}' not found. Columns: {dataset.column_names}")
     if label_field not in dataset.column_names:
         raise ValueError(f"label_field '{label_field}' not found. Columns: {dataset.column_names}")
-    unique_labels = set(dataset.unique(label_field))
+    unique_labels: set[int] = set(
+        typing.cast("list[int]", dataset.unique(label_field))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+    )
     if not unique_labels.issubset({0, 1}):
         raise ValueError(f"Expected binary labels {{0, 1}}, got {unique_labels}")
     if len(unique_labels) < 2:
@@ -45,12 +58,12 @@ def validate_probe_dataset(
 
 
 def tokenize_for_probes(
-    examples: dict,
-    tokenizer: transformers.PreTrainedTokenizer,
+    examples: dict[str, list[str] | list[int] | list[list[dict[str, str]]]],
+    tokenizer: transformers.PreTrainedTokenizerBase,
     max_seq_length: int,
     text_field: str,
     label_field: str,
-) -> dict:
+) -> transformers.BatchEncoding:
     """Tokenize text for probe training."""
     if text_field == "messages":
         if not getattr(tokenizer, "chat_template", None):
@@ -59,12 +72,18 @@ def tokenize_for_probes(
                 "Either use a model with a built-in template, or set text_field to "
                 "a preformatted string column."
             )
-        texts = [
-            tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-            for msgs in examples["messages"]
+        messages_batch = typing.cast("list[list[dict[str, str]]]", examples["messages"])
+        texts: list[str] = [
+            typing.cast(
+                "str",
+                tokenizer.apply_chat_template(  # pyright: ignore[reportUnknownMemberType]  # transformers stubs
+                    msgs, tokenize=False, add_generation_prompt=False
+                ),
+            )
+            for msgs in messages_batch
         ]
     else:
-        texts = examples[text_field]
+        texts = typing.cast("list[str]", examples[text_field])
 
     tokenized = tokenizer(
         texts,
@@ -79,11 +98,11 @@ def tokenize_for_probes(
 def load_and_tokenize(
     dataset_path: str,
     split: str,
-    tokenizer: transformers.PreTrainedTokenizer,
+    tokenizer: transformers.PreTrainedTokenizerBase,
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
 ) -> datasets.Dataset:
     """Load a dataset split and tokenize it."""
-    ds = datasets.load_from_disk(dataset_path)
+    ds = datasets.load_from_disk(dataset_path)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
     if isinstance(ds, datasets.DatasetDict):
         if split not in ds:
             raise ValueError(f"Split '{split}' not found. Available: {list(ds.keys())}")
@@ -92,7 +111,7 @@ def load_and_tokenize(
         ds_split = ds
 
     validate_probe_dataset(ds_split, config.text_field, config.label_field)
-    ds_split = ds_split.map(
+    ds_split = ds_split.map(  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         tokenize_for_probes,
         batched=True,
         fn_kwargs={
@@ -103,21 +122,21 @@ def load_and_tokenize(
         },
         remove_columns=[c for c in ds_split.column_names if c not in ("input_ids", "attention_mask", "labels")],
     )
-    ds_split.set_format("torch")
+    ds_split.set_format("torch")  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
     return ds_split
 
 
 def build_dataloader(
     dataset: datasets.Dataset,
-    tokenizer: transformers.PreTrainedTokenizer,
+    tokenizer: transformers.PreTrainedTokenizerBase,
     batch_size: int,
     num_workers: int,
     shuffle: bool,
-) -> torch.utils.data.DataLoader:
+) -> torch.utils.data.DataLoader[dict[str, torch.Tensor]]:
     """Build a DataLoader with dynamic padding."""
     collator = transformers.DataCollatorWithPadding(tokenizer=tokenizer, padding="longest")
     return torch.utils.data.DataLoader(
-        dataset,
+        typing.cast("torch.utils.data.Dataset[dict[str, torch.Tensor]]", dataset),
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
@@ -135,17 +154,21 @@ def validate_probes(
     probe_collection: ProbeCollection,
     model: torch.nn.Module,
     extractor: ActivationExtractor,
-    valid_loader: torch.utils.data.DataLoader,
+    valid_loader: torch.utils.data.DataLoader[dict[str, torch.Tensor]],
     loss_fn: torch.nn.Module,
     global_step: int,
-    accelerator: Accelerator,  # noqa: F821
+    accelerator: Accelerator,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> dict[str, dict[str, float]]:
     """Run validation and compute loss + AUROC per probe."""
     probe_collection.eval()
 
     # Handle both DDP-wrapped and raw ProbeCollection
-    probes_dict = probe_collection.module.probes if hasattr(probe_collection, "module") else probe_collection.probes
+    raw = typing.cast(
+        "ProbeCollection",
+        getattr(probe_collection, "module", probe_collection),
+    )
+    probes_dict = raw.probes
     all_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
     all_labels: list[torch.Tensor] = []
 
@@ -164,30 +187,46 @@ def validate_probes(
             all_labels.append(labels)
 
     # Gather across GPUs
+    gathered_logits: dict[str, torch.Tensor] = {}
     for name in all_logits:
-        all_logits[name] = torch.cat(all_logits[name])
-        all_logits[name] = accelerator.gather_for_metrics(all_logits[name])
-    all_labels_cat = accelerator.gather_for_metrics(torch.cat(all_labels))
+        cat_logits = torch.cat(all_logits[name])
+        gathered_logits[name] = typing.cast(
+            "torch.Tensor",
+            accelerator.gather_for_metrics(cat_logits),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+        )
+    all_labels_cat = typing.cast(
+        "torch.Tensor",
+        accelerator.gather_for_metrics(torch.cat(all_labels)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
 
     # Compute metrics on main process
     metrics: dict[str, dict[str, float]] = {}
     if accelerator.is_main_process:
         for name in probes_dict:
-            logits_cpu = all_logits[name].float().cpu()
+            logits_cpu = gathered_logits[name].float().cpu()
             labels_cpu = all_labels_cat.long().cpu()
 
             val_loss = loss_fn(logits_cpu, labels_cpu.float()).item()
-            probs = torch.sigmoid(logits_cpu).numpy()
-            labels_np = labels_cpu.numpy()
+            probs = typing.cast(
+                "npt.NDArray[np.floating[typing.Any]]",
+                torch.sigmoid(logits_cpu).numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+            )
+            labels_np = typing.cast(
+                "npt.NDArray[np.integer[typing.Any]]",
+                labels_cpu.numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+            )
 
-            unique_labels = set(labels_np.tolist())
+            unique_labels: set[int] = {int(v) for v in labels_np.tolist()}
             if len(unique_labels) < 2:
                 logger.warning(f"Skipping AUROC for {name}: only labels {unique_labels} present")
                 auroc = float("nan")
             else:
                 import sklearn.metrics
 
-                auroc = float(sklearn.metrics.roc_auc_score(labels_np, probs))
+                auroc_score: float = float(
+                    sklearn.metrics.roc_auc_score(labels_np, probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
+                )
+                auroc = auroc_score
 
             metrics[name] = {"loss": val_loss, "auroc": auroc}
 
@@ -217,19 +256,23 @@ def save_probe_checkpoints(
     probe_collection: ProbeCollection,
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-    accelerator: Accelerator,  # noqa: F821
+    accelerator: Accelerator,
 ) -> Path | None:
     """Save probe weights + configs. Only on main process."""
     if not accelerator.is_main_process:
         return None
 
-    raw_collection = accelerator.unwrap_model(probe_collection)
+    raw_collection = typing.cast(
+        "ProbeCollection",
+        accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
     if runtime is not None:
         output_dir = Path(runtime.output_dir) / "probes"
     else:
         output_dir = Path("probes_output")
 
-    for name, probe in raw_collection.probes.items():
+    for name, module in raw_collection.probes.items():
+        probe = typing.cast("BaseProbe", module)
         probe_dir = output_dir / name
         probe_dir.mkdir(parents=True, exist_ok=True)
         torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
@@ -268,7 +311,7 @@ def probe_train(
     )
 
     # --- 2. Build ProbeCollection + optimizer ---
-    hidden_dim = model.config.hidden_size
+    hidden_dim: int = model.config.hidden_size
     logger.info(f"Building ProbeCollection with hidden_dim={hidden_dim}, {len(config.probe_configs)} probes")
     probe_collection = ProbeCollection(config.probe_configs, hidden_dim)
     probe_collection = probe_collection.to(dtype=config.target_dtype)
@@ -294,11 +337,20 @@ def probe_train(
     )
 
     # --- 4. Prepare with accelerate ---
-    probe_collection, optimizer, train_loader, valid_loader = accelerator.prepare(
+    # accelerate.prepare() returns the same types wrapped for distributed training
+    (
         probe_collection,
         optimizer,
         train_loader,
         valid_loader,
+    ) = typing.cast(
+        "_PreparedResult",
+        accelerator.prepare(  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+            probe_collection,
+            optimizer,
+            train_loader,
+            valid_loader,
+        ),
     )
 
     # --- 5. Register activation hooks ---
@@ -316,7 +368,7 @@ def probe_train(
         probe_collection.train()
 
         for _step, batch in enumerate(train_loader):
-            with accelerator.accumulate(probe_collection):
+            with accelerator.accumulate(probe_collection):  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
                 input_ids = batch["input_ids"]
                 attention_mask = batch["attention_mask"]
                 labels = batch["labels"]
@@ -337,12 +389,12 @@ def probe_train(
                     per_probe_losses[name] = loss
                     total_loss = total_loss + loss
 
-                accelerator.backward(total_loss)
-                optimizer.step()
+                accelerator.backward(total_loss)  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+                optimizer.step()  # pyright: ignore[reportUnknownMemberType]  # torch stubs
                 optimizer.zero_grad()
 
             # Logging + eval gated on actual optimizer steps
-            if accelerator.sync_gradients:
+            if accelerator.sync_gradients:  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
                 global_step += 1
                 if global_step % config.logging_steps == 0:
                     if accelerator.is_main_process:
@@ -390,7 +442,10 @@ def probe_train(
     extractor.remove_hooks()
 
     logger.info("Probe training complete.")
-    return accelerator.unwrap_model(probe_collection)
+    return typing.cast(
+        "ProbeCollection",
+        accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
 
 
 # ---------------------------------------------------------------------------

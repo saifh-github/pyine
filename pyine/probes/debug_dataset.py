@@ -59,7 +59,7 @@ _NOISE_RATE = 0.1  # Fraction of labels that are flipped
 def _make_sample(
     label: int,
     rng: random.Random,
-) -> dict:
+) -> dict[str, list[dict[str, str]] | int]:
     """Create a single synthetic sample."""
     if label == 1:
         code = rng.choice(_CODE_SNIPPETS_WITH_SIGNAL)
@@ -99,8 +99,8 @@ def create_debug_probe_dataset(
     """
     rng = random.Random(seed)
 
-    def _make_split(n: int) -> list[dict]:
-        samples = []
+    def _make_split(n: int) -> list[dict[str, list[dict[str, str]] | int]]:
+        samples: list[dict[str, list[dict[str, str]] | int]] = []
         for _ in range(n):
             # Base label: roughly 50/50
             base_label = rng.randint(0, 1)
@@ -117,13 +117,13 @@ def create_debug_probe_dataset(
 
     ds = datasets.DatasetDict(
         {
-            "train": datasets.Dataset.from_list(train_samples),
-            "valid": datasets.Dataset.from_list(valid_samples),
+            "train": datasets.Dataset.from_list(train_samples),  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+            "valid": datasets.Dataset.from_list(valid_samples),  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         }
     )
 
     if output_path is not None:
-        ds.save_to_disk(str(output_path))
+        ds.save_to_disk(str(output_path))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
     return ds
 

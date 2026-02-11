@@ -35,10 +35,11 @@ class BaseProbe(torch.nn.Module, abc.ABC):
     """
 
     def __init__(self, config: ProbeConfig) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # nn.Module stub
         if config.hidden_dim is None:
             raise ValueError("hidden_dim must be set before constructing a probe")
         self.config = config
+        self.hidden_dim: int = config.hidden_dim
 
     @abc.abstractmethod
     def forward(
