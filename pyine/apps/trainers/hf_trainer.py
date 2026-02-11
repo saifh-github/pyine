@@ -24,9 +24,6 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
-import pyine.organisms.models.rewards.core.logging as reward_logging
-import pyine.organisms.models.rewards.core.manager
-import pyine.organisms.models.rewards.trl
 import pyine.utils.distrib
 import pyine.utils.interrupts
 import pyine.utils.reprod
@@ -234,33 +231,13 @@ def rl_train(
         ]
         eval_ds = valid_datasets[0] if len(valid_datasets) == 1 else hf_datasets.concatenate_datasets(valid_datasets)
 
-    # 3. Create reward function
+    # 3. Create reward manager/function
     logger.info("creating reward function with RewardManager...")
-    reward_logger: reward_logging.WandBRewardLogger | None = None
-    # only create logger on main rank when main_process_only=True (default distributed setup)
-    # ...this avoids requiring wandb.Run on non-main ranks, which is more efficient and avoids
-    # validation errors in the RewardManager when non-main ranks don't have runtime.wandb_run.
-    should_create_logger = (
-        runtime is not None
-        and runtime.wandb_run is not None
-        and config.reward_manager_config.logging.enabled
-        and (not config.reward_manager_config.logging.main_process_only or pyine.utils.distrib.is_main_process())
-    )
-    if should_create_logger:
-        reward_logger = reward_logging.make_wandb_reward_logger(
-            runtime.wandb_run,
-            config.reward_manager_config.logging,
-        )
-    reward_manager = pyine.organisms.models.rewards.core.manager.RewardManager(
-        config.reward_manager_config,
-        logger=reward_logger,
+    reward = pyine.apps.trainers.common.create_model_organism_reward_components(
+        reward_manager_config=config.reward_manager_config,
         tokenizer=tokenizer,
-    )
-    reward_adapter = pyine.organisms.models.rewards.trl.TRLRewardAdapter(
-        manager=reward_manager,
-        prompt_key="prompts",  # TRL passes prompts (plural) to reward functions
-        sample_data_key="sample_data",
-        skip_on_error=True,
+        generation_export_config=config.generation_export_config,
+        wandb_run=runtime.wandb_run if runtime is not None else None,
     )
 
     # 4. Create TRL trainer
@@ -281,7 +258,7 @@ def rl_train(
         args=grpo_config,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        reward_funcs=reward_adapter,  # type: ignore[reportArgumentType]  # TRL accepts list[float | None] for skipping
+        reward_funcs=reward.adapter,  # type: ignore[reportArgumentType]  # TRL accepts list[float | None] for skipping
     )
 
     # 5. Add shutdown callback
@@ -295,8 +272,8 @@ def rl_train(
 
     # 6. Add reward logging callback for train/eval prefix switching and log flushing
     reward_logging_callback = pyine.utils.transformers.RewardLoggingCallback(
-        reward_manager=reward_manager,
-        reward_adapter=reward_adapter,
+        reward_manager=reward.manager,
+        reward_adapter=reward.adapter,
         resume_from_checkpoint=resume_artifacts.checkpoint_path if resume_artifacts else None,
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, reward_logging_callback)
@@ -322,7 +299,10 @@ def rl_train(
 
     # 9. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
-    pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
+    try:
+        pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
+    finally:
+        reward.close()  # to finalize logging, if needed
     pyine.apps.trainers.common.log_shutdown_status(shutdown_manager, training_type="RL training")
     return trainer
 

@@ -26,6 +26,7 @@ import pyine.data.datamodule
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.filter_rules
+import pyine.data.utils.lmdb_io
 import pyine.data.utils.splits
 import pyine.evals.common
 import pyine.organisms.datamodules.samples
@@ -33,6 +34,7 @@ import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.utils.transforms
 import pyine.prompts.types
 import pyine.utils.filesystem
+import pyine.utils.parsing
 import pyine.utils.portability
 import pyine.utils.reprod
 
@@ -90,6 +92,35 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
     Traces with tags that match this rule will be filtered out. See the `pyine.data.utils.filter_rules`
     module for filter rule syntax. This rule applies in a case-insensitive manner.
     """
+
+    # --------------- PREGENERATED OUTPUT CONFIGURATION ---------------
+
+    pregenerated_outputs_lmdb_path: pathlib.Path | None = pydantic.Field(
+        default=None,
+        description="Path to an LMDB of pregenerated model outputs to use instead of groundtruth.",
+    )
+    pregenerated_outputs_selection: typing.Literal["latest", "best_reward"] = pydantic.Field(
+        default="latest",
+        description="Strategy for selecting among multiple pregenerated completions per sample_id.",
+    )
+    pregenerated_outputs_phase_prefix: str = pydantic.Field(
+        default="",
+        description=(
+            "Phase prefix to filter exported records (e.g. 'train/', 'eval/'). "
+            "Empty string (default) loads all phases without filtering."
+        ),
+    )
+
+    @pydantic.field_validator("pregenerated_outputs_phase_prefix")
+    @classmethod
+    def _normalize_phase_prefix(
+        cls,
+        value: str,
+    ) -> str:
+        """Normalize the phase prefix for consistent matching against export keys."""
+        if not value:
+            return ""
+        return pyine.utils.parsing.normalize_path_prefix(value)
 
     # --------------- DATA TRANSFORMATION + COLLATE CONFIGURATION ---------------
 
@@ -294,6 +325,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         self._metadata = None
         self._readers = []
         self._subset_parsers = {}
+        self._pregenerated_outputs: dict[str, str] | None = None
 
     # --------------- ABSTRACT METHODS ---------------
 
@@ -451,6 +483,102 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             timeout=self.config.cache_lock_timeout_seconds,
         )
 
+    # --------------- PREGENERATED OUTPUT METHODS ---------------
+
+    def _load_pregenerated_outputs(self) -> dict[str, str]:
+        """Load pregenerated model outputs from an exported LMDB dataset.
+
+        Reads the LMDB, filters by phase prefix, deduplicates by sample_id using the configured
+        selection strategy, and returns a mapping of ``{sample_id: pregenerated_model_output}``.
+
+        Returns:
+            Dict mapping sample identifiers to their pregenerated model output strings to use
+            for overriding expected outputs.
+
+        Raises:
+            ValueError: If a non-empty phase prefix yields zero matching records, or if
+                ``best_reward`` selection encounters a record with ``reward_total=None``.
+        """
+        assert self.config.pregenerated_outputs_lmdb_path is not None
+        reader = pyine.data.utils.lmdb_io.LMDBReader(self.config.pregenerated_outputs_lmdb_path)
+        prefix = self.config.pregenerated_outputs_phase_prefix
+        # group sample_id -> list of (generation_count, record_dict) for deduplication
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {}
+        total_records = len(reader.key_map)
+        filtered_count = 0
+        try:
+            for key_name in reader.key_map:
+                if prefix and not key_name.startswith(prefix):
+                    continue
+                filtered_count += 1
+                record = reader.get(key_name)
+                # strip the record's own key_prefix to recover (sample_id, generation_count);
+                # this is more robust than stripping the filter prefix, which may be empty
+                record_prefix = record.get("key_prefix", prefix) or ""
+                if record_prefix and not key_name.startswith(record_prefix):
+                    raise ValueError(
+                        f"key '{key_name}' does not start with its record's key_prefix '{record_prefix}'; "
+                        "the LMDB may contain corrupted or manually edited records"
+                    )
+                stripped = key_name[len(record_prefix) :] if record_prefix else key_name
+                last_slash_idx = stripped.rfind("/")
+                if last_slash_idx == -1:
+                    raise ValueError(f"unexpected key format (no '/' separator): {key_name}")
+                sample_id = stripped[:last_slash_idx]
+                gen_count_str = stripped[last_slash_idx + 1 :]
+                gen_count = int(gen_count_str) if gen_count_str != "none" else 0
+                model_output = record.get("model_output")
+                if not isinstance(model_output, str):
+                    raise ValueError(
+                        f"record for key '{key_name}' has invalid 'model_output' "
+                        f"(expected str, got {type(model_output).__name__})"
+                    )
+                grouped.setdefault(sample_id, []).append((gen_count, record))
+        finally:
+            reader.close()
+        if prefix and filtered_count == 0:
+            raise ValueError(
+                f"phase prefix '{prefix}' matched 0 out of {total_records} records; "
+                "check that the prefix matches the key_prefix used during export"
+            )
+        # apply selection strategy per sample_id
+        result: dict[str, str] = {}
+        selection = self.config.pregenerated_outputs_selection
+        for sample_id, entries in grouped.items():
+            if selection == "latest":
+                best = max(entries, key=lambda entry: entry[0])
+            elif selection == "best_reward":
+                for gen_count, record in entries:
+                    if record.get("reward_total") is None:
+                        raise ValueError(
+                            f"best_reward selection requires reward_total for all records, "
+                            f"but sample_id '{sample_id}' (generation_count={gen_count}) has None; "
+                            "ensure logging.log_total=True during export"
+                        )
+                best = max(entries, key=lambda entry: entry[1]["reward_total"])
+            else:
+                raise ValueError(f"unknown pregenerated_outputs_selection: {selection}")
+            result[sample_id] = best[1]["model_output"]
+        logger.info(
+            f"loaded pregenerated outputs: {len(result)} unique sample_ids "
+            f"from {filtered_count}/{total_records} records" + (f" (phase_prefix='{prefix}')" if prefix else "")
+        )
+        return result
+
+    def _build_parser_kwargs(
+        self,
+        source_data: typing.Any,
+        subset_traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+    ) -> dict[str, typing.Any]:
+        """Build kwargs dict for SampleBuilder instantiation, injecting pregenerated outputs."""
+        kwargs: dict[str, typing.Any] = {
+            "source_data": source_data,
+            "traces": subset_traces,
+        }
+        if self._pregenerated_outputs is not None:
+            kwargs["pregenerated_outputs"] = self._pregenerated_outputs
+        return kwargs
+
     # --------------- PARSER INSTANTIATION METHODS ---------------
 
     def _instantiate_parser_if_needed(
@@ -463,8 +591,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             subset_traces = self._get_traces_meta_for_subset(subset_name)
             parser = self.config.instantiate_parser(
                 subset_name=subset_name,
-                source_data=self._readers,
-                traces=subset_traces,
+                **self._build_parser_kwargs(source_data=self._readers, subset_traces=subset_traces),
             )
             self._subset_parsers[subset_name] = typing.cast(
                 "pyine.organisms.datamodules.samples.SampleBuilder",
@@ -558,6 +685,9 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             pyine.data.traces.dataset_reader.DatasetReader(path) for path in self.config.lmdb_paths
         ]
         self._readers = readers
+        self._pregenerated_outputs = None
+        if self.config.pregenerated_outputs_lmdb_path is not None:
+            self._pregenerated_outputs = self._load_pregenerated_outputs()
         self._subset_parsers.clear()
         for subset_name in self.config.subset_names:
             if self.config.instantiate_parsers_at_setup:
@@ -572,6 +702,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         self._metadata = None
         self._subset_parsers.clear()
         self._readers = []
+        self._pregenerated_outputs = None
 
     # --------------- PUBLIC UTILITY METHODS ---------------
 
@@ -643,10 +774,10 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             append_answer=append_answer,
             merge_system_with_user=merge_system_with_user,
             keep_original_data=keep_original_data,
-            parser_kwargs={
-                "source_data": self.config.lmdb_paths,
-                "traces": subset_traces,
-            },
+            parser_kwargs=self._build_parser_kwargs(
+                source_data=self.config.lmdb_paths,
+                subset_traces=subset_traces,
+            ),
             force_regenerate=force_regenerate,
         )
 
@@ -666,10 +797,10 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             subset_name=subset_name,
             append_answer=append_answer,
             merge_system_with_user=merge_system_with_user,
-            parser_kwargs={
-                "source_data": self.config.lmdb_paths,
-                "traces": subset_traces,
-            },
+            parser_kwargs=self._build_parser_kwargs(
+                source_data=self.config.lmdb_paths,
+                subset_traces=subset_traces,
+            ),
         )
 
     def make_dataloader(

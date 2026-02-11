@@ -1,7 +1,12 @@
 """Tests for reward logging implementations."""
 
+import pathlib
+
+import pydantic
+import pytest
 import wandb
 
+import pyine.data.utils.lmdb_io
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.logging as reward_logging
 import pyine.utils.stats as stats_utils
@@ -804,3 +809,186 @@ class TestSecondarySourceTable:
         # verify mutation of original doesn't affect snapshot
         secondary_stats["source_a"].update(100.0)
         assert run_entry["secondary_stats"]["source_a"]["count"] == 1  # still 1
+
+
+class TestDiskRewardLogger:
+    def test_write_and_read_back_sample(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "generations"
+        disk_logger = reward_logging.DiskRewardLogger(output_path=output_dir)
+        disk_logger.set_key_prefix("train/")
+        disk_logger.log_sample(
+            "TACO/s0001/t0001",
+            generation_count=100,
+            total=0.75,
+            model_output="print(42)",
+            prompt="What is the output?",
+            expected_output="42",
+            terms={"hard_match": 0.75},
+            step=10,
+            batch_count=5,
+            completion_idx=0,
+            rank=0,
+            predict_type="program_output",
+            code_type="original",
+            tags=["subset:train"],
+            categories=["code_type/original"],
+        )
+        disk_logger.close()
+        reader = pyine.data.utils.lmdb_io.LMDBReader(output_dir)
+        assert len(reader.key_map) == 1
+        key = next(iter(reader.key_map))
+        assert key == "train/TACO/s0001/t0001/100"
+        record = reader.get(key)
+        assert record["model_output"] == "print(42)"
+        assert record["reward_total"] == 0.75
+        assert record["prompt"] == "What is the output?"
+        assert record["reward_terms"] == {"hard_match": 0.75}
+        assert record["tags"] == ["subset:train"]
+        assert record["categories"] == ["code_type/original"]
+        assert record["key_prefix"] == "train/"
+        reader.close()
+
+    def test_rejects_non_empty_output_path(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "existing"
+        output_dir.mkdir()
+        (output_dir / "data.mdb").write_bytes(b"fake")
+        with pytest.raises(ValueError, match="non-empty"):
+            reward_logging.DiskRewardLogger(output_path=output_dir)
+
+    def test_phase_prefix_normalization(self, tmp_path: pathlib.Path) -> None:
+        disk_logger = reward_logging.DiskRewardLogger(output_path=tmp_path / "gen")
+        disk_logger.set_key_prefix("eval")  # no trailing slash
+        assert disk_logger.get_key_prefix() == "eval/"
+
+    def test_should_log_sample_frequency_gating(self, tmp_path: pathlib.Path) -> None:
+        disk_logger = reward_logging.DiskRewardLogger(
+            output_path=tmp_path / "gen",
+            log_every_n_generations=3,
+        )
+        assert not disk_logger.should_log_sample(1)
+        assert not disk_logger.should_log_sample(2)
+        assert disk_logger.should_log_sample(3)
+        assert not disk_logger.should_log_sample(4)
+        assert disk_logger.should_log_sample(6)
+        disk_logger.close()
+
+    def test_multiple_samples_round_trip(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "gen"
+        disk_logger = reward_logging.DiskRewardLogger(output_path=output_dir)
+        disk_logger.set_key_prefix("train/")
+        for gen_idx in range(5):
+            disk_logger.log_sample(
+                f"sample_{gen_idx}",
+                generation_count=gen_idx + 1,
+                total=float(gen_idx),
+                model_output=f"output_{gen_idx}",
+            )
+        disk_logger.close()
+        reader = pyine.data.utils.lmdb_io.LMDBReader(output_dir)
+        assert len(reader.key_map) == 5
+        record = reader.get("train/sample_2/3")
+        assert record["model_output"] == "output_2"
+        assert record["reward_total"] == 2.0
+        reader.close()
+
+    def test_reward_total_none_when_log_total_false(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "gen"
+        disk_logger = reward_logging.DiskRewardLogger(output_path=output_dir)
+        disk_logger.set_key_prefix("train/")
+        disk_logger.log_sample("s1", generation_count=1, total=None, model_output="out")
+        disk_logger.close()
+        reader = pyine.data.utils.lmdb_io.LMDBReader(output_dir)
+        record = reader.get("train/s1/1")
+        assert record["reward_total"] is None
+        reader.close()
+
+
+class TestCompositeRewardLogger:
+    def test_fan_out_log_sample(self) -> None:
+        inner1 = reward_logging.InMemoryRewardLogger(log_every_n_generations=1)
+        inner2 = reward_logging.InMemoryRewardLogger(log_every_n_generations=1)
+        composite = reward_logging.CompositeRewardLogger([inner1, inner2])
+        composite.log_sample("s1", generation_count=1, total=0.5)
+        assert len(inner1.samples) == 1
+        assert len(inner2.samples) == 1
+
+    def test_per_logger_frequency_gating(self) -> None:
+        inner_all = reward_logging.InMemoryRewardLogger(log_every_n_generations=1)
+        inner_every3 = reward_logging.InMemoryRewardLogger(log_every_n_generations=3)
+        composite = reward_logging.CompositeRewardLogger([inner_all, inner_every3])
+        for gen_count in range(1, 7):
+            if composite.should_log_sample(gen_count):
+                composite.log_sample(f"s{gen_count}", generation_count=gen_count, total=float(gen_count))
+        assert len(inner_all.samples) == 6  # logs all
+        assert len(inner_every3.samples) == 2  # logs gen_count=3 and gen_count=6
+
+    def test_should_log_sample_union_semantics(self) -> None:
+        inner_every2 = reward_logging.InMemoryRewardLogger(log_every_n_generations=2)
+        inner_every3 = reward_logging.InMemoryRewardLogger(log_every_n_generations=3)
+        composite = reward_logging.CompositeRewardLogger([inner_every2, inner_every3])
+        assert not composite.should_log_sample(1)
+        assert composite.should_log_sample(2)  # inner_every2 says yes
+        assert composite.should_log_sample(3)  # inner_every3 says yes
+        assert composite.should_log_sample(4)  # inner_every2 says yes
+        assert not composite.should_log_sample(5)  # neither
+        assert composite.should_log_sample(6)  # both say yes
+
+    def test_set_key_prefix_propagates(self) -> None:
+        inner1 = reward_logging.InMemoryRewardLogger()
+        inner2 = reward_logging.InMemoryRewardLogger()
+        composite = reward_logging.CompositeRewardLogger([inner1, inner2])
+        composite.set_key_prefix("eval/")
+        assert inner1.get_key_prefix() == "eval/"
+        assert inner2.get_key_prefix() == "eval/"
+        assert composite.get_key_prefix() == "eval/"
+
+    def test_close_propagates(self, tmp_path: pathlib.Path) -> None:
+        disk_logger = reward_logging.DiskRewardLogger(output_path=tmp_path / "gen")
+        inner = reward_logging.InMemoryRewardLogger()
+        composite = reward_logging.CompositeRewardLogger([inner, disk_logger])
+        composite.set_key_prefix("train/")
+        composite.log_sample("s1", generation_count=1, total=1.0, model_output="out")
+        composite.close()
+        # verify disk logger was closed (LMDB readable)
+        reader = pyine.data.utils.lmdb_io.LMDBReader(tmp_path / "gen")
+        assert len(reader.key_map) == 1
+        reader.close()
+
+    def test_empty_loggers_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one"):
+            reward_logging.CompositeRewardLogger([])
+
+    def test_set_step_and_epoch_propagate(self) -> None:
+        inner = reward_logging.InMemoryRewardLogger()
+        composite = reward_logging.CompositeRewardLogger([inner])
+        composite.set_step(42)
+        composite.set_epoch(1.5)
+        assert inner._step == 42
+        assert inner._epoch == 1.5
+
+
+class TestMakeDiskRewardLogger:
+    def test_creates_logger_from_config(self, tmp_path: pathlib.Path) -> None:
+        config = reward_configs.GenerationExportConfig(
+            output_path=tmp_path / "gen",
+            log_every_n_generations=5,
+        )
+        disk_logger = reward_logging.make_disk_reward_logger(config)
+        assert isinstance(disk_logger, reward_logging.DiskRewardLogger)
+        assert disk_logger._log_every_n_generations == 5
+        disk_logger.close()
+
+
+class TestGenerationExportConfig:
+    def test_frozen_config(self, tmp_path: pathlib.Path) -> None:
+        config = reward_configs.GenerationExportConfig(output_path=tmp_path / "gen")
+        with pytest.raises(pydantic.ValidationError):
+            config.output_path = pathlib.Path("/other")  # type: ignore[misc]
+
+    def test_extra_forbid(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            reward_configs.GenerationExportConfig(output_path=tmp_path / "gen", unknown_field="x")  # type: ignore[call-arg]
+
+    def test_log_every_n_must_be_positive(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            reward_configs.GenerationExportConfig(output_path=tmp_path / "gen", log_every_n_generations=0)

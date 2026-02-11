@@ -1593,6 +1593,7 @@ class RewardManager:
             predict_type=sample_ctx.sample_data.predict_type.value,
             code_type=sample_ctx.sample_data.code_type,
             has_code_override=sample_ctx.sample_data.has_code_override,
+            has_expected_output_override=sample_ctx.sample_data.has_expected_output_override,
         )
 
     def _scope_reward_sample_fields(

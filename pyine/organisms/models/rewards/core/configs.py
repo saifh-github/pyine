@@ -5,6 +5,7 @@ configs describe which terms are enabled, how aggregation is performed, and how 
 reward breakdowns/metrics are logged.
 """
 
+import pathlib
 import typing
 
 import pydantic
@@ -567,6 +568,30 @@ class LoggingConfig(reward_types.BaseConfig):
         if value < 0:
             raise ValueError("histogram_max_samples must be >= 0")
         return value
+
+
+class GenerationExportConfig(pydantic.BaseModel):
+    """Configuration for exporting RL-generated completions to disk for later SFT re-import.
+
+    The exported LMDB contains per-sample reward records keyed by phase prefix, sample identifier,
+    and generation count. For richest metadata, set ``logging.log_tables=True`` in the reward
+    manager config (ensures reasoning/final_answer fields are populated).
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    output_path: pathlib.Path
+    """Directory path for the output LMDB dataset.
+
+    Must point to a fresh (non-existent or empty) directory. Each exported record is stored
+    in a LMDB database as a JSON-ZSTD entry keyed by ``{key_prefix}{sample_id}/{generation_count}``.
+    """
+    log_every_n_generations: pydantic.PositiveInt = 1
+    """How often to write a record, in number of generations.
+
+    Set to 1 (default) to export every generation. Higher values subsample the export,
+    which can reduce disk usage for long runs where not every completion is needed.
+    """
 
 
 class RewardTermSpec(reward_types.BaseConfig):

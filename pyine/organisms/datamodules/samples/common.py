@@ -516,9 +516,13 @@ class SampleData(typing.NamedTuple):
     expected_output: str
     """Expected output that was previously verified/found, and that should be predicted by models.
 
-    Note: this expected output is only "correct" when the code does NOT contain issues/bugs! Refer
+    Note1: this expected output is only "correct" when the code does NOT contain issues/bugs! Refer
     to the `code_type` field to determine this; in such cases, the expected output is actually not
     the "correct" output, but the "intended" output.
+
+    Note2: when conducting experiments with e.g. pseudolabels, this might not actually correspond
+    with groundtruth, but instead with previously generated outputs fed in during sample preparation;
+    refer to `has_expected_output_override` to validate.
     """
     predict_type: SamplePredictType
     """Type of the expected prediction (helps provide specific descriptions in prompts)."""
@@ -552,6 +556,14 @@ class SampleData(typing.NamedTuple):
     """Absolute trace step index of segment start. 0 if not applicable."""
     last_step_idx: int = 0
     """Absolute trace step index of segment end. 0 if not applicable."""
+    has_expected_output_override: bool = False
+    """Whether the expected output was replaced by a pregenerated/pseudolabel output.
+
+    When True, ``expected_output`` does not come from the original trace execution but was
+    injected by the data pipeline (e.g. from a prior RL run's exported generations). Reward
+    terms and difficulty estimators should be aware that the ground truth may differ from what
+    the trace would actually produce.
+    """
 
     def has_bugged_code(self) -> bool:
         """Returns whether the code snippet contains a bug that should affect its execution outcome.

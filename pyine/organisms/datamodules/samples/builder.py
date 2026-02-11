@@ -61,8 +61,29 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             pyine.organisms.datamodules.samples.configs.SampleTransformConfig | dict[str, typing.Any] | None
         ) = None,
         prompt_result_db_path: str | None = None,  # if none, will use framework default
+        pregenerated_outputs: dict[str, str] | None = None,
     ) -> None:
-        """Initializes the reader with a list of LMDB readers and a list of target traces."""
+        """Initializes the reader with a list of LMDB readers and a list of target traces.
+
+        Args:
+            source_data: One or more LMDB dataset paths/readers providing raw execution traces.
+            traces: Optional list of trace metadata entries to target. If None, all traces
+                available in the source data are used.
+            filtering_config: Configuration controlling which traces to skip based on length or
+                other criteria. If a dict, it is unpacked into a ``TraceFilteringConfig``. If
+                None, defaults are used.
+            selection_config: Configuration controlling how samples are selected from traces
+                (e.g. with or without augmentations). If a dict, it is unpacked into a
+                ``SampleSelectionConfig``. If None, defaults are used.
+            transform_config: Configuration controlling how raw traces are transformed into
+                model inputs and expected outputs. If a dict, it is unpacked into a
+                ``SampleTransformConfig``. If None, defaults are used.
+            prompt_result_db_path: Path to a prompt result database. If None, the framework
+                default database is used.
+            pregenerated_outputs: Optional mapping from sample identifiers to pregenerated model
+                output strings, used to override normal sample construction with e.g. pseudolabels.
+        """
+        self._pregenerated_outputs = pregenerated_outputs
         self._curr_epoch: int = 0
         if filtering_config is None:
             filtering_config = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig()
@@ -277,6 +298,16 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                 f"failed to generate sample for idx={idx}"
                 " (current sample builder impl should never produce a None sample,"
                 " update transform config accordingly)"
+            )
+        if self._pregenerated_outputs is not None and sample.identifier in self._pregenerated_outputs:
+            if sample.predict_type != _samples_common.SamplePredictType.program_output:
+                raise NotImplementedError(
+                    f"pregenerated output overrides are only supported for program_output predict_type, "
+                    f"got {sample.predict_type} for sample {sample.identifier}"
+                )
+            sample = sample._replace(
+                expected_output=self._pregenerated_outputs[sample.identifier],
+                has_expected_output_override=True,
             )
         # compute stats using sample here @@@@@
         # @@@@ consider caching results here too? (if they're expensive to compute, and not too voluminous?)

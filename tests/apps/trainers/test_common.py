@@ -14,6 +14,7 @@ import pyine.apps.trainers.common as trainer_common
 import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
+import pyine.organisms.models.rewards.core.configs as reward_configs
 import tests.env_checks
 
 
@@ -795,3 +796,98 @@ def test_resolve_attn_implementation_empty_config() -> None:
     auto_config: dict[str, typing.Any] = {}
     resolved = trainer_common._resolve_attn_implementation(auto_config)
     assert resolved == {}
+
+
+def _make_reward_manager_config(
+    *,
+    logging_enabled: bool = True,
+    log_total: bool = True,
+    main_process_only: bool = True,
+) -> reward_configs.RewardManagerConfig:
+    return reward_configs.RewardManagerConfig(
+        terms=[reward_configs.RewardTermSpec(name="dummy", type="exact_match")],
+        logging=reward_configs.LoggingConfig(
+            enabled=logging_enabled,
+            log_total=log_total,
+            main_process_only=main_process_only,
+        ),
+    )
+
+
+class TestCreateModelOrganismRewardComponents:
+    def test_returns_components_without_export(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_manager = types.SimpleNamespace()
+        mock_adapter = types.SimpleNamespace()
+        monkeypatch.setattr(
+            trainer_common.reward_manager_mod,
+            "RewardManager",
+            lambda *args, **kwargs: mock_manager,
+        )
+        monkeypatch.setattr(
+            trainer_common.reward_trl,
+            "TRLRewardAdapter",
+            lambda *args, **kwargs: mock_adapter,
+        )
+        config = _make_reward_manager_config()
+        result = trainer_common.create_model_organism_reward_components(
+            reward_manager_config=config,
+            tokenizer=None,
+            generation_export_config=None,
+            wandb_run=None,
+        )
+        assert result.manager is mock_manager
+        assert result.adapter is mock_adapter
+        assert result._disk_logger is None
+        result.close()  # should be a safe no-op
+
+    def test_returns_disk_logger_when_export_configured(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_manager = types.SimpleNamespace()
+        mock_adapter = types.SimpleNamespace()
+        monkeypatch.setattr(
+            trainer_common.reward_manager_mod,
+            "RewardManager",
+            lambda *args, **kwargs: mock_manager,
+        )
+        monkeypatch.setattr(
+            trainer_common.reward_trl,
+            "TRLRewardAdapter",
+            lambda *args, **kwargs: mock_adapter,
+        )
+        export_path = tmp_path / "export_lmdb"
+        export_config = reward_configs.GenerationExportConfig(output_path=export_path)
+        config = _make_reward_manager_config()
+        result = trainer_common.create_model_organism_reward_components(
+            reward_manager_config=config,
+            tokenizer=None,
+            generation_export_config=export_config,
+            wandb_run=None,
+        )
+        assert result._disk_logger is not None
+        result.close()
+
+    def test_raises_when_export_with_logging_disabled(self) -> None:
+        config = _make_reward_manager_config(logging_enabled=False)
+        export_config = reward_configs.GenerationExportConfig(output_path=pathlib.Path("/nonexistent/dummy/export"))
+        with pytest.raises(ValueError, match="logging.enabled=False"):
+            trainer_common.create_model_organism_reward_components(
+                reward_manager_config=config,
+                tokenizer=None,
+                generation_export_config=export_config,
+            )
+
+    def test_raises_when_export_with_log_total_false(self) -> None:
+        config = _make_reward_manager_config(log_total=False)
+        export_config = reward_configs.GenerationExportConfig(output_path=pathlib.Path("/nonexistent/dummy/export"))
+        with pytest.raises(ValueError, match="log_total=False"):
+            trainer_common.create_model_organism_reward_components(
+                reward_manager_config=config,
+                tokenizer=None,
+                generation_export_config=export_config,
+            )

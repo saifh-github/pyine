@@ -60,6 +60,13 @@ class RLTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBa
         description="Reward manager configuration for RL training.",
     )
 
+    generation_export_config: pyine.organisms.models.rewards.core.configs.GenerationExportConfig | None = (
+        pydantic.Field(
+            default=None,
+            description="If set, export model generations to disk for later SFT reuse.",
+        )
+    )
+
     cache_config: CacheConfig = pydantic.Field(
         default_factory=CacheConfig,
         description="Dataset caching configuration.",

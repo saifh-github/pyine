@@ -1327,14 +1327,14 @@ def test_rl_train_uses_resume_artifacts_correctly(
         MockGRPOConfig,
     )
 
-    # patch RewardManager and TRLRewardAdapter
+    # patch RewardManager and TRLRewardAdapter (imported via common.py)
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.organisms.models.rewards.core.manager,
+        pyine.apps.trainers.common.reward_manager_mod,
         "RewardManager",
         lambda *args, **kwargs: mock_reward_manager,
     )
     monkeypatch.setattr(
-        pyine.apps.trainers.hf_trainer.pyine.organisms.models.rewards.trl,
+        pyine.apps.trainers.common.reward_trl,
         "TRLRewardAdapter",
         lambda *args, **kwargs: mock_reward_adapter,
     )
@@ -1365,6 +1365,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
             to_dict=lambda: {"output_dir": str(output_dir), "do_eval": False, "report_to": []},
         ),
         reward_manager_config=reward_manager_config,
+        generation_export_config=None,
         get_model=mock_get_model,
         get_tokenizer=mock_get_tokenizer,
         gpu_stats_logging=None,

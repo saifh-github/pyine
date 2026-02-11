@@ -22,6 +22,11 @@ import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
+import pyine.organisms.models.rewards.core.configs as reward_configs
+import pyine.organisms.models.rewards.core.logging as reward_logging
+import pyine.organisms.models.rewards.core.manager as reward_manager_mod
+import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.organisms.models.rewards.trl as reward_trl
 import pyine.utils.distrib
 import pyine.utils.filesystem
 import pyine.utils.interrupts
@@ -1370,6 +1375,94 @@ def log_shutdown_status(
     """
     if shutdown_manager is not None and shutdown_manager.should_terminate():
         logger.info(f"{training_type} run exited early after honoring shutdown request")
+
+
+@dataclasses.dataclass
+class ModelOrganismRewardComponents:
+    """Components produced by reward setup for RL training of model organisms."""
+
+    manager: reward_manager_mod.RewardManager
+    """Reward manager that orchestrates term evaluation, aggregation, and logging."""
+    adapter: reward_trl.TRLRewardAdapter
+    """TRL-compatible adapter wrapping the manager for use as a reward function."""
+    _disk_logger: reward_logging.DiskRewardLogger | None = dataclasses.field(default=None, repr=False)
+    """Optional LMDB-backed logger for exporting generations to disk; closed via ``close()``."""
+
+    def close(self) -> None:
+        """Close resources (e.g. flush disk logger LMDB)."""
+        if self._disk_logger is not None:
+            self._disk_logger.close()
+
+
+def create_model_organism_reward_components(
+    reward_manager_config: reward_configs.RewardManagerConfig,
+    tokenizer: typing.Any,
+    *,
+    generation_export_config: reward_configs.GenerationExportConfig | None = None,
+    wandb_run: typing.Any | None = None,
+    prompt_key: str = "prompts",
+    sample_data_key: str = "sample_data",
+) -> ModelOrganismRewardComponents:
+    """Create reward manager, adapter, and optional loggers for RL training.
+
+    Args:
+        reward_manager_config: Configuration for the reward manager.
+        tokenizer: Tokenizer instance passed to the reward manager.
+        generation_export_config: Optional config for disk export of generations.
+        wandb_run: Optional wandb run object for logging.
+        prompt_key: Key under which TRL passes prompt strings to the reward function. Must match
+            the column name produced by the data generation pipeline (e.g. TRL's GRPOTrainer
+            passes "prompts" by default).
+        sample_data_key: Key under which per-sample metadata dicts are passed to the reward
+            function. Must match the column name emitted by the datamodule HF dataset creation call.
+
+    Returns:
+        A ModelOrganismRewardComponents instance containing the manager, adapter, and optional
+        disk logger.
+
+    Raises:
+        ValueError: If generation_export_config is set but logging is disabled or log_total is False.
+    """
+    if generation_export_config is not None and not reward_manager_config.logging.enabled:
+        raise ValueError(
+            "generation_export_config is set but reward_manager_config.logging.enabled=False; "
+            "enable logging for export to work (RewardManager gates all logging on this flag)"
+        )
+    if generation_export_config is not None and not reward_manager_config.logging.log_total:
+        raise ValueError(
+            "generation_export_config is set but reward_manager_config.logging.log_total=False; "
+            "reward_total will be None in exported records"
+        )
+    if generation_export_config is not None and not reward_manager_config.logging.main_process_only:
+        raise ValueError(
+            "generation_export_config is set but reward_manager_config.logging.main_process_only=False; "
+            "disk export requires main_process_only=True to avoid multiple ranks writing to the same LMDB"
+        )
+    is_logging_rank = not reward_manager_config.logging.main_process_only or pyine.utils.distrib.is_main_process()
+    loggers: list[reward_types.RewardLogger] = []
+    if wandb_run is not None and reward_manager_config.logging.enabled and is_logging_rank:
+        loggers.append(reward_logging.make_wandb_reward_logger(wandb_run, reward_manager_config.logging))
+    disk_logger: reward_logging.DiskRewardLogger | None = None
+    if generation_export_config is not None and is_logging_rank:
+        disk_logger = reward_logging.make_disk_reward_logger(generation_export_config)
+        loggers.append(disk_logger)
+    reward_logger: reward_types.RewardLogger | None = None
+    if len(loggers) == 1:
+        reward_logger = loggers[0]
+    elif loggers:
+        reward_logger = reward_logging.CompositeRewardLogger(loggers)
+    manager = reward_manager_mod.RewardManager(
+        reward_manager_config,
+        logger=reward_logger,
+        tokenizer=tokenizer,
+    )
+    adapter = reward_trl.TRLRewardAdapter(
+        manager=manager,
+        prompt_key=prompt_key,
+        sample_data_key=sample_data_key,
+        skip_on_error=True,
+    )
+    return ModelOrganismRewardComponents(manager=manager, adapter=adapter, _disk_logger=disk_logger)
 
 
 def get_hardware_training_flags() -> dict[str, typing.Any]:

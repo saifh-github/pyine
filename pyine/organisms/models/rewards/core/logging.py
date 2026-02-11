@@ -45,15 +45,21 @@ Where `{prefix}` is typically "train" or "eval" depending on the training phase.
 
 import collections.abc
 import json
+import logging
+import pathlib
 import re
+import threading
 import typing
 
 import wandb
 
+import pyine.data.utils.lmdb_io
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.parsing as parsing_utils
 import pyine.utils.stats as stats_utils
+
+logger = logging.getLogger(__name__)
 
 
 def _has_nonempty_stats(
@@ -319,6 +325,7 @@ class InMemoryRewardLogger:
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
+        has_expected_output_override: bool | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Record a per-sample logging event in memory.
@@ -351,6 +358,8 @@ class InMemoryRewardLogger:
             predict_type: Sample predict type.
             code_type: Sample code type.
             has_code_override: Whether the sample has a code override.
+            has_expected_output_override: Whether the expected output was replaced by a
+                pregenerated/pseudolabel output.
             **kwargs: Additional fields to store.
         """
         # note: frequency gating is the caller's responsibility (typically RewardManager);
@@ -385,6 +394,7 @@ class InMemoryRewardLogger:
             "predict_type": predict_type,
             "code_type": code_type,
             "has_code_override": has_code_override,
+            "has_expected_output_override": has_expected_output_override,
             **kwargs,
         }
         self.samples.append(dict(record))
@@ -797,6 +807,7 @@ class WandBRewardLogger:
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
+        has_expected_output_override: bool | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward payload to W&B.
@@ -834,6 +845,8 @@ class WandBRewardLogger:
             predict_type: Sample predict type.
             code_type: Sample code type.
             has_code_override: Whether the sample has a code override.
+            has_expected_output_override: Whether the expected output was replaced by a
+                pregenerated/pseudolabel output.
             **kwargs: Absorbed for forward compatibility.
         """
         del kwargs  # absorb any future additions for forward compatibility
@@ -906,6 +919,7 @@ class WandBRewardLogger:
                 "predict_type": predict_type,
                 "code_type": code_type,
                 "has_code_override": has_code_override,
+                "has_expected_output_override": has_expected_output_override,
             }
             self._generation_table_rows.append(row)
             # flush table when buffer reaches max size
@@ -1127,6 +1141,7 @@ class WandBRewardLogger:
             "predict_type",
             "code_type",
             "has_code_override",
+            "has_expected_output_override",
         ]
         table = wandb.Table(columns=columns)
         table_obj = typing.cast("typing.Any", table)
@@ -1158,6 +1173,7 @@ class WandBRewardLogger:
                 row["predict_type"],
                 row["code_type"],
                 row["has_code_override"],
+                row["has_expected_output_override"],
             ]
             table_obj.add_data(*row_data)
         self._wandb_run.log({self._prefix_key(self._generation_table_key): table})  # type: ignore[reportUnknownMemberType]
@@ -1189,3 +1205,276 @@ def make_wandb_reward_logger(
         log_every_n_generations=logging_config.log_every_n_generations,
         histogram_num_bins=logging_config.histogram_num_bins,
     )
+
+
+class DiskRewardLogger:
+    """RewardLogger implementation that writes generation records to an LMDB dataset on disk.
+
+    Each ``log_sample()`` call writes one record to LMDB keyed as
+    ``{key_prefix}{sample_id}/{generation_count}``. This enables later re-import of
+    RL-generated completions as SFT training examples.
+
+    Uses ``JSON_ZSTD`` serialization for human-inspectable, compressed storage. Thread-safe via
+    an internal lock around LMDB writes.
+    """
+
+    _METADATA_FLUSH_INTERVAL = 500  # flush internal metadata every N writes as crash safety belt
+
+    def __init__(
+        self,
+        output_path: pathlib.Path,
+        log_every_n_generations: int = 1,
+    ) -> None:
+        """Create a disk-backed reward logger.
+
+        Args:
+            output_path: Directory path for the LMDB dataset.
+            log_every_n_generations: Record samples every N generations (default 1 = log all).
+
+        Raises:
+            ValueError: If ``output_path`` already exists and is non-empty.
+        """
+        if log_every_n_generations < 1:
+            raise ValueError("log_every_n_generations must be >= 1")
+        output_path = pathlib.Path(output_path)
+        if output_path.exists() and any(output_path.iterdir()):
+            raise ValueError(
+                f"output_path '{output_path}' already exists and is non-empty; "
+                "use a fresh directory to avoid mixing runs"
+            )
+        self._log_every_n_generations = log_every_n_generations
+        self._key_prefix: str = ""
+        self._step: int | None = None
+        self._epoch: float | None = None
+        self._write_count = 0
+        self._lock = threading.Lock()
+        self._writer = pyine.data.utils.lmdb_io.LMDBWriter(
+            path=output_path,
+            serialization_config=pyine.data.utils.lmdb_io.SerializationConfig(
+                method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+            ),
+        )
+
+    def should_log_sample(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if sample metrics should be logged for this generation_count."""
+        return generation_count % self._log_every_n_generations == 0
+
+    def log_sample(
+        self,
+        sample_id: str,
+        *,
+        generation_count: int | None = None,
+        batch_count: int | None = None,
+        local_batch_idx: int | None = None,
+        completion_idx: int | None = None,
+        rank: int | None = None,
+        total: float | None,
+        terms: collections.abc.Mapping[str, float] | None = None,
+        metrics: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        raw_terms: collections.abc.Mapping[str, float] | None = None,
+        step: int | None = None,
+        prompt: str | None = None,
+        expected_output: str | None = None,
+        model_output: str | None = None,
+        reasoning: str | None = None,
+        final_answer: str | None = None,
+        categories: collections.abc.Sequence[str] | None = None,
+        tags: collections.abc.Sequence[str] | None = None,
+        difficulty_source: str | None = None,
+        difficulty_score: float | None = None,
+        difficulty_bin: int | None = None,
+        difficulty_raw_primary: float | None = None,
+        difficulty_secondary_json: str | None = None,
+        predict_type: str | None = None,
+        code_type: str | None = None,
+        has_code_override: bool | None = None,
+        has_expected_output_override: bool | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Write a per-sample reward record to LMDB."""
+        if not self._key_prefix:
+            logger.debug("DiskRewardLogger.log_sample() called with empty key_prefix")
+        gen_count_str = str(generation_count) if generation_count is not None else "none"
+        lmdb_key = f"{self._key_prefix}{sample_id}/{gen_count_str}"
+        record: dict[str, typing.Any] = {
+            "model_output": model_output,
+            "reward_total": total,
+            "prompt": prompt,
+            "expected_output": expected_output,
+            "reasoning": reasoning,
+            "final_answer": final_answer,
+            "reward_terms": dict(terms) if terms is not None else None,
+            "reward_metrics": dict(metrics) if metrics is not None else None,
+            "reward_terms_raw": dict(raw_terms) if raw_terms is not None else None,
+            "step": step,
+            "batch_count": batch_count,
+            "local_batch_idx": local_batch_idx,
+            "completion_idx": completion_idx,
+            "rank": rank,
+            "predict_type": predict_type,
+            "code_type": code_type,
+            "has_code_override": has_code_override,
+            "has_expected_output_override": has_expected_output_override,
+            "tags": list(tags) if tags is not None else None,
+            "categories": list(categories) if categories is not None else None,
+            "difficulty_source": difficulty_source,
+            "difficulty_score": difficulty_score,
+            "difficulty_bin": difficulty_bin,
+            "difficulty_raw_primary": difficulty_raw_primary,
+            "difficulty_secondary_json": difficulty_secondary_json,
+            "key_prefix": self._key_prefix,
+        }
+        with self._lock:
+            self._writer.put(lmdb_key, record)
+            self._write_count += 1
+            if self._write_count % self._METADATA_FLUSH_INTERVAL == 0:
+                self._writer._write_internal_metadata()  # type: ignore[reportPrivateUsage]
+
+    def log_phase_summaries(
+        self,
+        *,
+        reward_totals: collections.abc.Mapping[str, reward_types.MetricValue],
+        reward_term_summaries: collections.abc.Mapping[str, reward_types.MetricValue],
+        reward_category_summaries: collections.abc.Mapping[str, reward_types.MetricValue],
+        parsing_summaries: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        parsing_category_summaries: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        difficulty_summaries: collections.abc.Mapping[str, reward_types.MetricValue] | None = None,
+        failure_ratio: float | None = None,
+        failure_count: int | None = None,
+        step: int | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """No-op for disk logger (monitoring-only concern)."""
+
+    def log_batch_stats(
+        self,
+        *,
+        batch_mean: float,
+        batch_std: float,
+        batch_count: int | None = None,
+    ) -> None:
+        """No-op for disk logger (monitoring-only concern)."""
+
+    def set_step(self, step: int | None) -> None:
+        """Set a default step value for subsequent logs."""
+        self._step = step
+
+    def set_epoch(self, epoch: float | None) -> None:
+        """Set a default epoch value for subsequent logs."""
+        self._epoch = epoch
+
+    def set_key_prefix(self, key_prefix: str) -> None:
+        """Set the key prefix for subsequent logs."""
+        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
+
+    def get_key_prefix(self) -> str:
+        """Get the current key prefix."""
+        return self._key_prefix
+
+    def close(self) -> None:
+        """Close the underlying LMDB writer, flushing metadata."""
+        self._writer.close()
+
+
+def make_disk_reward_logger(
+    export_config: reward_configs.GenerationExportConfig,
+) -> DiskRewardLogger:
+    """Create a ``DiskRewardLogger`` from a ``GenerationExportConfig``.
+
+    Args:
+        export_config: Export configuration specifying output path and logging frequency.
+
+    Returns:
+        A disk-backed reward logger.
+    """
+    return DiskRewardLogger(
+        output_path=export_config.output_path,
+        log_every_n_generations=export_config.log_every_n_generations,
+    )
+
+
+class CompositeRewardLogger:
+    """Wraps multiple ``RewardLogger`` instances into one, fanning out calls to each.
+
+    ``should_log_sample()`` returns True if **any** inner logger returns True (union
+    semantics). ``log_sample()`` individually gates each inner logger via its own
+    ``should_log_sample()`` check, preserving per-logger frequency settings.
+    """
+
+    def __init__(
+        self,
+        loggers: collections.abc.Sequence[reward_types.RewardLogger],
+    ) -> None:
+        """Create a composite reward logger.
+
+        Args:
+            loggers: Inner loggers to fan out to.
+        """
+        if not loggers:
+            raise ValueError("CompositeRewardLogger requires at least one inner logger")
+        self._loggers = list(loggers)
+        self._key_prefix: str = ""
+
+    def should_log_sample(
+        self,
+        generation_count: int,
+    ) -> bool:
+        """Return True if any inner logger wants to log this generation."""
+        return any(inner.should_log_sample(generation_count) for inner in self._loggers)
+
+    def log_sample(
+        self,
+        sample_id: str,
+        *,
+        generation_count: int | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Fan out to each inner logger that passes its own should_log_sample gate."""
+        for inner in self._loggers:
+            if generation_count is None or inner.should_log_sample(generation_count):
+                inner.log_sample(sample_id, generation_count=generation_count, **kwargs)
+
+    def log_phase_summaries(
+        self,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Fan out phase summaries to all inner loggers."""
+        for inner in self._loggers:
+            inner.log_phase_summaries(**kwargs)
+
+    def log_batch_stats(
+        self,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Fan out batch stats to all inner loggers."""
+        for inner in self._loggers:
+            inner.log_batch_stats(**kwargs)
+
+    def set_step(self, step: int | None) -> None:
+        """Set step on all inner loggers."""
+        for inner in self._loggers:
+            inner.set_step(step)
+
+    def set_epoch(self, epoch: float | None) -> None:
+        """Set epoch on all inner loggers."""
+        for inner in self._loggers:
+            inner.set_epoch(epoch)
+
+    def set_key_prefix(self, key_prefix: str) -> None:
+        """Set key prefix on all inner loggers."""
+        self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
+        for inner in self._loggers:
+            inner.set_key_prefix(key_prefix)
+
+    def get_key_prefix(self) -> str:
+        """Get the current key prefix."""
+        return self._key_prefix
+
+    def close(self) -> None:
+        """Close any inner loggers that have a close method."""
+        for inner in self._loggers:
+            if hasattr(inner, "close"):
+                inner.close()  # type: ignore[union-attr]
