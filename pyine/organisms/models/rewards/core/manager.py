@@ -155,6 +155,7 @@ class RewardManager:
             pyine.evals.utils.SampleCategoryExtractor(category_config) if category_config is not None else None
         )
         self._reward_category_stats: dict[str, stats_utils.RunningStats] = {}
+        self._reward_category_term_stats: dict[str, dict[str, stats_utils.RunningStats]] = {}
         self._parsing_stats: reward_types.ParsingStatsAccumulator | None = (
             reward_types.ParsingStatsAccumulator.new() if config.parsing is not None else None
         )
@@ -678,6 +679,7 @@ class RewardManager:
         for key in self._reward_term_stats:
             self._reward_term_stats[key] = stats_utils.RunningStats()
         self._reward_category_stats.clear()
+        self._reward_category_term_stats.clear()
         self._reward_total_values = []
         self._reward_total_values_count = 0
         if self._parsing_stats is not None:
@@ -730,6 +732,12 @@ class RewardManager:
         ]
         # categories: alphabetical (always pass for tables)
         kwargs["category_stats"] = sorted(self._reward_category_stats.items())
+        # category-term cross-product: config-order terms within sorted categories (only when non-empty)
+        if self._reward_category_term_stats:
+            kwargs["category_term_stats"] = {
+                category: [(name, term_stats[name]) for name in self.enabled_term_names if name in term_stats]
+                for category, term_stats in sorted(self._reward_category_term_stats.items())
+            }
         # difficulty data (if enabled)
         if self._difficulty_estimator:
             kwargs["bin_stats"] = self._difficulty_estimator.get_bin_stats()
@@ -1250,6 +1258,10 @@ class RewardManager:
             "total": self._reward_total_stats.as_state(),
             "terms": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
             "categories": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
+            "category_terms": {
+                cat: {term_name: term_stats.as_state() for term_name, term_stats in terms.items()}
+                for cat, terms in self._reward_category_term_stats.items()
+            },
             "reward_total_values": self._reward_total_values,
             "reward_total_values_count": self._reward_total_values_count,
         }
@@ -1265,6 +1277,7 @@ class RewardManager:
             name: stats_utils.RunningStats() for name in self._reward_term_stats
         }
         merged_categories: dict[str, stats_utils.RunningStats] = {}
+        merged_category_terms: dict[str, dict[str, stats_utils.RunningStats]] = {}
         merged_parsing: reward_types.ParsingStatsAccumulator | None = (
             reward_types.ParsingStatsAccumulator.new() if self._parsing_stats is not None else None
         )
@@ -1291,6 +1304,16 @@ class RewardManager:
                 if category_name not in merged_categories:
                     merged_categories[category_name] = stats_utils.RunningStats()
                 merged_categories[category_name].merge(stats_utils.RunningStats.from_state(state))
+            category_terms_state = typing.cast(
+                "collections.abc.Mapping[str, collections.abc.Mapping[str, collections.abc.Mapping[str, int | float]]]",
+                item.get("category_terms", {}),
+            )
+            for cat_name, terms_map in category_terms_state.items():
+                cat_merged = merged_category_terms.setdefault(cat_name, {})
+                for term_name, term_state in terms_map.items():
+                    if term_name not in cat_merged:
+                        cat_merged[term_name] = stats_utils.RunningStats()
+                    cat_merged[term_name].merge(stats_utils.RunningStats.from_state(term_state))
             if merged_parsing is not None and "parsing" in item:
                 parsing_state = typing.cast("dict[str, typing.Any]", item["parsing"])
                 merged_parsing.merge(reward_types.ParsingStatsAccumulator.from_state(parsing_state))
@@ -1305,6 +1328,7 @@ class RewardManager:
         self._reward_total_stats = merged_total
         self._reward_term_stats = merged_terms
         self._reward_category_stats = merged_categories
+        self._reward_category_term_stats = merged_category_terms
         if merged_parsing is not None:
             self._parsing_stats = merged_parsing
         if merged_difficulty is not None:
@@ -1406,9 +1430,11 @@ class RewardManager:
     ) -> None:
         """Update run-level summary stats.
 
-        Note1: per-term stats track weighted values (after per-term clipping and weight
-        multiplication), not raw term values. If verbosity scaling is enabled, totals may be
-        post-scaled while per-term stats remain unscaled.
+        Note1: per-term stats (including per-category per-term stats) track weighted values
+        (after per-term clipping and weight multiplication), not raw term values. If verbosity
+        scaling is enabled, totals (including per-category totals) may be post-scaled while
+        per-term stats remain unscaled, so per-category per-term values will not sum to
+        category totals.
 
         Note2: global generation counts are managed at the batch level in compute_batch(),
         not per-sample in this method. This method only updates statistics accumulators.
@@ -1427,6 +1453,9 @@ class RewardManager:
                 if category not in self._reward_category_stats:
                     self._reward_category_stats[category] = stats_utils.RunningStats()
                 self._reward_category_stats[category].update(total_reward)
+                cat_term_stats = self._reward_category_term_stats.setdefault(category, {})
+                for term_name, term_reward in output.weighted_terms.items():
+                    cat_term_stats.setdefault(term_name, stats_utils.RunningStats()).update(float(term_reward))
         self._update_parsing_stats(sample_ctx)
 
     def _populate_token_count_cache(
@@ -1699,6 +1728,7 @@ class RewardManager:
             - reward_total_stats: serialized RunningStats for total rewards;
             - reward_term_stats: dict of serialized RunningStats per term;
             - reward_category_stats: dict of serialized RunningStats per category;
+            - reward_category_term_stats: nested dict of serialized RunningStats per (category, term);
             - batch_reward_mean_stats: serialized RunningStats for batch means;
             - batch_reward_std_stats: serialized RunningStats for batch std devs;
             - parsing_stats: serialized ParsingStatsAccumulator (only if parsing enabled).
@@ -1720,6 +1750,10 @@ class RewardManager:
             "reward_total_stats": self._reward_total_stats.as_state(),
             "reward_term_stats": {name: stats.as_state() for name, stats in self._reward_term_stats.items()},
             "reward_category_stats": {name: stats.as_state() for name, stats in self._reward_category_stats.items()},
+            "reward_category_term_stats": {
+                cat: {term_name: term_stats.as_state() for term_name, term_stats in terms.items()}
+                for cat, terms in self._reward_category_term_stats.items()
+            },
             # histogram values for checkpoint persistence
             "reward_total_values": self._reward_total_values,
             "reward_total_values_count": self._reward_total_values_count,
@@ -1738,8 +1772,9 @@ class RewardManager:
 
         Args:
             state: Dictionary with keys: reward_total_stats, reward_term_stats, reward_category_stats,
-                step, epoch, global_generation_counts, global_batch_counts, local_generation_counts,
-                total_global_generation_count, total_global_batch_count, and optionally parsing_stats.
+                reward_category_term_stats, step, epoch, global_generation_counts, global_batch_counts,
+                local_generation_counts, total_global_generation_count, total_global_batch_count,
+                and optionally parsing_stats.
 
         Note:
             _current_prefix will be set by trainer via set_key_prefix() after loading state.
@@ -1765,6 +1800,20 @@ class RewardManager:
         self._reward_category_stats.clear()
         for name, cat_state in state["reward_category_stats"].items():
             self._reward_category_stats[name] = stats_utils.RunningStats.from_state(cat_state)
+        self._reward_category_term_stats.clear()
+        if "reward_category_term_stats" not in state:
+            raise KeyError(
+                "'reward_category_term_stats' missing from checkpoint state; "
+                "checkpoint may predate per-category per-term tracking"
+            )
+        for cat_name, terms_state in state["reward_category_term_stats"].items():
+            self._reward_category_term_stats[cat_name] = {}
+            for term_name, term_state in terms_state.items():
+                if term_name not in self._reward_term_stats:
+                    raise KeyError(
+                        f"term '{term_name}' in category '{cat_name}' checkpoint state not found in current config"
+                    )
+                self._reward_category_term_stats[cat_name][term_name] = stats_utils.RunningStats.from_state(term_state)
         # histogram values (optional, for checkpoint persistence)
         self._reward_total_values = list(state.get("reward_total_values", []))
         self._reward_total_values_count = int(state.get("reward_total_values_count", 0))

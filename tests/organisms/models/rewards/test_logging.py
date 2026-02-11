@@ -811,6 +811,121 @@ class TestSecondarySourceTable:
         assert run_entry["secondary_stats"]["source_a"]["count"] == 1  # still 1
 
 
+class TestCategoryTermStatsHelpers:
+    """Tests for per-category per-term stats table construction and emission."""
+
+    def test_build_category_term_stats_table(self) -> None:
+        stats_a1 = stats_utils.RunningStats()
+        stats_a1.update(0.5)
+        stats_a1.update(0.7)
+        stats_a2 = stats_utils.RunningStats()
+        stats_a2.update(1.0)
+        stats_b1 = stats_utils.RunningStats()
+        stats_b1.update(0.3)
+        category_term_stats = {
+            "code_type/original": [("term_a", stats_a1), ("term_b", stats_a2)],
+            "code_type/bugfix": [("term_a", stats_b1)],
+        }
+        table = reward_logging._build_category_term_stats_table(category_term_stats)
+        assert table.columns == ["category", "term", "mean", "std", "min", "max", "count"]
+        assert len(table.data) == 3
+        # check contents as set of (category, term, count) tuples for order-independence
+        row_keys = {(row[0], row[1], row[6]) for row in table.data}
+        assert ("code_type/original", "term_a", 2) in row_keys
+        assert ("code_type/original", "term_b", 1) in row_keys
+        assert ("code_type/bugfix", "term_a", 1) in row_keys
+
+    def test_build_category_term_stats_table_empty(self) -> None:
+        table = reward_logging._build_category_term_stats_table({})
+        assert table.columns == ["category", "term", "mean", "std", "min", "max", "count"]
+        assert len(table.data) == 0
+
+    def test_has_nonempty_category_term_stats(self) -> None:
+        assert not reward_logging._has_nonempty_category_term_stats(None)
+        assert not reward_logging._has_nonempty_category_term_stats({})
+        # all zero-count
+        empty_stats = stats_utils.RunningStats()
+        assert not reward_logging._has_nonempty_category_term_stats({"cat": [("t", empty_stats)]})
+        # valid case
+        valid_stats = stats_utils.RunningStats()
+        valid_stats.update(1.0)
+        assert reward_logging._has_nonempty_category_term_stats({"cat": [("t", valid_stats)]})
+
+    def test_in_memory_logger_stores_category_term_stats_snapshot(self) -> None:
+        logger = reward_logging.InMemoryRewardLogger()
+        running_stats = stats_utils.RunningStats()
+        running_stats.update(0.5)
+        category_term_stats = {
+            "code_type/original": [("term_a", running_stats)],
+        }
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            category_term_stats=category_term_stats,
+        )
+        assert len(logger.runs) == 1
+        stored = logger.runs[0]["category_term_stats"]
+        assert "code_type/original" in stored
+        assert stored["code_type/original"][0][0] == "term_a"
+        assert isinstance(stored["code_type/original"][0][1], dict)  # snapshot
+        assert stored["code_type/original"][0][1]["count"] == 1
+        # verify mutation of original doesn't affect stored snapshot
+        running_stats.update(100.0)
+        assert stored["code_type/original"][0][1]["count"] == 1
+
+    def test_wandb_logger_emits_category_term_summary_table(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        stats_obj = stats_utils.RunningStats()
+        stats_obj.update(0.8)
+        category_term_stats = {
+            "code_type/original": [("accuracy", stats_obj)],
+        }
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            category_term_stats=category_term_stats,
+        )
+        assert len(logged_payloads) == 1
+        payload = logged_payloads[0]
+        assert "reward/run/category_term_summary" in payload
+        table = payload["reward/run/category_term_summary"]
+        assert isinstance(table, wandb.Table)
+        assert len(table.data) == 1
+        assert table.data[0][0] == "code_type/original"
+        assert table.data[0][1] == "accuracy"
+
+    def test_wandb_logger_skips_category_term_summary_when_empty(self) -> None:
+        logged_payloads: list[dict] = []
+
+        class MockWandBRun:
+            def log(self, payload: dict) -> None:
+                logged_payloads.append(dict(payload))
+
+        mock_run = MockWandBRun()
+        logger = reward_logging.WandBRewardLogger(mock_run)
+        # all zero-count stats
+        empty_stats = stats_utils.RunningStats()
+        category_term_stats = {"code_type/original": [("accuracy", empty_stats)]}
+        logger.log_phase_summaries(
+            reward_totals={"mean": 0.5},
+            reward_term_summaries={},
+            reward_category_summaries={},
+            category_term_stats=category_term_stats,
+        )
+        assert len(logged_payloads) == 1
+        payload = logged_payloads[0]
+        assert "reward/run/category_term_summary" not in payload
+
+
 class TestDiskRewardLogger:
     def test_write_and_read_back_sample(self, tmp_path: pathlib.Path) -> None:
         output_dir = tmp_path / "generations"

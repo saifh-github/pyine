@@ -1246,6 +1246,157 @@ class TestCategoryWiseRewardTracking:
         manager.set_key_prefix("")
 
 
+class TestCategoryTermRewardTracking:
+    @staticmethod
+    def _make_manager_with_categories(
+        *,
+        logging_enabled: bool = False,
+        logger: pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger | None = None,
+    ) -> pyine.organisms.models.rewards.core.manager.RewardManager:
+        category_config = pyine.evals.utils.SampleCategoryExtractionConfig(
+            enabled_fields=frozenset({pyine.evals.utils.SampleCategoryField.code_type}),
+        )
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    params={"reward_if_present": 1.0, "reward_if_missing": 0.0},
+                ),
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="length_check",
+                    type="parseable_answer",
+                    params={"reward_if_present": 0.5, "reward_if_missing": 0.0},
+                ),
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=logging_enabled,
+                log_every_n_generations=1,
+                category_extraction_config=category_config,
+            ),
+        )
+        return pyine.organisms.models.rewards.core.manager.RewardManager(config, logger=logger)
+
+    def test_category_term_stats_accumulate_correctly(self) -> None:
+        manager = self._make_manager_with_categories()
+        ctx1 = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
+        )
+        ctx2 = manager.build_sample_context(
+            prompt="p",
+            model_output="no final tag",
+            sample_data=rewards_conftest.make_sample_data("s2", code_type="original"),
+        )
+        ctx3 = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s3", code_type="bugfix"),
+        )
+        manager.compute(ctx1, log=False)
+        manager.compute(ctx2, log=False)
+        manager.compute(ctx3, log=False)
+        cat_term_stats = manager._reward_category_term_stats
+        assert "code_type/original" in cat_term_stats
+        assert "code_type/bugfix" in cat_term_stats
+        # original: parseable got 1.0 and 0.0 => count=2, mean=0.5
+        assert cat_term_stats["code_type/original"]["parseable"].count == 2
+        assert cat_term_stats["code_type/original"]["parseable"].mean() == pytest.approx(0.5)
+        # bugfix: parseable got 1.0 => count=1, mean=1.0
+        assert cat_term_stats["code_type/bugfix"]["parseable"].count == 1
+        assert cat_term_stats["code_type/bugfix"]["parseable"].mean() == pytest.approx(1.0)
+        # length_check follows same pattern
+        assert cat_term_stats["code_type/original"]["length_check"].count == 2
+        assert cat_term_stats["code_type/bugfix"]["length_check"].count == 1
+
+    def test_category_term_stats_cleared_on_reset(self) -> None:
+        manager = self._make_manager_with_categories()
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
+        )
+        manager.compute(ctx, log=False)
+        assert len(manager._reward_category_term_stats) > 0
+        manager.reset_accumulators()
+        assert len(manager._reward_category_term_stats) == 0
+
+    def test_category_term_stats_emitted_in_flush(self) -> None:
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        manager = self._make_manager_with_categories(logging_enabled=True, logger=logger_obj)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
+        )
+        manager.compute(ctx)
+        manager.flush_stats(step=1)
+        assert len(logger_obj.runs) == 1
+        run_record = logger_obj.runs[0]
+        assert "category_term_stats" in run_record
+        cat_term = run_record["category_term_stats"]
+        assert "code_type/original" in cat_term
+        # each entry is a list of (name, state_dict) tuples
+        term_names = [name for name, _ in cat_term["code_type/original"]]
+        assert "parseable" in term_names
+        assert "length_check" in term_names
+
+    def test_category_term_stats_state_round_trip(self) -> None:
+        manager = self._make_manager_with_categories()
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
+        )
+        manager.compute(ctx, log=False)
+        state = manager.get_state()
+        assert "reward_category_term_stats" in state
+        # create a fresh manager and load state
+        manager2 = self._make_manager_with_categories()
+        manager2.load_state(state)
+        orig = manager._reward_category_term_stats
+        restored = manager2._reward_category_term_stats
+        assert set(orig.keys()) == set(restored.keys())
+        for cat in orig:
+            assert set(orig[cat].keys()) == set(restored[cat].keys())
+            for term in orig[cat]:
+                assert orig[cat][term].count == restored[cat][term].count
+                assert orig[cat][term].mean() == pytest.approx(restored[cat][term].mean())
+
+    def test_category_term_stats_load_state_missing_key_raises(self) -> None:
+        manager = self._make_manager_with_categories()
+        state = manager.get_state()
+        # remove the key to simulate an old checkpoint
+        del state["reward_category_term_stats"]
+        with pytest.raises(KeyError, match="reward_category_term_stats"):
+            manager.load_state(state)
+
+    def test_category_term_stats_disabled_without_category_extractor(self) -> None:
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=False,
+                category_extraction_config=None,
+            ),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        ctx = manager.build_sample_context(
+            prompt="p",
+            model_output="<final>ok</final>",
+            sample_data=rewards_conftest.make_sample_data("s1", code_type="original"),
+        )
+        manager.compute(ctx, log=False)
+        assert len(manager._reward_category_term_stats) == 0
+
+
 def _make_test_manager(parsing: bool = True) -> pyine.organisms.models.rewards.core.manager.RewardManager:
     """Create a simple manager for tests."""
     config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(

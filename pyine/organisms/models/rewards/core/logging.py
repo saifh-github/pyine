@@ -35,6 +35,8 @@ When using WandBRewardLogger, metrics are indexed to different x-axes depending 
     - `{prefix}/reward/run/total/{mean,std,min,max,count}`: accumulated total reward statistics;
     - `{prefix}/reward/run/terms/{term}/{mean,std,min,max,count}`: per-term reward statistics;
     - `{prefix}/reward/run/categories/{category}/{mean,std,min,max,count}`: per-category reward statistics;
+    - `{prefix}/reward/run/category_term_summary`: per-category per-term reward statistics (table);
+      Note: per-term values are pre-verbosity-scaling and may not sum to category totals.
     - `{prefix}/parsing/*`: aggregated parsing statistics (lengths, missing ratios);
     - `{prefix}/failures/failure_ratio`: ratio of failed generations in the phase;
     - `{prefix}/failures/failure_count`: count of failed generations in the phase.
@@ -99,6 +101,36 @@ def _build_stats_table_from_running_stats(
     for name, stats in stats_items:
         if stats.count > 0:
             table.add_data(name, stats.mean(), stats.std(), stats.min, stats.max, stats.count)  # type: ignore[reportUnknownMemberType]
+    return table
+
+
+def _has_nonempty_category_term_stats(
+    category_term_stats: dict[str, list[tuple[str, stats_utils.RunningStats]]] | None,
+) -> bool:
+    """Check if any per-category per-term RunningStats has count > 0."""
+    if not category_term_stats:
+        return False
+    return any(stats.count > 0 for term_stats_list in category_term_stats.values() for _name, stats in term_stats_list)
+
+
+def _build_category_term_stats_table(
+    category_term_stats: dict[str, list[tuple[str, stats_utils.RunningStats]]],
+) -> wandb.Table:
+    """Build table from per-category per-term RunningStats pairs.
+
+    Args:
+        category_term_stats: Dict mapping category name to ordered list of (term_name, RunningStats).
+
+    Returns:
+        wandb.Table with columns [category, term, mean, std, min, max, count],
+        one row per (category, term) pair with count > 0.
+    """
+    columns = ["category", "term", "mean", "std", "min", "max", "count"]
+    table = wandb.Table(columns=columns)
+    for category, term_stats_list in category_term_stats.items():
+        for term_name, stats in term_stats_list:
+            if stats.count > 0:
+                table.add_data(category, term_name, stats.mean(), stats.std(), stats.min, stats.max, stats.count)  # type: ignore[reportUnknownMemberType]
     return table
 
 
@@ -453,6 +485,11 @@ class InMemoryRewardLogger:
             record["term_stats"] = [(name, stats.as_state()) for name, stats in kwargs["term_stats"]]
         if "category_stats" in kwargs:
             record["category_stats"] = [(name, stats.as_state()) for name, stats in kwargs["category_stats"]]
+        if "category_term_stats" in kwargs:
+            record["category_term_stats"] = {
+                cat: [(name, stats.as_state()) for name, stats in term_stats_list]
+                for cat, term_stats_list in kwargs["category_term_stats"].items()
+            }
         if "bin_stats" in kwargs:
             record["bin_stats"] = [stats.as_state() for stats in kwargs["bin_stats"]]
         if "bin_edges" in kwargs:
@@ -1027,6 +1064,10 @@ class WandBRewardLogger:
             table = _build_stats_table_from_running_stats(kwargs["category_stats"], "category")
             if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
                 prefixed[self._prefix_key("reward/run/category_summary")] = table
+        if _has_nonempty_category_term_stats(kwargs.get("category_term_stats")):
+            table = _build_category_term_stats_table(kwargs["category_term_stats"])
+            if len(table.data) > 0:  # type: ignore[reportUnknownMemberType]
+                prefixed[self._prefix_key("reward/run/category_term_summary")] = table
         if "bin_stats" in kwargs and "bin_edges" in kwargs:
             table = _build_difficulty_bin_table(
                 kwargs["bin_stats"],
