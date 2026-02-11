@@ -150,7 +150,7 @@ config:
   # if we want to EXPORT generations for later experiments, uncomment these lines:
   # (note: )requires logging.enabled=true, logging.log_total=true, logging.main_process_only=true)
   #generation_export_config:
-  #  output_path: ${runtime.output_dir_path}/generation_export.lmdb
+  #  output_path: ${runtime.output_dir}/generation_export.lmdb
   #  log_every_n_generations: 1
 
   # GRPO training arguments (RL equivalent of training_args_config)
