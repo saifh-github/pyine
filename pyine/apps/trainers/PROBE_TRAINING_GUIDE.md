@@ -190,7 +190,7 @@ Two formats are supported, controlled by the `text_field` config:
 **Chat format** (`text_field: messages`): Each sample has a `messages` column containing a list of chat-turn
 dicts. The tokenizer's chat template is applied automatically.
 
-```python
+````python
 {
     "messages": [
         {"role": "user", "content": "Analyze the following code:\n```python\ndef foo(): ...```"},
@@ -198,7 +198,7 @@ dicts. The tokenizer's chat template is applied automatically.
     ],
     "label": 1,
 }
-```
+````
 
 **Plain text** (`text_field: text`): Each sample has a string column that is tokenized directly.
 
@@ -221,6 +221,7 @@ training).
 ### Validation
 
 The trainer validates the dataset at load time:
+
 - Checks that `text_field` and `label_field` columns exist
 - Checks that labels are in `{0, 1}`
 - Warns if a split contains only one class
@@ -231,14 +232,14 @@ All probes receive a tensor of per-token hidden states `(batch, seq_len, hidden_
 `(batch, seq_len)`, and produce a scalar logit per sample `(batch, 1)`. The architectures differ in **how
 they pool** across the sequence dimension.
 
-| Architecture | Config name | Description | Extra hyperparams |
-|---|---|---|---|
-| **Mean** | `mean` | Masked mean pooling over all non-padding tokens, then linear head | - |
-| **Max** | `max` | Per-token scores via linear head, then masked max over the sequence | - |
-| **Last-token** | `last_token` | Hidden state at the last non-padding position, then linear head | - |
-| **Rolling mean** | `rolling_mean` | 1D rolling mean of per-token scores (window of size `T`), then max | `window_size` (default: 16) |
-| **Softmax** | `softmax` | Temperature-scaled softmax attention over per-token scores, weighted sum | `temperature` (default: 1.0) |
-| **Attention** | `attention` | Learned query/value attention-weighted pooling | `attn_dim` (default: 64) |
+| Architecture     | Config name    | Description                                                              | Extra hyperparams            |
+| ---------------- | -------------- | ------------------------------------------------------------------------ | ---------------------------- |
+| **Mean**         | `mean`         | Masked mean pooling over all non-padding tokens, then linear head        | -                            |
+| **Max**          | `max`          | Per-token scores via linear head, then masked max over the sequence      | -                            |
+| **Last-token**   | `last_token`   | Hidden state at the last non-padding position, then linear head          | -                            |
+| **Rolling mean** | `rolling_mean` | 1D rolling mean of per-token scores (window of size `T`), then max       | `window_size` (default: 16)  |
+| **Softmax**      | `softmax`      | Temperature-scaled softmax attention over per-token scores, weighted sum | `temperature` (default: 1.0) |
+| **Attention**    | `attention`    | Learned query/value attention-weighted pooling                           | `attn_dim` (default: 64)     |
 
 ### Probe Config Fields
 
@@ -289,11 +290,13 @@ All probes sharing the same layer reuse activations from a single hook (no dupli
 ### Strategy: Full Replication with Data Parallelism
 
 Each GPU holds:
+
 - A **full copy** of the frozen LLM (no sharding — not training it, so DeepSpeed/FSDP add no benefit)
 - A **full copy** of the ProbeCollection (tiny — typically a few thousand parameters total)
 
 Data is sharded across GPUs via `DistributedSampler`. Each GPU processes its data shard independently.
 Probe gradients are synchronized via DDP. This is efficient because:
+
 - No cross-GPU communication for the LLM forward pass
 - Only probe gradients are synchronized (tiny payload)
 
@@ -418,13 +421,13 @@ probe.eval()
 
 When `use_wandb_logging: true`, the following metrics are logged:
 
-| Metric Key | Phase | Description |
-|---|---|---|
-| `train/{probe_name}/loss` | Train | BCE loss per logging step |
-| `train/global_step` | Train | Global optimizer step counter |
-| `train/epoch` | Train | Current epoch |
-| `valid/{probe_name}/loss` | Valid | BCE loss over the full validation set |
-| `valid/{probe_name}/auroc` | Valid | AUROC over the full validation set |
+| Metric Key                 | Phase | Description                           |
+| -------------------------- | ----- | ------------------------------------- |
+| `train/{probe_name}/loss`  | Train | BCE loss per logging step             |
+| `train/global_step`        | Train | Global optimizer step counter         |
+| `train/epoch`              | Train | Current epoch                         |
+| `valid/{probe_name}/loss`  | Valid | BCE loss over the full validation set |
+| `valid/{probe_name}/auroc` | Valid | AUROC over the full validation set    |
 
 Each probe's metrics are namespaced under its name (e.g., `train/mean_L16/loss`), making it easy to compare
 architectures and layers in W&B dashboards.
@@ -468,6 +471,7 @@ All 12 probes train simultaneously in a single run, sharing the LLM forward pass
 **`ValueError: text_field 'messages' requires a tokenizer with a chat template`**
 
 Your model's tokenizer does not have a built-in chat template. Either:
+
 - Use a model with a chat template (e.g., Qwen Instruct, Llama Instruct, Mistral Instruct)
 - Set `text_field` to a preformatted string column instead of `messages`
 
