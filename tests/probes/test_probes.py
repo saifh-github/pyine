@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from pyine.probes import PROBE_REGISTRY, ProbeConfig, build_probe
-from tests.probes.conftest import PROBE_BATCH_SIZE, PROBE_HIDDEN_DIM, PROBE_SEQ_LEN
+from tests.probes.conftest import PROBE_BATCH_SIZE, PROBE_HIDDEN_DIM
 
 ALL_ARCHITECTURES = [
     pytest.param("mean", {}, id="mean"),
@@ -109,9 +109,7 @@ class TestBuildProbe:
     def test_build_probe_all_architectures(self) -> None:
         """build_probe returns correct subclass for each registered architecture."""
         for arch_name, expected_cls in PROBE_REGISTRY.items():
-            config = ProbeConfig(
-                name=f"test_{arch_name}", architecture=arch_name, layer=0, hidden_dim=32
-            )
+            config = ProbeConfig(name=f"test_{arch_name}", architecture=arch_name, layer=0, hidden_dim=32)
             probe = build_probe(config)
             assert isinstance(probe, expected_cls)
 

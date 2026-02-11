@@ -11,8 +11,6 @@ import pathlib
 import pytest
 import torch
 
-import tests.env_checks
-
 
 @pytest.mark.slow
 @pytest.mark.integration
@@ -32,10 +30,10 @@ class TestProbeTrainerIntegration:
         - Probe checkpoints are saved to disk
         - Validation AUROC is computed (>= 0.0, not NaN)
         """
-        from pyine.probes.base import ProbeConfig
-        from pyine.probes.debug_dataset import create_debug_probe_dataset
         from pyine.apps.trainers.probe_trainer import probe_train
         from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+        from pyine.probes.base import ProbeConfig
+        from pyine.probes.debug_dataset import create_debug_probe_dataset
 
         # Create debug dataset
         ds_path = tmp_path / "debug-dataset"
@@ -64,6 +62,7 @@ class TestProbeTrainerIntegration:
 
         # Mock runtime with output_dir
         from unittest.mock import MagicMock
+
         runtime = MagicMock()
         runtime.output_dir = str(tmp_path / "output")
         runtime.wandb_run = None

@@ -16,7 +16,7 @@ The app will:
 4. Log per-probe loss (train + valid) and AUROC (valid) to W&B
 5. Follow existing hydra-zen config patterns for full composability
 
----
+______________________________________________________________________
 
 ## 2. High-Level Architecture
 
@@ -58,7 +58,7 @@ tests/
       test_probe_trainer_integration.py  # End-to-end integration test (GPU, slow)
 ```
 
----
+______________________________________________________________________
 
 ## 3. Probe Architectures
 
@@ -134,7 +134,7 @@ pooled = (attn_weights * V).sum(dim=1)           -> (batch, 1)
 
 Here `W_q` is `(hidden_dim, attn_dim)`, `Q_global` is a learned query vector `(attn_dim,)`, and `W_v` is `(hidden_dim, 1)`. This gives the probe ~`hidden_dim * (attn_dim + 1) + attn_dim` parameters total.
 
----
+______________________________________________________________________
 
 ## 4. Module Design: `pyine/probes/`
 
@@ -269,7 +269,7 @@ def build_probe(config: ProbeConfig) -> BaseProbe:
     return cls(config)
 ```
 
----
+______________________________________________________________________
 
 ## 5. Activation Extraction
 
@@ -394,7 +394,7 @@ The optional `activation_dtype` parameter allows casting activations to a specif
 - With 3 hooked layers: ~246 MB per step (well within GPU memory)
 - Activations are detached immediately (no grad through the LLM) and cleared after each step
 
----
+______________________________________________________________________
 
 ## 6. Data Pipeline
 
@@ -478,13 +478,14 @@ def build_dataloader(dataset, tokenizer, batch_size, num_workers, shuffle):
     )
 ```
 
----
+______________________________________________________________________
 
 ## 7. Multi-GPU DDP Strategy
 
 ### 7.1 Approach: Accelerate DDP with Full Model Replication
 
 Each GPU holds:
+
 - A **full copy** of the frozen LLM (no sharding — not training it, so DeepSpeed/FSDP add no benefit)
 - A **full copy** of the ProbeCollection (tiny — a few thousand parameters total)
 
@@ -530,6 +531,7 @@ extractor = ActivationExtractor(model, target_layers, activation_dtype=config.ta
 ### 7.4 Launch Patterns
 
 Single-node DDP (reuse existing infrastructure):
+
 ```bash
 # Via torchrun (aligns with existing run_ddp.sh)
 bash scripts/run_ddp.sh -- +experiment=probes/v0_probe
@@ -540,11 +542,12 @@ accelerate launch --config_file pyine/configs/accelerate/multi_gpu.yaml \
 ```
 
 Single GPU (no special setup):
+
 ```bash
 python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe
 ```
 
----
+______________________________________________________________________
 
 ## 8. Training Loop Design
 
@@ -723,17 +726,17 @@ def validate_probes(
 
 Metrics are organized under a per-probe namespace:
 
-| Metric Key | Phase | Description |
-|---|---|---|
-| `train/{probe_name}/loss` | Train | BCE loss per logging step |
-| `valid/{probe_name}/loss` | Valid | BCE loss over full valid set |
-| `valid/{probe_name}/auroc` | Valid | AUROC over full valid set |
-| `train/global_step` | Train | Global optimizer step counter |
-| `train/epoch` | Train | Current epoch |
+| Metric Key                 | Phase | Description                   |
+| -------------------------- | ----- | ----------------------------- |
+| `train/{probe_name}/loss`  | Train | BCE loss per logging step     |
+| `valid/{probe_name}/loss`  | Valid | BCE loss over full valid set  |
+| `valid/{probe_name}/auroc` | Valid | AUROC over full valid set     |
+| `train/global_step`        | Train | Global optimizer step counter |
+| `train/epoch`              | Train | Current epoch                 |
 
 Logging is gated on `runtime.wandb_run is not None` and done only on the main process (`accelerator.is_main_process`). At the end of training, a W&B summary table with per-probe final metrics is logged for easy comparison.
 
----
+______________________________________________________________________
 
 ## 9. Config System Design
 
@@ -968,7 +971,7 @@ config:
       attn_dim: 64
 ```
 
----
+______________________________________________________________________
 
 ## 10. Probe Checkpoint Saving
 
@@ -1010,7 +1013,7 @@ def save_probe_checkpoints(probe_collection, config, runtime, accelerator):
         )
 ```
 
----
+______________________________________________________________________
 
 ## 11. Entrypoint
 
@@ -1054,7 +1057,7 @@ if __name__ == "__main__":
     )
 ```
 
----
+______________________________________________________________________
 
 ## 12. Debug / Synthetic Dataset
 
@@ -1094,7 +1097,7 @@ def create_debug_probe_dataset(
 
 ### 12.3 Sample Format
 
-```python
+````python
 # label=1 sample (contains signal keyword)
 {
     "messages": [
@@ -1112,7 +1115,7 @@ def create_debug_probe_dataset(
     ],
     "label": 0,
 }
-```
+````
 
 Sequences are kept short (~50-150 tokens) so tests run fast, even on CPU with a tiny model.
 
@@ -1131,7 +1134,7 @@ ds = create_debug_probe_dataset(n_train=100, n_valid=20)
 
 The module includes a `__main__` block for CLI usage, keeping the trainer code completely unaware of the debug dataset.
 
----
+______________________________________________________________________
 
 ## 13. Test Suite
 
@@ -1451,17 +1454,17 @@ class TestProbeTrainerIntegration:
 
 ### 13.10 Testing Strategy Summary
 
-| Category | Location | Marker | GPU needed | Runs in CI |
-|---|---|---|---|---|
-| Probe architectures | `tests/probes/test_probes.py` | (none) | No | Yes |
-| ProbeCollection | `tests/probes/test_collection.py` | (none) | No | Yes |
-| ActivationExtractor | `tests/probes/test_extraction.py` | (none) | No | Yes |
-| Debug dataset | `tests/probes/test_debug_dataset.py` | (none) | No | Yes |
-| Config validation | `tests/apps/trainers/test_probe_trainer_configs.py` | (none) | No | Yes |
-| Training loop (mocked) | `tests/apps/trainers/test_probe_trainer.py` | (none) | No | Yes |
-| Integration (real model) | `tests/apps/trainers/test_probe_trainer_integration.py` | `slow`, `integration` | Yes | GPU CI only |
+| Category                 | Location                                                | Marker                | GPU needed | Runs in CI  |
+| ------------------------ | ------------------------------------------------------- | --------------------- | ---------- | ----------- |
+| Probe architectures      | `tests/probes/test_probes.py`                           | (none)                | No         | Yes         |
+| ProbeCollection          | `tests/probes/test_collection.py`                       | (none)                | No         | Yes         |
+| ActivationExtractor      | `tests/probes/test_extraction.py`                       | (none)                | No         | Yes         |
+| Debug dataset            | `tests/probes/test_debug_dataset.py`                    | (none)                | No         | Yes         |
+| Config validation        | `tests/apps/trainers/test_probe_trainer_configs.py`     | (none)                | No         | Yes         |
+| Training loop (mocked)   | `tests/apps/trainers/test_probe_trainer.py`             | (none)                | No         | Yes         |
+| Integration (real model) | `tests/apps/trainers/test_probe_trainer_integration.py` | `slow`, `integration` | Yes        | GPU CI only |
 
----
+______________________________________________________________________
 
 ## 14. Implementation Steps
 
@@ -1516,7 +1519,7 @@ bash scripts/run_ddp.sh -- +experiment=probes/v0_probe \
     config.dataset_path=/tmp/probe-debug-dataset
 ```
 
----
+______________________________________________________________________
 
 ## 15. Key Design Decisions
 
@@ -1525,6 +1528,7 @@ bash scripts/run_ddp.sh -- +experiment=probes/v0_probe \
 **Decision: Custom loop.**
 
 The HF `Trainer` is designed for a single model with a single loss. We need to:
+
 - Run one LLM forward pass and fan out activations to N probes
 - Sum N independent losses for a single backward pass
 - Log per-probe metrics independently
@@ -1536,6 +1540,7 @@ The probes are tiny (a few thousand parameters each), so the distributed trainin
 **Decision: On-the-fly extraction via forward hooks.**
 
 Pre-computing activations for all layers x all samples would require massive disk storage and a separate extraction pass. On-the-fly extraction:
+
 - Is memory-efficient (only keeps current batch's activations)
 - Feeds all probes from a single LLM forward pass
 - Avoids disk I/O bottlenecks
@@ -1545,6 +1550,7 @@ Pre-computing activations for all layers x all samples would require massive dis
 **Decision: ProbeCollection with a single optimizer (per-probe parameter groups).**
 
 This gives us:
+
 - A single DDP wrapper (one all-reduce call per step, efficient for 12+ probes)
 - Per-probe learning rates via optimizer parameter groups
 - A single `backward()` call on the summed loss (mathematically equivalent to per-probe backward since parameters are disjoint)
@@ -1555,6 +1561,7 @@ This gives us:
 **Decision: Full model replication per GPU, data-parallel via accelerate.**
 
 The frozen LLM is not trained, so sharding (DeepSpeed/FSDP) provides no benefit. Full replication means:
+
 - Each GPU runs an independent LLM forward pass on its data shard
 - No cross-GPU communication for the LLM forward pass
 - Only probe gradients are synchronized (tiny — microseconds of communication)
@@ -1572,35 +1579,35 @@ Standard, numerically stable binary cross-entropy. The summed loss across probes
 
 We need hidden-state activations from processing input text. `generate()` is for autoregressive generation. `forward()` runs the full transformer stack once, and hooks capture layer outputs.
 
----
+______________________________________________________________________
 
 ## 16. Codex Review Assessment
 
 ### v1 Review (addressed in v2)
 
-| # | Codex Concern | Assessment | Action |
-|---|---|---|---|
-| 1 | Model/layer hook robustness | **Accepted.** | Added fallback chain in `_resolve_layer()`. |
-| 2 | Activation lifetime & gradient flow | **Partially accepted.** | Added `activation_dtype` parameter. Memory is manageable. |
-| 3 | Mixed precision / dtype handling | **Accepted.** | Added `activation_dtype` + explicit probe dtype cast. |
-| 4 | Optimizer & step semantics | **Accepted.** | Added `gradient_accumulation_steps`, proper `global_step`, `accelerator.accumulate()`. |
-| 5 | Validation cadence | **Accepted.** | Implemented `eval_steps` in-loop. |
-| 6 | AUROC edge cases | **Accepted.** | Added label diversity check. |
-| 7 | Chat template kwargs | **Deferred.** | Added `add_generation_prompt=False`. Full kwargs deferred. |
-| 8 | LoRA / adapter handling | **Already covered.** | Reused existing `get_model()` infrastructure. |
-| 9 | Saving probe artifacts | **Accepted.** | Added Section 10 with output structure. |
-| 10 | `hidden_dim` naming/stability | **Accepted.** | Changed to optional, runtime-validated. |
+| #   | Codex Concern                       | Assessment              | Action                                                                                 |
+| --- | ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------- |
+| 1   | Model/layer hook robustness         | **Accepted.**           | Added fallback chain in `_resolve_layer()`.                                            |
+| 2   | Activation lifetime & gradient flow | **Partially accepted.** | Added `activation_dtype` parameter. Memory is manageable.                              |
+| 3   | Mixed precision / dtype handling    | **Accepted.**           | Added `activation_dtype` + explicit probe dtype cast.                                  |
+| 4   | Optimizer & step semantics          | **Accepted.**           | Added `gradient_accumulation_steps`, proper `global_step`, `accelerator.accumulate()`. |
+| 5   | Validation cadence                  | **Accepted.**           | Implemented `eval_steps` in-loop.                                                      |
+| 6   | AUROC edge cases                    | **Accepted.**           | Added label diversity check.                                                           |
+| 7   | Chat template kwargs                | **Deferred.**           | Added `add_generation_prompt=False`. Full kwargs deferred.                             |
+| 8   | LoRA / adapter handling             | **Already covered.**    | Reused existing `get_model()` infrastructure.                                          |
+| 9   | Saving probe artifacts              | **Accepted.**           | Added Section 10 with output structure.                                                |
+| 10  | `hidden_dim` naming/stability       | **Accepted.**           | Changed to optional, runtime-validated.                                                |
 
 ### v2 Review (addressed in v2.1)
 
-| # | Codex Concern | Assessment | Action |
-|---|---|---|---|
-| 1 | Layer output shape assumptions | **Accepted.** Models may return `BaseModelOutput` or non-standard tuples. | Added `_normalize_layer_output()` helper with `BaseModelOutput` handling and 3D shape validation. |
-| 2 | Probe dtype consistency | **Accepted.** Probes were not explicitly cast to `target_dtype`. | Added `probe_collection.to(dtype=config.target_dtype)` before `accelerator.prepare()`. |
-| 3 | Tokenization edge cases | **Accepted.** Missing chat template would cause cryptic errors. | Added early detection: raise if `text_field="messages"` and tokenizer has no chat template. |
-| 4 | Dataset / label validation | **Accepted.** Late errors are hard to debug. | Added `validate_probe_dataset()` at load time: checks column presence, label values `{0,1}`, warns on single-class. |
-| 5 | Parameter group guards | **Accepted.** Lightweight safety net. | Added `assert len(params) > 0` in `get_parameter_groups()`. |
-| 6 | Eval gating on sync_gradients | **Accepted.** Bug in v2: `eval_steps` check was outside `sync_gradients` block. | Moved inside `if accelerator.sync_gradients` to prevent eval on accumulation micro-steps. |
+| #   | Codex Concern                  | Assessment                                                                      | Action                                                                                                              |
+| --- | ------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1   | Layer output shape assumptions | **Accepted.** Models may return `BaseModelOutput` or non-standard tuples.       | Added `_normalize_layer_output()` helper with `BaseModelOutput` handling and 3D shape validation.                   |
+| 2   | Probe dtype consistency        | **Accepted.** Probes were not explicitly cast to `target_dtype`.                | Added `probe_collection.to(dtype=config.target_dtype)` before `accelerator.prepare()`.                              |
+| 3   | Tokenization edge cases        | **Accepted.** Missing chat template would cause cryptic errors.                 | Added early detection: raise if `text_field="messages"` and tokenizer has no chat template.                         |
+| 4   | Dataset / label validation     | **Accepted.** Late errors are hard to debug.                                    | Added `validate_probe_dataset()` at load time: checks column presence, label values `{0,1}`, warns on single-class. |
+| 5   | Parameter group guards         | **Accepted.** Lightweight safety net.                                           | Added `assert len(params) > 0` in `get_parameter_groups()`.                                                         |
+| 6   | Eval gating on sync_gradients  | **Accepted.** Bug in v2: `eval_steps` check was outside `sync_gradients` block. | Moved inside `if accelerator.sync_gradients` to prevent eval on accumulation micro-steps.                           |
 
 ### v1 suggestions NOT adopted (unchanged)
 
@@ -1608,7 +1615,7 @@ We need hidden-state activations from processing input text. `generate()` is for
 - **`layer_path` config override**: Fallback chain covers common architectures. Extend the chain if needed.
 - **`max_layers_in_memory` knob**: 3-5 layers x ~82 MB = ~250-400 MB. Well within limits.
 
----
+______________________________________________________________________
 
 ## 17. Future Extensions (Out of Scope for v0)
 

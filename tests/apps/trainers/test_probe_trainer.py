@@ -12,9 +12,7 @@ import torch
 
 from pyine.probes import ProbeConfig, build_probe
 from pyine.probes.collection import ProbeCollection
-from pyine.probes.debug_dataset import create_debug_probe_dataset
 from pyine.probes.extraction import ActivationExtractor
-
 
 # ---------------------------------------------------------------------------
 # Small mock LLM for testing
@@ -43,9 +41,7 @@ class SmallMockLLM(torch.nn.Module):
             hidden_size=hidden_dim,
         )
         self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList(
-            [MockTransformerBlock(hidden_dim) for _ in range(n_layers)]
-        )
+        self.model.layers = torch.nn.ModuleList([MockTransformerBlock(hidden_dim) for _ in range(n_layers)])
         self.embed = torch.nn.Embedding(1000, hidden_dim)
 
     def forward(
@@ -114,9 +110,7 @@ class TestProbeTrainUnit:
             mock_llm(input_ids=input_ids, attention_mask=attention_mask)
         activations = extractor.get_activations()
         logits = probe_collection(activations, attention_mask)
-        initial_loss = sum(
-            loss_fn(l.squeeze(-1), labels) for l in logits.values()
-        ).item()
+        initial_loss = sum(loss_fn(l.squeeze(-1), labels) for l in logits.values()).item()
 
         # Train for 30 steps
         for _ in range(30):
@@ -140,6 +134,7 @@ class TestProbeTrainUnit:
     ) -> None:
         """validate_probes() returns loss and AUROC per probe."""
         from accelerate import Accelerator
+
         from pyine.apps.trainers.probe_trainer import validate_probes
 
         accelerator = Accelerator()
@@ -156,11 +151,13 @@ class TestProbeTrainUnit:
 
         # Build a small dataloader
         batch_size, seq_len = 8, 16
-        ds = datasets.Dataset.from_dict({
-            "input_ids": torch.randint(0, 100, (20, seq_len)).tolist(),
-            "attention_mask": torch.ones(20, seq_len, dtype=torch.long).tolist(),
-            "labels": ([0] * 10 + [1] * 10),
-        })
+        ds = datasets.Dataset.from_dict(
+            {
+                "input_ids": torch.randint(0, 100, (20, seq_len)).tolist(),
+                "attention_mask": torch.ones(20, seq_len, dtype=torch.long).tolist(),
+                "labels": ([0] * 10 + [1] * 10),
+            }
+        )
         ds.set_format("torch")
         loader = torch.utils.data.DataLoader(ds, batch_size=batch_size)
 
@@ -168,8 +165,14 @@ class TestProbeTrainUnit:
         loader = accelerator.prepare(loader)
 
         metrics = validate_probes(
-            coll_prepared, model, extractor, loader,
-            loss_fn, global_step=0, accelerator=accelerator, runtime=None,
+            coll_prepared,
+            model,
+            extractor,
+            loader,
+            loss_fn,
+            global_step=0,
+            accelerator=accelerator,
+            runtime=None,
         )
 
         assert len(metrics) > 0
@@ -188,6 +191,7 @@ class TestProbeTrainUnit:
         import math
 
         from accelerate import Accelerator
+
         from pyine.apps.trainers.probe_trainer import validate_probes
 
         accelerator = Accelerator()
@@ -203,11 +207,13 @@ class TestProbeTrainUnit:
 
         # All labels are 0 -> single-class
         batch_size, seq_len = 4, 16
-        ds = datasets.Dataset.from_dict({
-            "input_ids": torch.randint(0, 100, (8, seq_len)).tolist(),
-            "attention_mask": torch.ones(8, seq_len, dtype=torch.long).tolist(),
-            "labels": [0] * 8,
-        })
+        ds = datasets.Dataset.from_dict(
+            {
+                "input_ids": torch.randint(0, 100, (8, seq_len)).tolist(),
+                "attention_mask": torch.ones(8, seq_len, dtype=torch.long).tolist(),
+                "labels": [0] * 8,
+            }
+        )
         ds.set_format("torch")
         loader = torch.utils.data.DataLoader(ds, batch_size=batch_size)
 
@@ -215,8 +221,14 @@ class TestProbeTrainUnit:
         loader_prepared = accelerator.prepare(loader)
 
         metrics = validate_probes(
-            coll_prepared, model, extractor, loader_prepared,
-            loss_fn, global_step=0, accelerator=accelerator, runtime=None,
+            coll_prepared,
+            model,
+            extractor,
+            loader_prepared,
+            loss_fn,
+            global_step=0,
+            accelerator=accelerator,
+            runtime=None,
         )
 
         for name, m in metrics.items():
@@ -231,6 +243,7 @@ class TestProbeTrainUnit:
     ) -> None:
         """save_probe_checkpoints() writes state_dict + config JSON per probe."""
         from accelerate import Accelerator
+
         from pyine.apps.trainers.probe_trainer import save_probe_checkpoints
 
         accelerator = Accelerator()
@@ -242,7 +255,10 @@ class TestProbeTrainUnit:
         config = MagicMock()
 
         output_dir = save_probe_checkpoints(
-            probe_collection_prepared, config, runtime, accelerator,
+            probe_collection_prepared,
+            config,
+            runtime,
+            accelerator,
         )
 
         assert output_dir is not None
@@ -259,7 +275,9 @@ class TestProbeTrainUnit:
     ) -> None:
         """Saved probe can be reconstructed from config JSON + state_dict."""
         import json
+
         from accelerate import Accelerator
+
         from pyine.apps.trainers.probe_trainer import save_probe_checkpoints
 
         accelerator = Accelerator()
@@ -270,7 +288,10 @@ class TestProbeTrainUnit:
         config = MagicMock()
 
         output_dir = save_probe_checkpoints(
-            probe_collection_prepared, config, runtime, accelerator,
+            probe_collection_prepared,
+            config,
+            runtime,
+            accelerator,
         )
 
         # Reload each probe
@@ -295,13 +316,15 @@ class TestDatasetValidation:
         """validate_probe_dataset() raises on non-binary labels."""
         from pyine.apps.trainers.probe_trainer import validate_probe_dataset
 
-        ds = datasets.Dataset.from_dict({
-            "messages": [
-                [{"role": "user", "content": "hi"}],
-                [{"role": "user", "content": "bye"}],
-            ],
-            "label": [0, 2],  # 2 is invalid
-        })
+        ds = datasets.Dataset.from_dict(
+            {
+                "messages": [
+                    [{"role": "user", "content": "hi"}],
+                    [{"role": "user", "content": "bye"}],
+                ],
+                "label": [0, 2],  # 2 is invalid
+            }
+        )
         with pytest.raises(ValueError, match="binary labels"):
             validate_probe_dataset(ds, "messages", "label")
 

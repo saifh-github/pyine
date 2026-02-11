@@ -9,10 +9,10 @@ import torch
 
 from pyine.probes.extraction import ActivationExtractor
 
-
 # ---------------------------------------------------------------------------
 # Mock transformer model
 # ---------------------------------------------------------------------------
+
 
 class MockTransformerBlock(torch.nn.Module):
     """Minimal transformer block that returns a fixed-shape tensor."""
@@ -32,9 +32,7 @@ class MockLayers(torch.nn.Module):
 
     def __init__(self, n_layers: int, hidden_dim: int) -> None:
         super().__init__()
-        self.layers = torch.nn.ModuleList(
-            [MockTransformerBlock(hidden_dim) for _ in range(n_layers)]
-        )
+        self.layers = torch.nn.ModuleList([MockTransformerBlock(hidden_dim) for _ in range(n_layers)])
 
 
 class MockModel(torch.nn.Module):
@@ -58,6 +56,7 @@ class MockModel(torch.nn.Module):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestActivationExtractor:
     """Tests for hook-based activation extraction."""
@@ -104,9 +103,7 @@ class TestActivationExtractor:
     def test_activation_dtype_casting(self) -> None:
         """activation_dtype casts activations to the specified dtype."""
         model = MockModel(n_layers=4, hidden_dim=32)
-        extractor = ActivationExtractor(
-            model, target_layers=[0], activation_dtype=torch.float16
-        )
+        extractor = ActivationExtractor(model, target_layers=[0], activation_dtype=torch.float16)
 
         x = torch.randn(2, 8, 32)
         model(x)
@@ -174,9 +171,7 @@ class TestActivationExtractor:
             def __init__(self) -> None:
                 super().__init__()
                 self.transformer = torch.nn.Module()
-                self.transformer.h = torch.nn.ModuleList(
-                    [MockTransformerBlock(32) for _ in range(4)]
-                )
+                self.transformer.h = torch.nn.ModuleList([MockTransformerBlock(32) for _ in range(4)])
                 self.config = SimpleNamespace(num_hidden_layers=4)
 
         model = GPT2StyleModel()

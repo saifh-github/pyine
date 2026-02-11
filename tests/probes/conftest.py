@@ -20,10 +20,7 @@ def probe_hidden_dim() -> int:
 @pytest.fixture
 def random_activations() -> dict[int, torch.Tensor]:
     """Random activations for layers 0, 4, 8 with small dimensions."""
-    return {
-        layer: torch.randn(PROBE_BATCH_SIZE, PROBE_SEQ_LEN, PROBE_HIDDEN_DIM)
-        for layer in [0, 4, 8]
-    }
+    return {layer: torch.randn(PROBE_BATCH_SIZE, PROBE_SEQ_LEN, PROBE_HIDDEN_DIM) for layer in [0, 4, 8]}
 
 
 @pytest.fixture

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datasets
-import pytest
 
 from pyine.probes.debug_dataset import create_debug_probe_dataset
 

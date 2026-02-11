@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from pyine.probes import ProbeConfig
@@ -63,9 +62,7 @@ class TestProbeCollection:
 
         # All probes in the collection should have hidden_dim set
         for name, probe in coll.probes.items():
-            assert probe.config.hidden_dim == PROBE_HIDDEN_DIM, (
-                f"Probe {name} has hidden_dim={probe.config.hidden_dim}"
-            )
+            assert probe.config.hidden_dim == PROBE_HIDDEN_DIM, f"Probe {name} has hidden_dim={probe.config.hidden_dim}"
 
     def test_summed_loss_gradient_independence(
         self,
@@ -80,16 +77,11 @@ class TestProbeCollection:
 
         # 1) Compute gradient of sum(losses) w.r.t. first probe's params
         logits = coll(random_activations, random_attention_mask)
-        total_loss = sum(
-            loss_fn(l.squeeze(-1), labels) for l in logits.values()
-        )
+        total_loss = sum(loss_fn(l.squeeze(-1), labels) for l in logits.values())
         total_loss.backward()
 
         first_probe_name = sample_probe_configs[0].name
-        grads_from_sum = {
-            n: p.grad.clone()
-            for n, p in coll.probes[first_probe_name].named_parameters()
-        }
+        grads_from_sum = {n: p.grad.clone() for n, p in coll.probes[first_probe_name].named_parameters()}
         coll.zero_grad()
 
         # 2) Compute gradient of only the first probe's loss
@@ -97,15 +89,13 @@ class TestProbeCollection:
         single_loss = loss_fn(logits2[first_probe_name].squeeze(-1), labels)
         single_loss.backward()
 
-        grads_from_single = {
-            n: p.grad.clone()
-            for n, p in coll.probes[first_probe_name].named_parameters()
-        }
+        grads_from_single = {n: p.grad.clone() for n, p in coll.probes[first_probe_name].named_parameters()}
 
         # They should be identical
         for n in grads_from_sum:
             torch.testing.assert_close(
-                grads_from_sum[n], grads_from_single[n],
+                grads_from_sum[n],
+                grads_from_single[n],
                 msg=f"Gradient mismatch for {first_probe_name}.{n}",
             )
 
