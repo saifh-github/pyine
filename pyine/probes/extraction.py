@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import typing
 
 import torch
+
+if typing.TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +84,8 @@ class ActivationExtractor:
             )
         return h
 
-    def _make_hook(self, layer_idx: int):
-        def hook_fn(module, input, output):
+    def _make_hook(self, layer_idx: int) -> Callable:
+        def hook_fn(module: torch.nn.Module, input: tuple[torch.Tensor, ...], output: object) -> None:
             h = self._normalize_layer_output(output, layer_idx).detach()
             if self._activation_dtype is not None:
                 h = h.to(self._activation_dtype)

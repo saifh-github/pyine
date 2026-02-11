@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from pyine.probes import ProbeConfig
+from pyine.probes.base import ProbeConfig
 
 PROBE_HIDDEN_DIM = 64
 PROBE_SEQ_LEN = 32

@@ -34,10 +34,10 @@ class AttentionProbe(BaseProbe):
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
         # Key projection: (batch, seq_len, attn_dim)
-        K = self.W_q(hidden_states)
+        key = self.W_q(hidden_states)
 
         # Attention scores: (batch, seq_len, 1)
-        attn_scores = (K @ self.Q_global.unsqueeze(-1)) / self._scale
+        attn_scores = (key @ self.Q_global.unsqueeze(-1)) / self._scale
 
         # Masked softmax
         mask = attention_mask.unsqueeze(-1).bool()  # (batch, seq_len, 1)
@@ -45,8 +45,7 @@ class AttentionProbe(BaseProbe):
         attn_weights = torch.softmax(attn_scores, dim=1)  # (batch, seq_len, 1)
 
         # Value projection: (batch, seq_len, 1)
-        V = self.W_v(hidden_states)
+        value = self.W_v(hidden_states)
 
         # Weighted sum: (batch, 1)
-        pooled = (attn_weights * V).sum(dim=1)
-        return pooled
+        return (attn_weights * value).sum(dim=1)

@@ -315,7 +315,7 @@ def probe_train(
     for epoch in range(config.num_epochs):
         probe_collection.train()
 
-        for step, batch in enumerate(train_loader):
+        for _step, batch in enumerate(train_loader):
             with accelerator.accumulate(probe_collection):
                 input_ids = batch["input_ids"]
                 attention_mask = batch["attention_mask"]
@@ -347,11 +347,11 @@ def probe_train(
                 if global_step % config.logging_steps == 0:
                     if accelerator.is_main_process:
                         log_msg = f"[epoch {epoch + 1}/{config.num_epochs}, step {global_step}] "
-                        log_msg += ", ".join(f"{n}: {l.item():.4f}" for n, l in per_probe_losses.items())
+                        log_msg += ", ".join(f"{name}: {loss.item():.4f}" for name, loss in per_probe_losses.items())
                         logger.info(log_msg)
 
                         if runtime and runtime.wandb_run:
-                            log_dict = {f"train/{n}/loss": l.item() for n, l in per_probe_losses.items()}
+                            log_dict = {f"train/{name}/loss": loss.item() for name, loss in per_probe_losses.items()}
                             log_dict["train/global_step"] = global_step
                             log_dict["train/epoch"] = epoch
                             runtime.wandb_run.log(log_dict, step=global_step)

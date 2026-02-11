@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 import torch
 
-from pyine.probes import PROBE_REGISTRY, ProbeConfig, build_probe
+from pyine.probes import PROBE_REGISTRY, build_probe
+from pyine.probes.base import ProbeConfig
 from tests.probes.conftest import PROBE_BATCH_SIZE, PROBE_HIDDEN_DIM
+
+if typing.TYPE_CHECKING:
+    from pyine.probes.base import BaseProbe
 
 ALL_ARCHITECTURES = [
     pytest.param("mean", {}, id="mean"),
@@ -18,7 +24,7 @@ ALL_ARCHITECTURES = [
 ]
 
 
-def _make_probe(architecture: str, extra_kwargs: dict, hidden_dim: int = PROBE_HIDDEN_DIM):
+def _make_probe(architecture: str, extra_kwargs: dict, hidden_dim: int = PROBE_HIDDEN_DIM) -> BaseProbe:
     config = ProbeConfig(
         name=f"test_{architecture}",
         architecture=architecture,

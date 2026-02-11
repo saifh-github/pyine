@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import typing
+
 from pyine.probes.attention_probe import AttentionProbe
-from pyine.probes.base import BaseProbe, ProbeConfig
 from pyine.probes.last_token_probe import LastTokenProbe
 from pyine.probes.max_probe import MaxProbe
 from pyine.probes.mean_probe import MeanProbe
 from pyine.probes.rolling_mean_probe import RollingMeanProbe
 from pyine.probes.softmax_probe import SoftmaxProbe
+
+if typing.TYPE_CHECKING:
+    from pyine.probes.base import BaseProbe, ProbeConfig
 
 PROBE_REGISTRY: dict[str, type[BaseProbe]] = {
     "mean": MeanProbe,

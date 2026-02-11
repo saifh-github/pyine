@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import typing
+
+if typing.TYPE_CHECKING:
+    from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -10,7 +13,8 @@ import datasets
 import pytest
 import torch
 
-from pyine.probes import ProbeConfig, build_probe
+from pyine.probes import build_probe
+from pyine.probes.base import ProbeConfig
 from pyine.probes.collection import ProbeCollection
 from pyine.probes.extraction import ActivationExtractor
 
@@ -48,7 +52,7 @@ class SmallMockLLM(torch.nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> torch.Tensor:
         h = self.embed(input_ids)
         for layer in self.model.layers:
@@ -110,7 +114,7 @@ class TestProbeTrainUnit:
             mock_llm(input_ids=input_ids, attention_mask=attention_mask)
         activations = extractor.get_activations()
         logits = probe_collection(activations, attention_mask)
-        initial_loss = sum(loss_fn(l.squeeze(-1), labels) for l in logits.values()).item()
+        initial_loss = sum(loss_fn(logit.squeeze(-1), labels) for logit in logits.values()).item()
 
         # Train for 30 steps
         for _ in range(30):
@@ -118,7 +122,7 @@ class TestProbeTrainUnit:
                 mock_llm(input_ids=input_ids, attention_mask=attention_mask)
             activations = extractor.get_activations()
             logits = probe_collection(activations, attention_mask)
-            total_loss = sum(loss_fn(l.squeeze(-1), labels) for l in logits.values())
+            total_loss = sum(loss_fn(logit.squeeze(-1), labels) for logit in logits.values())
             total_loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -176,7 +180,7 @@ class TestProbeTrainUnit:
         )
 
         assert len(metrics) > 0
-        for name, m in metrics.items():
+        for _name, m in metrics.items():
             assert "loss" in m
             assert "auroc" in m
             assert m["loss"] >= 0.0

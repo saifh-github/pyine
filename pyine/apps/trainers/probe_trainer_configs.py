@@ -15,7 +15,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.utils.reprod
-from pyine.probes.base import ProbeConfig
+from pyine.probes.base import ProbeConfig  # noqa: TC001
 
 logger = logging.getLogger(__name__)
 

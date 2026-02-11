@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import typing
+
 import torch
 
-from pyine.probes import ProbeConfig
+if typing.TYPE_CHECKING:
+    from pyine.probes import ProbeConfig
 from pyine.probes.collection import ProbeCollection
 from tests.probes.conftest import PROBE_BATCH_SIZE, PROBE_HIDDEN_DIM
 
@@ -35,7 +38,7 @@ class TestProbeCollection:
         groups = coll.get_parameter_groups()
         assert len(groups) == len(sample_probe_configs)
 
-        for group, pc in zip(groups, sample_probe_configs):
+        for group, pc in zip(groups, sample_probe_configs, strict=True):
             assert group["lr"] == pc.learning_rate
             assert group["weight_decay"] == pc.weight_decay
 
@@ -77,7 +80,7 @@ class TestProbeCollection:
 
         # 1) Compute gradient of sum(losses) w.r.t. first probe's params
         logits = coll(random_activations, random_attention_mask)
-        total_loss = sum(loss_fn(l.squeeze(-1), labels) for l in logits.values())
+        total_loss = sum(loss_fn(logit.squeeze(-1), labels) for logit in logits.values())
         total_loss.backward()
 
         first_probe_name = sample_probe_configs[0].name

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as functional
 
 from pyine.probes.base import BaseProbe, ProbeConfig
 
@@ -36,12 +36,12 @@ class RollingMeanProbe(BaseProbe):
 
         # Pad so we don't lose positions (same-size output)
         pad = self.window_size - 1
-        scores_padded = F.pad(scores_1d, (pad, 0), value=0.0)
-        mask_padded = F.pad(mask_1d, (pad, 0), value=0.0)
+        scores_padded = functional.pad(scores_1d, (pad, 0), value=0.0)
+        mask_padded = functional.pad(mask_1d, (pad, 0), value=0.0)
 
         # Sum-pool
-        score_sums = F.avg_pool1d(scores_padded, self.window_size, stride=1) * self.window_size
-        mask_sums = F.avg_pool1d(mask_padded, self.window_size, stride=1) * self.window_size
+        score_sums = functional.avg_pool1d(scores_padded, self.window_size, stride=1) * self.window_size
+        mask_sums = functional.avg_pool1d(mask_padded, self.window_size, stride=1) * self.window_size
 
         # Rolling mean (avoid division by zero)
         rolling = score_sums / mask_sums.clamp(min=1)  # (batch, 1, seq_len)

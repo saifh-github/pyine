@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import typing
+
 import torch
 
-from pyine.probes.base import ProbeConfig
+if typing.TYPE_CHECKING:
+    from pyine.probes.base import ProbeConfig
 
 # Avoid circular import at module level; build_probe is imported lazily.
 

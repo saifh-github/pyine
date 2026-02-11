@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import typing
+
+if typing.TYPE_CHECKING:
+    from pathlib import Path
+
 import datasets
 
 from pyine.probes.debug_dataset import create_debug_probe_dataset
@@ -64,10 +69,10 @@ class TestDebugDataset:
                 assert ds1[split][i]["label"] == ds2[split][i]["label"]
                 assert ds1[split][i]["messages"] == ds2[split][i]["messages"]
 
-    def test_save_to_disk_and_reload(self, tmp_path) -> None:
+    def test_save_to_disk_and_reload(self, tmp_path: Path) -> None:
         """Dataset saved to disk can be reloaded with datasets.load_from_disk()."""
         output = tmp_path / "debug-ds"
-        ds = create_debug_probe_dataset(output_path=output, n_train=10, n_valid=5)
+        create_debug_probe_dataset(output_path=output, n_train=10, n_valid=5)
 
         reloaded = datasets.load_from_disk(str(output))
         assert set(reloaded.keys()) == {"train", "valid"}

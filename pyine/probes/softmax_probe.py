@@ -30,5 +30,4 @@ class SoftmaxProbe(BaseProbe):
         weights = torch.softmax(scaled, dim=1)  # (batch, seq_len, 1)
 
         # Weighted sum
-        pooled = (weights * scores).sum(dim=1)  # (batch, 1)
-        return pooled
+        return (weights * scores).sum(dim=1)  # (batch, 1)

@@ -70,7 +70,7 @@ class TestProbeTrainerIntegration:
 
         pathlib.Path(runtime.output_dir).mkdir(parents=True, exist_ok=True)
 
-        probe_collection = probe_train(config=config, runtime=runtime)
+        probe_train(config=config, runtime=runtime)
 
         # Verify probes were saved
         probes_dir = pathlib.Path(runtime.output_dir) / "probes"

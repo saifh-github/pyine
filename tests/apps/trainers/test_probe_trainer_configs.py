@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import pathlib
+import typing
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 import pytest
 
@@ -12,11 +15,11 @@ from pyine.probes.base import ProbeConfig
 class TestProbeTrainerAppMainConfig:
     """Tests for ProbeTrainerAppMainConfig validation."""
 
-    def _make_minimal_config(self, **overrides) -> dict:
+    def _make_minimal_config(self, **overrides: object) -> dict:
         """Minimal valid config kwargs."""
         base = {
             "base_model": "some-model",
-            "dataset_path": "/tmp/fake-dataset",
+            "dataset_path": "/tmp/fake-dataset",  # noqa: S108
             "probe_configs": [
                 ProbeConfig(name="mean_L0", architecture="mean", layer=0),
             ],
@@ -30,7 +33,7 @@ class TestProbeTrainerAppMainConfig:
 
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert len(cfg.probe_configs) == 1
-        assert cfg.dataset_path == "/tmp/fake-dataset"
+        assert cfg.dataset_path == "/tmp/fake-dataset"  # noqa: S108
 
     def test_duplicate_probe_names_raises(self) -> None:
         """Config rejects probe_configs with duplicate names."""

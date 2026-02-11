@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import argparse
 import random
-from pathlib import Path
+import typing
+
+if typing.TYPE_CHECKING:
+    from pathlib import Path
 
 import datasets
 
