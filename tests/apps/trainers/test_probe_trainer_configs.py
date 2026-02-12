@@ -89,3 +89,62 @@ class TestHydraConfigRegistration:
             None,
         )
         assert entrypoint is not None
+
+
+class TestProbeTrainerConfigReplicas:
+    """Tests for replica-related config fields on ProbeTrainerAppMainConfig."""
+
+    def _make_minimal_config(self, **overrides: object) -> dict:
+        """Minimal valid config kwargs."""
+        base: dict[str, object] = {
+            "base_model": "some-model",
+            "dataset_path": "/tmp/fake-dataset",  # noqa: S108
+            "probe_configs": [
+                ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            ],
+        }
+        base.update(overrides)
+        return base
+
+    def test_num_replicas_default_is_1(self) -> None:
+        """Default num_replicas is 1."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
+        assert cfg.num_replicas == 1
+
+    def test_num_replicas_must_be_positive(self) -> None:
+        """num_replicas < 1 raises validation error (ge=1 constraint)."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        with pytest.raises(ValueError):
+            ProbeTrainerAppMainConfig(**self._make_minimal_config(num_replicas=0))
+
+    def test_replica_fields_accepted(self) -> None:
+        """num_replicas, replica_base_seed, log_individual_replicas are accepted without error."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(
+            **self._make_minimal_config(
+                num_replicas=5,
+                replica_base_seed=42,
+                log_individual_replicas=True,
+            )
+        )
+        assert cfg.num_replicas == 5
+        assert cfg.replica_base_seed == 42
+        assert cfg.log_individual_replicas is True
+
+    def test_replica_base_seed_default_is_0(self) -> None:
+        """Default replica_base_seed is 0."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
+        assert cfg.replica_base_seed == 0
+
+    def test_log_individual_replicas_default_is_false(self) -> None:
+        """Default log_individual_replicas is False."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
+        assert cfg.log_individual_replicas is False

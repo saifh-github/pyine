@@ -7,7 +7,7 @@ import typing
 import torch
 
 if typing.TYPE_CHECKING:
-    from pyine.probes import ProbeConfig
+    from pyine.probes.base import ProbeConfig
 from pyine.probes.collection import ProbeCollection
 from tests.probes.conftest import PROBE_BATCH_SIZE, PROBE_HIDDEN_DIM
 
@@ -118,3 +118,63 @@ class TestProbeCollection:
         # All should be in collection.parameters()
         collection_param_ids = {id(p) for p in coll.parameters()}
         assert probe_param_ids == collection_param_ids
+
+
+class TestReplicaSeeding:
+    """Tests for reproducible replica initialization in ProbeCollection."""
+
+    def test_different_replicas_have_different_weights(
+        self,
+        replica_probe_configs: list[ProbeConfig],
+    ) -> None:
+        """Two replicas of the same architecture with different seeds have different weights."""
+        coll = ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+        # mean_L0_r0 and mean_L0_r1 should have different weight tensors
+        params_r0 = dict(coll.probes["mean_L0_r0"].named_parameters())
+        params_r1 = dict(coll.probes["mean_L0_r1"].named_parameters())
+        any_different = False
+        for n in params_r0:
+            if not torch.equal(params_r0[n], params_r1[n]):
+                any_different = True
+                break
+        assert any_different, "Replica r0 and r1 should have different weights"
+
+    def test_same_seed_produces_same_weights(
+        self,
+        replica_probe_configs: list[ProbeConfig],
+    ) -> None:
+        """Building ProbeCollection twice with the same expanded configs produces identical weights."""
+        coll1 = ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+        coll2 = ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+        for name in coll1.probes:
+            for (n1, p1), (n2, p2) in zip(
+                coll1.probes[name].named_parameters(),
+                coll2.probes[name].named_parameters(),
+                strict=True,
+            ):
+                assert n1 == n2
+                assert torch.equal(p1, p2), f"Weight mismatch for {name}.{n1}"
+
+    def test_rng_state_restored_after_construction(
+        self,
+        replica_probe_configs: list[ProbeConfig],
+    ) -> None:
+        """Global RNG state is restored after ProbeCollection construction with replicas."""
+        torch.manual_seed(12345)
+        before_val = torch.randn(1).item()
+
+        # Re-seed and construct collection (should save/restore RNG state)
+        torch.manual_seed(12345)
+        ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+        after_val = torch.randn(1).item()
+
+        assert before_val == after_val, "RNG state was not restored after replica construction"
+
+    def test_non_seeded_probes_unaffected(
+        self,
+        sample_probe_configs: list[ProbeConfig],
+    ) -> None:
+        """Probes without replica_seed use default init and don't trigger RNG save/restore."""
+        # Should construct normally without any issues
+        coll = ProbeCollection(sample_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+        assert len(coll.probes) == len(sample_probe_configs)

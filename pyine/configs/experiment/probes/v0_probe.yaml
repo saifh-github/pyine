@@ -42,6 +42,11 @@ config:
   dataloader_num_workers: 4
   save_probes: true
 
+  # Replica settings — train N copies of each probe with different init seeds
+  # num_replicas: 5             # Default: 1 (no replication)
+  # replica_base_seed: 0        # Base seed for reproducible replica initialization
+  # log_individual_replicas: false  # Also log per-replica metrics to W&B
+
   auto_model_config:
     use_cache: false
     attn_implementation: "flash_attention_2"

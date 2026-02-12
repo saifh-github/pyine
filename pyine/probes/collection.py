@@ -25,10 +25,22 @@ class ProbeCollection(torch.nn.Module):
 
         self._probe_configs: dict[str, ProbeConfig] = {}
         probes: dict[str, torch.nn.Module] = {}
+
+        # Save RNG state so replica seeding doesn't affect downstream randomness
+        any_seeded = any(pc.replica_seed is not None for pc in probe_configs)
+        saved_rng_state = torch.random.get_rng_state() if any_seeded else None
+
         for pc in probe_configs:
             pc = pc.model_copy(update={"hidden_dim": hidden_dim})
+            if pc.replica_seed is not None:
+                torch.manual_seed(pc.replica_seed)  # pyright: ignore[reportUnknownMemberType]  # torch stubs
             probes[pc.name] = build_probe(pc)
             self._probe_configs[pc.name] = pc
+
+        # Restore RNG state after seeded construction
+        if saved_rng_state is not None:
+            torch.random.set_rng_state(saved_rng_state)
+
         self.probes = torch.nn.ModuleDict(probes)
 
     def forward(

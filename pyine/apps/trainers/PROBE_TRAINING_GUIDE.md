@@ -325,6 +325,75 @@ CUDA_VISIBLE_DEVICES=0,1,2 uv run accelerate launch \
 Multi-GPU does **not** help if the frozen LLM doesn't fit on a single GPU. In that case, tensor parallelism
 would be needed (not currently supported by the probe trainer).
 
+## Replica Training
+
+Replica training creates multiple copies of each probe configuration, each initialized with a different
+random seed, and trains them all in parallel within a single run. This enables statistically-grounded
+comparisons by showing mean and standard deviation of metrics across replicas.
+
+Since all replicas of a given architecture-layer-hyperparameter combination share the same frozen LLM
+activations (already computed in the forward pass), training 1 vs. 10 replicas adds negligible overhead.
+
+### Enabling Replicas
+
+Add the following to your experiment config:
+
+```yaml
+config:
+  num_replicas: 5             # Number of copies per probe config (default: 1 = no replication)
+  replica_base_seed: 0        # Base seed for deterministic initialization (default: 0)
+  log_individual_replicas: false  # Also log per-replica scalar metrics to W&B (default: false)
+```
+
+With `num_replicas: 5` and 12 probe configs, the system creates **60 probes** internally. The W&B
+dashboard shows 12 curves (one per base configuration) with aggregated mean and standard deviation.
+
+### W&B Metrics with Replicas
+
+When `num_replicas > 1`, metrics are aggregated across replicas:
+
+| Metric Key                     | Description                            |
+| ------------------------------ | -------------------------------------- |
+| `train/{base_name}/loss/mean`  | Mean train loss across replicas        |
+| `train/{base_name}/loss/std`   | Std of train loss across replicas      |
+| `valid/{base_name}/loss/mean`  | Mean validation loss across replicas   |
+| `valid/{base_name}/loss/std`   | Std of validation loss across replicas |
+| `valid/{base_name}/loss/min`   | Min validation loss across replicas    |
+| `valid/{base_name}/loss/max`   | Max validation loss across replicas    |
+| `valid/{base_name}/auroc/mean` | Mean AUROC across replicas             |
+| `valid/{base_name}/auroc/std`  | Std of AUROC across replicas           |
+| `valid/{base_name}/auroc/min`  | Min AUROC across replicas              |
+| `valid/{base_name}/auroc/max`  | Max AUROC across replicas              |
+
+Additionally, **W&B Tables** (`train/replica_details` and `valid/replica_details`) are logged at each
+step with the raw per-replica values. These tables include probe metadata columns (architecture, layer,
+replica index) and support filtering, sorting, and CSV export in the W&B UI.
+
+### Output Structure with Replicas
+
+```
+<output_dir>/probes/
+  mean_L16_r0/
+    probe_state_dict.pt
+    probe_config.json
+  mean_L16_r1/
+    ...
+  replica_summary.json       # Aggregated final metrics per base config
+```
+
+The `replica_summary.json` file contains aggregated loss and AUROC statistics for each base probe
+configuration, along with the number of replicas.
+
+### Notes
+
+- `num_replicas: 1` (default) produces identical behaviour to the non-replica system.
+- The standard deviation uses sample std (n-1 denominator), appropriate since replicas sample from
+  the population of possible initializations.
+- If some replicas produce NaN AUROC (e.g., single-class validation batch in DDP), those values are
+  excluded from AUROC aggregation. If all replicas produce NaN, NaN is logged.
+- W&B table size is proportional to `logging_steps` frequency and `num_replicas`. For very long runs
+  with frequent logging, consider increasing `logging_steps`.
+
 ## Configuration Reference
 
 ### Training Parameters
@@ -362,6 +431,11 @@ config:
       architecture: ...
       layer: ...
       learning_rate: ...
+
+  # Replica settings
+  num_replicas: 1                   # Copies per probe config, each with different init seed (default: 1)
+  replica_base_seed: 0              # Base seed for deterministic replica init (default: 0)
+  log_individual_replicas: false    # Also log per-replica scalar metrics to W&B (default: false)
 
   # W&B logging
   use_wandb_logging: true           # Enable W&B logging (default from base config)

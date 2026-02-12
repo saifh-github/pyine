@@ -25,6 +25,11 @@ class ProbeConfig(pydantic.BaseModel):
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
 
+    # Replica metadata (populated at runtime by expand_probe_configs_with_replicas, not set by user)
+    replica_idx: int | None = None
+    replica_seed: int | None = None
+    base_name: str | None = None
+
 
 class BaseProbe(torch.nn.Module, abc.ABC):
     """Abstract base class for all probes.

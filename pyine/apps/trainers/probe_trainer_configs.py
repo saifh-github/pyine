@@ -84,6 +84,28 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="Whether to save trained probe weights at the end of training.",
     )
 
+    # --- Replica settings ---
+    num_replicas: int = pydantic.Field(
+        default=1,
+        ge=1,
+        description=(
+            "Number of replicas per probe config. Each replica is initialized with a "
+            "different random seed. Metrics are aggregated (mean/std) across replicas. "
+            "Default 1 = no replication."
+        ),
+    )
+    replica_base_seed: int = pydantic.Field(
+        default=0,
+        description="Base seed for deterministic replica initialization.",
+    )
+    log_individual_replicas: bool = pydantic.Field(
+        default=False,
+        description=(
+            "When true, also log per-replica metrics to W&B (in addition to "
+            "aggregated mean/std). Useful for debugging but adds many metrics."
+        ),
+    )
+
     @property
     @typing.override
     def target_dtype(self) -> torch.dtype:

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 import torch
 
 from pyine.probes.base import ProbeConfig
+
+if typing.TYPE_CHECKING:
+    from pyine.probes.collection import ProbeCollection
 
 PROBE_HIDDEN_DIM = 64
 PROBE_SEQ_LEN = 32
@@ -43,3 +48,23 @@ def sample_probe_configs() -> list[ProbeConfig]:
         ProbeConfig(name="softmax_L8", architecture="softmax", layer=8, temperature=0.5),
         ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
     ]
+
+
+@pytest.fixture
+def replica_probe_configs() -> list[ProbeConfig]:
+    """Two base configs expanded to 3 replicas each (6 total), with replica metadata."""
+    from pyine.apps.trainers.probe_trainer import expand_probe_configs_with_replicas
+
+    base_configs = [
+        ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+        ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
+    ]
+    return expand_probe_configs_with_replicas(base_configs, num_replicas=3, replica_base_seed=42)
+
+
+@pytest.fixture
+def replica_probe_collection(replica_probe_configs: list[ProbeConfig]) -> ProbeCollection:
+    """ProbeCollection built from replica-expanded configs."""
+    from pyine.probes.collection import ProbeCollection
+
+    return ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
