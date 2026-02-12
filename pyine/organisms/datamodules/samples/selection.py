@@ -1,5 +1,7 @@
 import collections
+import collections.abc
 import dataclasses
+import enum
 import logging
 
 import numpy as np
@@ -22,8 +24,17 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SelectedSample",
     "SampleSelectionResults",
+    "SampleSelectionSource",
     "select_samples_from_trace_families",
 ]
+
+
+class SampleSelectionSource(str, enum.Enum):
+    """Describes how a sample was selected."""
+
+    full_trace = "full_trace"
+    prompt_db = "prompt_db"
+    parent_fallback = "parent_fallback"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -38,6 +49,8 @@ class SelectedSample:
     """The metadata associated with the target trace from which to generate a sample."""
     code_type: SampleCodeTypeSet
     """The type of the code snippet that will be used in the generated sample."""
+    selection_source: SampleSelectionSource
+    """The selection path that produced the sample."""
     code_override: str | None = None  # if None, use the target trace's code snippet directly
     """The code snippet override that will be used in the generated sample (instead of the original)."""
 
@@ -80,6 +93,31 @@ class SampleSelectionResults:
         code_type_counts = collections.Counter([s.code_type for s in self.samples])
         return dict(code_type_counts.items())
 
+    def filter_samples(
+        self,
+        sample_filter: collections.abc.Callable[[SelectedSample], bool],
+    ) -> "SampleSelectionResults":
+        """Returns a copy of these results with samples filtered by the provided predicate."""
+        filtered_samples = [sample for sample in self.samples if sample_filter(sample)]
+        samples_with_full_trace_support = sum(
+            1 for sample in filtered_samples if sample.selection_source == SampleSelectionSource.full_trace
+        )
+        samples_with_prompt_db_code = sum(
+            1 for sample in filtered_samples if sample.selection_source == SampleSelectionSource.prompt_db
+        )
+        samples_with_parent_fallback = sum(
+            1 for sample in filtered_samples if sample.selection_source == SampleSelectionSource.parent_fallback
+        )
+        return SampleSelectionResults(
+            orig_trace_data=self.orig_trace_data,
+            selection_config=self.selection_config,
+            samples=filtered_samples,
+            failed_selections=self.failed_selections,
+            samples_with_full_trace_support=samples_with_full_trace_support,
+            samples_with_prompt_db_code=samples_with_prompt_db_code,
+            samples_with_parent_fallback=samples_with_parent_fallback,
+        )
+
     def __post_init__(self) -> None:
         """Validates the selection stats."""
         assert self.failed_selections >= 0
@@ -95,6 +133,18 @@ class SampleSelectionResults:
         )
         samples_with_overrides = [s for s in self.samples if s.code_override is not None]
         assert len(samples_with_overrides) == self.samples_with_prompt_db_code
+        samples_with_prompt_db_source = [
+            s for s in self.samples if s.selection_source == SampleSelectionSource.prompt_db
+        ]
+        assert len(samples_with_prompt_db_source) == self.samples_with_prompt_db_code
+        samples_with_full_trace_source = [
+            s for s in self.samples if s.selection_source == SampleSelectionSource.full_trace
+        ]
+        assert len(samples_with_full_trace_source) == self.samples_with_full_trace_support
+        samples_with_parent_fallback_source = [
+            s for s in self.samples if s.selection_source == SampleSelectionSource.parent_fallback
+        ]
+        assert len(samples_with_parent_fallback_source) == self.samples_with_parent_fallback
         assert self.selection_config.allow_db_lookups or self.samples_with_prompt_db_code == 0
         assert self.selection_config.fallback_to_orig or self.samples_with_parent_fallback == 0
 
@@ -351,6 +401,7 @@ def _try_prompt_db_hint_lookup(
             trace_id=record_tid,
             trace_meta=trace_data.trace_metadata_lut[record_tid],
             code_type=target_type,
+            selection_source=SampleSelectionSource.prompt_db,
             code_override=record.result,
         )
     )
@@ -434,6 +485,7 @@ def select_samples_from_trace_families(
                             trace_id=trace_meta.trace_id,
                             trace_meta=trace_meta,
                             code_type=native_type,
+                            selection_source=SampleSelectionSource.full_trace,
                             code_override=None,
                         )
                     )
@@ -479,6 +531,7 @@ def select_samples_from_trace_families(
                         trace_id=trace_entry.target_trace_id,
                         trace_meta=trace_entry.target_trace_meta,
                         code_type=native_type,
+                        selection_source=SampleSelectionSource.full_trace,
                         code_override=None,
                     )
                 )
@@ -504,6 +557,7 @@ def select_samples_from_trace_families(
                             trace_id=target_trace_meta.trace_id,
                             trace_meta=target_trace_meta,
                             code_type=target_type,
+                            selection_source=SampleSelectionSource.full_trace,
                             code_override=None,
                         )
                     )
@@ -540,6 +594,7 @@ def select_samples_from_trace_families(
                                 trace_id=record_tid,
                                 trace_meta=trace_data.trace_metadata_lut[record_tid],
                                 code_type=target_type,
+                                selection_source=SampleSelectionSource.prompt_db,
                                 code_override=record.result,
                             )
                         )
@@ -555,6 +610,7 @@ def select_samples_from_trace_families(
                         trace_id=parent_id,
                         trace_meta=trace_data.trace_metadata_lut[parent_id],
                         code_type=SampleCodeTypeSet.create_default(),
+                        selection_source=SampleSelectionSource.parent_fallback,
                         code_override=None,
                     )
                 )

@@ -13,7 +13,7 @@ from pyine.organisms.datamodules.samples.common import (
     SampleTransformStrategy,
 )
 from pyine.organisms.datamodules.samples.configs import SampleTransformConfig
-from pyine.organisms.datamodules.samples.selection import SelectedSample
+from pyine.organisms.datamodules.samples.selection import SampleSelectionSource, SelectedSample
 from pyine.organisms.datamodules.samples.transform import (
     SelectedPredictTypeResult,
     _get_code_segment_sample,
@@ -46,6 +46,7 @@ def make_selected_sample(
     idx: int,
     code_type: SampleCodeTypeSet | None = None,
     code_override: str | None = None,
+    selection_source: SampleSelectionSource = SampleSelectionSource.full_trace,
 ) -> SelectedSample:
     """Helper to create a SelectedSample from a fake reader."""
     trace_meta = reader.trace_metadata[idx]
@@ -56,6 +57,7 @@ def make_selected_sample(
         trace_id=trace_id,
         trace_meta=trace_meta,
         code_type=code_type or SampleCodeTypeSet.create_default(),
+        selection_source=selection_source,
         code_override=code_override,
     )
 

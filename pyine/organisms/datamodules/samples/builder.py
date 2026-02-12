@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import collections
 import collections.abc
-import dataclasses
 import logging
 import pathlib
 import sys
@@ -225,18 +224,13 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
         )
         if self._only_with_pregenerated_output and self._pregenerated_outputs is not None:
             pre_filter_count = len(self.selection_results.samples)
-            filtered_samples = [
-                sample
-                for sample in self.selection_results.samples
-                if str(sample.trace_id) in self._pregenerated_outputs
-            ]
-            self.selection_results = dataclasses.replace(
-                self.selection_results,
-                samples=filtered_samples,
+            self.selection_results = self.selection_results.filter_samples(
+                sample_filter=lambda sample: str(sample.trace_id) in self._pregenerated_outputs,  # type: ignore[arg-type]
             )
             logger.info(
                 f"pregenerated output filter: kept {len(self.selection_results.samples)} of {pre_filter_count} samples"
             )
+            selected_traces = self.selection_results.get_selected_traces()
         code_type_counts = collections.Counter([s.code_type for s in self.selection_results.samples])
         code_type_counts_str = "\n\t".join([f"{k}: {c}" for k, c in code_type_counts.items()])
         logger.debug(f"selected sample code types:\n\t{code_type_counts_str}")
