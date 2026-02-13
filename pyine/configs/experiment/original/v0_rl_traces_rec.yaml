@@ -10,7 +10,9 @@ defaults:
 runtime:
   exp_name: original/traces_recording
   run_name: "${runtime.exp_name}"
-
+  tags:
+    - "model:checkpoint-500"
+    - "rl-training"
 config:
   base_model: /scratch/a.palmas/code-interp-benchmark/checkpoints/checkpoint-500
 
