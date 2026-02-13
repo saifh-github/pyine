@@ -322,8 +322,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                     f"got {sample.predict_type} for sample {sample.identifier}"
                 )
             sample = sample._replace(
-                expected_output=self._pregenerated_outputs[sample.identifier],
-                has_expected_output_override=True,
+                pregenerated_output=self._pregenerated_outputs[sample.identifier],
             )
         # compute stats using sample here @@@@@
         # @@@@ consider caching results here too? (if they're expensive to compute, and not too voluminous?)

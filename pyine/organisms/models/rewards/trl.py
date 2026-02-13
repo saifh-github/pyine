@@ -353,13 +353,11 @@ class TRLRewardAdapter:
         serialized to strings by HF datasets.
         """
         sample_data: typing.Any = kwargs.get(self._sample_data_key)
-
         if not isinstance(sample_data, (list, tuple)):
             raise TypeError(f"expected list for '{self._sample_data_key}', got {type(sample_data)}")
         sample_data = typing.cast("collections.abc.Sequence[typing.Any]", sample_data)
         if len(sample_data) != batch_size:
             raise ValueError(f"sample_data length ({len(sample_data)}) != batch size ({batch_size})")
-
         result: list[samples_common.SampleData] = []
         for idx, sd in enumerate(sample_data):
             if isinstance(sd, samples_common.SampleData):

@@ -102,7 +102,7 @@ class TestWandBRewardLogger:
             "predict_type",
             "code_type",
             "has_code_override",
-            "has_expected_output_override",
+            "pregenerated_output",
         ]
         assert table_obj.columns == expected_cols
         # verify row content

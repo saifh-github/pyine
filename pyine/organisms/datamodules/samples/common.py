@@ -520,9 +520,8 @@ class SampleData(typing.NamedTuple):
     to the `code_type` field to determine this; in such cases, the expected output is actually not
     the "correct" output, but the "intended" output.
 
-    Note2: when conducting experiments with e.g. pseudolabels, this might not actually correspond
-    with groundtruth, but instead with previously generated outputs fed in during sample preparation;
-    refer to `has_expected_output_override` to validate.
+    Note2: this field always contains the original ground-truth output from the trace execution.
+    When pseudolabels are in use, refer to ``pregenerated_output`` for the injected value.
     """
     predict_type: SamplePredictType
     """Type of the expected prediction (helps provide specific descriptions in prompts)."""
@@ -556,13 +555,11 @@ class SampleData(typing.NamedTuple):
     """Absolute trace step index of segment start. 0 if not applicable."""
     last_step_idx: int = 0
     """Absolute trace step index of segment end. 0 if not applicable."""
-    has_expected_output_override: bool = False
-    """Whether the expected output was replaced by a pregenerated/pseudolabel output.
+    pregenerated_output: str | None = None
+    """Pregenerated model output (pseudolabel) injected by the data pipeline.
 
-    When True, ``expected_output`` does not come from the original trace execution but was
-    injected by the data pipeline (e.g. from a prior RL run's exported generations). Reward
-    terms and difficulty estimators should be aware that the ground truth may differ from what
-    the trace would actually produce.
+    When not None, this value was loaded from a prior RL run's exported generations.
+    The original ``expected_output`` from the trace execution is always preserved unchanged.
     """
 
     def has_bugged_code(self) -> bool:

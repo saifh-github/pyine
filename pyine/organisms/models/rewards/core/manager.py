@@ -1548,12 +1548,10 @@ class RewardManager:
         raw_terms: dict[str, float] | None = None
         if output.raw_terms is not None:
             raw_terms = dict(output.raw_terms)
-        # extract expected_output if available
-        expected_output: str | None = None
+        # extract expected_output (always ground truth from the trace)
+        expected_output = sample_ctx.sample_data.expected_output
         if sample_ctx.code_exec_eval is not None:
-            expected_output = sample_ctx.code_exec_eval.expected
-        else:
-            expected_output = getattr(sample_ctx.sample_data, "expected_output", None)
+            assert sample_ctx.code_exec_eval.expected == expected_output
         # extract difficulty metrics from output (if present)
         all_metrics = output.metrics
         difficulty_source = all_metrics.get("difficulty/source")
@@ -1593,7 +1591,7 @@ class RewardManager:
             predict_type=sample_ctx.sample_data.predict_type.value,
             code_type=sample_ctx.sample_data.code_type,
             has_code_override=sample_ctx.sample_data.has_code_override,
-            has_expected_output_override=sample_ctx.sample_data.has_expected_output_override,
+            pregenerated_output=sample_ctx.sample_data.pregenerated_output,
         )
 
     def _scope_reward_sample_fields(

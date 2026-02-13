@@ -325,7 +325,7 @@ class InMemoryRewardLogger:
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
-        has_expected_output_override: bool | None = None,
+        pregenerated_output: str | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Record a per-sample logging event in memory.
@@ -358,8 +358,7 @@ class InMemoryRewardLogger:
             predict_type: Sample predict type.
             code_type: Sample code type.
             has_code_override: Whether the sample has a code override.
-            has_expected_output_override: Whether the expected output was replaced by a
-                pregenerated/pseudolabel output.
+            pregenerated_output: Pregenerated pseudolabel output from a prior run (if any).
             **kwargs: Additional fields to store.
         """
         # note: frequency gating is the caller's responsibility (typically RewardManager);
@@ -394,7 +393,7 @@ class InMemoryRewardLogger:
             "predict_type": predict_type,
             "code_type": code_type,
             "has_code_override": has_code_override,
-            "has_expected_output_override": has_expected_output_override,
+            "pregenerated_output": pregenerated_output,
             **kwargs,
         }
         self.samples.append(dict(record))
@@ -807,7 +806,7 @@ class WandBRewardLogger:
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
-        has_expected_output_override: bool | None = None,
+        pregenerated_output: str | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward payload to W&B.
@@ -845,8 +844,7 @@ class WandBRewardLogger:
             predict_type: Sample predict type.
             code_type: Sample code type.
             has_code_override: Whether the sample has a code override.
-            has_expected_output_override: Whether the expected output was replaced by a
-                pregenerated/pseudolabel output.
+            pregenerated_output: Pregenerated pseudolabel output from a prior run (if any).
             **kwargs: Absorbed for forward compatibility.
         """
         del kwargs  # absorb any future additions for forward compatibility
@@ -919,7 +917,7 @@ class WandBRewardLogger:
                 "predict_type": predict_type,
                 "code_type": code_type,
                 "has_code_override": has_code_override,
-                "has_expected_output_override": has_expected_output_override,
+                "pregenerated_output": pregenerated_output,
             }
             self._generation_table_rows.append(row)
             # flush table when buffer reaches max size
@@ -1141,7 +1139,7 @@ class WandBRewardLogger:
             "predict_type",
             "code_type",
             "has_code_override",
-            "has_expected_output_override",
+            "pregenerated_output",
         ]
         table = wandb.Table(columns=columns)
         table_obj = typing.cast("typing.Any", table)
@@ -1173,7 +1171,7 @@ class WandBRewardLogger:
                 row["predict_type"],
                 row["code_type"],
                 row["has_code_override"],
-                row["has_expected_output_override"],
+                row["pregenerated_output"],
             ]
             table_obj.add_data(*row_data)
         self._wandb_run.log({self._prefix_key(self._generation_table_key): table})  # type: ignore[reportUnknownMemberType]
@@ -1291,7 +1289,7 @@ class DiskRewardLogger:
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
-        has_expected_output_override: bool | None = None,
+        pregenerated_output: str | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Write a per-sample reward record to LMDB."""
@@ -1317,7 +1315,7 @@ class DiskRewardLogger:
             "predict_type": predict_type,
             "code_type": code_type,
             "has_code_override": has_code_override,
-            "has_expected_output_override": has_expected_output_override,
+            "pregenerated_output": pregenerated_output,
             "tags": list(tags) if tags is not None else None,
             "categories": list(categories) if categories is not None else None,
             "difficulty_source": difficulty_source,

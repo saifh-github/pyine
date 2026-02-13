@@ -231,8 +231,9 @@ class TestSampleBuilderPregeneratedOverride:
         # apply override logic (same as SampleBuilder.__getitem__)
         if sample.identifier in overrides:
             assert sample.predict_type == samples_common.SamplePredictType.program_output
-            sample = sample._replace(expected_output=overrides[sample.identifier])
-        assert sample.expected_output == "OVERRIDDEN_OUTPUT"
+            sample = sample._replace(pregenerated_output=overrides[sample.identifier])
+        assert sample.pregenerated_output == "OVERRIDDEN_OUTPUT"
+        assert sample.expected_output == "42"  # original ground truth preserved
 
     def test_non_program_output_raises(self) -> None:
         sample = samples_common.SampleData(
@@ -279,7 +280,8 @@ class TestSampleBuilderPregeneratedOverride:
         )
         overrides = {"other/id": "OVERRIDDEN"}
         if sample.identifier in overrides:
-            sample = sample._replace(expected_output=overrides[sample.identifier])
+            sample = sample._replace(pregenerated_output=overrides[sample.identifier])
+        assert sample.pregenerated_output is None
         assert sample.expected_output == "42"  # unchanged
 
 

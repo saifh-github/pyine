@@ -737,7 +737,7 @@ class RewardLogger(typing.Protocol):
         predict_type: str | None = None,
         code_type: str | None = None,
         has_code_override: bool | None = None,
-        has_expected_output_override: bool | None = None,
+        pregenerated_output: str | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Log a per-sample reward breakdown and metrics.
@@ -780,8 +780,7 @@ class RewardLogger(typing.Protocol):
             predict_type: Sample predict type (e.g., "program_output").
             code_type: Sample code type.
             has_code_override: Whether the sample has a code override.
-            has_expected_output_override: Whether the expected output was replaced by a
-                pregenerated/pseudolabel output.
+            pregenerated_output: pregenerated pseudolabel output from a prior run (if any).
             **kwargs: Additional keyword arguments for forward compatibility.
                 Custom implementations should accept **kwargs to remain compatible
                 with future additions to the logging interface.

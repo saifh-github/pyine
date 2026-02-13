@@ -90,7 +90,7 @@ SampleData(
     first_line: int,                  # first execution line (0 for full execs)
     last_line: int,                   # last potential execution line
     inputs: str,                      # execution inputs or intermediate program state
-    expected_output: str,             # target prediction value
+    expected_output: str,             # ground-truth target prediction value
     predict_type: SamplePredictType,  # prediction (task) type
     code_type: str,                   # augmentation type(s) associated with the code
     trace_step_count: int,            # number of execution steps to completion
@@ -101,6 +101,7 @@ SampleData(
     last_line_hit: int,               # which visit to last_line (for code segments)
     first_step_idx: int,              # absolute trace index of segment start
     last_step_idx: int,               # absolute trace index of segment end
+    pregenerated_output: str | None,  # pseudolabel from a prior run (None when not applicable)
 )
 ```
 
@@ -284,6 +285,15 @@ Samples are not fully generated until accessed via the builder's `__getitem__`. 
 
 However, that also means we cannot predetermine all the statistics for the samples that will be
 generated, as many transformation decisions require access to the full trace data.
+
+### Pregenerated Output Support
+
+The `SampleBuilder` can inject pregenerated model outputs (pseudolabels) from a prior RL run via
+the `pregenerated_outputs` constructor parameter. When set, samples whose identifiers match a key
+in the provided dict get their `pregenerated_output` field populated with the pseudolabel.
+
+- `expected_output` always retains the original ground truth from the trace execution;
+- The `only_with_pregenerated_output` flag on the builder filters to keep only matched samples.
 
 ### Strong Coupling Warning
 
