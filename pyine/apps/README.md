@@ -20,6 +20,7 @@ Dataset preparation:
 Trace annotation:
 
 - Prompt-chain annotator: [`pyine/apps/annotate/trace_annot_generator.py`](./annotate/trace_annot_generator.py)
+- Annotation validator: [`pyine/apps/annotate/trace_annot_validator.py`](./annotate/trace_annot_validator.py)
 
 Trace analysis and repair:
 
@@ -225,6 +226,48 @@ python -m pyine.apps.annotate.trace_annot_generator \
 - For more information on the prompt result database, see
   [`pyine/prompts/result_db.py`](../../pyine/prompts/result_db.py) and
   [this README](../../pyine/prompts/README.md).
+
+______________________________________________________________________
+
+### Trace annotation validation (misleading hint quality check)
+
+**Script:** [`pyine/apps/annotate/trace_annot_validator.py`](./annotate/trace_annot_validator.py)
+
+**Main use:** queries the prompt result DB for misleading-tagged annotation records, loads
+corresponding traces for ground truth, and uses an LLM prompt to assess whether each hint actually
+misleads a reader. Stores validation verdicts (`MISLEADING`, `NOT_MISLEADING`, or `UNINFORMATIVE`)
+as new records in the same DB.
+
+**Examples:**
+
+```bash
+# dry-run over a small subset
+python -m pyine.apps.annotate.trace_annot_validator \
+    --dataset /path/to/traces_dataset.lmdb \
+    --llm-option provider=openai \
+    --llm-option model=gpt-4o-mini \
+    --target-indices 0-5 \
+    --dry-run
+
+# full validation run with concurrency controls
+python -m pyine.apps.annotate.trace_annot_validator \
+    --dataset-latest-from TACO \
+    --llm-option provider=openai \
+    --llm-option model=gpt-4o-mini \
+    --parallel --max-workers 8
+```
+
+**Outputs and layout:**
+
+- Validation records are stored in the same prompt result DB as the annotations, with
+  `prompt_name = "validation/misleading"`. Each record's `identifier` is the source annotation's
+  `record_uid`, providing a 1:1 join key.
+- The verdict and explanation are stored in `meta.verdict` and `meta.explanation`, and a filterable
+  tag (`verdict:misleading`, `verdict:not_misleading`, or `verdict:uninformative`) is attached.
+- Source record lineage is preserved via `meta.source_record_uid`, `meta.source_prompt_name`,
+  and `meta.source_identifier`.
+- For the full DB schema and downstream query patterns, see the
+  [annotate package README](./annotate/README.md).
 
 ______________________________________________________________________
 
