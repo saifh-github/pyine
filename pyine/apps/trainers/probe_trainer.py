@@ -15,7 +15,6 @@ import typing
 from collections import defaultdict
 from pathlib import Path
 
-import datasets
 import torch
 import transformers
 
@@ -24,8 +23,10 @@ import pyine.configs.schemas
 import pyine.evals.common
 from pyine.probes.collection import ProbeCollection
 from pyine.probes.extraction import ActivationExtractor
+from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
 if typing.TYPE_CHECKING:
+    import datasets
     import numpy as np
     import numpy.typing as npt
     from accelerate import Accelerator
@@ -43,92 +44,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def validate_probe_dataset(
+def _tokenize_split(
     dataset: datasets.Dataset,
-    text_field: str,
-    label_field: str,
-) -> None:
-    """Fail fast on malformed datasets."""
-    if text_field not in dataset.column_names:
-        raise ValueError(f"text_field '{text_field}' not found. Columns: {dataset.column_names}")
-    if label_field not in dataset.column_names:
-        raise ValueError(f"label_field '{label_field}' not found. Columns: {dataset.column_names}")
-    unique_labels: set[int] = set(
-        typing.cast("list[int]", dataset.unique(label_field))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
-    )
-    if not unique_labels.issubset({0, 1}):
-        raise ValueError(f"Expected binary labels {{0, 1}}, got {unique_labels}")
-    if len(unique_labels) < 2:
-        logger.warning(f"Split has only label(s) {unique_labels} — probe training may be degenerate")
-
-
-def tokenize_for_probes(
-    examples: dict[str, list[str] | list[int] | list[list[dict[str, str]]]],
     tokenizer: transformers.PreTrainedTokenizerBase,
     max_seq_length: int,
-    text_field: str,
-    label_field: str,
-) -> transformers.BatchEncoding:
-    """Tokenize text for probe training."""
-    if text_field == "messages":
-        if not getattr(tokenizer, "chat_template", None):
-            raise ValueError(
-                "text_field='messages' requires a tokenizer with a chat template. "
-                "Either use a model with a built-in template, or set text_field to "
-                "a preformatted string column."
-            )
-        messages_batch = typing.cast("list[list[dict[str, str]]]", examples["messages"])
-        texts: list[str] = [
-            typing.cast(
-                "str",
-                tokenizer.apply_chat_template(  # pyright: ignore[reportUnknownMemberType]  # transformers stubs
-                    msgs, tokenize=False, add_generation_prompt=False
-                ),
-            )
-            for msgs in messages_batch
-        ]
-    else:
-        texts = typing.cast("list[str]", examples[text_field])
-
-    tokenized = tokenizer(
-        texts,
-        max_length=max_seq_length,
-        truncation=True,
-        padding=False,  # dynamic padding in collator
-    )
-    tokenized["labels"] = examples[label_field]
-    return tokenized
-
-
-def load_and_tokenize(
-    dataset_path: str,
-    split: str,
-    tokenizer: transformers.PreTrainedTokenizerBase,
-    config: probe_trainer_configs.ProbeTrainerAppMainConfig,
 ) -> datasets.Dataset:
-    """Load a dataset split and tokenize it."""
-    ds = datasets.load_from_disk(dataset_path)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
-    if isinstance(ds, datasets.DatasetDict):
-        if split not in ds:
-            raise ValueError(f"Split '{split}' not found. Available: {list(ds.keys())}")
-        ds_split = ds[split]
-    else:
-        ds_split = ds
+    """Tokenize a probe dataset split (plain text, no special tokens)."""
 
-    validate_probe_dataset(ds_split, config.text_field, config.label_field)
-    ds_split = ds_split.map(  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
-        tokenize_for_probes,
+    def _tokenize(examples: dict[str, list[str] | list[int]]) -> transformers.BatchEncoding:
+        tokenized = tokenizer(
+            examples["text"],  # pyright: ignore[reportArgumentType]  # always list[str] at runtime
+            max_length=max_seq_length,
+            truncation=True,
+            padding=False,
+            add_special_tokens=False,  # Post-template text — don't add BOS/EOS/chat markers
+        )
+        tokenized["labels"] = examples["label"]
+        return tokenized
+
+    ds = dataset.map(  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+        _tokenize,
         batched=True,
-        fn_kwargs={
-            "tokenizer": tokenizer,
-            "max_seq_length": config.max_seq_length,
-            "text_field": config.text_field,
-            "label_field": config.label_field,
-        },
-        remove_columns=[c for c in ds_split.column_names if c not in ("input_ids", "attention_mask", "labels")],
+        remove_columns=[c for c in dataset.column_names if c not in ("input_ids", "attention_mask", "labels")],
     )
-    ds_split.set_format("torch")  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
-    return ds_split
+    ds.set_format("torch")  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+    return ds
 
 
 def build_dataloader(
@@ -604,9 +544,19 @@ def probe_train(
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
     # --- 3. Prepare datasets ---
-    logger.info(f"Loading dataset from {config.dataset_path}")
-    train_ds = load_and_tokenize(config.dataset_path, "train", tokenizer, config)
-    valid_ds = load_and_tokenize(config.dataset_path, "valid", tokenizer, config)
+    logger.info(f"Loading probe dataset from LMDB: {config.lmdb_path}")
+    raw_ds = load_probe_dataset_from_lmdb(
+        lmdb_path=config.lmdb_path,
+        label_metric_key=config.label_metric_key,
+        train_key_prefix=config.train_key_prefix,
+        valid_key_prefix=config.valid_key_prefix,
+        selection_strategy=config.selection_strategy,
+        recompute_labels=config.recompute_labels,
+        max_samples_per_split=config.max_samples_per_split,
+        skip_malformed_records=config.skip_malformed_records,
+    )
+    train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length)
+    valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length)
     train_loader = build_dataloader(
         train_ds,
         tokenizer,

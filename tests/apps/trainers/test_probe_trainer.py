@@ -313,50 +313,6 @@ class TestProbeTrainUnit:
             assert set(original_params.keys()) == set(loaded_params.keys())
 
 
-class TestDatasetValidation:
-    """Tests for dataset validation and tokenization helpers."""
-
-    def test_dataset_validation_catches_bad_labels(self) -> None:
-        """validate_probe_dataset() raises on non-binary labels."""
-        from pyine.apps.trainers.probe_trainer import validate_probe_dataset
-
-        ds = datasets.Dataset.from_dict(
-            {
-                "messages": [
-                    [{"role": "user", "content": "hi"}],
-                    [{"role": "user", "content": "bye"}],
-                ],
-                "label": [0, 2],  # 2 is invalid
-            }
-        )
-        with pytest.raises(ValueError, match="binary labels"):
-            validate_probe_dataset(ds, "messages", "label")
-
-    def test_dataset_validation_catches_missing_columns(self) -> None:
-        """validate_probe_dataset() raises on missing text/label columns."""
-        from pyine.apps.trainers.probe_trainer import validate_probe_dataset
-
-        ds = datasets.Dataset.from_dict({"something": [1, 2]})
-        with pytest.raises(ValueError, match="text_field"):
-            validate_probe_dataset(ds, "messages", "label")
-
-    def test_tokenization_chat_template_guard(self) -> None:
-        """tokenize_for_probes() raises if tokenizer has no chat template and text_field='messages'."""
-        from pyine.apps.trainers.probe_trainer import tokenize_for_probes
-
-        tokenizer = MagicMock()
-        tokenizer.chat_template = None
-
-        examples = {
-            "messages": [
-                [{"role": "user", "content": "hello"}],
-            ],
-            "label": [1],
-        }
-        with pytest.raises(ValueError, match="chat template"):
-            tokenize_for_probes(examples, tokenizer, 512, "messages", "label")
-
-
 # ---------------------------------------------------------------------------
 # Replica feature tests
 # ---------------------------------------------------------------------------

@@ -18,55 +18,56 @@ frozen language model. Given a dataset of text inputs with binary labels, the tr
 ## Prerequisites
 
 - Python environment with all dependencies installed (`torch`, `transformers`, `accelerate`, `scikit-learn`, etc.)
-- A pre-processed HuggingFace dataset with text inputs and binary labels (see [Dataset Format](#dataset-format))
+- An LMDB database exported by `DiskRewardLogger` during RL training (see [Data Source](#data-source))
 - **GPU requirements**: Single or multi-GPU. The frozen LLM is fully replicated per GPU (no sharding needed since
   it is not trained)
 - Optional (performance): Flash Attention 2 support via `flash-attn` (see the project root [`README.md`](../../../README.md))
 
 ## Quick Start
 
-### Step 1: Prepare a Dataset
+### Step 1: Prepare an LMDB Data Source
 
-The trainer expects a **HuggingFace dataset** saved to disk (via `datasets.save_to_disk()`) with `train` and
-`valid` splits. Each split must have:
+The trainer reads completion records from an **LMDB database** exported by `DiskRewardLogger` during RL
+training. Each record contains the prompt, model output, and reward metrics. The trainer constructs
+input text as `prompt + model_output` and derives binary labels from reward metrics
+(e.g., `reward_metrics["soft_match/is_match"]`).
 
-- A **text field**: Either `messages` (chat-template format: list of `{"role": ..., "content": ...}` dicts) or
-  a plain string column
-- A **label field**: Binary integers (`0` or `1`)
+Train/valid splits are determined by LMDB key prefixes (default: `train/` and `eval/`).
 
-#### Using the Debug Dataset (for Testing)
+#### Using the Debug LMDB (for Testing)
 
-A built-in synthetic dataset factory generates datasets in the exact format the trainer expects. This is useful
-for smoke tests and verifying your setup before training on real data:
+A built-in synthetic LMDB factory generates mock records in the exact `DiskRewardLogger` format. This is
+useful for smoke tests and verifying your setup before training on real data:
 
 ```bash
-# Generate a debug dataset to disk
-uv run python -m pyine.probes.debug_dataset --output /tmp/probe-debug-dataset
+# Generate a debug LMDB
+uv run python -m pyine.probes.debug_dataset --output /tmp/probe-debug-lmdb
 ```
 
-The debug dataset contains chat-format messages with a learnable keyword-correlated signal, so probes can
-actually learn (AUROC > 0.5) rather than just verifying the pipeline runs.
+The debug LMDB contains records with a learnable keyword-correlated signal, so probes can actually learn
+(AUROC > 0.5) rather than just verifying the pipeline runs.
 
 Options:
 
 ```bash
 uv run python -m pyine.probes.debug_dataset \
-    --output /tmp/probe-debug-dataset \
-    --n-train 200 \    # Number of training samples (default: 200)
-    --n-valid 50 \     # Number of validation samples (default: 50)
+    --output /tmp/probe-debug-lmdb \
+    --n-train 200 \    # Number of training records (default: 200)
+    --n-valid 50 \     # Number of validation records (default: 50)
     --seed 42          # Random seed (default: 42)
 ```
 
 Or from Python:
 
 ```python
-from pyine.probes.debug_dataset import create_debug_probe_dataset
+from pyine.probes.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
 
-# In-memory (e.g., for tests)
+# Create a debug LMDB on disk
+create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_valid=50, seed=42)
+
+# Or get a ready-to-use DatasetDict (creates temp LMDB internally)
 ds = create_debug_probe_dataset(n_train=200, n_valid=50, seed=42)
-
-# Save to disk
-create_debug_probe_dataset(output_path="/tmp/probe-debug-dataset")
+# ds["train"] has columns: text, label, sample_id
 ```
 
 ### Step 2: Create an Experiment Config
@@ -101,10 +102,14 @@ config:
   base_model: Qwen/Qwen3-4B-Instruct-2507
   llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from a fine-tuned checkpoint
 
-  # Dataset
-  dataset_path: /path/to/probe-dataset  # HF dataset with train/valid splits
-  text_field: messages      # "messages" for chat format, or a plain text column name
-  label_field: label        # Binary label column (0/1)
+  # LMDB data source
+  lmdb_path: /path/to/lmdb          # LMDB exported by DiskRewardLogger
+  label_metric_key: "soft_match/is_match"  # Key in reward_metrics for binary label
+  train_key_prefix: "train/"         # LMDB key prefix for training records
+  valid_key_prefix: "eval/"          # LMDB key prefix for validation records
+  selection_strategy: latest          # Deduplication: "latest" or "best_reward"
+  recompute_labels: false             # Re-derive labels from expected/predicted outputs
+  skip_malformed_records: false       # Skip records missing required fields
   max_seq_length: 3000
 
   # Training loop
@@ -164,67 +169,77 @@ uv run accelerate launch \
 ```bash
 uv run python -m pyine.apps.trainers.probe_trainer \
     +experiment=probes/my_probe_experiment \
-    config.dataset_path=/tmp/probe-debug-dataset \
+    config.lmdb_path=/tmp/probe-debug-lmdb \
     config.num_epochs=5 \
     config.train_batch_size=8
 ```
 
-## Dataset Format
+## Data Source
 
-### Required Structure
+### LMDB Format
 
-The dataset must be a HuggingFace `DatasetDict` saved to disk with at least `train` and `valid` splits:
+The trainer reads from an LMDB database exported by `DiskRewardLogger` during RL training. Records are
+serialized with `JSON_ZSTD` (orjson + zstandard compression).
+
+LMDB keys follow the pattern `{key_prefix}{sample_id}/{generation_count}`, for example:
 
 ```
-my-dataset/
-  train/
-    ...
-  valid/
-    ...
+train/TACO/train/p000001/s0000/3
+eval/debug_sample_0042/1
 ```
 
-### Text Field
+### Record Fields
 
-Two formats are supported, controlled by the `text_field` config:
+Each LMDB record is a JSON dict. The fields used by the probe trainer:
 
-**Chat format** (`text_field: messages`): Each sample has a `messages` column containing a list of chat-turn
-dicts. The tokenizer's chat template is applied automatically.
+| Field             | Required  | Description                                             |
+| ----------------- | --------- | ------------------------------------------------------- |
+| `prompt`          | Always    | The prompt text sent to the model                       |
+| `model_output`    | Always    | The model's completion text                             |
+| `reward_metrics`  | Default   | Dict with metric keys (e.g., `soft_match/is_match`)     |
+| `expected_output` | Recompute | Expected output (required when `recompute_labels=True`) |
+| `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)     |
+| `reward_total`    | Optional  | Used when `selection_strategy: best_reward`             |
 
-````python
-{
-    "messages": [
-        {"role": "user", "content": "Analyze the following code:\n```python\ndef foo(): ...```"},
-        {"role": "assistant", "content": "This function ..."},
-    ],
-    "label": 1,
-}
-````
+The trainer constructs input text as `prompt + model_output` (plain text, post-chat-template). Tokenization
+uses `add_special_tokens=False` since the text is already formatted.
 
-**Plain text** (`text_field: text`): Each sample has a string column that is tokenized directly.
+### Label Derivation
 
-```python
-{
-    "text": "Some input text to classify.",
-    "label": 0,
-}
-```
+Labels are derived from LMDB records in one of two ways:
 
-**Note:** When using `text_field: messages`, the tokenizer must have a chat template. Models like Qwen, Llama,
-and Mistral Instruct variants include one by default.
+**From stored metrics** (default, `recompute_labels: false`): The label is read from
+`reward_metrics[label_metric_key]` and cast to int. Common keys: `soft_match/is_match`,
+`hard_match/is_match`.
 
-### Label Field
+**Re-computed** (`recompute_labels: true`): The label is re-derived by running `compute_soft_match()` or
+`compute_hard_match()` on `expected_output` vs. `final_answer`. Only supported for
+`label_metric_key` in `{soft_match/is_match, hard_match/is_match}`.
 
-The label column must contain binary integers: `0` or `1`. The trainer validates this at load time and will
-raise an error if non-binary values are found. A warning is logged if only one class is present (degenerate
-training).
+### Deduplication
+
+When multiple generations exist per sample (same `sample_id`, different `generation_count`), a single
+record is selected per sample:
+
+- **`latest`** (default): Highest `generation_count` wins
+- **`best_reward`**: Highest `reward_total` wins (raises `ValueError` if `reward_total` is `None`)
+
+### Train/Valid Splits
+
+Splits are determined by LMDB key prefixes:
+
+- `train_key_prefix: "train/"` — keys starting with `train/` become the training set
+- `valid_key_prefix: "eval/"` — keys starting with `eval/` become the validation set
 
 ### Validation
 
-The trainer validates the dataset at load time:
+The trainer validates the loaded dataset at load time:
 
-- Checks that `text_field` and `label_field` columns exist
 - Checks that labels are in `{0, 1}`
-- Warns if a split contains only one class
+- Checks that text fields are non-empty
+- Warns if a split contains only one class (degenerate training)
+- With `skip_malformed_records: false` (default), raises `ValueError` on any record missing required fields
+- With `skip_malformed_records: true`, skips malformed records and logs a count at WARNING level
 
 ## Probe Architectures
 
@@ -404,11 +419,16 @@ config:
   base_model: Qwen/Qwen3-4B-Instruct-2507  # HuggingFace model name or local path
   llm_checkpoint_path: null  # Path to a fine-tuned checkpoint (safetensors). If null, uses base_model
 
-  # Dataset
-  dataset_path: /path/to/dataset   # HF dataset with train/valid splits (required)
-  text_field: messages              # "messages" for chat format, or a plain text column (default: "messages")
-  label_field: label                # Binary label column name (default: "label")
-  max_seq_length: 3000              # Maximum sequence length for tokenization (default: 3000)
+  # LMDB data source
+  lmdb_path: /path/to/lmdb          # LMDB from DiskRewardLogger (required)
+  label_metric_key: "soft_match/is_match"  # Key in reward_metrics for binary label (default)
+  train_key_prefix: "train/"         # LMDB key prefix for training records (default: "train/")
+  valid_key_prefix: "eval/"          # LMDB key prefix for validation records (default: "eval/")
+  selection_strategy: latest          # "latest" or "best_reward" for dedup (default: "latest")
+  recompute_labels: false             # Re-derive labels from expected/predicted (default: false)
+  max_samples_per_split: null         # Cap samples per split, null = no cap (default: null)
+  skip_malformed_records: false       # Skip bad records instead of raising (default: false)
+  max_seq_length: 3000                # Maximum sequence length for tokenization (default: 3000)
 
   # Training loop
   num_epochs: 10                    # Number of training epochs (default: 10)
@@ -542,16 +562,29 @@ All 12 probes train simultaneously in a single run, sharing the LLM forward pass
 
 ### Common Issues
 
-**`ValueError: text_field 'messages' requires a tokenizer with a chat template`**
+**`ValueError: no records match key prefix 'train/' in LMDB at ...`**
 
-Your model's tokenizer does not have a built-in chat template. Either:
+The LMDB contains no keys starting with the configured `train_key_prefix` (or `valid_key_prefix`). Verify
+that the prefix matches what `DiskRewardLogger` used during export. Common prefixes are `train/` and `eval/`.
 
-- Use a model with a chat template (e.g., Qwen Instruct, Llama Instruct, Mistral Instruct)
-- Set `text_field` to a preformatted string column instead of `messages`
+**`ValueError: record for sample_id '...' is missing prompt or model_output`**
+
+An LMDB record is missing the `prompt` or `model_output` field. Either fix the export pipeline, or set
+`skip_malformed_records: true` to skip bad records.
+
+**`ValueError: recompute_labels=True is only supported for label_metric_key in ...`**
+
+`recompute_labels` only works with `soft_match/is_match` or `hard_match/is_match`. For other metrics, use
+stored labels (`recompute_labels: false`).
+
+**`ValueError: best_reward selection requires reward_total for all records`**
+
+When using `selection_strategy: best_reward`, every record must have a non-null `reward_total`. Either ensure
+`logging.log_total=True` during RL export, or switch to `selection_strategy: latest`.
 
 **`ValueError: Expected binary labels {0, 1}, got ...`**
 
-Your dataset's label column contains values other than 0 and 1. Ensure labels are binary integers.
+The derived labels contain values other than 0 and 1. Check the `label_metric_key` or underlying data.
 
 **`ValueError: Cannot resolve transformer layer N for model type ...`**
 
@@ -569,6 +602,7 @@ For other architectures, the fallback chain in `ActivationExtractor._resolve_lay
 
 ## Additional Resources
 
+- LMDB integration plan: `INTEGRATION_PLAN.md` (repository root)
 - Implementation plan: `PROBES_CLAUDE.md` (repository root)
 - Existing experiment config: [`pyine/configs/experiment/probes/v0_probe.yaml`](../../configs/experiment/probes/v0_probe.yaml)
 - RL Training Guide: [`RL_TRAINING_GUIDE.md`](./RL_TRAINING_GUIDE.md)

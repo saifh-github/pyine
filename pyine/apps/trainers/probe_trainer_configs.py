@@ -45,18 +45,52 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="List of probe configs, each specifying architecture, layer, and hyperparams.",
     )
 
-    # --- Dataset ---
-    dataset_path: str = pydantic.Field(
+    # --- LMDB data source ---
+    lmdb_path: str = pydantic.Field(
         ...,
-        description="HuggingFace dataset path (local dir or Hub name) with train/valid splits.",
+        description="Path to LMDB database exported by DiskRewardLogger.",
     )
-    text_field: str = pydantic.Field(
-        default="messages",
-        description="Column name for text input. 'messages' for chat format, or a plain text column.",
+    label_metric_key: str = pydantic.Field(
+        default="soft_match/is_match",
+        description=(
+            "Key in reward_metrics dict for binary label derivation. "
+            "Common values: 'soft_match/is_match', 'hard_match/is_match'."
+        ),
     )
-    label_field: str = pydantic.Field(
-        default="label",
-        description="Column name for binary labels (0/1).",
+    train_key_prefix: str = pydantic.Field(
+        default="train/",
+        description="LMDB key prefix for training records.",
+    )
+    valid_key_prefix: str = pydantic.Field(
+        default="eval/",
+        description="LMDB key prefix for validation records.",
+    )
+    selection_strategy: typing.Literal["latest", "best_reward"] = pydantic.Field(
+        default="latest",
+        description=(
+            "Strategy for deduplicating multiple generations per sample. "
+            "'latest' uses highest generation_count, 'best_reward' uses highest reward_total."
+        ),
+    )
+    recompute_labels: bool = pydantic.Field(
+        default=False,
+        description=(
+            "If True, re-compute labels instead of using stored reward_metrics. "
+            "Only valid when label_metric_key is 'soft_match/is_match' or "
+            "'hard_match/is_match' — validated at config construction time."
+        ),
+    )
+    max_samples_per_split: int | None = pydantic.Field(
+        default=None,
+        description="Cap samples per split. Useful for debugging or fast iteration.",
+    )
+    skip_malformed_records: bool = pydantic.Field(
+        default=False,
+        description=(
+            "If True, skip records missing required fields instead of raising. "
+            "Skipped records are counted and logged at WARNING level. "
+            "If False (default), raise ValueError on any malformed record."
+        ),
     )
 
     # --- Training loop ---
@@ -112,6 +146,16 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
             return torch.bfloat16
         return torch.float16
+
+    @pydantic.model_validator(mode="after")
+    def _validate_recompute_label_metric(self) -> ProbeTrainerAppMainConfig:
+        recomputable = {"soft_match/is_match", "hard_match/is_match"}
+        if self.recompute_labels and self.label_metric_key not in recomputable:
+            raise ValueError(
+                f"recompute_labels=True is only supported for label_metric_key in "
+                f"{recomputable}, got '{self.label_metric_key}'"
+            )
+        return self
 
     @pydantic.model_validator(mode="after")
     def _validate_probe_names_unique(self) -> ProbeTrainerAppMainConfig:

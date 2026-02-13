@@ -38,16 +38,16 @@ config:
 
 With `num_replicas: 5` and the 2 probe configs above, the system internally creates **10 probes**:
 
-| Internal name     | Base name   | Architecture | Layer | Replica | Init seed                         |
-| ----------------- | ----------- | ------------ | ----- | ------- | --------------------------------- |
-| `mean_L16_r0`     | `mean_L16`  | mean         | 16    | 0       | `blake2b("0:mean_L16:0") % 2^31` |
-| `mean_L16_r1`     | `mean_L16`  | mean         | 16    | 1       | `blake2b("0:mean_L16:1") % 2^31` |
-| `mean_L16_r2`     | `mean_L16`  | mean         | 16    | 2       | `blake2b("0:mean_L16:2") % 2^31` |
-| `mean_L16_r3`     | `mean_L16`  | mean         | 16    | 3       | `blake2b("0:mean_L16:3") % 2^31` |
-| `mean_L16_r4`     | `mean_L16`  | mean         | 16    | 4       | `blake2b("0:mean_L16:4") % 2^31` |
-| `attn_L16_r0`     | `attn_L16`  | attention    | 16    | 0       | `blake2b("0:attn_L16:0") % 2^31` |
-| `attn_L16_r1`     | `attn_L16`  | attention    | 16    | 1       | `blake2b("0:attn_L16:1") % 2^31` |
-| ...               | ...         | ...          | ...   | ...     | ...                    |
+| Internal name | Base name  | Architecture | Layer | Replica | Init seed                        |
+| ------------- | ---------- | ------------ | ----- | ------- | -------------------------------- |
+| `mean_L16_r0` | `mean_L16` | mean         | 16    | 0       | `blake2b("0:mean_L16:0") % 2^31` |
+| `mean_L16_r1` | `mean_L16` | mean         | 16    | 1       | `blake2b("0:mean_L16:1") % 2^31` |
+| `mean_L16_r2` | `mean_L16` | mean         | 16    | 2       | `blake2b("0:mean_L16:2") % 2^31` |
+| `mean_L16_r3` | `mean_L16` | mean         | 16    | 3       | `blake2b("0:mean_L16:3") % 2^31` |
+| `mean_L16_r4` | `mean_L16` | mean         | 16    | 4       | `blake2b("0:mean_L16:4") % 2^31` |
+| `attn_L16_r0` | `attn_L16` | attention    | 16    | 0       | `blake2b("0:attn_L16:0") % 2^31` |
+| `attn_L16_r1` | `attn_L16` | attention    | 16    | 1       | `blake2b("0:attn_L16:1") % 2^31` |
+| ...           | ...        | ...          | ...   | ...     | ...                              |
 
 All 10 probes train simultaneously in a single run, sharing the same LLM forward pass.
 
@@ -55,26 +55,26 @@ All 10 probes train simultaneously in a single run, sharing the same LLM forward
 
 With `num_replicas > 1`, **aggregated metrics** are logged under the base name:
 
-| Metric Key                        | Description                              |
-| --------------------------------- | ---------------------------------------- |
-| `train/{base_name}/loss/mean`     | Mean train loss across replicas          |
-| `train/{base_name}/loss/std`      | Std of train loss across replicas        |
-| `valid/{base_name}/loss/mean`     | Mean validation loss across replicas     |
-| `valid/{base_name}/loss/std`      | Std of validation loss across replicas   |
-| `valid/{base_name}/loss/min`      | Min validation loss across replicas      |
-| `valid/{base_name}/loss/max`      | Max validation loss across replicas      |
-| `valid/{base_name}/auroc/mean`    | Mean AUROC across replicas               |
-| `valid/{base_name}/auroc/std`     | Std of AUROC across replicas             |
-| `valid/{base_name}/auroc/min`     | Min AUROC across replicas                |
-| `valid/{base_name}/auroc/max`     | Max AUROC across replicas                |
+| Metric Key                     | Description                            |
+| ------------------------------ | -------------------------------------- |
+| `train/{base_name}/loss/mean`  | Mean train loss across replicas        |
+| `train/{base_name}/loss/std`   | Std of train loss across replicas      |
+| `valid/{base_name}/loss/mean`  | Mean validation loss across replicas   |
+| `valid/{base_name}/loss/std`   | Std of validation loss across replicas |
+| `valid/{base_name}/loss/min`   | Min validation loss across replicas    |
+| `valid/{base_name}/loss/max`   | Max validation loss across replicas    |
+| `valid/{base_name}/auroc/mean` | Mean AUROC across replicas             |
+| `valid/{base_name}/auroc/std`  | Std of AUROC across replicas           |
+| `valid/{base_name}/auroc/min`  | Min AUROC across replicas              |
+| `valid/{base_name}/auroc/max`  | Max AUROC across replicas              |
 
 When `log_individual_replicas: true`, the existing per-probe metrics are also logged as scalar lines:
 
-| Metric Key                        | Description                              |
-| --------------------------------- | ---------------------------------------- |
-| `train/{replica_name}/loss`       | Train loss for individual replica        |
-| `valid/{replica_name}/loss`       | Valid loss for individual replica         |
-| `valid/{replica_name}/auroc`      | AUROC for individual replica             |
+| Metric Key                   | Description                       |
+| ---------------------------- | --------------------------------- |
+| `train/{replica_name}/loss`  | Train loss for individual replica |
+| `valid/{replica_name}/loss`  | Valid loss for individual replica |
+| `valid/{replica_name}/auroc` | AUROC for individual replica      |
 
 ### 2.3.1 W&B Tables for Raw Per-Replica Metrics
 
@@ -82,20 +82,20 @@ In addition to the aggregated scalar metrics, **W&B Tables** are logged at each 
 
 **Training table** (logged every `logging_steps` optimizer steps):
 
-| `probe_name`    | `base_name` | `architecture` | `layer` | `replica_idx` | `step` | `epoch` | `train_loss` |
-| --------------- | ----------- | -------------- | ------- | ------------- | ------ | ------- | ------------ |
-| `mean_L16_r0`   | `mean_L16`  | mean           | 16      | 0             | 10     | 0       | 0.6923       |
-| `mean_L16_r1`   | `mean_L16`  | mean           | 16      | 1             | 10     | 0       | 0.6931       |
-| ...             | ...         | ...            | ...     | ...           | ...    | ...     | ...          |
-| `attn_L16_r4`   | `attn_L16`  | attention      | 16      | 4             | 10     | 0       | 0.7012       |
+| `probe_name`  | `base_name` | `architecture` | `layer` | `replica_idx` | `step` | `epoch` | `train_loss` |
+| ------------- | ----------- | -------------- | ------- | ------------- | ------ | ------- | ------------ |
+| `mean_L16_r0` | `mean_L16`  | mean           | 16      | 0             | 10     | 0       | 0.6923       |
+| `mean_L16_r1` | `mean_L16`  | mean           | 16      | 1             | 10     | 0       | 0.6931       |
+| ...           | ...         | ...            | ...     | ...           | ...    | ...     | ...          |
+| `attn_L16_r4` | `attn_L16`  | attention      | 16      | 4             | 10     | 0       | 0.7012       |
 
 **Validation table** (logged at each validation step):
 
-| `probe_name`    | `base_name` | `architecture` | `layer` | `replica_idx` | `step` | `valid_loss` | `auroc`  |
-| --------------- | ----------- | -------------- | ------- | ------------- | ------ | ------------ | -------- |
-| `mean_L16_r0`   | `mean_L16`  | mean           | 16      | 0             | 50     | 0.6512       | 0.7234   |
-| `mean_L16_r1`   | `mean_L16`  | mean           | 16      | 1             | 50     | 0.6489       | 0.7301   |
-| ...             | ...         | ...            | ...     | ...           | ...    | ...          | ...      |
+| `probe_name`  | `base_name` | `architecture` | `layer` | `replica_idx` | `step` | `valid_loss` | `auroc` |
+| ------------- | ----------- | -------------- | ------- | ------------- | ------ | ------------ | ------- |
+| `mean_L16_r0` | `mean_L16`  | mean           | 16      | 0             | 50     | 0.6512       | 0.7234  |
+| `mean_L16_r1` | `mean_L16`  | mean           | 16      | 1             | 50     | 0.6489       | 0.7301  |
+| ...           | ...         | ...            | ...     | ...           | ...    | ...          | ...     |
 
 These tables are logged as `wandb.Table` objects under the keys `train/replica_details` and `valid/replica_details`. W&B's Table panel supports sorting, filtering by column (e.g., filter `base_name == "mean_L16"`), and exporting to CSV for external analysis.
 
@@ -117,10 +117,10 @@ ______________________________________________________________________
 
 Two approaches were considered:
 
-| Approach | Pros | Cons |
-| --- | --- | --- |
-| **A: Config expansion** — expand `probe_configs` list before building `ProbeCollection` | ProbeCollection stays simple; each probe is a regular entry in `ModuleDict`; DDP/optimizer/checkpointing all work unchanged | Need to add replica metadata to `ProbeConfig`; expansion logic is new code |
-| **B: ProbeCollection-internal** — ProbeCollection creates replicas internally | No changes to ProbeConfig; self-contained | ProbeCollection becomes complex; parameter groups, checkpointing, and logging all need to understand the nested structure |
+| Approach                                                                                | Pros                                                                                                                        | Cons                                                                                                                      |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **A: Config expansion** — expand `probe_configs` list before building `ProbeCollection` | ProbeCollection stays simple; each probe is a regular entry in `ModuleDict`; DDP/optimizer/checkpointing all work unchanged | Need to add replica metadata to `ProbeConfig`; expansion logic is new code                                                |
+| **B: ProbeCollection-internal** — ProbeCollection creates replicas internally           | No changes to ProbeConfig; self-contained                                                                                   | ProbeCollection becomes complex; parameter groups, checkpointing, and logging all need to understand the nested structure |
 
 **Approach A (config expansion)** is chosen because it keeps the ProbeCollection, optimizer, DDP wrapper, and checkpoint logic completely unchanged. The only new complexity is a straightforward expansion function and an aggregation helper for logging.
 
@@ -129,6 +129,7 @@ Two approaches were considered:
 The expansion happens **inside `probe_train()`**, between reading `config.probe_configs` and constructing the `ProbeCollection`. The original `config.probe_configs` list is never mutated — a new expanded list is produced.
 
 This means:
+
 - The `ProbeTrainerAppMainConfig` stores the user's original configs (clean, no replica suffixes)
 - The `_validate_probe_names_unique` validator checks the user's names (not the expanded ones)
 - The expanded configs are a runtime-only artefact
@@ -136,6 +137,7 @@ This means:
 ### 3.3 Seed Strategy
 
 Each replica needs a **deterministic, unique** seed for weight initialization. The seed must be:
+
 - **Reproducible**: Same `replica_base_seed` + probe name + replica index = same seed
 - **Independent**: Changing the runtime seed (for data shuffling) does not change init seeds
 - **Collision-free**: Different probes / replicas always get different seeds
@@ -183,10 +185,12 @@ The standard deviation uses **sample std** (`statistics.stdev`, n-1 denominator)
 ### 3.6 Memory / Compute Impact
 
 Each probe replica adds only its parameter count to the model:
+
 - MeanProbe: `hidden_dim + 1` params (one Linear layer)
 - AttentionProbe: `hidden_dim * (attn_dim + 1) + attn_dim` params
 
 For a 7B model (`hidden_dim=3584`) with 12 probe configs and 5 replicas = 60 probes:
+
 - Worst case (all attention probes, `attn_dim=64`): 60 * ~233K params = ~14M params in float32 = ~56 MB
 - Typical (mix of architectures): ~5-20 MB total
 
@@ -816,6 +820,7 @@ ______________________________________________________________________
 ### 13.1 Aggregated Line Charts (Automatic)
 
 W&B auto-generates panels for the aggregated scalar metrics. These appear as clean line charts:
+
 - `train/{base_name}/loss/mean` — average train loss over time
 - `train/{base_name}/loss/std` — standard deviation of train loss over time
 - `valid/{base_name}/auroc/mean` — average AUROC over time
@@ -843,18 +848,18 @@ ______________________________________________________________________
 
 ## 14. File Changes Summary
 
-| File | Change type | Description |
-| --- | --- | --- |
-| `pyine/probes/base.py` | **Modify** | Add `replica_idx`, `replica_seed`, `base_name` fields to `ProbeConfig` |
-| `pyine/probes/collection.py` | **Modify** | Add `torch.manual_seed()` call before probe construction when `replica_seed` is set |
-| `pyine/apps/trainers/probe_trainer_configs.py` | **Modify** | Add `num_replicas`, `replica_base_seed`, `log_individual_replicas` fields to `ProbeTrainerAppMainConfig` |
-| `pyine/apps/trainers/probe_trainer.py` | **Modify** | Add `expand_probe_configs_with_replicas()`, `aggregate_replica_metrics()`, `build_train_replica_table()`, `build_valid_replica_table()`, update `probe_train()` and `validate_probes()` for aggregated logging + W&B Tables, add `save_replica_summary()` |
-| `pyine/configs/experiment/probes/v0_probe.yaml` | **Modify** | Add commented-out `num_replicas`, `replica_base_seed`, `log_individual_replicas` fields as documentation |
-| `pyine/apps/trainers/PROBE_TRAINING_GUIDE.md` | **Modify** | Add section on replica training |
-| `tests/probes/conftest.py` | **Modify** | Add `replica_probe_configs` and `replica_probe_collection` fixtures |
-| `tests/probes/test_collection.py` | **Modify** | Add `TestReplicaSeeding` class (4 tests) |
-| `tests/apps/trainers/test_probe_trainer.py` | **Modify** | Add `TestExpandProbeConfigsWithReplicas` (8), `TestAggregateReplicaMetrics` (7), `TestReplicaTables` (7), `TestValidateProbesWithReplicas` (3), `TestStableReplicaSeed` (5), and 1 new method on `TestProbeTrainUnit` — 31 tests total |
-| `tests/apps/trainers/test_probe_trainer_configs.py` | **Modify** | Add `TestProbeTrainerConfigReplicas` class (5 tests) |
+| File                                                | Change type | Description                                                                                                                                                                                                                                               |
+| --------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pyine/probes/base.py`                              | **Modify**  | Add `replica_idx`, `replica_seed`, `base_name` fields to `ProbeConfig`                                                                                                                                                                                    |
+| `pyine/probes/collection.py`                        | **Modify**  | Add `torch.manual_seed()` call before probe construction when `replica_seed` is set                                                                                                                                                                       |
+| `pyine/apps/trainers/probe_trainer_configs.py`      | **Modify**  | Add `num_replicas`, `replica_base_seed`, `log_individual_replicas` fields to `ProbeTrainerAppMainConfig`                                                                                                                                                  |
+| `pyine/apps/trainers/probe_trainer.py`              | **Modify**  | Add `expand_probe_configs_with_replicas()`, `aggregate_replica_metrics()`, `build_train_replica_table()`, `build_valid_replica_table()`, update `probe_train()` and `validate_probes()` for aggregated logging + W&B Tables, add `save_replica_summary()` |
+| `pyine/configs/experiment/probes/v0_probe.yaml`     | **Modify**  | Add commented-out `num_replicas`, `replica_base_seed`, `log_individual_replicas` fields as documentation                                                                                                                                                  |
+| `pyine/apps/trainers/PROBE_TRAINING_GUIDE.md`       | **Modify**  | Add section on replica training                                                                                                                                                                                                                           |
+| `tests/probes/conftest.py`                          | **Modify**  | Add `replica_probe_configs` and `replica_probe_collection` fixtures                                                                                                                                                                                       |
+| `tests/probes/test_collection.py`                   | **Modify**  | Add `TestReplicaSeeding` class (4 tests)                                                                                                                                                                                                                  |
+| `tests/apps/trainers/test_probe_trainer.py`         | **Modify**  | Add `TestExpandProbeConfigsWithReplicas` (8), `TestAggregateReplicaMetrics` (7), `TestReplicaTables` (7), `TestValidateProbesWithReplicas` (3), `TestStableReplicaSeed` (5), and 1 new method on `TestProbeTrainUnit` — 31 tests total                    |
+| `tests/apps/trainers/test_probe_trainer_configs.py` | **Modify**  | Add `TestProbeTrainerConfigReplicas` class (5 tests)                                                                                                                                                                                                      |
 
 ______________________________________________________________________
 
@@ -1157,30 +1162,30 @@ ______________________________________________________________________
 
 **No existing tests are modified.** All new `ProbeConfig` fields (`replica_idx`, `replica_seed`, `base_name`) default to `None`, so existing test code that constructs `ProbeConfig` without these fields continues to work unchanged. Specifically:
 
-| Existing file | Impact |
-| --- | --- |
-| `tests/probes/conftest.py` | **Unchanged.** New fixtures are added; existing fixtures remain as-is. |
-| `tests/probes/test_probes.py` | **Unchanged.** Tests individual probe architectures using `ProbeConfig(name=..., architecture=..., layer=..., hidden_dim=...)` — no replica fields needed. |
-| `tests/probes/test_collection.py` | **Unchanged.** Existing `TestProbeCollection` tests use `sample_probe_configs` (no replicas). The new `TestReplicaSeeding` class is added alongside. |
-| `tests/probes/test_extraction.py` | **Unchanged.** ActivationExtractor is not affected by replica changes. |
-| `tests/probes/test_debug_dataset.py` | **Unchanged.** Debug dataset is not affected by replica changes. |
-| `tests/apps/trainers/test_probe_trainer.py` | **Unchanged existing tests.** New classes and one new method are added. The existing `SmallMockLLM`, fixtures, and `TestProbeTrainUnit`/`TestDatasetValidation` classes remain as-is. |
-| `tests/apps/trainers/test_probe_trainer_configs.py` | **Unchanged existing tests.** New `TestProbeTrainerConfigReplicas` class is added. |
+| Existing file                                       | Impact                                                                                                                                                                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/probes/conftest.py`                          | **Unchanged.** New fixtures are added; existing fixtures remain as-is.                                                                                                                |
+| `tests/probes/test_probes.py`                       | **Unchanged.** Tests individual probe architectures using `ProbeConfig(name=..., architecture=..., layer=..., hidden_dim=...)` — no replica fields needed.                            |
+| `tests/probes/test_collection.py`                   | **Unchanged.** Existing `TestProbeCollection` tests use `sample_probe_configs` (no replicas). The new `TestReplicaSeeding` class is added alongside.                                  |
+| `tests/probes/test_extraction.py`                   | **Unchanged.** ActivationExtractor is not affected by replica changes.                                                                                                                |
+| `tests/probes/test_debug_dataset.py`                | **Unchanged.** Debug dataset is not affected by replica changes.                                                                                                                      |
+| `tests/apps/trainers/test_probe_trainer.py`         | **Unchanged existing tests.** New classes and one new method are added. The existing `SmallMockLLM`, fixtures, and `TestProbeTrainUnit`/`TestDatasetValidation` classes remain as-is. |
+| `tests/apps/trainers/test_probe_trainer_configs.py` | **Unchanged existing tests.** New `TestProbeTrainerConfigReplicas` class is added.                                                                                                    |
 
 ### 15.10 Test Summary
 
-| Target file | New test class/method | # Tests |
-| --- | --- | --- |
-| `tests/probes/conftest.py` | 2 new fixtures (`replica_probe_configs`, `replica_probe_collection`) | — |
-| `tests/probes/test_collection.py` | `TestReplicaSeeding` | 4 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestExpandProbeConfigsWithReplicas` | 8 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestAggregateReplicaMetrics` | 7 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestReplicaTables` | 7 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestValidateProbesWithReplicas` | 3 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestStableReplicaSeed` | 5 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestProbeTrainUnit.test_train_step_reduces_loss_with_replicas` | 1 |
-| `tests/apps/trainers/test_probe_trainer_configs.py` | `TestProbeTrainerConfigReplicas` | 5 |
-| **Total** | | **40** |
+| Target file                                         | New test class/method                                                | # Tests |
+| --------------------------------------------------- | -------------------------------------------------------------------- | ------- |
+| `tests/probes/conftest.py`                          | 2 new fixtures (`replica_probe_configs`, `replica_probe_collection`) | —       |
+| `tests/probes/test_collection.py`                   | `TestReplicaSeeding`                                                 | 4       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestExpandProbeConfigsWithReplicas`                                 | 8       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestAggregateReplicaMetrics`                                        | 7       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestReplicaTables`                                                  | 7       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestValidateProbesWithReplicas`                                     | 3       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestStableReplicaSeed`                                              | 5       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestProbeTrainUnit.test_train_step_reduces_loss_with_replicas`      | 1       |
+| `tests/apps/trainers/test_probe_trainer_configs.py` | `TestProbeTrainerConfigReplicas`                                     | 5       |
+| **Total**                                           |                                                                      | **40**  |
 
 ______________________________________________________________________
 
@@ -1266,30 +1271,30 @@ ______________________________________________________________________
 
 ## 18. Risks and Mitigations
 
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| **Memory pressure** with many replicas | Low | Medium | 60 probes = ~20 MB; negligible vs. LLM. Document in guide. |
-| **DDP sync overhead** with many probes | Low | Low | Single all-reduce for all probes; ~28 MB payload with 60 probes is small. |
-| **DDP weight divergence** across ranks | Low | High | Mitigated by using `hashlib.blake2b` for seed generation (deterministic across processes). All ranks compute identical seeds → identical initial weights. DDP then keeps weights in sync via gradient synchronization. |
-| **Metric explosion in W&B** with `log_individual_replicas: true` | Low | Low | Off by default. When on, 60 probes x 3 metrics = 180 metrics — W&B handles this fine. |
-| **Backward compatibility** | Low | High | `num_replicas=1` triggers no expansion, no aggregation, no naming changes. Tested explicitly. |
+| Risk                                                             | Likelihood | Impact | Mitigation                                                                                                                                                                                                             |
+| ---------------------------------------------------------------- | ---------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Memory pressure** with many replicas                           | Low        | Medium | 60 probes = ~20 MB; negligible vs. LLM. Document in guide.                                                                                                                                                             |
+| **DDP sync overhead** with many probes                           | Low        | Low    | Single all-reduce for all probes; ~28 MB payload with 60 probes is small.                                                                                                                                              |
+| **DDP weight divergence** across ranks                           | Low        | High   | Mitigated by using `hashlib.blake2b` for seed generation (deterministic across processes). All ranks compute identical seeds → identical initial weights. DDP then keeps weights in sync via gradient synchronization. |
+| **Metric explosion in W&B** with `log_individual_replicas: true` | Low        | Low    | Off by default. When on, 60 probes x 3 metrics = 180 metrics — W&B handles this fine.                                                                                                                                  |
+| **Backward compatibility**                                       | Low        | High   | `num_replicas=1` triggers no expansion, no aggregation, no naming changes. Tested explicitly.                                                                                                                          |
 
 ______________________________________________________________________
 
 ## 19. Codex Review Assessment
 
-| # | Codex Concern | Verdict | Action |
-| --- | --- | --- | --- |
-| 1 | `hash()` not stable across DDP ranks | **Accepted** | Replaced with `hashlib.blake2b`. Real bug — `PYTHONHASHSEED` is not set in this codebase and `torchrun` spawns separate processes. |
-| 2 | Global RNG side effects from `torch.manual_seed()` | **Accepted** | Added save/restore of RNG state around probe construction loop in `ProbeCollection`. |
-| 3 | Define std semantics (sample vs population) | **Accepted (doc)** | Added note that `statistics.stdev()` uses sample std (n-1). No code change — sample std is correct here. |
-| 4 | NaN AUROC aggregation edge case | **Accepted partially** | `aggregate_replica_metrics` now filters NaN values and logs NaN for mean/std/min/max when all values are NaN. No `num_valid` tracking — unnecessary complexity. |
-| 5 | DDP parameter consistency | **Accepted (doc)** | Covered by fix #1. Added DDP weight divergence row to risks table with explanation. |
-| 6 | W&B table frequency knob | **Rejected** | Tables are small (~60 rows of floats per step). `logging_steps` already controls frequency. Adding a separate knob is over-engineering for a theoretical concern. |
-| 7 | Validator scope wording inconsistency | **Accepted** | Fixed section 2.4 to correctly state validator operates on original configs. |
-| 8 | Replica metadata defaults in tables | **Rejected** | When `num_replicas=1`, tables aren't logged. When >1, all probes have `replica_idx` set. No ambiguity. |
-| 9 | Log min/max for loss (symmetry with AUROC) | **Accepted** | Added `loss/min` and `loss/max` to validation logging. |
-| 10 | Shallow copy when `num_replicas==1` | **Rejected** | `ProbeCollection` already copies configs via `model_copy()`. Mutation risk is theoretical and doesn't apply. |
+| #   | Codex Concern                                      | Verdict                | Action                                                                                                                                                            |
+| --- | -------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `hash()` not stable across DDP ranks               | **Accepted**           | Replaced with `hashlib.blake2b`. Real bug — `PYTHONHASHSEED` is not set in this codebase and `torchrun` spawns separate processes.                                |
+| 2   | Global RNG side effects from `torch.manual_seed()` | **Accepted**           | Added save/restore of RNG state around probe construction loop in `ProbeCollection`.                                                                              |
+| 3   | Define std semantics (sample vs population)        | **Accepted (doc)**     | Added note that `statistics.stdev()` uses sample std (n-1). No code change — sample std is correct here.                                                          |
+| 4   | NaN AUROC aggregation edge case                    | **Accepted partially** | `aggregate_replica_metrics` now filters NaN values and logs NaN for mean/std/min/max when all values are NaN. No `num_valid` tracking — unnecessary complexity.   |
+| 5   | DDP parameter consistency                          | **Accepted (doc)**     | Covered by fix #1. Added DDP weight divergence row to risks table with explanation.                                                                               |
+| 6   | W&B table frequency knob                           | **Rejected**           | Tables are small (~60 rows of floats per step). `logging_steps` already controls frequency. Adding a separate knob is over-engineering for a theoretical concern. |
+| 7   | Validator scope wording inconsistency              | **Accepted**           | Fixed section 2.4 to correctly state validator operates on original configs.                                                                                      |
+| 8   | Replica metadata defaults in tables                | **Rejected**           | When `num_replicas=1`, tables aren't logged. When >1, all probes have `replica_idx` set. No ambiguity.                                                            |
+| 9   | Log min/max for loss (symmetry with AUROC)         | **Accepted**           | Added `loss/min` and `loss/max` to validation logging.                                                                                                            |
+| 10  | Shallow copy when `num_replicas==1`                | **Rejected**           | `ProbeCollection` already copies configs via `model_copy()`. Mutation risk is theoretical and doesn't apply.                                                      |
 
 ______________________________________________________________________
 

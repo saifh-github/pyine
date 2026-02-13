@@ -6,6 +6,7 @@ import typing
 
 from pyine.probes.attention_probe import AttentionProbe
 from pyine.probes.last_token_probe import LastTokenProbe
+from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb as load_probe_dataset_from_lmdb
 from pyine.probes.max_probe import MaxProbe
 from pyine.probes.mean_probe import MeanProbe
 from pyine.probes.rolling_mean_probe import RollingMeanProbe

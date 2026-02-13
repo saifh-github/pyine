@@ -10,6 +10,8 @@ import torch
 from pyine.probes.base import ProbeConfig
 
 if typing.TYPE_CHECKING:
+    from pathlib import Path
+
     from pyine.probes.collection import ProbeCollection
 
 PROBE_HIDDEN_DIM = 64
@@ -68,3 +70,13 @@ def replica_probe_collection(replica_probe_configs: list[ProbeConfig]) -> ProbeC
     from pyine.probes.collection import ProbeCollection
 
     return ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+
+
+@pytest.fixture
+def debug_lmdb_path(tmp_path: Path) -> Path:
+    """Create a debug LMDB at tmp_path and return its path."""
+    from pyine.probes.debug_dataset import create_debug_probe_lmdb
+
+    lmdb_path = tmp_path / "debug.lmdb"
+    create_debug_probe_lmdb(lmdb_path, n_train=50, n_valid=20, seed=42)
+    return lmdb_path

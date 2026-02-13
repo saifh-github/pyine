@@ -26,10 +26,15 @@ config:
   base_model: Qwen/Qwen3-4B-Instruct-2507
   llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from checkpoint
 
-  # Dataset
-  dataset_path: /path/to/probe-dataset  # HF dataset with train/valid splits
-  text_field: messages
-  label_field: label
+  # LMDB data source
+  lmdb_path: /path/to/lmdb  # LMDB exported by DiskRewardLogger
+  label_metric_key: "soft_match/is_match"
+  train_key_prefix: "train/"
+  valid_key_prefix: "eval/"
+  selection_strategy: latest
+  recompute_labels: false
+  max_samples_per_split: null
+  skip_malformed_records: false
   max_seq_length: 3000
 
   # Training loop

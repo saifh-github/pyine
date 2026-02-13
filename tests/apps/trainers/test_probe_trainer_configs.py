@@ -19,7 +19,7 @@ class TestProbeTrainerAppMainConfig:
         """Minimal valid config kwargs."""
         base = {
             "base_model": "some-model",
-            "dataset_path": "/tmp/fake-dataset",  # noqa: S108
+            "lmdb_path": "/tmp/fake-lmdb",  # noqa: S108
             "probe_configs": [
                 ProbeConfig(name="mean_L0", architecture="mean", layer=0),
             ],
@@ -33,7 +33,7 @@ class TestProbeTrainerAppMainConfig:
 
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert len(cfg.probe_configs) == 1
-        assert cfg.dataset_path == "/tmp/fake-dataset"  # noqa: S108
+        assert cfg.lmdb_path == "/tmp/fake-lmdb"  # noqa: S108
 
     def test_duplicate_probe_names_raises(self) -> None:
         """Config rejects probe_configs with duplicate names."""
@@ -64,6 +64,30 @@ class TestProbeTrainerAppMainConfig:
 
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.target_dtype in (torch.bfloat16, torch.float16)
+
+    def test_recompute_labels_invalid_metric_raises(self) -> None:
+        """recompute_labels=True with unsupported label_metric_key raises ValueError."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        with pytest.raises(ValueError, match="recompute_labels"):
+            ProbeTrainerAppMainConfig(
+                **self._make_minimal_config(
+                    recompute_labels=True,
+                    label_metric_key="some/custom_metric",
+                )
+            )
+
+    def test_recompute_labels_valid_metric_accepted(self) -> None:
+        """recompute_labels=True with soft_match/is_match is accepted."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(
+            **self._make_minimal_config(
+                recompute_labels=True,
+                label_metric_key="soft_match/is_match",
+            )
+        )
+        assert cfg.recompute_labels is True
 
 
 class TestHydraConfigRegistration:
@@ -98,7 +122,7 @@ class TestProbeTrainerConfigReplicas:
         """Minimal valid config kwargs."""
         base: dict[str, object] = {
             "base_model": "some-model",
-            "dataset_path": "/tmp/fake-dataset",  # noqa: S108
+            "lmdb_path": "/tmp/fake-lmdb",  # noqa: S108
             "probe_configs": [
                 ProbeConfig(name="mean_L0", architecture="mean", layer=0),
             ],
