@@ -1,0 +1,28 @@
+# @package _global_
+
+# RL training config for generation recordings
+# Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl_30B
+
+defaults:
+  - original/v0_rl
+  - _self_
+
+runtime:
+  exp_name: original/traces_recording
+  run_name: "${runtime.exp_name}"
+
+config:
+  base_model: /scratch/a.palmas/code-interp-benchmark/checkpoints/checkpoint-500
+
+  generation_export_config:
+    output_path: ${runtime.output_dir}/generation_export.lmdb
+    log_every_n_generations: 1
+
+  grpo_config:
+    per_device_train_batch_size: 4  # GRPO typically uses smaller batch sizes
+    per_device_eval_batch_size: 5  # Larger eval batch (from prototype train_grpo.py)
+    gradient_accumulation_steps: 8
+    learning_rate: 0.0  # Lower than SFT (2e-4) for RL stability
+    # ------------
+    max_steps: 20 # alternative to num_train_epochs
+    eval_steps: 100
