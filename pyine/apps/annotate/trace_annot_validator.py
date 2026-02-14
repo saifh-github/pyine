@@ -298,13 +298,19 @@ async def main(
 
     # -------- connect to DB and fetch source records --------
 
-    db = pyine.prompts.result_db.PromptResultDB(db_path) if db_path else pyine.prompts.result_db.get_framework_db()
+    if db_path:
+        logger.info(f"connecting to existing PromptResultDB at '{db_path}'")
+        db = pyine.prompts.result_db.PromptResultDB(db_path)
+    else:
+        logger.info("connecting to default PromptResultDB")
+        db = pyine.prompts.result_db.get_framework_db()
     try:
         source_max_age_td = pyine.utils.portability.parse_duration_to_timedelta(source_max_result_age)
     except ValueError as exc:
         raise click.BadParameter(f"invalid source max result age spec: {exc}") from exc
     source_records: list[pyine.prompts.result_db.PromptResultRecord] = []
     for prompt_name in source_prompt_names:
+        logger.info(f"fetching source records for prompt '{prompt_name}'...")
         source_records.extend(
             db.get_by_prompt_name(
                 prompt_name,
@@ -312,13 +318,6 @@ async def main(
                 max_result_age=source_max_age_td,
             )
         )
-    # dedupe by record_uid in case prompts share aliases or records overlap
-    seen_uids: set[str] = set()
-    source_records = [
-        rec
-        for rec in source_records
-        if rec.record_uid not in seen_uids and not seen_uids.add(rec.record_uid)  # type: ignore[func-returns-value]
-    ]
     logger.info(f"fetched {len(source_records)} source record(s) from {len(source_prompt_names)} prompt name(s)")
 
     # -------- keep only misleading records, then exclude bugged --------
