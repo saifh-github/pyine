@@ -328,6 +328,7 @@ async def main(
     # -------- batch skip-already-validated lookup --------
 
     all_record_uids = [rec.record_uid for rec in source_records]
+    logger.info(f"will validate up to {len(all_record_uids)} records, depending on already-validated ones")
     existing_validations = db.get_by_identifiers(all_record_uids, prompt_name=VALIDATION_PROMPT_NAME)
     already_validated_uids = {uid for uid, recs in existing_validations.items() if recs}
     logger.info(f"found {len(already_validated_uids)} already-validated record(s)")
