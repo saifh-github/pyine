@@ -8,6 +8,7 @@ import numpy as np
 
 import pyine.data.traces.dataset_utils
 import pyine.prompts
+import pyine.prompts.names
 from pyine.organisms.datamodules.samples.common import (
     SampleCodeType,
     SampleCodeTypeSet,
@@ -174,6 +175,7 @@ def _find_db_match_for_target_type(
     trace_data: list[TraceToSampleCodeTypeMapping],
     prompt_result_db: pyine.prompts.PromptResultDB,
     rng: np.random.Generator,
+    validated_misleading_record_uids: frozenset[str] | None = None,
 ) -> pyine.prompts.PromptResultRecord | None:
     """Finds a record that matches the given target type using the prompt result db.
 
@@ -200,6 +202,16 @@ def _find_db_match_for_target_type(
                     # records exist but none matched; likely tag format issue
                     sample_tags = list({t for r in records for t in r.tags})
                     records_fetched_no_match.append((db_keys.identifier, sample_tags))
+    # filter by validated misleading UIDs when applicable
+    if validated_misleading_record_uids is not None and SampleCodeType.misleading in target_type.types:
+        pre_filter_count = len(potential_choices)
+        potential_choices = [rec for rec in potential_choices if rec.record_uid in validated_misleading_record_uids]
+        removed_count = pre_filter_count - len(potential_choices)
+        if removed_count > 0:
+            logger.debug(
+                f"validated-misleading filter removed {removed_count}/{pre_filter_count} "
+                f"records for target type {target_type}"
+            )
     if not potential_choices:
         # log debug info about records that were fetched but didn't match
         if records_fetched_no_match:
@@ -325,6 +337,7 @@ def _try_prompt_db_hint_lookup(
     output_selections: list["SelectedSample"],
     parent_id: pyine.data.traces.dataset_utils.TraceIdentifier,
     trace_data: TraceDatasetToSampleCodeTypeMappings,
+    validated_misleading_record_uids: frozenset[str] | None = None,
 ) -> bool:
     """Try to find a hint via prompt-DB for a specific hintless trace.
 
@@ -380,6 +393,7 @@ def _try_prompt_db_hint_lookup(
         trace_data=[trace],
         prompt_result_db=prompt_result_db,
         rng=rng,
+        validated_misleading_record_uids=validated_misleading_record_uids,
     )
     if record is None:
         return False
@@ -413,6 +427,7 @@ def select_samples_from_trace_families(
     epoch: int,
     selection_config: SampleSelectionConfig,
     prompt_result_db: pyine.prompts.PromptResultDB,
+    validated_misleading_record_uids: frozenset[str] | None = None,
 ) -> SampleSelectionResults:
     """Select samples from trace families according to the configured selection mode.
 
@@ -434,10 +449,31 @@ def select_samples_from_trace_families(
         epoch: Current training epoch (seeds the RNG for reproducible selection).
         selection_config: Configuration controlling which mode, probabilities, and fallbacks to use.
         prompt_result_db: Prompt result database for augmented code lookups.
+        validated_misleading_record_uids: Optional pre-computed set of annotation record UIDs
+            validated as truly misleading. When provided and the selection config has
+            require_validated_misleading=True, only prompt-DB records whose record_uid is in
+            this set are accepted for misleading code types.
 
     Returns:
         Selection results including chosen samples and statistics (failed, DB-backed, fallback counts).
     """
+    # resolve effective validated UIDs: only apply when this subset's config requests it
+    effective_validated_uids: frozenset[str] | None = None
+    if selection_config.require_validated_misleading:
+        if validated_misleading_record_uids is not None:
+            effective_validated_uids = validated_misleading_record_uids
+        else:
+            validation_records = prompt_result_db.get_by_prompt_name(
+                pyine.prompts.names.PromptNames.VALIDATION_MISLEADING,
+                tag_filter_rule="+verdict:misleading",
+            )
+            effective_validated_uids = frozenset(rec.identifier for rec in validation_records)
+            if not effective_validated_uids:
+                logger.warning(
+                    "require_validated_misleading=True but no validation records with "
+                    "verdict:misleading found in the prompt result DB; all misleading "
+                    "prompt-DB records will be filtered out"
+                )
     rng = selection_config.get_rng(epoch)
     code_type_prob_map = selection_config.get_code_type_prob_map_resolved()
     output_selections: list[SelectedSample] = []
@@ -507,6 +543,7 @@ def select_samples_from_trace_families(
                             output_selections=output_selections,
                             parent_id=parent_id,
                             trace_data=trace_data,
+                            validated_misleading_record_uids=effective_validated_uids,
                         )
                         if got_selection:
                             samples_with_prompt_db_code += 1
@@ -576,6 +613,7 @@ def select_samples_from_trace_families(
                         trace_data=family_trace_data,
                         prompt_result_db=prompt_result_db,
                         rng=rng,
+                        validated_misleading_record_uids=effective_validated_uids,
                     )
                     if record is None:
                         failed_selections += 1

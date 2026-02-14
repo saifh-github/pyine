@@ -305,6 +305,7 @@ def _build_counterfactual_groups(
     check_prompt_db_fn: typing.Callable[
         [pyine.data.traces.dataset_utils.TraceIdentifier, pyine.prompts.PromptResultDB, HintType], bool
     ],
+    check_lmdb_misleading_fn: typing.Callable[[pyine.data.traces.dataset_utils.TraceIdentifier], None] | None = None,
 ) -> dict[tuple[str, str | tuple[str, ...]], CounterfactualGroup]:
     """Build counterfactual groups keyed by (family_id, base_augment_key).
 
@@ -316,6 +317,9 @@ def _build_counterfactual_groups(
         prompt_db: Optional prompt result database for hint availability checks.
         eval_hint_types: The hint types configured for evaluation.
         check_prompt_db_fn: Function to check if prompt-DB has hint for a trace.
+        check_lmdb_misleading_fn: Optional callback invoked when an LMDB misleading trace is
+            encountered. Used to raise NotImplementedError when validated-misleading filtering
+            is active (LMDB misleading traces cannot be validated yet).
 
     Returns:
         Dict mapping (family_id, base_augment_key) to CounterfactualGroup.
@@ -349,6 +353,8 @@ def _build_counterfactual_groups(
         if has_lmdb_helpful:
             group.hinted_traces.append(trace)
         elif has_lmdb_misleading:
+            if check_lmdb_misleading_fn is not None:
+                check_lmdb_misleading_fn(trace.trace_id)
             group.misleading_traces.append(trace)
         elif not has_any_lmdb_hint:
             group.hintless_traces.append(trace)
@@ -520,6 +526,7 @@ def build_counterfactual_eval_subsets(
         [pyine.data.traces.dataset_utils.TraceIdentifier, pyine.prompts.PromptResultDB, HintType], bool
     ],
     caps_filtering_config: pyine.organisms.datamodules.samples.configs.TraceFilteringConfig | None = None,
+    check_lmdb_misleading_fn: typing.Callable[[pyine.data.traces.dataset_utils.TraceIdentifier], None] | None = None,
 ) -> dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]]:
     """Build counterfactual evaluation subsets with distribution control.
 
@@ -542,12 +549,19 @@ def build_counterfactual_eval_subsets(
         check_prompt_db_fn: Function to check prompt-DB hint availability.
         caps_filtering_config: Optional caps-only filtering config to apply group-level caps
             between completeness filtering and distribution sampling.
+        check_lmdb_misleading_fn: Optional callback for LMDB misleading trace validation guard.
 
     Returns:
         Dict with keys "hinted", "misleading", "hintless" mapping to trace lists.
     """
     # step 1: build groups
-    groups = _build_counterfactual_groups(traces, prompt_db, eval_hint_types, check_prompt_db_fn)
+    groups = _build_counterfactual_groups(
+        traces,
+        prompt_db,
+        eval_hint_types,
+        check_prompt_db_fn,
+        check_lmdb_misleading_fn=check_lmdb_misleading_fn,
+    )
     # step 2: filter to complete groups
     complete_groups = _filter_to_complete_groups(groups, eval_hint_types)
     if not complete_groups:
@@ -630,6 +644,11 @@ class ShortcutBiasDataModule(
       trace family appears with and without hints. Best for controlled comparisons.
     """
 
+    _validated_misleading_uids: frozenset[str] | None = None
+    """Pre-computed set of annotation record UIDs validated as truly misleading.
+    None when require_validated_misleading=False or before metadata prep.
+    """
+
     @typing.override
     def _get_metadata_model_class(
         self,
@@ -686,6 +705,30 @@ class ShortcutBiasDataModule(
         if self._should_use_prompt_db_for_hints():
             prompt_db = pyine.prompts.get_framework_db()
             logger.debug("using prompt result DB for hint detection in derived subsets")
+        # pre-compute validated-misleading UIDs if validation filtering is active
+        self._validated_misleading_uids: frozenset[str] | None = None
+        if self.config.require_validated_misleading and prompt_db is not None:
+            validation_records = prompt_db.get_by_prompt_name(
+                pyine.prompts.names.PromptNames.VALIDATION_MISLEADING,
+                tag_filter_rule="+verdict:misleading",
+            )
+            # NOTE: rec.identifier here is the validation record's identifier, which the
+            # trace_annot_validator sets to the source annotation record's record_uid
+            # (see validator.py:176). This is the join key used to match annotation records
+            # against their validation verdicts downstream.
+            self._validated_misleading_uids = frozenset(rec.identifier for rec in validation_records)
+            if not self._validated_misleading_uids:
+                raise ValueError(
+                    "require_validated_misleading=True but no validation records with "
+                    "verdict:misleading found in the prompt result DB. Run the trace_annot_validator "
+                    "first, or set require_validated_misleading=False."
+                )
+            logger.info(f"loaded {len(self._validated_misleading_uids)} validated-misleading record UIDs for filtering")
+        elif self.config.require_validated_misleading and prompt_db is None:
+            raise ValueError(
+                "require_validated_misleading=True but prompt_db is None. "
+                "Prompt-DB access is required for validation filtering."
+            )
         # create derived subsets for hint-based evaluation
         derived_subsets, filtered_parent_counts = self._create_hint_split_derived_subsets(subset_traces_meta, prompt_db)
         self._validate_sample_counts(subset_traces_meta, derived_subsets, filtered_parent_counts)
@@ -803,8 +846,30 @@ class ShortcutBiasDataModule(
                     record.tags
                 )
                 if record_code_type == target_code_type:
+                    # when validated-misleading filtering is active, skip unvalidated records
+                    if (
+                        target_hint_type == HintType.misleading
+                        and self._validated_misleading_uids is not None
+                        and record.record_uid not in self._validated_misleading_uids
+                    ):
+                        continue
                     return True
         return False
+
+    def _check_lmdb_misleading_with_validation(
+        self,
+        trace_id: pyine.data.traces.dataset_utils.TraceIdentifier,
+    ) -> None:
+        """Raises NotImplementedError if an LMDB misleading trace is encountered with validation active."""
+        if self.config.require_validated_misleading:
+            # TODO @@@@@ check LMDB trace dataset entry tags, those should contain validation status?
+            #            (will need to update tracing app to include validation status directly)
+            raise NotImplementedError(
+                f"LMDB misleading trace {trace_id} encountered with "
+                f"require_validated_misleading=True. Validation filtering for LMDB-native "
+                f"misleading traces is not yet implemented; only prompt-DB-sourced misleading "
+                f"hints can currently be filtered by validation status."
+            )
 
     def _should_use_prompt_db_for_hints(self) -> bool:
         """Checks if prompt DB should be used based on the default dataparser config."""
@@ -1130,6 +1195,9 @@ class ShortcutBiasDataModule(
             resolved_prob_map = self._resolve_parent_code_type_prob_map(eval_subset_name)
             if resolved_prob_map is not None:
                 code_type_prob_map = resolved_prob_map
+            lmdb_misleading_fn = (
+                self._check_lmdb_misleading_with_validation if self.config.require_validated_misleading else None
+            )
             return build_counterfactual_eval_subsets(
                 traces=traces,
                 eval_hint_types=self.config.eval_hint_types,
@@ -1138,6 +1206,7 @@ class ShortcutBiasDataModule(
                 prompt_db=prompt_db,
                 check_prompt_db_fn=self._check_prompt_db_for_hint,
                 caps_filtering_config=caps_filtering_config,
+                check_lmdb_misleading_fn=lmdb_misleading_fn,
             )
         # hint_presence_split: simple partition based on whether trace has each hint type
         partitions: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]] = {
@@ -1166,6 +1235,7 @@ class ShortcutBiasDataModule(
             if want_helpful and has_lmdb_helpful:
                 partitions["hinted"].append(trace)
             elif want_misleading and has_lmdb_misleading:
+                self._check_lmdb_misleading_with_validation(trace.trace_id)
                 partitions["misleading"].append(trace)
             elif has_any_lmdb_hint:
                 # has non-configured LMDB hint -- exclude from all partitions
@@ -1285,6 +1355,18 @@ class ShortcutBiasDataModule(
             if key != current_key and key in self._metadata.derived_subsets:
                 other_ids |= {t.identifier for t in self._metadata.derived_subsets[key].traces}
         return frozenset(current_ids & other_ids)
+
+    @typing.override
+    def _build_parser_kwargs(
+        self,
+        source_data: typing.Any,
+        subset_traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+    ) -> dict[str, typing.Any]:
+        """Extend base parser kwargs with validated misleading UIDs when available."""
+        kwargs = super()._build_parser_kwargs(source_data, subset_traces)
+        if self._validated_misleading_uids is not None:
+            kwargs["validated_misleading_record_uids"] = self._validated_misleading_uids
+        return kwargs
 
     @typing.override
     def get_parser(

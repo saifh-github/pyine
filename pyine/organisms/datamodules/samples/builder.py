@@ -63,6 +63,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
         prompt_result_db_path: str | None = None,  # if none, will use framework default
         pregenerated_outputs: dict[str, str] | None = None,
         only_with_pregenerated_output: bool = False,
+        validated_misleading_record_uids: frozenset[str] | None = None,
     ) -> None:
         """Initializes the reader with a list of LMDB readers and a list of target traces.
 
@@ -86,7 +87,10 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             only_with_pregenerated_output: If True, only keep samples whose trace identifier
                 has a matching entry in ``pregenerated_outputs``. Requires ``pregenerated_outputs``
                 to be set.
+            validated_misleading_record_uids: Optional pre-computed set of annotation record UIDs
+                validated as truly misleading. Passed through to selection for filtering.
         """
+        self._validated_misleading_record_uids = validated_misleading_record_uids
         self._pregenerated_outputs = pregenerated_outputs
         self._only_with_pregenerated_output = only_with_pregenerated_output
         if only_with_pregenerated_output and pregenerated_outputs is None:
@@ -211,6 +215,7 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             epoch=self._curr_epoch,
             selection_config=self.selection_config,
             prompt_result_db=self.prompt_result_db,
+            validated_misleading_record_uids=self._validated_misleading_record_uids,
         )
         selected_traces = self.selection_results.get_selected_traces()
         logger.info(

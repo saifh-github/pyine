@@ -11,6 +11,7 @@ from pytest_mock import MockerFixture
 
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
+import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.samples.configs
@@ -116,6 +117,7 @@ def _make_stub_shortcuts_datamodule(
         min_samples_misleading=0,
         min_samples_hintless=0,
         split_seed=0,  # needed for counterfactual RNG initialization
+        require_validated_misleading=False,
     )
     stub.verbose = False
     return stub
@@ -552,6 +554,7 @@ class TestCreateHintSplitDerivedSubsetsPresenceSplit:
             evaluation_strategy=EvaluationStrategy.hint_presence_split,
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid", "test"),
+            require_validated_misleading=False,
         )
         stub.verbose = False
         # create mock traces with some having hints
@@ -601,6 +604,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
             split_seed=0,  # needed for counterfactual RNG initialization
+            require_validated_misleading=False,
         )
         stub.verbose = False
         # create mock trace_ids with proper augmentless identifier
@@ -645,6 +649,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
             split_seed=0,  # needed for counterfactual RNG initialization
+            require_validated_misleading=False,
         )
         stub.verbose = False
         # create traces with no complete pairs - all hinted, no hintless traces
@@ -671,6 +676,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
             split_seed=0,  # needed for counterfactual RNG initialization
+            require_validated_misleading=False,
         )
         stub.verbose = False
         subset_traces = {"valid": []}
@@ -2248,3 +2254,359 @@ class TestTwoPhaseFiltering:
         assert len(filter_calls) == 1
         assert filter_calls[0].max_trace_steps == 500
         assert filter_calls[0].max_traces_per_solution is None
+
+
+class TestValidatedMisleadingConfig:
+    """Tests for require_validated_misleading config validation and propagation."""
+
+    def test_raises_when_misleading_not_in_eval_hint_types(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="HintType.misleading in eval_hint_types"):
+            pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                eval_hint_types=(HintType.helpful,),
+                require_validated_misleading=True,
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_raises_when_db_lookups_disabled(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="prompt-DB lookups to be enabled"):
+            pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                eval_hint_types=(HintType.misleading,),
+                require_validated_misleading=True,
+                default_dataparser_config=pyine.organisms.datamodules.base.get_default_sample_builder_config(
+                    seed=0,
+                    allow_db_lookups=False,
+                    as_pydantic=True,
+                ),
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_valid_config_passes(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_hint_types=(HintType.misleading,),
+            require_validated_misleading=True,
+            instantiate_parsers_at_setup=False,
+        )
+        assert config.require_validated_misleading is True
+
+    def test_propagates_to_misleading_selection_config(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            eval_hint_types=(HintType.misleading,),
+            require_validated_misleading=True,
+            instantiate_parsers_at_setup=False,
+        )
+        parser_config = config._resolve_dataparser_config("valid_misleading")
+        params = parser_config.get_params_dict()
+        selection_config = params["selection_config"]
+        if isinstance(selection_config, dict):
+            assert selection_config.get("require_validated_misleading") is True
+        else:
+            assert getattr(selection_config, "require_validated_misleading", False) is True
+
+    def test_does_not_propagate_to_hintless_selection_config(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=("valid",),
+            eval_hint_types=(HintType.misleading,),
+            require_validated_misleading=True,
+            instantiate_parsers_at_setup=False,
+        )
+        parser_config = config._resolve_dataparser_config("valid_hintless")
+        params = parser_config.get_params_dict()
+        selection_config = params["selection_config"]
+        if isinstance(selection_config, dict):
+            assert selection_config.get("require_validated_misleading", False) is False
+        else:
+            assert getattr(selection_config, "require_validated_misleading", False) is False
+
+    def test_default_false_preserves_existing_behavior(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_hint_types=(HintType.misleading,),
+            instantiate_parsers_at_setup=False,
+        )
+        assert config.require_validated_misleading is False
+
+
+class TestValidatedMisleadingFiltering:
+    """Tests for validated misleading filtering in _check_prompt_db_for_hint and partition."""
+
+    def test_check_prompt_db_skips_unvalidated_record(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.misleading,))
+        dm.config.require_validated_misleading = True
+        dm._validated_misleading_uids = frozenset({"validated-uid-1"})
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mocker.MagicMock()
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "unvalidated-uid-99"
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db, HintType.misleading) is False
+
+    def test_check_prompt_db_accepts_validated_record(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.misleading,))
+        dm.config.require_validated_misleading = True
+        dm._validated_misleading_uids = frozenset({"validated-uid-1"})
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mocker.MagicMock()
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "validated-uid-1"
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db, HintType.misleading) is True
+
+    def test_check_prompt_db_no_filter_when_disabled(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.misleading,))
+        dm._validated_misleading_uids = None
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mocker.MagicMock()
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "any-uid"
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db, HintType.misleading) is True
+
+    def test_check_prompt_db_filter_does_not_affect_helpful(self, mocker: MockerFixture) -> None:
+        dm = _make_stub_shortcuts_datamodule(eval_hint_types=(HintType.helpful,))
+        dm.config.require_validated_misleading = True
+        dm._validated_misleading_uids = frozenset({"validated-uid-1"})
+        trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        mock_prompt_db = mocker.MagicMock()
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:hinted"]
+        mock_record.record_uid = "some-uid-not-in-validated"
+        mock_prompt_db.get_by_identifier.return_value = [mock_record]
+        assert dm._check_prompt_db_for_hint(trace_id, mock_prompt_db, HintType.helpful) is True
+
+
+class TestLmdbMisleadingGuard:
+    """Tests for LMDB misleading trace guard when validation filtering is active."""
+
+    def test_raises_for_lmdb_misleading_trace_in_hint_presence_split(self) -> None:
+        dm = _make_stub_shortcuts_datamodule(
+            eval_hint_types=(HintType.misleading,),
+        )
+        dm.config.require_validated_misleading = True
+        traces = [
+            _MockTraceMeta(
+                "t1",
+                _MockTraceId(
+                    "TACO/train/p000001/s0001/t0001/a:issues_docs:000",
+                    augment_category="issues_docs",
+                    is_misleading=True,
+                ),
+            ),
+        ]
+        with pytest.raises(NotImplementedError, match="LMDB misleading trace"):
+            dm._partition_traces_by_hint_strategy(traces)
+
+    def test_no_raise_when_validation_disabled(self) -> None:
+        dm = _make_stub_shortcuts_datamodule(
+            eval_hint_types=(HintType.misleading,),
+        )
+        dm.config.require_validated_misleading = False
+        traces = [
+            _MockTraceMeta(
+                "t1",
+                _MockTraceId(
+                    "TACO/train/p000001/s0001/t0001/a:issues_docs:000",
+                    augment_category="issues_docs",
+                    is_misleading=True,
+                ),
+            ),
+        ]
+        result = dm._partition_traces_by_hint_strategy(traces)
+        assert len(result["misleading"]) == 1
+
+    def test_raises_for_lmdb_misleading_in_counterfactual_groups(self) -> None:
+        dm = _make_stub_shortcuts_datamodule(
+            evaluation_strategy=EvaluationStrategy.counterfactual,
+            eval_hint_types=(HintType.misleading,),
+        )
+        dm.config.require_validated_misleading = True
+        base_trace_id = _MockTraceId("TACO/train/p000001/s0001/t0001")
+        trace_misleading = _MockTraceMeta(
+            "t1",
+            _MockTraceId(
+                "TACO/train/p000001/s0001/t0001/a:issues_docs:000",
+                augment_category="issues_docs",
+                is_misleading=True,
+            ),
+        )
+        trace_misleading.trace_id.get_augmentless_identifier = lambda: base_trace_id
+        with pytest.raises(NotImplementedError, match="LMDB misleading trace"):
+            shortcuts_mod._build_counterfactual_groups(
+                traces=[trace_misleading],
+                prompt_db=None,
+                eval_hint_types=(HintType.misleading,),
+                check_prompt_db_fn=lambda tid, db, ht: False,
+                check_lmdb_misleading_fn=dm._check_lmdb_misleading_with_validation,
+            )
+
+
+class TestFindDbMatchValidatedFiltering:
+    """Tests for validated misleading filtering in _find_db_match_for_target_type."""
+
+    def test_excludes_unvalidated_misleading_records(self, mocker: MockerFixture) -> None:
+        import pyine.organisms.datamodules.samples.selection as selection_mod
+
+        target_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.misleading})
+        )
+        mock_trace = mocker.MagicMock()
+        mock_trace.trace_sample_code_types = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.original})
+        )
+        mock_db_key = mocker.MagicMock()
+        mock_db_key._asdict.return_value = {"identifier": "trace-id", "prompt_name": "some_prompt"}
+        mock_trace.db_supported_sample_code_types = {mock_db_key: {target_type}}
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "unvalidated-uid"
+        mock_record.identifier = "trace-id"
+        mock_record.creation_meta.created_at.isoformat.return_value = "2024-01-01"
+        mock_db = mocker.MagicMock()
+        mock_db.get_by_identifier.return_value = [mock_record]
+        rng = np.random.default_rng(42)
+        validated_uids = frozenset({"other-uid"})
+        result = selection_mod._find_db_match_for_target_type(
+            target_type=target_type,
+            trace_data=[mock_trace],
+            prompt_result_db=mock_db,
+            rng=rng,
+            validated_misleading_record_uids=validated_uids,
+        )
+        assert result is None
+
+    def test_accepts_validated_misleading_records(self, mocker: MockerFixture) -> None:
+        import pyine.organisms.datamodules.samples.selection as selection_mod
+
+        target_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.misleading})
+        )
+        mock_trace = mocker.MagicMock()
+        mock_trace.trace_sample_code_types = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.original})
+        )
+        mock_db_key = mocker.MagicMock()
+        mock_db_key._asdict.return_value = {"identifier": "trace-id", "prompt_name": "some_prompt"}
+        mock_trace.db_supported_sample_code_types = {mock_db_key: {target_type}}
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "validated-uid"
+        mock_record.identifier = "trace-id"
+        mock_record.creation_meta.created_at.isoformat.return_value = "2024-01-01"
+        mock_db = mocker.MagicMock()
+        mock_db.get_by_identifier.return_value = [mock_record]
+        rng = np.random.default_rng(42)
+        validated_uids = frozenset({"validated-uid"})
+        result = selection_mod._find_db_match_for_target_type(
+            target_type=target_type,
+            trace_data=[mock_trace],
+            prompt_result_db=mock_db,
+            rng=rng,
+            validated_misleading_record_uids=validated_uids,
+        )
+        assert result is not None
+        assert result.record_uid == "validated-uid"
+
+    def test_no_filter_when_uids_none(self, mocker: MockerFixture) -> None:
+        import pyine.organisms.datamodules.samples.selection as selection_mod
+
+        target_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.misleading})
+        )
+        mock_trace = mocker.MagicMock()
+        mock_trace.trace_sample_code_types = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.original})
+        )
+        mock_db_key = mocker.MagicMock()
+        mock_db_key._asdict.return_value = {"identifier": "trace-id", "prompt_name": "some_prompt"}
+        mock_trace.db_supported_sample_code_types = {mock_db_key: {target_type}}
+        mock_record = mocker.MagicMock()
+        mock_record.tags = ["augment:misleading"]
+        mock_record.record_uid = "any-uid"
+        mock_record.identifier = "trace-id"
+        mock_record.creation_meta.created_at.isoformat.return_value = "2024-01-01"
+        mock_db = mocker.MagicMock()
+        mock_db.get_by_identifier.return_value = [mock_record]
+        rng = np.random.default_rng(42)
+        result = selection_mod._find_db_match_for_target_type(
+            target_type=target_type,
+            trace_data=[mock_trace],
+            prompt_result_db=mock_db,
+            rng=rng,
+            validated_misleading_record_uids=None,
+        )
+        assert result is not None
+
+    def test_no_filter_when_config_disabled_even_if_cached_set_provided(self, mocker: MockerFixture) -> None:
+        """Cached UIDs set must not leak into subsets where require_validated_misleading=False.
+
+        select_samples_from_trace_families gates on selection_config.require_validated_misleading
+        before passing the set downstream. When the flag is False, _find_db_match_for_target_type
+        must receive None — even if a cached set was provided to the top-level call.
+        """
+        import pyine.organisms.datamodules.samples.selection as selection_mod
+
+        target_type = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.misleading})
+        )
+        restrictive_uids = frozenset({"other-uid-only"})
+        spy = mocker.patch.object(
+            selection_mod,
+            "_find_db_match_for_target_type",
+            return_value=None,
+        )
+        # build minimal trace data with one family that can draw misleading
+        mock_trace_mapping = mocker.MagicMock()
+        mock_trace_mapping.trace_sample_code_types = pyine.organisms.datamodules.samples.common.SampleCodeTypeSet(
+            frozenset({pyine.organisms.datamodules.samples.common.SampleCodeType.original})
+        )
+        parent_id = mocker.MagicMock()
+        mock_trace_data = mocker.MagicMock()
+        mock_trace_data.trace_families = {parent_id: {mocker.MagicMock(): mock_trace_mapping}}
+        # the family has misleading available via DB
+        mock_trace_data.trace_family_sample_code_type_counts = {parent_id: {}}
+        mock_trace_data.db_supported_family_sample_code_type_counts = {parent_id: {target_type: 1}}
+        config = pyine.organisms.datamodules.samples.configs.SampleSelectionConfig(
+            code_type_prob_map={"misleading": 1.0},
+            allow_db_lookups=True,
+            require_validated_misleading=False,  # flag OFF
+        )
+        mock_db = mocker.MagicMock()
+        selection_mod.select_samples_from_trace_families(
+            trace_data=mock_trace_data,
+            epoch=0,
+            selection_config=config,
+            prompt_result_db=mock_db,
+            validated_misleading_record_uids=restrictive_uids,  # cached set provided
+        )
+        # _find_db_match_for_target_type must have received None, not the restrictive set
+        assert spy.called, "expected _find_db_match_for_target_type to be called"
+        actual_uids = spy.call_args.kwargs.get("validated_misleading_record_uids")
+        assert actual_uids is None, f"expected None when require_validated_misleading=False, got {actual_uids}"
