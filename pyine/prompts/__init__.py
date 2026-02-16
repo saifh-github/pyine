@@ -11,6 +11,7 @@ from .result_db import (
     CreationMeta,
     PromptResultDB,
     PromptResultRecord,
+    PromptResultSummary,
     TypedPromptResultFetcher,
     fetch_or_generate_prompt_results,
     get_framework_db,
@@ -41,6 +42,7 @@ __all__ = [
     # result db
     "CreationMeta",
     "PromptResultRecord",
+    "PromptResultSummary",
     "PromptResultDB",
     "get_framework_db",
     "get_framework_db_path",

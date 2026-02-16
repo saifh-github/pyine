@@ -15,6 +15,7 @@ from pyine.prompts.result_db import (
     CreationMeta,
     PromptResultDB,
     PromptResultRecord,
+    PromptResultSummary,
     TypedPromptResultFetcher,
     ValidationFailedError,
     fetch_or_generate_prompt_results,
@@ -819,3 +820,208 @@ def test_has_records_with_max_age(db: PromptResultDB) -> None:
     # with max_result_age
     assert db.has_records("old_only", max_result_age=datetime.timedelta(hours=1)) is False
     assert db.has_records("has_new", max_result_age=datetime.timedelta(hours=1)) is True
+
+
+class TestPromptResultSummaries:
+    """Tests for PromptResultSummary and the summary query methods."""
+
+    @pytest.fixture()
+    def db(self, tmp_path: pathlib.Path) -> PromptResultDB:
+        return PromptResultDB(db_path=tmp_path / "prompt_results.sqlite")
+
+    @pytest.fixture()
+    def populated_db(self, db: PromptResultDB) -> PromptResultDB:
+        """DB with a few records for summary tests."""
+        now = datetime.datetime.now(datetime.UTC)
+        old_cm = CreationMeta(created_at=now - datetime.timedelta(minutes=30))
+        mid_cm = CreationMeta(created_at=now - datetime.timedelta(minutes=10))
+        new_cm = CreationMeta(created_at=now - datetime.timedelta(minutes=1))
+        db.store(
+            identifier="id_a",
+            group="g1",
+            prompt_name="validation/misleading",
+            prompt_version="v1",
+            prompt="prompt_old",
+            result="result_old",
+            meta={"verdict": "MISLEADING"},
+            tags=["verdict:misleading", "llm_provider:openai"],
+            creation_meta=old_cm,
+        )
+        db.store(
+            identifier="id_b",
+            group="g1",
+            prompt_name="validation/misleading",
+            prompt_version="v1",
+            prompt="prompt_mid",
+            result="result_mid",
+            meta={"verdict": "NOT_MISLEADING"},
+            tags=["verdict:not_misleading", "ok"],
+            creation_meta=mid_cm,
+        )
+        db.store(
+            identifier="id_a",
+            group="g2",
+            prompt_name="other_prompt",
+            prompt="prompt_new",
+            result="result_new",
+            tags=["wip:yes"],
+            creation_meta=new_cm,
+        )
+        return db
+
+    def test_get_summaries_by_prompt_name_returns_summaries(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_summaries_by_prompt_name("validation/misleading")
+        assert len(summaries) == 2
+        assert all(isinstance(s, PromptResultSummary) for s in summaries)
+        assert summaries[0].identifier == "id_a"
+        assert summaries[1].identifier == "id_b"
+
+    def test_get_summaries_by_prompt_name_requires_name(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        with pytest.raises(ValueError, match="prompt name required"):
+            populated_db.get_summaries_by_prompt_name("")
+
+    def test_get_summaries_by_prompt_name_filters_version(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_summaries_by_prompt_name(
+            "validation/misleading",
+            prompt_version="v1",
+        )
+        assert len(summaries) == 2
+        summaries = populated_db.get_summaries_by_prompt_name(
+            "validation/misleading",
+            prompt_version="v_nonexistent",
+        )
+        assert len(summaries) == 0
+
+    def test_get_summaries_by_prompt_name_filters_tags(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_summaries_by_prompt_name(
+            "validation/misleading",
+            tag_filter_rule="-verdict:misleading",
+        )
+        assert len(summaries) == 1
+        assert summaries[0].identifier == "id_b"
+
+    def test_get_summaries_by_prompt_name_filters_age(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_summaries_by_prompt_name(
+            "validation/misleading",
+            max_result_age=datetime.timedelta(minutes=15),
+        )
+        assert len(summaries) == 1
+        assert summaries[0].identifier == "id_b"
+
+    def test_get_all_summaries(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_all_summaries()
+        assert len(summaries) == 3
+
+    def test_get_all_summaries_filters_age(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_all_summaries(
+            max_result_age=datetime.timedelta(minutes=15),
+        )
+        assert len(summaries) == 2
+
+    def test_get_all_summaries_filters_tags(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        summaries = populated_db.get_all_summaries(tag_filter_rule="-wip:*")
+        assert len(summaries) == 2
+        assert all(s.identifier != "id_a" or s.prompt_name == "validation/misleading" for s in summaries)
+
+    def test_summary_fields_match_full_record(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        records = populated_db.get_by_prompt_name("validation/misleading")
+        summaries = populated_db.get_summaries_by_prompt_name("validation/misleading")
+        assert len(records) == len(summaries) == 2
+        for rec, summ in zip(records, summaries, strict=True):
+            assert rec.identifier == summ.identifier
+            assert rec.prompt_name == summ.prompt_name
+            assert rec.prompt_version == summ.prompt_version
+            assert rec.group == summ.group
+            assert rec.meta == summ.meta
+            assert rec.tags == summ.tags
+            # created_at should match (both UTC)
+            assert rec.creation_meta.created_at == summ.created_at
+
+    def test_summary_has_no_heavy_fields(self) -> None:
+        summ = PromptResultSummary(
+            identifier="test",
+            created_at=datetime.datetime.now(datetime.UTC),
+        )
+        assert not hasattr(summ, "prompt")
+        assert not hasattr(summ, "result")
+        assert not hasattr(summ, "creation_meta")
+
+    def test_record_uid_prefix_matches_between_summary_and_record(
+        self,
+        populated_db: PromptResultDB,
+    ) -> None:
+        records = populated_db.get_by_prompt_name("validation/misleading")
+        summaries = populated_db.get_summaries_by_prompt_name("validation/misleading")
+        for rec, summ in zip(records, summaries, strict=True):
+            assert rec.record_uid_prefix == summ.record_uid_prefix
+
+    def test_record_uid_starts_with_prefix(self) -> None:
+        rec = PromptResultRecord(
+            identifier="sample_123",
+            prompt_name="code_summary",
+            prompt_version="v1",
+            prompt="Summarize this",
+            result="This is a summary",
+            creation_meta=CreationMeta(
+                created_at=datetime.datetime(2024, 11, 26, 14, 30, 22, tzinfo=datetime.UTC),
+            ),
+        )
+        assert rec.record_uid.startswith(rec.record_uid_prefix)
+        # the uid should be prefix + "_" + 6-char hash
+        suffix = rec.record_uid[len(rec.record_uid_prefix) :]
+        assert suffix.startswith("_")
+        assert len(suffix) == 7  # "_" + 6 hex chars
+
+    def test_created_at_handles_naive_timestamps(
+        self,
+        db: PromptResultDB,
+    ) -> None:
+        """Regression: _row_to_summary treats naive SQL timestamps as UTC."""
+        row_id = db.store(identifier="naive-test", prompt="p", result="r")
+        # strip tz suffix from the stored created_at to simulate a naive timestamp
+        conn = db._connect()
+        try:
+            raw_ts = conn.execute(
+                "SELECT created_at FROM items WHERE id = ?",
+                (row_id,),
+            ).fetchone()[0]
+            # remove timezone suffix (e.g. "+00:00") to make it naive
+            naive_ts = raw_ts.replace("+00:00", "").replace("Z", "")
+            conn.execute(
+                "UPDATE items SET created_at = ? WHERE id = ?",
+                (naive_ts, row_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        summaries = db.get_all_summaries()
+        assert len(summaries) == 1
+        assert summaries[0].created_at.tzinfo is not None
+        assert summaries[0].created_at.tzinfo.utcoffset(summaries[0].created_at) == datetime.timedelta(0)
