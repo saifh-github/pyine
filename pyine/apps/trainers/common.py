@@ -569,7 +569,7 @@ class ResumeArtifacts(pydantic.BaseModel):
         checkpoint_metadata_path = checkpoint_path / "run_meta.json"
         if checkpoint_metadata_path.is_file():
             checkpoint_metadata_dict = cls._load_json_if_exists(checkpoint_metadata_path)
-            if config.use_wandb_logging and not wandb_resume_kwargs:
+            if config.use_wandb_logging and not wandb_resume_kwargs and config.resume_wandb_behavior != "never":
                 checkpoint_runtime_payload = typing.cast(
                     "dict[str, typing.Any]",
                     checkpoint_metadata_dict.get("runtime", {}),
