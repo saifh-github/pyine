@@ -48,8 +48,12 @@ def _tokenize_split(
     dataset: datasets.Dataset,
     tokenizer: transformers.PreTrainedTokenizerBase,
     max_seq_length: int,
+    code_type_to_id: dict[str, int],
 ) -> datasets.Dataset:
-    """Tokenize a probe dataset split (plain text, no special tokens)."""
+    """Tokenize a probe dataset split (plain text, no special tokens).
+
+    Maps ``code_type`` strings to integer IDs for DDP-safe gathering.
+    """
 
     def _tokenize(examples: dict[str, list[str] | list[int]]) -> transformers.BatchEncoding:
         tokenized = tokenizer(
@@ -60,14 +64,18 @@ def _tokenize_split(
             add_special_tokens=False,  # Post-template text — don't add BOS/EOS/chat markers
         )
         tokenized["labels"] = examples["label"]
+        # Map code_type string → integer ID for DDP gathering
+        tokenized["code_type_id"] = [code_type_to_id[ct] for ct in examples["code_type"]]  # type: ignore[index]
         return tokenized
 
     ds = dataset.map(  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         _tokenize,
         batched=True,
-        remove_columns=[c for c in dataset.column_names if c not in ("input_ids", "attention_mask", "labels")],
+        remove_columns=[
+            c for c in dataset.column_names if c not in ("input_ids", "attention_mask", "labels", "code_type_id")
+        ],
     )
-    ds.set_format("torch")  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+    ds.set_format("torch", columns=["input_ids", "attention_mask", "labels", "code_type_id"])  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
     return ds
 
 
@@ -320,8 +328,14 @@ def validate_probes(
     *,
     expanded_configs_by_name: dict[str, ProbeConfig] | None = None,
     log_individual_replicas: bool = False,
+    id_to_code_type: dict[int, str] | None = None,
+    log_per_code_type_metrics: bool = False,
 ) -> dict[str, dict[str, float]]:
-    """Run validation and compute loss + AUROC per probe."""
+    """Run validation and compute loss + AUROC per probe.
+
+    When ``log_per_code_type_metrics=True`` and ``id_to_code_type`` is provided,
+    also computes per-code-type loss and AUROC breakdowns.
+    """
     probe_collection.eval()
 
     # Handle both DDP-wrapped and raw ProbeCollection
@@ -332,6 +346,7 @@ def validate_probes(
     probes_dict = raw.probes
     all_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
     all_labels: list[torch.Tensor] = []
+    all_code_type_ids: list[torch.Tensor] = []
 
     with torch.no_grad():
         for batch in valid_loader:
@@ -347,6 +362,9 @@ def validate_probes(
                 all_logits[name].append(logits.squeeze(-1))
             all_labels.append(labels)
 
+            if log_per_code_type_metrics and "code_type_id" in batch:
+                all_code_type_ids.append(batch["code_type_id"])
+
     # Gather across GPUs
     gathered_logits: dict[str, torch.Tensor] = {}
     for name in all_logits:
@@ -359,6 +377,13 @@ def validate_probes(
         "torch.Tensor",
         accelerator.gather_for_metrics(torch.cat(all_labels)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
+
+    gathered_ct_ids: torch.Tensor | None = None
+    if log_per_code_type_metrics and all_code_type_ids:
+        gathered_ct_ids = typing.cast(
+            "torch.Tensor",
+            accelerator.gather_for_metrics(torch.cat(all_code_type_ids)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+        ).cpu()
 
     # Compute metrics on main process
     metrics: dict[str, dict[str, float]] = {}
@@ -390,6 +415,19 @@ def validate_probes(
                 auroc = auroc_score
 
             metrics[name] = {"loss": val_loss, "auroc": auroc}
+
+            # --- Per-code-type metrics ---
+            if log_per_code_type_metrics and gathered_ct_ids is not None and id_to_code_type is not None:
+                _log_per_code_type_metrics(
+                    name=name,
+                    logits_cpu=logits_cpu,
+                    labels_cpu=labels_cpu,
+                    gathered_ct_ids=gathered_ct_ids,
+                    id_to_code_type=id_to_code_type,
+                    loss_fn=loss_fn,
+                    runtime=runtime,
+                    global_step=global_step,
+                )
 
         # --- Logging ---
         has_replicas = expanded_configs_by_name is not None and any(
@@ -455,6 +493,51 @@ def validate_probes(
             )
 
     return metrics
+
+
+def _log_per_code_type_metrics(
+    name: str,
+    logits_cpu: torch.Tensor,
+    labels_cpu: torch.Tensor,
+    gathered_ct_ids: torch.Tensor,
+    id_to_code_type: dict[int, str],
+    loss_fn: torch.nn.Module,
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+    global_step: int,
+) -> None:
+    """Compute and log per-code-type loss and AUROC for a single probe."""
+    unique_ct_ids: list[int] = gathered_ct_ids.unique().tolist()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
+    for ct_id in unique_ct_ids:  # pyright: ignore[reportUnknownVariableType]  # element of torch-derived list
+        ct = id_to_code_type[int(ct_id)]  # pyright: ignore[reportUnknownArgumentType]  # torch stubs
+        ct_mask: torch.Tensor = (gathered_ct_ids == ct_id).nonzero(as_tuple=True)[0]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
+        if len(ct_mask) < 2:  # pyright: ignore[reportUnknownArgumentType]  # torch stubs
+            continue
+
+        ct_logits = logits_cpu[ct_mask]
+        ct_labels = labels_cpu[ct_mask]
+
+        ct_loss = loss_fn(ct_logits, ct_labels.float()).item()
+
+        ct_labels_np: npt.NDArray[np.int_] = ct_labels.numpy()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
+        ct_unique: set[int] = {int(v) for v in ct_labels_np.tolist()}
+        if len(ct_unique) < 2:
+            ct_auroc = float("nan")
+        else:
+            import sklearn.metrics
+
+            ct_probs: npt.NDArray[np.floating[typing.Any]] = torch.sigmoid(ct_logits).numpy()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
+            ct_auroc = float(
+                sklearn.metrics.roc_auc_score(ct_labels_np, ct_probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
+            )
+
+        if runtime and runtime.wandb_run:
+            runtime.wandb_run.log(
+                {
+                    f"valid/{name}/loss/code_type/{ct}": ct_loss,
+                    f"valid/{name}/auroc/code_type/{ct}": ct_auroc,
+                },
+                step=global_step,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -554,9 +637,31 @@ def probe_train(
         recompute_labels=config.recompute_labels,
         max_samples_per_split=config.max_samples_per_split,
         skip_malformed_records=config.skip_malformed_records,
+        use_eval_only_split=config.use_eval_only_split,
+        eval_only_source_prefix=config.eval_only_source_prefix,
+        train_split_ratio=config.train_split_ratio,
+        split_by_family=config.split_by_family,
+        code_type_filter=config.code_type_filter,
     )
-    train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length)
-    valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length)
+
+    # Build code_type → integer ID mapping (consistent across splits)
+    all_code_types: list[str] = sorted(
+        set(typing.cast("list[str]", raw_ds["train"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
+        | set(typing.cast("list[str]", raw_ds["valid"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
+    )
+    code_type_to_id: dict[str, int] = {ct: i for i, ct in enumerate(all_code_types)}
+    id_to_code_type: dict[int, str] = {i: ct for ct, i in code_type_to_id.items()}
+
+    if accelerator.is_main_process:
+        for split_name in ["train", "valid"]:
+            code_types = typing.cast("list[str]", raw_ds[split_name]["code_type"])  # pyright: ignore[reportIndexIssue]  # datasets stubs
+            ct_counts: dict[str, int] = {}
+            for ct in code_types:
+                ct_counts[ct] = ct_counts.get(ct, 0) + 1
+            logger.info(f"  {split_name} code_type distribution: {ct_counts}")
+
+    train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
+    valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
     train_loader = build_dataloader(
         train_ds,
         tokenizer,
@@ -693,6 +798,8 @@ def probe_train(
                         runtime,
                         expanded_configs_by_name=expanded_configs_by_name if has_replicas else None,
                         log_individual_replicas=config.log_individual_replicas,
+                        id_to_code_type=id_to_code_type if config.log_per_code_type_metrics else None,
+                        log_per_code_type_metrics=config.log_per_code_type_metrics,
                     )
                     probe_collection.train()
 
@@ -708,6 +815,8 @@ def probe_train(
             runtime,
             expanded_configs_by_name=expanded_configs_by_name if has_replicas else None,
             log_individual_replicas=config.log_individual_replicas,
+            id_to_code_type=id_to_code_type if config.log_per_code_type_metrics else None,
+            log_per_code_type_metrics=config.log_per_code_type_metrics,
         )
 
     # --- 7. Save probes ---

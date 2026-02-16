@@ -6,13 +6,13 @@ Rework the probe training dataset pipeline to support training on **evaluation d
 
 ### What changes
 
-| Aspect | Current | New |
-|---|---|---|
-| **Data source** | Separate `train/` and `eval/` LMDB prefixes for train/valid splits | Single `eval/` prefix, internally split into train/valid |
-| **Code type visibility** | `code_type` field exists in LMDB records but is discarded during loading | `code_type` preserved as a dataset column and used for splitting, filtering, and per-category metrics |
-| **Train/valid split** | Determined entirely by LMDB key prefix | Created from a single prefix via configurable splitting strategy (random or family-based) |
-| **Validation metrics** | Aggregate loss + AUROC only | Per-code-type loss + AUROC breakdown alongside aggregates |
-| **Backward compatibility** | N/A | Default behavior (`use_eval_only_split: false`) is identical to current behavior |
+| Aspect                     | Current                                                                  | New                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| **Data source**            | Separate `train/` and `eval/` LMDB prefixes for train/valid splits       | Single `eval/` prefix, internally split into train/valid                                              |
+| **Code type visibility**   | `code_type` field exists in LMDB records but is discarded during loading | `code_type` preserved as a dataset column and used for splitting, filtering, and per-category metrics |
+| **Train/valid split**      | Determined entirely by LMDB key prefix                                   | Created from a single prefix via configurable splitting strategy (random or family-based)             |
+| **Validation metrics**     | Aggregate loss + AUROC only                                              | Per-code-type loss + AUROC breakdown alongside aggregates                                             |
+| **Backward compatibility** | N/A                                                                      | Default behavior (`use_eval_only_split: false`) is identical to current behavior                      |
 
 ______________________________________________________________________
 
@@ -22,15 +22,15 @@ ______________________________________________________________________
 
 The `code_type` field in each LMDB record is a string representation of `SampleCodeTypeSet`, produced by `"_".join(sorted(self.types))`. The relevant values for this feature are:
 
-| `code_type` string | Description |
-|---|---|
-| `"original"` | Unmodified code from the source dataset |
-| `"hinted"` | Code with helpful execution output hints |
-| `"misleading"` | Code with **misleading** execution hints |
-| `"obfuscated"` | Obfuscated variable/function names |
-| `"hinted_obfuscated"` | Obfuscated code with helpful hints |
-| `"misleading_obfuscated"` | Obfuscated code with misleading hints |
-| `"stubbed"` | Part of code hidden/stubbed |
+| `code_type` string        | Description                              |
+| ------------------------- | ---------------------------------------- |
+| `"original"`              | Unmodified code from the source dataset  |
+| `"hinted"`                | Code with helpful execution output hints |
+| `"misleading"`            | Code with **misleading** execution hints |
+| `"obfuscated"`            | Obfuscated variable/function names       |
+| `"hinted_obfuscated"`     | Obfuscated code with helpful hints       |
+| `"misleading_obfuscated"` | Obfuscated code with misleading hints    |
+| `"stubbed"`               | Part of code hidden/stubbed              |
 
 For the primary use case (studying the effect of hints on model behavior), the three categories of interest are `"original"`, `"hinted"`, and `"misleading"` (and optionally their obfuscated variants).
 
@@ -61,12 +61,12 @@ For augmented traces, an augmentation suffix is appended:
 
 **Examples for the same underlying problem:**
 
-| Variant | sample_id |
-|---|---|
-| Original | `TACO/train/p000001/s0000/t0000` |
-| Hinted | `TACO/train/p000001/s0000/t0000/a:hints_docs:001` |
+| Variant    | sample_id                                          |
+| ---------- | -------------------------------------------------- |
+| Original   | `TACO/train/p000001/s0000/t0000`                   |
+| Hinted     | `TACO/train/p000001/s0000/t0000/a:hints_docs:001`  |
 | Misleading | `TACO/train/p000001/s0000/t0000/a:issues_docs:001` |
-| Obfuscated | `TACO/train/p000001/s0000/t0000/a:obfuscated:001` |
+| Obfuscated | `TACO/train/p000001/s0000/t0000/a:obfuscated:001`  |
 
 The **family identifier** is the augmentless prefix: `TACO/train/p000001/s0000/t0000`. All variants of the same problem share this prefix. It can be extracted by stripping the `/a:...` suffix (if present) from the sample_id.
 
@@ -99,10 +99,10 @@ config:
 
 ### 3.2 Mode Summary
 
-| Config | Behavior |
-|---|---|
+| Config                                 | Behavior                                                                                                                                                                                                    |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `use_eval_only_split: false` (default) | **Current behavior.** Train from `train_key_prefix`, validate from `valid_key_prefix`. Two separate LMDB prefixes. `code_type` is still extracted and preserved for metrics, but splitting is prefix-based. |
-| `use_eval_only_split: true` | **New mode.** Read only from `eval_only_source_prefix`. Split internally into train/valid using `train_split_ratio`. Split strategy controlled by `split_by_family`. |
+| `use_eval_only_split: true`            | **New mode.** Read only from `eval_only_source_prefix`. Split internally into train/valid using `train_split_ratio`. Split strategy controlled by `split_by_family`.                                        |
 
 ### 3.3 Code Type Filtering
 
@@ -171,12 +171,14 @@ Hinted, misleading, and original samples for the same underlying problem share t
 **Family ID** is derived from the sample_id by stripping the `/a:{augment_category}:{augment_idx}` suffix. All variants of problem `TACO/train/p000001/s0000/t0000` share the same family ID.
 
 When `split_by_family: true`:
+
 1. Group all records by family ID
 2. Shuffle family IDs (deterministically, using the runtime seed)
 3. Assign first `train_split_ratio` fraction of families to train, rest to valid
 4. All records belonging to a family go to the same split
 
 When `split_by_family: false`:
+
 - Simple random split at the record level (useful if family-based splitting produces imbalanced code-type distributions in the smaller valid split)
 
 ### 4.3 Code Type as a Dataset Column
@@ -203,11 +205,11 @@ The function already handles loading, deduplication, sample conversion, and vali
 
 When `log_per_code_type_metrics: true`, the validation loop groups predictions by `code_type` and computes separate metrics:
 
-| Metric Key | Description |
-|---|---|
-| `valid/{probe_name}/loss` | Overall loss (unchanged) |
-| `valid/{probe_name}/auroc` | Overall AUROC (unchanged) |
-| `valid/{probe_name}/loss/code_type/{ct}` | Loss for samples with `code_type == ct` |
+| Metric Key                                | Description                              |
+| ----------------------------------------- | ---------------------------------------- |
+| `valid/{probe_name}/loss`                 | Overall loss (unchanged)                 |
+| `valid/{probe_name}/auroc`                | Overall AUROC (unchanged)                |
+| `valid/{probe_name}/loss/code_type/{ct}`  | Loss for samples with `code_type == ct`  |
 | `valid/{probe_name}/auroc/code_type/{ct}` | AUROC for samples with `code_type == ct` |
 
 This provides direct visibility into whether the probe's classification accuracy varies across code types (e.g., does accuracy drop for misleading-hint samples?).
@@ -653,12 +655,12 @@ The current debug dataset is **insufficient** for testing the new eval-only mode
 
 #### 5.4.1 Problem Summary
 
-| Feature to test | Current debug dataset support | What's missing |
-|---|---|---|
-| **Code type filtering** | All records are `"original"` | No `"hinted"` or `"misleading"` records to filter on |
-| **Family-based splitting** | IDs are flat (`debug_sample_0042/1`) | No `/a:` augmentation suffixes — `_extract_family_id()` has nothing to strip, so every record is its own family |
-| **Per-code-type metrics** | Only `"original"` code type | Can't verify per-category breakdown |
-| **Eval-only mode integration** | 50 eval records, all identical code type | Would produce a degenerate single-code-type dataset |
+| Feature to test                | Current debug dataset support            | What's missing                                                                                                  |
+| ------------------------------ | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Code type filtering**        | All records are `"original"`             | No `"hinted"` or `"misleading"` records to filter on                                                            |
+| **Family-based splitting**     | IDs are flat (`debug_sample_0042/1`)     | No `/a:` augmentation suffixes — `_extract_family_id()` has nothing to strip, so every record is its own family |
+| **Per-code-type metrics**      | Only `"original"` code type              | Can't verify per-category breakdown                                                                             |
+| **Eval-only mode integration** | 50 eval records, all identical code type | Would produce a degenerate single-code-type dataset                                                             |
 
 #### 5.4.2 Updated `_make_record()` Signature
 
@@ -877,13 +879,13 @@ ______________________________________________________________________
 
 When `log_per_code_type_metrics: true` (default):
 
-| Metric Key | Description |
-|---|---|
-| `valid/{probe_name}/loss/code_type/original` | Loss on original-code samples |
-| `valid/{probe_name}/loss/code_type/hinted` | Loss on hinted-code samples |
-| `valid/{probe_name}/loss/code_type/misleading` | Loss on misleading-code samples |
-| `valid/{probe_name}/auroc/code_type/original` | AUROC on original-code samples |
-| `valid/{probe_name}/auroc/code_type/hinted` | AUROC on hinted-code samples |
+| Metric Key                                      | Description                      |
+| ----------------------------------------------- | -------------------------------- |
+| `valid/{probe_name}/loss/code_type/original`    | Loss on original-code samples    |
+| `valid/{probe_name}/loss/code_type/hinted`      | Loss on hinted-code samples      |
+| `valid/{probe_name}/loss/code_type/misleading`  | Loss on misleading-code samples  |
+| `valid/{probe_name}/auroc/code_type/original`   | AUROC on original-code samples   |
+| `valid/{probe_name}/auroc/code_type/hinted`     | AUROC on hinted-code samples     |
 | `valid/{probe_name}/auroc/code_type/misleading` | AUROC on misleading-code samples |
 
 If additional code types are present (e.g., `obfuscated`, `hinted_obfuscated`), they get their own metrics automatically.
@@ -892,10 +894,10 @@ If additional code types are present (e.g., `obfuscated`, `hinted_obfuscated`), 
 
 When both replicas and per-code-type metrics are active:
 
-| Metric Key | Description |
-|---|---|
-| `valid/{base_name}/auroc/code_type/{ct}/mean` | Mean AUROC across replicas for code type `ct` |
-| `valid/{base_name}/auroc/code_type/{ct}/std` | Std of AUROC across replicas for code type `ct` |
+| Metric Key                                    | Description                                     |
+| --------------------------------------------- | ----------------------------------------------- |
+| `valid/{base_name}/auroc/code_type/{ct}/mean` | Mean AUROC across replicas for code type `ct`   |
+| `valid/{base_name}/auroc/code_type/{ct}/std`  | Std of AUROC across replicas for code type `ct` |
 
 This follows the existing replica aggregation pattern.
 
@@ -916,30 +918,30 @@ ______________________________________________________________________
 
 ## 8. Edge Cases and Error Handling
 
-| Scenario | Handling |
-|---|---|
-| `code_type` is `None` in LMDB record | Mapped to `"unknown"`. If `code_type_filter` is active and doesn't include `"unknown"`, the record is excluded. |
-| `code_type_filter` excludes all records | Raise `ValueError` with a clear message listing the filter and available code types. |
-| Code type has too few samples for AUROC (< 2 unique labels) | Log NaN for that code type's AUROC; log a warning. |
-| `split_by_family=True` but all families have only one sample | Works correctly — each family is a single record. Degenerates to random split by record. |
-| `use_eval_only_split=True` but `eval_only_source_prefix` has no records | Raise `ValueError` (same as current behavior for missing prefix). |
-| `train_split_ratio` produces fewer than 2 families | `_split_records_by_family()` raises `ValueError`. Rounding rule: `n_train = max(1, int(n_families * ratio))`, `n_valid = n_families - n_train`. Both guaranteed ≥ 1. |
-| DDP mode with `code_type_id` alignment | `code_type_id` is a tensor column gathered via `gather_for_metrics()` alongside labels and logits. Alignment is guaranteed by construction — no ordering assumptions. |
-| Family-based split produces unbalanced code type distribution | Log a warning with per-split code type counts and the exact missing code types. Suggest `split_by_family: false` as fallback. |
-| `code_type_filter: []` (empty list) | Rejected at config validation time with a clear error. Use `null` to include all records. |
+| Scenario                                                                | Handling                                                                                                                                                              |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code_type` is `None` in LMDB record                                    | Mapped to `"unknown"`. If `code_type_filter` is active and doesn't include `"unknown"`, the record is excluded.                                                       |
+| `code_type_filter` excludes all records                                 | Raise `ValueError` with a clear message listing the filter and available code types.                                                                                  |
+| Code type has too few samples for AUROC (< 2 unique labels)             | Log NaN for that code type's AUROC; log a warning.                                                                                                                    |
+| `split_by_family=True` but all families have only one sample            | Works correctly — each family is a single record. Degenerates to random split by record.                                                                              |
+| `use_eval_only_split=True` but `eval_only_source_prefix` has no records | Raise `ValueError` (same as current behavior for missing prefix).                                                                                                     |
+| `train_split_ratio` produces fewer than 2 families                      | `_split_records_by_family()` raises `ValueError`. Rounding rule: `n_train = max(1, int(n_families * ratio))`, `n_valid = n_families - n_train`. Both guaranteed ≥ 1.  |
+| DDP mode with `code_type_id` alignment                                  | `code_type_id` is a tensor column gathered via `gather_for_metrics()` alongside labels and logits. Alignment is guaranteed by construction — no ordering assumptions. |
+| Family-based split produces unbalanced code type distribution           | Log a warning with per-split code type counts and the exact missing code types. Suggest `split_by_family: false` as fallback.                                         |
+| `code_type_filter: []` (empty list)                                     | Rejected at config validation time with a clear error. Use `null` to include all records.                                                                             |
 
 ______________________________________________________________________
 
 ## 9. File Changes Summary
 
-| File | Change type | Description |
-|---|---|---|
-| `pyine/probes/lmdb_dataset.py` | **Modify** | Add `code_type` extraction to samples, add `_extract_family_id()`, `_split_records_by_family()`, `_split_records_random()`, `_filter_by_code_type()` helpers, update `load_probe_dataset_from_lmdb()` with new parameters and eval-only split logic |
-| `pyine/apps/trainers/probe_trainer_configs.py` | **Modify** | Add `use_eval_only_split`, `eval_only_source_prefix`, `train_split_ratio`, `split_by_family`, `code_type_filter`, `log_per_code_type_metrics` fields |
-| `pyine/apps/trainers/probe_trainer.py` | **Modify** | Pass new config fields to `load_probe_dataset_from_lmdb()`, log code type distribution, extract `valid_code_types` list, update `_tokenize_split()` to preserve `code_type`, update `validate_probes()` with per-code-type metrics, update `build_dataloader()` to handle `code_type` column |
-| `pyine/probes/debug_dataset.py` | **Modify** | Rework `_make_record()` to accept `code_type`/`sample_id`, restructure `create_debug_probe_lmdb()` to generate family-structured eval records with 3 code-type variants per family (original/hinted/misleading), add augmentation suffixes to sample IDs, update `create_debug_probe_dataset()` for eval-only passthrough (see Section 5.4) |
-| `pyine/configs/experiment/probes/v0_probe.yaml` | **Modify** | Add commented-out examples of new config fields |
-| `pyine/apps/trainers/PROBE_TRAINING_GUIDE.md` | **Modify** | Add section on eval-only mode and code type metrics |
+| File                                            | Change type | Description                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pyine/probes/lmdb_dataset.py`                  | **Modify**  | Add `code_type` extraction to samples, add `_extract_family_id()`, `_split_records_by_family()`, `_split_records_random()`, `_filter_by_code_type()` helpers, update `load_probe_dataset_from_lmdb()` with new parameters and eval-only split logic                                                                                         |
+| `pyine/apps/trainers/probe_trainer_configs.py`  | **Modify**  | Add `use_eval_only_split`, `eval_only_source_prefix`, `train_split_ratio`, `split_by_family`, `code_type_filter`, `log_per_code_type_metrics` fields                                                                                                                                                                                        |
+| `pyine/apps/trainers/probe_trainer.py`          | **Modify**  | Pass new config fields to `load_probe_dataset_from_lmdb()`, log code type distribution, extract `valid_code_types` list, update `_tokenize_split()` to preserve `code_type`, update `validate_probes()` with per-code-type metrics, update `build_dataloader()` to handle `code_type` column                                                |
+| `pyine/probes/debug_dataset.py`                 | **Modify**  | Rework `_make_record()` to accept `code_type`/`sample_id`, restructure `create_debug_probe_lmdb()` to generate family-structured eval records with 3 code-type variants per family (original/hinted/misleading), add augmentation suffixes to sample IDs, update `create_debug_probe_dataset()` for eval-only passthrough (see Section 5.4) |
+| `pyine/configs/experiment/probes/v0_probe.yaml` | **Modify**  | Add commented-out examples of new config fields                                                                                                                                                                                                                                                                                             |
+| `pyine/apps/trainers/PROBE_TRAINING_GUIDE.md`   | **Modify**  | Add section on eval-only mode and code type metrics                                                                                                                                                                                                                                                                                         |
 
 ______________________________________________________________________
 
@@ -1176,22 +1178,22 @@ class TestDebugProbeDatasetConvenience:
 
 ### 10.6 Test Summary
 
-| Target file | New/Modified tests | # Tests |
-|---|---|---|
-| `tests/probes/test_lmdb_dataset.py` | `TestExtractFamilyId` | 4 |
-| `tests/probes/test_lmdb_dataset.py` | `TestFilterByCodeType` | 3 |
-| `tests/probes/test_lmdb_dataset.py` | `TestSplitRecordsByFamily` | 5 |
-| `tests/probes/test_lmdb_dataset.py` | `TestSplitRecordsRandom` | 2 |
-| `tests/probes/test_lmdb_dataset.py` | `TestLoadProbeDatasetEvalOnly` | 6 |
-| `tests/probes/test_lmdb_dataset.py` | `TestRecordToSample` (modified) | 2 |
-| `tests/apps/trainers/test_probe_trainer_configs.py` | `TestProbeTrainerConfigEvalOnly` | 6 |
-| `tests/apps/trainers/test_probe_trainer.py` | `TestValidateProbesWithCodeTypes` | 3 |
-| `tests/probes/test_debug_dataset.py` | `TestDebugLmdbStructure` | 9 |
-| `tests/probes/test_debug_dataset.py` | `TestDebugLmdbCodeTypeTags` | 3 |
-| `tests/probes/test_debug_dataset.py` | `TestDebugLmdbLabelDistribution` | 2 |
-| `tests/probes/test_debug_dataset.py` | `TestDebugLmdbIntegrationWithEvalOnly` | 5 |
-| `tests/probes/test_debug_dataset.py` | `TestDebugProbeDatasetConvenience` | 3 |
-| **Total** | | **53** |
+| Target file                                         | New/Modified tests                     | # Tests |
+| --------------------------------------------------- | -------------------------------------- | ------- |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestExtractFamilyId`                  | 4       |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestFilterByCodeType`                 | 3       |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestSplitRecordsByFamily`             | 5       |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestSplitRecordsRandom`               | 2       |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestLoadProbeDatasetEvalOnly`         | 6       |
+| `tests/probes/test_lmdb_dataset.py`                 | `TestRecordToSample` (modified)        | 2       |
+| `tests/apps/trainers/test_probe_trainer_configs.py` | `TestProbeTrainerConfigEvalOnly`       | 6       |
+| `tests/apps/trainers/test_probe_trainer.py`         | `TestValidateProbesWithCodeTypes`      | 3       |
+| `tests/probes/test_debug_dataset.py`                | `TestDebugLmdbStructure`               | 9       |
+| `tests/probes/test_debug_dataset.py`                | `TestDebugLmdbCodeTypeTags`            | 3       |
+| `tests/probes/test_debug_dataset.py`                | `TestDebugLmdbLabelDistribution`       | 2       |
+| `tests/probes/test_debug_dataset.py`                | `TestDebugLmdbIntegrationWithEvalOnly` | 5       |
+| `tests/probes/test_debug_dataset.py`                | `TestDebugProbeDatasetConvenience`     | 3       |
+| **Total**                                           |                                        | **53**  |
 
 ______________________________________________________________________
 
@@ -1257,15 +1259,15 @@ ______________________________________________________________________
 
 ## 12. Risks and Mitigations
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| **Data leakage** from same-problem variants in train/valid | High (without family split) | High | `split_by_family: true` is default. All variants of a problem go to the same split. |
-| **Small valid set** if few families exist | Medium | Medium | Log split sizes and code_type distributions; warn if valid has < 50 samples or missing code types. |
-| **Unbalanced code types** after family-based split | Medium | Low | Log per-split code type distribution. Offer `split_by_family: false` as escape hatch. Document the tradeoff. |
-| **DDP code_type alignment** | Very low | High | `code_type_id` is a tensor column gathered via `gather_for_metrics()` alongside labels/logits — alignment by construction. No ordering assumptions. |
-| **`code_type` column breaks DataLoader/collator** | Low | Medium | `set_format("torch")` applied only to numeric columns. `DataCollatorWithPadding` ignores non-tensor columns. |
-| **Backward compatibility** | Low | High | All new fields have defaults matching current behavior. Existing configs work unchanged. |
-| **`/a:` substring in dataset name** | Very low | Low | `_extract_family_id()` uses `rfind` to strip only the last `/a:` segment. The marker is standardized by `TraceIdentifier.__repr__()`. No known dataset uses `/a:` in its name. |
+| Risk                                                       | Likelihood                  | Impact | Mitigation                                                                                                                                                                     |
+| ---------------------------------------------------------- | --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Data leakage** from same-problem variants in train/valid | High (without family split) | High   | `split_by_family: true` is default. All variants of a problem go to the same split.                                                                                            |
+| **Small valid set** if few families exist                  | Medium                      | Medium | Log split sizes and code_type distributions; warn if valid has < 50 samples or missing code types.                                                                             |
+| **Unbalanced code types** after family-based split         | Medium                      | Low    | Log per-split code type distribution. Offer `split_by_family: false` as escape hatch. Document the tradeoff.                                                                   |
+| **DDP code_type alignment**                                | Very low                    | High   | `code_type_id` is a tensor column gathered via `gather_for_metrics()` alongside labels/logits — alignment by construction. No ordering assumptions.                            |
+| **`code_type` column breaks DataLoader/collator**          | Low                         | Medium | `set_format("torch")` applied only to numeric columns. `DataCollatorWithPadding` ignores non-tensor columns.                                                                   |
+| **Backward compatibility**                                 | Low                         | High   | All new fields have defaults matching current behavior. Existing configs work unchanged.                                                                                       |
+| **`/a:` substring in dataset name**                        | Very low                    | Low    | `_extract_family_id()` uses `rfind` to strip only the last `/a:` segment. The marker is standardized by `TraceIdentifier.__repr__()`. No known dataset uses `/a:` in its name. |
 
 ______________________________________________________________________
 

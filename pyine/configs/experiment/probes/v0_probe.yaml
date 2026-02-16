@@ -52,6 +52,19 @@ config:
   # replica_base_seed: 0        # Base seed for reproducible replica initialization
   # log_individual_replicas: false  # Also log per-replica metrics to W&B
 
+  # Eval-only split mode — use eval prefix as sole data source, split internally
+  # use_eval_only_split: true          # Default: false (use train_key_prefix + valid_key_prefix)
+  # eval_only_source_prefix: "eval/"   # Which prefix to read in eval-only mode
+  # train_split_ratio: 0.8            # Fraction of families/samples assigned to train
+  # split_by_family: true             # Split by family ID to prevent data leakage
+
+  # Code type filtering and metrics
+  # code_type_filter:                  # null = include all; or a list of code_type strings:
+  #   - original
+  #   - hinted
+  #   - misleading
+  log_per_code_type_metrics: true      # Log per-code-type validation metrics to W&B
+
   auto_model_config:
     use_cache: false
     attn_implementation: "flash_attention_2"

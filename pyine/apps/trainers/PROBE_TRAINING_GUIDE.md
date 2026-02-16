@@ -32,7 +32,8 @@ training. Each record contains the prompt, model output, and reward metrics. The
 input text as `prompt + model_output` and derives binary labels from reward metrics
 (e.g., `reward_metrics["soft_match/is_match"]`).
 
-Train/valid splits are determined by LMDB key prefixes (default: `train/` and `eval/`).
+Train/valid splits are determined by LMDB key prefixes (default: `train/` and `eval/`), or via
+**eval-only mode** which reads from a single prefix and splits internally (see [Eval-Only Split Mode](#eval-only-split-mode)).
 
 #### Using the Debug LMDB (for Testing)
 
@@ -47,14 +48,18 @@ uv run python -m pyine.probes.debug_dataset --output /tmp/probe-debug-lmdb
 The debug LMDB contains records with a learnable keyword-correlated signal, so probes can actually learn
 (AUROC > 0.5) rather than just verifying the pipeline runs.
 
+Train records use flat IDs and `code_type="original"`. Eval records are organized into **families**: each
+family has a base sample ID and three code-type variants (`original`, `hinted`, `misleading`) with `/a:`
+augmentation suffixes matching `TraceIdentifier` conventions.
+
 Options:
 
 ```bash
 uv run python -m pyine.probes.debug_dataset \
     --output /tmp/probe-debug-lmdb \
-    --n-train 200 \    # Number of training records (default: 200)
-    --n-valid 50 \     # Number of validation records (default: 50)
-    --seed 42          # Random seed (default: 42)
+    --n-train 200 \           # Number of training records (default: 200)
+    --n-eval-families 30 \    # Number of eval families, each produces 3 records (default: 30)
+    --seed 42                 # Random seed (default: 42)
 ```
 
 Or from Python:
@@ -63,11 +68,21 @@ Or from Python:
 from pyine.probes.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
 
 # Create a debug LMDB on disk
-create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_valid=50, seed=42)
+create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_eval_families=30, seed=42)
 
 # Or get a ready-to-use DatasetDict (creates temp LMDB internally)
-ds = create_debug_probe_dataset(n_train=200, n_valid=50, seed=42)
-# ds["train"] has columns: text, label, sample_id
+ds = create_debug_probe_dataset(n_train=200, n_eval_families=30, seed=42)
+# ds["train"] has columns: text, label, sample_id, code_type
+
+# Eval-only mode: use only eval records, split internally
+ds = create_debug_probe_dataset(n_eval_families=30, use_eval_only_split=True)
+
+# With code type filtering
+ds = create_debug_probe_dataset(
+    n_eval_families=30,
+    use_eval_only_split=True,
+    code_type_filter=["original", "hinted"],
+)
 ```
 
 ### Step 2: Create an Experiment Config
@@ -121,6 +136,9 @@ config:
   eval_steps: 50            # Mid-epoch validation every N steps (-1 = epoch end only)
   dataloader_num_workers: 4
   save_probes: true
+
+  # Code type metrics (logged per-code-type during validation)
+  log_per_code_type_metrics: true
 
   auto_model_config:
     use_cache: false
@@ -185,21 +203,27 @@ LMDB keys follow the pattern `{key_prefix}{sample_id}/{generation_count}`, for e
 
 ```
 train/TACO/train/p000001/s0000/3
-eval/debug_sample_0042/1
+eval/debug_problem_010/s0000/t0000/1
+eval/debug_problem_010/s0000/t0000/a:hints_docs:000/1    (hinted variant)
+eval/debug_problem_010/s0000/t0000/a:issues_docs:000/1   (misleading variant)
 ```
+
+Records sharing a base sample ID (before the `/a:` suffix) belong to the same **family** — different
+code-type augmentations of the same problem.
 
 ### Record Fields
 
 Each LMDB record is a JSON dict. The fields used by the probe trainer:
 
-| Field             | Required  | Description                                             |
-| ----------------- | --------- | ------------------------------------------------------- |
-| `prompt`          | Always    | The prompt text sent to the model                       |
-| `model_output`    | Always    | The model's completion text                             |
-| `reward_metrics`  | Default   | Dict with metric keys (e.g., `soft_match/is_match`)     |
-| `expected_output` | Recompute | Expected output (required when `recompute_labels=True`) |
-| `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)     |
-| `reward_total`    | Optional  | Used when `selection_strategy: best_reward`             |
+| Field             | Required  | Description                                                                                                                                               |
+| ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`          | Always    | The prompt text sent to the model                                                                                                                         |
+| `model_output`    | Always    | The model's completion text                                                                                                                               |
+| `reward_metrics`  | Default   | Dict with metric keys (e.g., `soft_match/is_match`)                                                                                                       |
+| `expected_output` | Recompute | Expected output (required when `recompute_labels=True`)                                                                                                   |
+| `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)                                                                                                       |
+| `reward_total`    | Optional  | Used when `selection_strategy: best_reward`                                                                                                               |
+| `code_type`       | Optional  | Code augmentation type (e.g., `"original"`, `"hinted"`, `"misleading"`). Defaults to `"unknown"` if absent. Used for filtering and per-code-type metrics. |
 
 The trainer constructs input text as `prompt + model_output` (plain text, post-chat-template). Tokenization
 uses `add_special_tokens=False` since the text is already formatted.
@@ -226,10 +250,13 @@ record is selected per sample:
 
 ### Train/Valid Splits
 
-Splits are determined by LMDB key prefixes:
+**Two-prefix mode** (default): Splits are determined by LMDB key prefixes:
 
 - `train_key_prefix: "train/"` — keys starting with `train/` become the training set
 - `valid_key_prefix: "eval/"` — keys starting with `eval/` become the validation set
+
+**Eval-only mode** (`use_eval_only_split: true`): All data is read from a single prefix
+(`eval_only_source_prefix`) and split internally. See [Eval-Only Split Mode](#eval-only-split-mode).
 
 ### Validation
 
@@ -409,6 +436,82 @@ configuration, along with the number of replicas.
 - W&B table size is proportional to `logging_steps` frequency and `num_replicas`. For very long runs
   with frequent logging, consider increasing `logging_steps`.
 
+## Eval-Only Split Mode
+
+In many scenarios, code-type variants (e.g., hinted, misleading) only exist in the evaluation dataset.
+To train probes that are aware of these variants, **eval-only mode** reads all data from a single LMDB
+prefix and splits it internally into train/valid sets.
+
+### When to Use
+
+- Your LMDB has code-type variants only under the `eval/` prefix
+- You want probes to see `original`, `hinted`, and `misleading` samples during training
+- You need to prevent data leakage between code-type variants of the same problem
+
+### Configuration
+
+```yaml
+config:
+  use_eval_only_split: true         # Enable eval-only mode
+  eval_only_source_prefix: "eval/"  # Prefix to read from (default: "eval/")
+  train_split_ratio: 0.8            # 80% train, 20% valid (default: 0.8)
+  split_by_family: true             # Split by problem family ID (default: true)
+```
+
+### Family-Based Splitting
+
+When `split_by_family: true` (default), the splitter groups records by their **family ID** — the
+base sample ID with the `/a:{category}:{idx}` augmentation suffix stripped. All code-type variants
+of the same problem go to the same split, preventing data leakage from shared problem structure.
+
+For example, these three records share family ID `TACO/train/p000001/s0000/t0000`:
+
+```
+eval/TACO/train/p000001/s0000/t0000/1                    (original)
+eval/TACO/train/p000001/s0000/t0000/a:hints_docs:001/1   (hinted)
+eval/TACO/train/p000001/s0000/t0000/a:issues_docs:001/1  (misleading)
+```
+
+All three will land in the same split (train or valid), never across splits.
+
+The splitter guarantees both splits have at least 1 family. Requires at least 2 families in the
+source data.
+
+When `split_by_family: false`, records are shuffled and split randomly at the individual record level
+(no family grouping).
+
+## Code Type Filtering
+
+You can filter records by code type to train probes on specific subsets:
+
+```yaml
+config:
+  code_type_filter:
+    - original
+    - hinted
+    # - misleading  # excluded
+```
+
+Setting `code_type_filter: null` (default) includes all records. The filter applies in both
+two-prefix and eval-only modes.
+
+Records with no `code_type` field are treated as `"unknown"` for filtering purposes.
+
+## Per-Code-Type Validation Metrics
+
+When `log_per_code_type_metrics: true` (default), the trainer computes and logs **per-code-type
+loss and AUROC** during validation. This enables comparing probe performance across different
+code augmentation types (e.g., does the probe perform better on `original` vs. `hinted` samples?).
+
+Each record carries a `code_type` column (e.g., `"original"`, `"hinted"`, `"misleading"`) that is
+mapped to an integer `code_type_id` for DDP-safe gathering. After gathering predictions across GPUs,
+metrics are broken down by code type.
+
+Metrics are logged to W&B under `valid/{probe_name}/loss/code_type/{ct}` and
+`valid/{probe_name}/auroc/code_type/{ct}`. See [W&B Logging](#wb-logging) for the full metrics table.
+
+Code types with fewer than 2 samples in a validation batch are skipped (no meaningful AUROC).
+
 ## Configuration Reference
 
 ### Training Parameters
@@ -429,6 +532,16 @@ config:
   max_samples_per_split: null         # Cap samples per split, null = no cap (default: null)
   skip_malformed_records: false       # Skip bad records instead of raising (default: false)
   max_seq_length: 3000                # Maximum sequence length for tokenization (default: 3000)
+
+  # Eval-only split mode
+  use_eval_only_split: false          # Use single prefix + internal split (default: false)
+  eval_only_source_prefix: "eval/"    # Prefix to read in eval-only mode (default: "eval/")
+  train_split_ratio: 0.8             # Fraction of data for training in eval-only mode (default: 0.8)
+  split_by_family: true              # Split by family ID for leakage prevention (default: true)
+
+  # Code type filtering and metrics
+  code_type_filter: null             # null = all; or list: ["original", "hinted"] (default: null)
+  log_per_code_type_metrics: true    # Log per-code-type loss/AUROC during validation (default: true)
 
   # Training loop
   num_epochs: 10                    # Number of training epochs (default: 10)
@@ -528,6 +641,25 @@ architectures and layers in W&B dashboards.
 
 **Note:** If the validation set contains only one class, AUROC is reported as `NaN` with a warning.
 
+### Per-Code-Type Metrics
+
+When `log_per_code_type_metrics: true` (default), additional per-code-type breakdowns are logged
+during validation:
+
+| Metric Key                                       | Description                            |
+| ------------------------------------------------ | -------------------------------------- |
+| `valid/{probe_name}/loss/code_type/{code_type}`  | BCE loss for samples of this code type |
+| `valid/{probe_name}/auroc/code_type/{code_type}` | AUROC for samples of this code type    |
+
+For example, with a probe named `mean_L16` and code types `original`, `hinted`, `misleading`:
+
+- `valid/mean_L16/loss/code_type/original`
+- `valid/mean_L16/auroc/code_type/hinted`
+- `valid/mean_L16/auroc/code_type/misleading`
+
+Code types with fewer than 2 samples in a validation step are skipped. Single-class code-type
+subsets produce `NaN` AUROC.
+
 ## Example: Full Sweep Config
 
 The included `v0_probe.yaml` experiment config demonstrates a full architecture x layer sweep:
@@ -586,6 +718,26 @@ When using `selection_strategy: best_reward`, every record must have a non-null 
 
 The derived labels contain values other than 0 and 1. Check the `label_metric_key` or underlying data.
 
+**`ValueError: split_by_family requires at least 2 families, got ...`**
+
+In eval-only mode with `split_by_family: true`, the source data must contain at least 2 distinct
+problem families (distinct base sample IDs). Either add more data, or set `split_by_family: false`
+to split randomly.
+
+**`ValueError: no records remain after code_type_filter=...`**
+
+The `code_type_filter` excluded all records. Check that the specified code types actually exist in
+your LMDB data. Records without a `code_type` field are treated as `"unknown"`.
+
+**`ValueError: code_type_filter must be None ... or a non-empty list; got an empty list`**
+
+An empty list `code_type_filter: []` is invalid. Use `null` (or omit) to include all records, or
+provide a non-empty list of code types.
+
+**`ValueError: eval_only_source_prefix must be non-empty when use_eval_only_split=True`**
+
+When enabling eval-only mode, the source prefix cannot be an empty string.
+
 **`ValueError: Cannot resolve transformer layer N for model type ...`**
 
 The model architecture is not recognized by the activation extractor. The extractor supports
@@ -604,5 +756,6 @@ For other architectures, the fallback chain in `ActivationExtractor._resolve_lay
 
 - LMDB integration plan: `INTEGRATION_PLAN.md` (repository root)
 - Implementation plan: `PROBES_CLAUDE.md` (repository root)
+- Dataset reworking plan: `PROBE_DATASET_REWORKING_PLAN.md` (repository root)
 - Existing experiment config: [`pyine/configs/experiment/probes/v0_probe.yaml`](../../configs/experiment/probes/v0_probe.yaml)
 - RL Training Guide: [`RL_TRAINING_GUIDE.md`](./RL_TRAINING_GUIDE.md)

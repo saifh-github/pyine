@@ -172,3 +172,91 @@ class TestProbeTrainerConfigReplicas:
 
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.log_individual_replicas is False
+
+
+class TestProbeTrainerConfigEvalOnly:
+    """Tests for eval-only split config fields."""
+
+    def _make_minimal_config(self, **overrides: object) -> dict:
+        """Minimal valid config kwargs."""
+        base: dict[str, object] = {
+            "base_model": "some-model",
+            "lmdb_path": "/tmp/fake-lmdb",  # noqa: S108
+            "probe_configs": [
+                ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            ],
+        }
+        base.update(overrides)
+        return base
+
+    def test_use_eval_only_split_default_false(self) -> None:
+        """Default is False."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
+        assert cfg.use_eval_only_split is False
+
+    def test_train_split_ratio_bounds(self) -> None:
+        """Rejects ratio <= 0 or >= 1."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        with pytest.raises(ValueError):
+            ProbeTrainerAppMainConfig(**self._make_minimal_config(train_split_ratio=0.0))
+        with pytest.raises(ValueError):
+            ProbeTrainerAppMainConfig(**self._make_minimal_config(train_split_ratio=1.0))
+
+    def test_eval_only_fields_accepted(self) -> None:
+        """All new fields are accepted without error."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(
+            **self._make_minimal_config(
+                use_eval_only_split=True,
+                eval_only_source_prefix="eval/",
+                train_split_ratio=0.7,
+                split_by_family=False,
+                code_type_filter=["original", "hinted"],
+                log_per_code_type_metrics=True,
+            )
+        )
+        assert cfg.use_eval_only_split is True
+        assert cfg.eval_only_source_prefix == "eval/"
+        assert cfg.train_split_ratio == 0.7
+        assert cfg.split_by_family is False
+        assert cfg.code_type_filter == ["original", "hinted"]
+        assert cfg.log_per_code_type_metrics is True
+
+    def test_code_type_filter_accepts_list(self) -> None:
+        """code_type_filter accepts a list of strings."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(
+            **self._make_minimal_config(code_type_filter=["original", "hinted", "misleading"])
+        )
+        assert cfg.code_type_filter == ["original", "hinted", "misleading"]
+
+    def test_code_type_filter_default_none(self) -> None:
+        """Default code_type_filter is None."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
+        assert cfg.code_type_filter is None
+
+    def test_code_type_filter_empty_list_rejected(self) -> None:
+        """Empty list code_type_filter raises ValidationError."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        with pytest.raises(ValueError, match="empty list"):
+            ProbeTrainerAppMainConfig(**self._make_minimal_config(code_type_filter=[]))
+
+    def test_eval_only_empty_prefix_rejected(self) -> None:
+        """Empty eval_only_source_prefix when use_eval_only_split=True raises ValueError."""
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        with pytest.raises(ValueError, match="eval_only_source_prefix"):
+            ProbeTrainerAppMainConfig(
+                **self._make_minimal_config(
+                    use_eval_only_split=True,
+                    eval_only_source_prefix="",
+                )
+            )

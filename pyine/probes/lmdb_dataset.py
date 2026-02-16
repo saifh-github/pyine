@@ -2,11 +2,19 @@
 
 Reads records exported by DiskRewardLogger during RL training runs and converts
 them into input-label pairs: text = prompt + model_output, label = is_match.
+
+Supports two modes:
+- **Two-prefix mode** (default): Train from ``train_key_prefix``, validate from
+  ``valid_key_prefix``.
+- **Eval-only mode** (``use_eval_only_split=True``): Read from a single prefix
+  and split internally into train/valid, with optional family-based splitting
+  and code-type filtering.
 """
 
 from __future__ import annotations
 
 import logging
+import random
 import typing
 
 import datasets  # noqa: TC002 — used at runtime (Dataset.from_list, DatasetDict)
@@ -171,7 +179,12 @@ def _record_to_probe_sample(
             raise ValueError(msg)
         label = int(reward_metrics[label_metric_key])
 
-    return {"text": text, "label": label, "sample_id": sample_id}
+    # Extract code_type (always present after DiskRewardLogger export)
+    code_type = record.get("code_type")
+    if code_type is None:
+        code_type = "unknown"
+
+    return {"text": text, "label": label, "sample_id": sample_id, "code_type": code_type}
 
 
 def _recompute_label(
@@ -192,6 +205,167 @@ def _recompute_label(
         f"recompute_labels=True is only supported for label_metric_key in "
         f"{set(_RECOMPUTABLE_METRICS)}, got '{label_metric_key}'"
     )
+
+
+def _extract_family_id(sample_id: str) -> str:
+    """Extract the family (augmentless) identifier from a sample_id.
+
+    Strips the ``/a:{category}:{idx}`` augmentation suffix if present.
+    All code-type variants of the same problem share the same family ID.
+
+    Examples:
+        >>> _extract_family_id("TACO/train/p000001/s0000/t0000")
+        'TACO/train/p000001/s0000/t0000'
+        >>> _extract_family_id("TACO/train/p000001/s0000/t0000/a:hints_docs:001")
+        'TACO/train/p000001/s0000/t0000'
+    """
+    augment_marker = "/a:"
+    idx = sample_id.rfind(augment_marker)
+    if idx == -1:
+        return sample_id
+    return sample_id[:idx]
+
+
+def _filter_by_code_type(
+    records: list[tuple[str, dict[str, typing.Any]]],
+    code_type_filter: list[str],
+) -> list[tuple[str, dict[str, typing.Any]]]:
+    """Filter LMDB records to include only specified code types.
+
+    Records with ``code_type=None`` are treated as ``"unknown"`` for filtering
+    purposes.
+
+    Args:
+        records: List of (sample_id, record) tuples.
+        code_type_filter: List of allowed code_type strings.
+
+    Returns:
+        Filtered list of (sample_id, record) tuples.
+    """
+    allowed = set(code_type_filter)
+    return [(sid, rec) for sid, rec in records if (rec.get("code_type") or "unknown") in allowed]
+
+
+def _split_records_by_family(
+    samples: list[dict[str, str | int]],
+    train_ratio: float,
+    seed: int,
+) -> tuple[list[dict[str, str | int]], list[dict[str, str | int]]]:
+    """Split samples into train/valid by family ID.
+
+    All samples sharing a family ID go to the same split, preventing data
+    leakage from shared problem structure.
+
+    Rounding rule: ``n_train = max(1, int(n_families * train_ratio))``,
+    ``n_valid = n_families - n_train``. Both splits are guaranteed at least
+    1 family. Raises ``ValueError`` if fewer than 2 families exist.
+
+    Args:
+        samples: List of sample dicts (must have ``"sample_id"`` key).
+        train_ratio: Fraction of families assigned to train.
+        seed: Random seed for deterministic shuffling.
+
+    Returns:
+        (train_samples, valid_samples) tuple.
+
+    Raises:
+        ValueError: If fewer than 2 families exist.
+    """
+    # Group samples by family ID
+    families: dict[str, list[dict[str, str | int]]] = {}
+    for sample in samples:
+        family_id = _extract_family_id(str(sample["sample_id"]))
+        families.setdefault(family_id, []).append(sample)
+
+    n_families = len(families)
+    if n_families < 2:
+        raise ValueError(
+            f"split_by_family requires at least 2 families, got {n_families}; "
+            "use split_by_family=False or provide more data"
+        )
+
+    # Deterministic shuffle of family IDs
+    family_ids = sorted(families.keys())
+    rng = random.Random(seed)
+    rng.shuffle(family_ids)
+
+    # Split families
+    n_train = max(1, int(n_families * train_ratio))
+    # Ensure at least 1 valid family
+    if n_train >= n_families:
+        n_train = n_families - 1
+
+    train_family_ids = set(family_ids[:n_train])
+
+    train_samples: list[dict[str, str | int]] = []
+    valid_samples: list[dict[str, str | int]] = []
+    for fid in family_ids:
+        target = train_samples if fid in train_family_ids else valid_samples
+        target.extend(families[fid])
+
+    return train_samples, valid_samples
+
+
+def _split_records_random(
+    samples: list[dict[str, str | int]],
+    train_ratio: float,
+    seed: int,
+) -> tuple[list[dict[str, str | int]], list[dict[str, str | int]]]:
+    """Split samples into train/valid by random shuffle.
+
+    Args:
+        samples: List of sample dicts.
+        train_ratio: Fraction of samples assigned to train.
+        seed: Random seed for deterministic shuffling.
+
+    Returns:
+        (train_samples, valid_samples) tuple.
+
+    Raises:
+        ValueError: If fewer than 2 samples exist.
+    """
+    if len(samples) < 2:
+        raise ValueError(f"random split requires at least 2 samples, got {len(samples)}")
+
+    shuffled = list(samples)
+    rng = random.Random(seed)
+    rng.shuffle(shuffled)
+
+    n_train = max(1, int(len(shuffled) * train_ratio))
+    if n_train >= len(shuffled):
+        n_train = len(shuffled) - 1
+
+    return shuffled[:n_train], shuffled[n_train:]
+
+
+def _convert_records_to_samples(
+    records: list[tuple[str, dict[str, typing.Any]]],
+    label_metric_key: str,
+    recompute_labels: bool,
+    compare_options: pyine.utils.code.output_compare.CompareOptions | None,
+    skip_malformed: bool,
+) -> tuple[list[dict[str, str | int]], int]:
+    """Convert LMDB records to probe samples, tracking skipped count.
+
+    Returns:
+        (samples, skipped_count) tuple.
+    """
+    samples: list[dict[str, str | int]] = []
+    skipped = 0
+    for sample_id, record in records:
+        sample = _record_to_probe_sample(
+            record,
+            sample_id,
+            label_metric_key,
+            recompute_labels,
+            compare_options,
+            skip_malformed=skip_malformed,
+        )
+        if sample is None:
+            skipped += 1
+        else:
+            samples.append(sample)
+    return samples, skipped
 
 
 def _validate_probe_split(split_name: str, dataset: datasets.Dataset) -> None:
@@ -231,6 +405,12 @@ def load_probe_dataset_from_lmdb(
     max_samples_per_split: int | None = None,
     skip_malformed_records: bool = False,
     seed: int = 42,
+    # --- Eval-only split mode ---
+    use_eval_only_split: bool = False,
+    eval_only_source_prefix: str = "eval/",
+    train_split_ratio: float = 0.8,
+    split_by_family: bool = True,
+    code_type_filter: list[str] | None = None,
 ) -> datasets.DatasetDict:
     """Load LMDB completion records and create a probe training dataset.
 
@@ -238,34 +418,41 @@ def load_probe_dataset_from_lmdb(
     extracts prompt+completion as input text and derives binary labels
     from reward metrics.
 
+    Supports two modes:
+
+    - **Two-prefix mode** (``use_eval_only_split=False``, default): Load train
+      records from ``train_key_prefix`` and valid records from ``valid_key_prefix``.
+    - **Eval-only mode** (``use_eval_only_split=True``): Load all records from
+      ``eval_only_source_prefix`` and split internally into train/valid.
+
     Args:
         lmdb_path: Path to LMDB database from DiskRewardLogger.
-        label_metric_key: Key in reward_metrics for binary label. Permissive — any
-            string is accepted as long as the key exists in record reward_metrics.
-        train_key_prefix: Key prefix for training records.
-        valid_key_prefix: Key prefix for validation records.
+        label_metric_key: Key in reward_metrics for binary label.
+        train_key_prefix: Key prefix for training records (two-prefix mode).
+        valid_key_prefix: Key prefix for validation records (two-prefix mode).
         selection_strategy: "latest" or "best_reward" for deduplication.
         recompute_labels: If True, re-compute match instead of using stored metrics.
-            Only supported for label_metric_key in {"soft_match/is_match",
-            "hard_match/is_match"} — raises ValueError otherwise.
-        compare_options: CompareOptions for soft match re-computation. Ignored when
-            recompute_labels=False or when label_metric_key is "hard_match/is_match".
+        compare_options: CompareOptions for soft match re-computation.
         max_samples_per_split: Cap samples per split (for debugging/fast iteration).
-        skip_malformed_records: If True, skip records missing required fields and log
-            count at WARNING level. If False (default), raise ValueError.
-        seed: Random seed for shuffling when capping samples.
+        skip_malformed_records: If True, skip records missing required fields.
+        seed: Random seed for shuffling.
+        use_eval_only_split: If True, use eval-only mode (single prefix, internal split).
+        eval_only_source_prefix: LMDB prefix to read when ``use_eval_only_split=True``.
+        train_split_ratio: Fraction of data for training (eval-only mode).
+        split_by_family: Split by family ID to prevent data leakage (eval-only mode).
+        code_type_filter: If set, only include records with matching code_type.
+            ``None`` includes all records. Applies in both modes.
 
     Returns:
         DatasetDict with "train" and "valid" splits, each containing:
         - "text": str (prompt + model_output)
         - "label": int (0 or 1)
         - "sample_id": str (for provenance tracking)
+        - "code_type": str (code augmentation type)
 
     Raises:
         ValueError: If recompute_labels=True with unsupported label_metric_key,
-            if selection_strategy='best_reward' and reward_total is None,
-            if skip_malformed_records=False and a malformed record is encountered,
-            or if no records match a key prefix.
+            if no records match a key prefix, or if code_type_filter excludes all.
     """
     # Defensive runtime check (also enforced in config validator)
     if recompute_labels and label_metric_key not in _RECOMPUTABLE_METRICS:
@@ -274,6 +461,58 @@ def load_probe_dataset_from_lmdb(
             f"{set(_RECOMPUTABLE_METRICS)}, got '{label_metric_key}'"
         )
 
+    if use_eval_only_split:
+        splits = _load_eval_only(
+            lmdb_path=lmdb_path,
+            eval_only_source_prefix=eval_only_source_prefix,
+            selection_strategy=selection_strategy,
+            label_metric_key=label_metric_key,
+            recompute_labels=recompute_labels,
+            compare_options=compare_options,
+            skip_malformed_records=skip_malformed_records,
+            train_split_ratio=train_split_ratio,
+            split_by_family=split_by_family,
+            code_type_filter=code_type_filter,
+            max_samples_per_split=max_samples_per_split,
+            seed=seed,
+        )
+    else:
+        splits = _load_two_prefix(
+            lmdb_path=lmdb_path,
+            train_key_prefix=train_key_prefix,
+            valid_key_prefix=valid_key_prefix,
+            selection_strategy=selection_strategy,
+            label_metric_key=label_metric_key,
+            recompute_labels=recompute_labels,
+            compare_options=compare_options,
+            skip_malformed_records=skip_malformed_records,
+            code_type_filter=code_type_filter,
+            max_samples_per_split=max_samples_per_split,
+            seed=seed,
+        )
+
+    logger.info(
+        "Loaded probe dataset: train=%d samples, valid=%d samples",
+        len(splits["train"]),
+        len(splits["valid"]),
+    )
+    return datasets.DatasetDict(splits)  # pyright: ignore[reportCallIssue, reportArgumentType]  # datasets stubs
+
+
+def _load_two_prefix(
+    lmdb_path: str | Path,
+    train_key_prefix: str,
+    valid_key_prefix: str,
+    selection_strategy: str,
+    label_metric_key: str,
+    recompute_labels: bool,
+    compare_options: pyine.utils.code.output_compare.CompareOptions | None,
+    skip_malformed_records: bool,
+    code_type_filter: list[str] | None,
+    max_samples_per_split: int | None,
+    seed: int,
+) -> dict[str, datasets.Dataset]:
+    """Two-prefix loading mode (original behavior)."""
     splits: dict[str, datasets.Dataset] = {}
     with LMDBReader(lmdb_path) as reader:
         for split_name, prefix in [("train", train_key_prefix), ("valid", valid_key_prefix)]:
@@ -284,21 +523,20 @@ def load_probe_dataset_from_lmdb(
                     "check that the prefix matches the key_prefix used during export"
                 )
 
-            samples: list[dict[str, str | int]] = []
-            skipped = 0
-            for sample_id, record in records:
-                sample = _record_to_probe_sample(
-                    record,
-                    sample_id,
-                    label_metric_key,
-                    recompute_labels,
-                    compare_options,
-                    skip_malformed=skip_malformed_records,
-                )
-                if sample is None:
-                    skipped += 1
-                else:
-                    samples.append(sample)
+            if code_type_filter is not None:
+                records = _filter_by_code_type(records, code_type_filter)
+                if not records:
+                    raise ValueError(
+                        f"no records remain after code_type_filter={code_type_filter} for split '{split_name}'"
+                    )
+
+            samples, skipped = _convert_records_to_samples(
+                records,
+                label_metric_key,
+                recompute_labels,
+                compare_options,
+                skip_malformed_records,
+            )
 
             if skipped > 0:
                 logger.warning(
@@ -321,9 +559,79 @@ def load_probe_dataset_from_lmdb(
             _validate_probe_split(split_name, ds)
             splits[split_name] = ds
 
-    logger.info(
-        "Loaded probe dataset: train=%d samples, valid=%d samples",
-        len(splits["train"]),
-        len(splits["valid"]),
+    return splits
+
+
+def _load_eval_only(
+    lmdb_path: str | Path,
+    eval_only_source_prefix: str,
+    selection_strategy: str,
+    label_metric_key: str,
+    recompute_labels: bool,
+    compare_options: pyine.utils.code.output_compare.CompareOptions | None,
+    skip_malformed_records: bool,
+    train_split_ratio: float,
+    split_by_family: bool,
+    code_type_filter: list[str] | None,
+    max_samples_per_split: int | None,
+    seed: int,
+) -> dict[str, datasets.Dataset]:
+    """Eval-only loading mode: single prefix, internal train/valid split."""
+    with LMDBReader(lmdb_path) as reader:
+        records = _load_lmdb_records(reader, eval_only_source_prefix, selection_strategy)
+
+    if not records:
+        raise ValueError(
+            f"no records match key prefix '{eval_only_source_prefix}' in LMDB at {lmdb_path}; "
+            "check that the prefix matches the key_prefix used during export"
+        )
+
+    if code_type_filter is not None:
+        records = _filter_by_code_type(records, code_type_filter)
+        if not records:
+            raise ValueError(f"no records remain after code_type_filter={code_type_filter}")
+
+    # Convert to samples
+    samples, skipped = _convert_records_to_samples(
+        records,
+        label_metric_key,
+        recompute_labels,
+        compare_options,
+        skip_malformed_records,
     )
-    return datasets.DatasetDict(splits)  # pyright: ignore[reportCallIssue, reportArgumentType]  # datasets stubs
+
+    if skipped > 0:
+        logger.warning(
+            "eval-only mode: skipped %d malformed records out of %d total",
+            skipped,
+            len(records),
+        )
+
+    if not samples:
+        raise ValueError(f"eval-only mode: all {len(records)} records were malformed; no valid samples to train on")
+
+    # Split into train/valid
+    if split_by_family:
+        train_samples, valid_samples = _split_records_by_family(samples, train_split_ratio, seed)
+    else:
+        train_samples, valid_samples = _split_records_random(samples, train_split_ratio, seed)
+
+    # Log per-split code type distribution
+    for name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
+        ct_counts: dict[str, int] = {}
+        for s in split_samples:
+            ct = str(s["code_type"])
+            ct_counts[ct] = ct_counts.get(ct, 0) + 1
+        logger.info("eval-only %s split: %d samples, code_type distribution: %s", name, len(split_samples), ct_counts)
+
+    splits: dict[str, datasets.Dataset] = {}
+    for split_name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
+        ds = datasets.Dataset.from_list(split_samples)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+
+        if max_samples_per_split is not None and len(ds) > max_samples_per_split:
+            ds = ds.shuffle(seed=seed).select(range(max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+
+        _validate_probe_split(split_name, ds)
+        splits[split_name] = ds
+
+    return splits

@@ -93,6 +93,53 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         ),
     )
 
+    # --- Eval-only split mode ---
+    use_eval_only_split: bool = pydantic.Field(
+        default=False,
+        description=(
+            "When True, read data from a single LMDB prefix (eval_only_source_prefix) "
+            "and split internally into train/valid. When False (default), use separate "
+            "train_key_prefix and valid_key_prefix as before."
+        ),
+    )
+    eval_only_source_prefix: str = pydantic.Field(
+        default="eval/",
+        description="LMDB key prefix to read from when use_eval_only_split=True.",
+    )
+    train_split_ratio: float = pydantic.Field(
+        default=0.8,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Fraction of data used for training when use_eval_only_split=True. Remainder is used for validation."
+        ),
+    )
+    split_by_family: bool = pydantic.Field(
+        default=True,
+        description=(
+            "When True (default), split by family (problem) ID so that all code-type "
+            "variants of the same problem go to the same split. Prevents data leakage "
+            "from shared problem structure. When False, split randomly at the record level."
+        ),
+    )
+
+    # --- Code type filtering and metrics ---
+    code_type_filter: list[str] | None = pydantic.Field(
+        default=None,
+        description=(
+            "If set, only include records with code_type matching one of the listed values. "
+            "Example: ['original', 'hinted', 'misleading']. "
+            "None (default) includes all records."
+        ),
+    )
+    log_per_code_type_metrics: bool = pydantic.Field(
+        default=True,
+        description=(
+            "Log per-code-type validation metrics (loss, AUROC) to W&B. "
+            "Requires code_type column in the dataset (always present)."
+        ),
+    )
+
     # --- Training loop ---
     num_epochs: int = pydantic.Field(default=10)
     train_batch_size: int = pydantic.Field(default=4)
@@ -155,6 +202,15 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
                 f"recompute_labels=True is only supported for label_metric_key in "
                 f"{recomputable}, got '{self.label_metric_key}'"
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_eval_only_split_config(self) -> ProbeTrainerAppMainConfig:
+        if self.use_eval_only_split:
+            if not self.eval_only_source_prefix:
+                raise ValueError("eval_only_source_prefix must be non-empty when use_eval_only_split=True")
+        if self.code_type_filter is not None and len(self.code_type_filter) == 0:
+            raise ValueError("code_type_filter must be None (include all) or a non-empty list; got an empty list")
         return self
 
     @pydantic.model_validator(mode="after")
