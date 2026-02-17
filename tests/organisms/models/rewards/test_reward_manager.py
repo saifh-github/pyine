@@ -8,6 +8,7 @@ import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
+import pyine.utils.distrib
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -1114,6 +1115,77 @@ class TestRewardManager:
         assert output.total == 1.0
         assert len(recorded) == 1
         assert "exceeds" in str(recorded[0].message)
+
+
+class TestAllRankLogging:
+    """Tests for all-rank logging gating in _maybe_log_sample."""
+
+    def _make_config(
+        self,
+        expect_all_rank_logging: bool = False,
+    ) -> pyine.organisms.models.rewards.core.configs.RewardManagerConfig:
+        return pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="x",
+                    type="parseable_answer",
+                )
+            ],
+            logging=pyine.organisms.models.rewards.core.configs.LoggingConfig(
+                enabled=True,
+                main_process_only=True,
+                expect_all_rank_logging=expect_all_rank_logging,
+            ),
+        )
+
+    def test_expect_all_rank_on_non_main_rank_logs_sample(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """expect_all_rank_logging=True + non-main rank -> log_sample IS called."""
+        monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            self._make_config(expect_all_rank_logging=True),
+            logger=logger_obj,
+        )
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        manager.compute(ctx)
+        assert len(logger_obj.samples) == 1
+
+    def test_default_config_on_non_main_rank_skips_sample(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """expect_all_rank_logging=False + non-main rank -> log_sample NOT called."""
+        monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            self._make_config(expect_all_rank_logging=False),
+            logger=logger_obj,
+        )
+        ctx = rewards_conftest.make_sample_context(identifier="s1")
+        manager.compute(ctx)
+        assert len(logger_obj.samples) == 0
+
+    def test_expect_all_rank_logging_no_logger_raises(self) -> None:
+        with pytest.raises(ValueError, match="expect_all_rank_logging=True but no logger"):
+            pyine.organisms.models.rewards.core.manager.RewardManager(
+                self._make_config(expect_all_rank_logging=True),
+            )
+
+    def test_has_all_rank_logging_from_config(self) -> None:
+        logger_obj = pyine.organisms.models.rewards.core.logging.InMemoryRewardLogger()
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(
+            self._make_config(expect_all_rank_logging=True),
+            logger=logger_obj,
+        )
+        assert manager._has_all_rank_logging is True
+        manager2 = pyine.organisms.models.rewards.core.manager.RewardManager(
+            self._make_config(expect_all_rank_logging=False),
+            logger=logger_obj,
+        )
+        assert manager2._has_all_rank_logging is False
 
 
 class TestCategoryWiseRewardTracking:

@@ -151,6 +151,14 @@ class TestLoggingConfigValidation:
         config = reward_configs.LoggingConfig(histogram_max_samples=0)
         assert config.histogram_max_samples == 0
 
+    def test_expect_all_rank_logging_with_disabled_raises(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="expect_all_rank_logging"):
+            reward_configs.LoggingConfig(expect_all_rank_logging=True, enabled=False)
+
+    def test_expect_all_rank_logging_with_enabled_ok(self) -> None:
+        config = reward_configs.LoggingConfig(expect_all_rank_logging=True, enabled=True)
+        assert config.expect_all_rank_logging is True
+
 
 class TestWandBRewardLogger:
     def test_log_calls_wandb_run_log(self) -> None:
@@ -1092,6 +1100,28 @@ class TestMakeDiskRewardLogger:
         assert isinstance(disk_logger, reward_logging.DiskRewardLogger)
         assert disk_logger._log_every_n_generations == 5
         disk_logger.close()
+
+    def test_rank_specific_path(self, tmp_path: pathlib.Path) -> None:
+        config = reward_configs.GenerationExportConfig(
+            output_path=tmp_path / "gen",
+            export_all_ranks=True,
+        )
+        disk_logger = reward_logging.make_disk_reward_logger(config, rank=3)
+        disk_logger.close()
+        assert (tmp_path / "gen" / "rank_3").exists()
+
+    def test_no_rank_backward_compat(self, tmp_path: pathlib.Path) -> None:
+        config = reward_configs.GenerationExportConfig(output_path=tmp_path / "gen")
+        disk_logger = reward_logging.make_disk_reward_logger(config)
+        disk_logger.close()
+
+    def test_export_all_ranks_without_rank_raises(self, tmp_path: pathlib.Path) -> None:
+        config = reward_configs.GenerationExportConfig(
+            output_path=tmp_path / "gen",
+            export_all_ranks=True,
+        )
+        with pytest.raises(ValueError, match="explicit rank"):
+            reward_logging.make_disk_reward_logger(config)
 
 
 class TestGenerationExportConfig:

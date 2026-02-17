@@ -61,7 +61,65 @@ def test_is_main_process_with_negative_local_rank(
 ) -> None:
     monkeypatch.setenv("LOCAL_RANK", "-1")
     assert pyine.utils.distrib.get_global_rank(default=None) is None
+    assert pyine.utils.distrib.is_main_process() is False
+
+
+def test_is_main_process_local_rank_only_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOCAL_RANK=0 set without explicit global rank -> ambiguous distributed -> False."""
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    assert pyine.utils.distrib.is_main_process() is False
+
+
+def test_is_main_process_confirmed_single_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOCAL_RANK=0, WORLD_SIZE=2, LOCAL_WORLD_SIZE=2 -> num_nodes=1 -> delegates to is_local_main_process."""
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
     assert pyine.utils.distrib.is_main_process() is True
+
+
+def test_is_main_process_confirmed_single_node_not_local_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOCAL_RANK=1, WORLD_SIZE=2, LOCAL_WORLD_SIZE=2 -> num_nodes=1 -> is_local_main_process=False."""
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    assert pyine.utils.distrib.is_main_process() is False
+
+
+def test_is_main_process_world_size_one_without_local_world_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOCAL_RANK=0, WORLD_SIZE=1, no LOCAL_WORLD_SIZE -> confirmed single-node via world_size."""
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    assert pyine.utils.distrib.is_main_process() is True
+
+
+def test_is_main_process_no_env_returns_true() -> None:
+    """No distributed env vars at all -> True (single process)."""
+    assert pyine.utils.distrib.is_main_process() is True
+
+
+def test_is_main_process_explicit_global_rank_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """has_explicit_global_rank()=True, get_global_rank()=0 -> True."""
+    monkeypatch.setenv("RANK", "0")
+    assert pyine.utils.distrib.is_main_process() is True
+
+
+def test_is_main_process_explicit_global_rank_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """has_explicit_global_rank()=True, get_global_rank()=3 -> False."""
+    monkeypatch.setenv("RANK", "3")
+    assert pyine.utils.distrib.is_main_process() is False
 
 
 def test_get_world_size_from_env(

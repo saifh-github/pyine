@@ -538,6 +538,25 @@ config = reward_configs.RewardManagerConfig(
 # - synchronize before finalize (when barrier_before_finalize=True).
 ```
 
+### All-Rank Disk Export
+
+To capture generated completions from **all** distributed ranks (for later SFT re-import),
+use `GenerationExportConfig.export_all_ranks=True`:
+
+```python
+import pyine.organisms.models.rewards.core.configs as reward_configs
+
+export_config = reward_configs.GenerationExportConfig(
+    output_path=pathlib.Path("/path/to/export"),
+    export_all_ranks=True,
+)
+```
+
+Each rank writes to a rank-specific subdirectory: `output_path/rank_0/`, `output_path/rank_1/`,
+etc. This avoids write contention across ranks.
+
+Note: WandB logging remains rank-0-only; only generation export fans out to all ranks.
+
 ## Testing
 
 Use registry snapshots for test isolation:

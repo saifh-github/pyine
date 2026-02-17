@@ -93,12 +93,18 @@ class RewardManager:
             reward_terms.ensure_builtin_terms_registered()
         self._parser = self._resolve_parser(parser)
         self._logger = logger
+        self._has_all_rank_logging = config.logging.expect_all_rank_logging
         if config.logging.enabled and logger is None:
-            # Allow missing logger on non-main ranks when main_process_only=True.
-            # In distributed training with wandb_init_on_all_ranks=False (the default), non-main
-            # ranks don't have a wandb.Run object and thus cannot create a logger. This is fine
-            # because when main_process_only=True, the manager skips all logging operations on
-            # non-main ranks anyway (see _maybe_log_sample, flush_stats, finalize_run methods).
+            if self._has_all_rank_logging:
+                raise ValueError(
+                    "logging.expect_all_rank_logging=True but no logger was provided on this rank; "
+                    "ensure all ranks receive a logger when using export_all_ranks=True"
+                )
+            # allow missing logger on non-main ranks when main_process_only=True; in distrib runs
+            # with wandb_init_on_all_ranks=False (the default), non-main ranks don't have a
+            # wandb.Run object and thus cannot create a logger. This is fine because when
+            # main_process_only=True, the manager skips all logging operations on non-main ranks
+            # anyway (see _maybe_log_sample, flush_stats, finalize_run methods).
             if not config.logging.main_process_only or pyine.utils.distrib.is_main_process():
                 raise ValueError(
                     "logging is enabled in config (LoggingConfig.enabled=True) but no logger was provided; "
@@ -1531,9 +1537,10 @@ class RewardManager:
                 this rank's N-th sample triggers logging.
             global_batch_count: Global batch count (1-indexed, same for all samples in this batch).
         """
-        # early return depending on main_process_only
+        # early return depending on main_process_only (relaxed when all-rank logging is expected)
         if self._config.logging.main_process_only and not pyine.utils.distrib.is_main_process():
-            return
+            if not self._has_all_rank_logging:
+                return
         # check if logging is enabled (per-rank log parameter)
         should_log = self._config.logging.enabled if log is None else log
         if not should_log:

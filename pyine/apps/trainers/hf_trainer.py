@@ -320,7 +320,7 @@ async def main(
     pyine.apps.trainers.common.validate_wandb_sweeper_requirements(config)
     pyine.apps.trainers.common.validate_training_prediction_vllm_compatibility(config)
     persist_runtime_artifacts = pyine.utils.distrib.is_local_main_process()
-    is_global_main = pyine.utils.distrib.is_confirmed_global_main()
+    is_global_main = pyine.utils.distrib.is_main_process()
     resume_artifacts = pyine.apps.trainers.common.prepare_resume_artifacts(
         config=config,
         runtime=runtime,

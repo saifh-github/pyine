@@ -15,6 +15,8 @@ import pyine.configs.schemas
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.models.rewards.core.configs as reward_configs
+import pyine.organisms.models.rewards.core.logging as reward_logging
+import pyine.utils.distrib
 import tests.env_checks
 
 
@@ -886,6 +888,128 @@ class TestCreateModelOrganismRewardComponents:
         config = _make_reward_manager_config(log_total=False)
         export_config = reward_configs.GenerationExportConfig(output_path=pathlib.Path("/nonexistent/dummy/export"))
         with pytest.raises(ValueError, match="log_total=False"):
+            trainer_common.create_model_organism_reward_components(
+                reward_manager_config=config,
+                tokenizer=None,
+                generation_export_config=export_config,
+            )
+
+    def test_raises_when_export_no_all_ranks_and_main_process_only_false(self) -> None:
+        config = _make_reward_manager_config(main_process_only=False)
+        export_config = reward_configs.GenerationExportConfig(output_path=pathlib.Path("/nonexistent/dummy/export"))
+        with pytest.raises(ValueError, match="export_all_ranks=False"):
+            trainer_common.create_model_organism_reward_components(
+                reward_manager_config=config,
+                tokenizer=None,
+                generation_export_config=export_config,
+            )
+
+    def test_export_all_ranks_on_non_main_creates_disk_logger(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """export_all_ranks=True on non-main rank -> disk logger created with rank-specific path."""
+        monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
+        monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: True)
+        monkeypatch.setattr(pyine.utils.distrib, "get_global_rank", lambda default=None: 2)
+        mock_manager = types.SimpleNamespace()
+        mock_adapter = types.SimpleNamespace()
+        monkeypatch.setattr(
+            trainer_common.reward_manager_mod,
+            "RewardManager",
+            lambda *args, **kwargs: mock_manager,
+        )
+        monkeypatch.setattr(
+            trainer_common.reward_trl,
+            "TRLRewardAdapter",
+            lambda *args, **kwargs: mock_adapter,
+        )
+        export_path = tmp_path / "export_lmdb"
+        export_config = reward_configs.GenerationExportConfig(
+            output_path=export_path,
+            export_all_ranks=True,
+        )
+        config = _make_reward_manager_config()
+        result = trainer_common.create_model_organism_reward_components(
+            reward_manager_config=config,
+            tokenizer=None,
+            generation_export_config=export_config,
+            wandb_run=None,
+        )
+        assert result._disk_logger is not None
+        result.close()
+        assert (export_path / "rank_2").exists()
+
+    def test_export_all_ranks_on_rank0_creates_composite(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """export_all_ranks=True on rank 0 with wandb -> composite wrapping WandB + Disk."""
+        monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: True)
+        monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: True)
+        monkeypatch.setattr(pyine.utils.distrib, "get_global_rank", lambda default=None: 0)
+        mock_manager = types.SimpleNamespace()
+        mock_adapter = types.SimpleNamespace()
+        captured_kwargs: dict = {}
+
+        def capture_manager(*args: object, **kwargs: object) -> types.SimpleNamespace:
+            captured_kwargs.update(kwargs)
+            return mock_manager
+
+        monkeypatch.setattr(trainer_common.reward_manager_mod, "RewardManager", capture_manager)
+        monkeypatch.setattr(
+            trainer_common.reward_trl,
+            "TRLRewardAdapter",
+            lambda *args, **kwargs: mock_adapter,
+        )
+        export_path = tmp_path / "export_lmdb"
+        export_config = reward_configs.GenerationExportConfig(
+            output_path=export_path,
+            export_all_ranks=True,
+        )
+        config = _make_reward_manager_config()
+        mock_wandb_run = types.SimpleNamespace(log=lambda *a, **kw: None)
+        result = trainer_common.create_model_organism_reward_components(
+            reward_manager_config=config,
+            tokenizer=None,
+            generation_export_config=export_config,
+            wandb_run=mock_wandb_run,
+        )
+        # logger passed to manager should be a composite
+        logger_arg = captured_kwargs.get("logger")
+        assert isinstance(logger_arg, reward_logging.CompositeRewardLogger)
+        result.close()
+
+    def test_export_all_ranks_ambiguous_distributed_raises(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """export_all_ranks=True + LOCAL_RANK=0 + no explicit global rank -> ValueError."""
+        monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
+        monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: False)
+        monkeypatch.setattr(pyine.utils.distrib, "get_local_rank", lambda default=None: 0)
+        mock_manager = types.SimpleNamespace()
+        mock_adapter = types.SimpleNamespace()
+        monkeypatch.setattr(
+            trainer_common.reward_manager_mod,
+            "RewardManager",
+            lambda *args, **kwargs: mock_manager,
+        )
+        monkeypatch.setattr(
+            trainer_common.reward_trl,
+            "TRLRewardAdapter",
+            lambda *args, **kwargs: mock_adapter,
+        )
+        export_path = tmp_path / "export_lmdb"
+        export_config = reward_configs.GenerationExportConfig(
+            output_path=export_path,
+            export_all_ranks=True,
+        )
+        config = _make_reward_manager_config()
+        with pytest.raises(ValueError, match="authoritative global rank"):
             trainer_common.create_model_organism_reward_components(
                 reward_manager_config=config,
                 tokenizer=None,

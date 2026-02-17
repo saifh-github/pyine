@@ -1420,17 +1420,34 @@ class DiskRewardLogger:
 
 def make_disk_reward_logger(
     export_config: reward_configs.GenerationExportConfig,
+    *,
+    rank: int | None = None,
 ) -> DiskRewardLogger:
     """Create a ``DiskRewardLogger`` from a ``GenerationExportConfig``.
 
     Args:
         export_config: Export configuration specifying output path and logging frequency.
+        rank: Optional global rank for per-rank output paths. Required when
+            ``export_config.export_all_ranks=True``; appends ``rank_{rank}`` to the output path.
 
     Returns:
         A disk-backed reward logger.
+
+    Raises:
+        ValueError: If ``export_all_ranks=True`` but no rank is provided.
     """
+    if export_config.export_all_ranks and rank is None:
+        raise ValueError(
+            "export_all_ranks=True requires an explicit rank to construct rank-specific "
+            "output paths; resolve an authoritative global rank (via has_explicit_global_rank() "
+            "then get_global_rank(), or _resolve_export_rank() in the training harness) "
+            "before calling make_disk_reward_logger()"
+        )
+    output_path = export_config.output_path
+    if rank is not None:
+        output_path = output_path / f"rank_{rank}"
     return DiskRewardLogger(
-        output_path=export_config.output_path,
+        output_path=output_path,
         log_every_n_generations=export_config.log_every_n_generations,
     )
 

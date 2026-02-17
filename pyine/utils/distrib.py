@@ -97,7 +97,6 @@ __all__ = [
     "is_distributed",
     "is_local_main_process",
     "has_explicit_global_rank",
-    "is_confirmed_global_main",
     "is_main_process",
     "is_per_node_prep_enabled",
     "local_barrier",
@@ -276,49 +275,44 @@ def has_explicit_global_rank() -> bool:
     return rank is not None and rank >= 0
 
 
-def is_confirmed_global_main() -> bool:
-    """Return True only when this process is confirmed to be the single global primary.
-
-    Unlike ``is_main_process()`` which can be fooled when ``get_global_rank()`` falls
-    back to LOCAL_RANK (every node's local-rank-0 looks like global-rank-0), this
-    function requires an authoritative global rank source. In multi-node setups where
-    only LOCAL_RANK is available, it conservatively returns False to avoid accidental
-    fan-out of globally-singleton operations (W&B init, fixed-name artifact writes).
-
-    For single-node runs (or when no distributed environment is detected), the function
-    falls back to ``is_local_main_process()`` since local == global in that case.
-
-    Use this for operations that must happen exactly once across all nodes. For per-node
-    operations, use ``is_local_main_process()`` instead.
-    """
-    if has_explicit_global_rank():
-        return is_main_process()
-    num_nodes = get_num_nodes(default=None)
-    if num_nodes in (None, 1):
-        return is_local_main_process()
-    return False
-
-
 def is_main_process(
     rank: int | None = None,
 ) -> bool:
-    """Return ``True`` when the provided (or detected) global rank is 0.
+    """Return ``True`` when this process is the single global primary.
 
-    The main process (global_rank == 0) is the single primary process across all nodes.
-    Use this for operations that should happen exactly once globally (e.g., logging,
-    saving final checkpoints).
+    When ``rank`` is provided, simply checks ``rank == 0``.
+
+    When ``rank`` is None (the default), detects from environment with conservative
+    multi-node handling: if LOCAL_RANK is set (indicating a distributed launcher) but
+    no authoritative global rank source (RANK, SLURM_PROCID, torch.distributed) exists,
+    returns ``False`` unless the setup is confirmed single-node (num_nodes == 1, or
+    WORLD_SIZE == 1). This avoids accidental fan-out of globally-singleton operations
+    when every node's local-rank-0 would otherwise look like global-rank-0.
+
+    For non-distributed runs (no LOCAL_RANK, no RANK, no torch.distributed), returns
+    ``True`` since there is only one process.
+
+    Use this for operations that MUST happen exactly once across all nodes.
 
     See also: ``is_local_main_process()`` for operations that should happen once per node.
 
     Args:
         rank: Optional explicit global rank to check. If None, detects from environment.
-
-    Returns:
-        True if global_rank == 0 (or if global_rank cannot be determined).
     """
-    if rank is None:
-        rank = get_global_rank(default=None)
-    return rank in (None, 0)
+    if rank is not None:
+        return rank == 0
+    if has_explicit_global_rank():
+        return get_global_rank() == 0
+    # check if confirmed single-node: either num_nodes==1 (via NNODES or world_size//local_world_size)
+    # or world_size==1 (only one process total, so local==global regardless of LOCAL_WORLD_SIZE)
+    num_nodes = get_num_nodes(default=None)
+    if num_nodes == 1 or get_world_size(default=None) == 1:
+        return is_local_main_process()  # confirmed single-node
+    # if LOCAL_RANK is set without an explicit global rank, we're in an ambiguous
+    # distributed setup (could be multi-node with each node's local-rank-0 looking
+    # like global main); conservatively return False. Otherwise, no distributed env
+    # detected at all -> True.
+    return get_local_rank(default=None) is None
 
 
 def is_local_main_process(

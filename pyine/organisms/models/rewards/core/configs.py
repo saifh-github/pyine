@@ -518,6 +518,20 @@ class LoggingConfig(reward_types.BaseConfig):
     When False, all ranks log and frequency gating uses GLOBAL generation counts, so the
     N-th global sample triggers logging regardless of which rank processes it. This requires
     all ranks to have a logger configured.
+
+    Note: When ``expect_all_rank_logging=True``, the manager relaxes this check for
+    per-sample logging so that non-main ranks also call ``log_sample()``. Phase
+    summaries and batch stats are unaffected and remain main-process-only.
+    """
+    expect_all_rank_logging: bool = False
+    """Whether the manager should expect logging on all ranks.
+
+    When True, the manager (1) raises ValueError if constructed without a logger on any
+    rank (including non-main ranks), and (2) relaxes the ``main_process_only`` early
+    return in ``_maybe_log_sample`` so non-main ranks also log samples.
+
+    Set automatically by the training harness when
+    ``GenerationExportConfig.export_all_ranks=True`` to fail fast on misconfiguration.
     """
     gather_distributed_summaries: bool = True
     """Whether to gather run summaries across ranks and log them on rank 0."""
@@ -546,6 +560,15 @@ class LoggingConfig(reward_types.BaseConfig):
     track_bin_quantiles). When enabled, those histograms store all values for the phase without
     bounds, which may cause memory growth in very long runs.
     """
+
+    @pydantic.model_validator(mode="after")
+    def _validate_expect_all_rank_logging(self) -> typing.Self:
+        if self.expect_all_rank_logging and not self.enabled:
+            raise ValueError(
+                "expect_all_rank_logging=True requires enabled=True; "
+                "cannot require all-rank loggers when logging is disabled"
+            )
+        return self
 
     @pydantic.field_validator("histogram_num_bins")
     @classmethod
@@ -591,6 +614,21 @@ class GenerationExportConfig(pydantic.BaseModel):
 
     Set to 1 (default) to export every generation. Higher values subsample the export,
     which can reduce disk usage for long runs where not every completion is needed.
+    """
+    export_all_ranks: bool = False
+    """Whether to export generations on all distributed ranks.
+
+    When True, each rank should write to its own path (e.g. `{output_path}/rank_{global_rank}/`)
+    so that all completions are captured across distributed training. When False (default), only the
+    logging rank (determined by LoggingConfig.main_process_only) exports to ``output_path`` directly.
+
+    Callers outside the standard training harness (``create_model_organism_reward_components``)
+    must also set ``LoggingConfig.expect_all_rank_logging=True`` and ensure all ranks
+    receive a logger to avoid silently dropping data.
+
+    Note: When combined with ``main_process_only=False``, frequency gating uses global generation
+    counts. If ``log_every_n_generations > 1``, different ranks may export different subsets.
+    Use ``log_every_n_generations=1`` (the default) to guarantee all completions are captured.
     """
 
 

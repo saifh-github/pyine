@@ -1377,6 +1377,32 @@ def log_shutdown_status(
         logger.info(f"{training_type} run exited early after honoring shutdown request")
 
 
+def _resolve_export_rank() -> int:
+    """Return a validated global rank for per-rank disk export.
+
+    Raises ValueError in ambiguous distributed setups where LOCAL_RANK is set but no authoritative
+    global rank (RANK, SLURM_PROCID, torch.distributed) exists. Allows true single-process runs
+    (no LOCAL_RANK) by returning 0.
+
+    Note: does NOT use get_global_rank() directly because that function falls back to LOCAL_RANK
+    when no explicit global rank env var exists, which would silently return the local rank and
+    cause cross-node path collisions.
+    """
+    if pyine.utils.distrib.has_explicit_global_rank():
+        rank = pyine.utils.distrib.get_global_rank(default=None)
+        if rank is None:
+            raise RuntimeError("has_explicit_global_rank() returned True but get_global_rank() returned None")
+        return rank
+    # no explicit global rank; only OK if not in distributed mode at all
+    if pyine.utils.distrib.get_local_rank(default=None) is not None:
+        raise ValueError(
+            "export_all_ranks=True requires an authoritative global rank "
+            "(RANK, SLURM_PROCID, or torch.distributed), but only LOCAL_RANK is set; "
+            "use a launcher that sets global rank env vars (torchrun, srun, deepspeed)"
+        )
+    return 0  # single-process, non-distributed
+
+
 @dataclasses.dataclass
 class ModelOrganismRewardComponents:
     """Components produced by reward setup for RL training of model organisms."""
@@ -1403,7 +1429,7 @@ def create_model_organism_reward_components(
     prompt_key: str = "prompts",
     sample_data_key: str = "sample_data",
 ) -> ModelOrganismRewardComponents:
-    """Create reward manager, adapter, and optional loggers for RL training.
+    """Create a reward manager, adapter, and optional loggers for RL training.
 
     Args:
         reward_manager_config: Configuration for the reward manager.
@@ -1433,19 +1459,33 @@ def create_model_organism_reward_components(
             "generation_export_config is set but reward_manager_config.logging.log_total=False; "
             "reward_total will be None in exported records"
         )
-    if generation_export_config is not None and not reward_manager_config.logging.main_process_only:
+    if (
+        generation_export_config is not None
+        and not generation_export_config.export_all_ranks
+        and not reward_manager_config.logging.main_process_only
+    ):
         raise ValueError(
-            "generation_export_config is set but reward_manager_config.logging.main_process_only=False; "
-            "disk export requires main_process_only=True to avoid multiple ranks writing to the same LMDB"
+            "generation_export_config with export_all_ranks=False requires "
+            "logging.main_process_only=True to avoid multiple ranks writing to the same LMDB; "
+            "set export_all_ranks=True for per-rank exports, or use main_process_only=True"
+        )
+    if generation_export_config is not None and generation_export_config.export_all_ranks:
+        reward_manager_config = reward_manager_config.model_copy(
+            update={"logging": reward_manager_config.logging.model_copy(update={"expect_all_rank_logging": True})}
         )
     is_logging_rank = not reward_manager_config.logging.main_process_only or pyine.utils.distrib.is_main_process()
     loggers: list[reward_types.RewardLogger] = []
+    # wandb: only on logging rank (rank 0 when main_process_only=True)
     if wandb_run is not None and reward_manager_config.logging.enabled and is_logging_rank:
         loggers.append(reward_logging.make_wandb_reward_logger(wandb_run, reward_manager_config.logging))
+    # disk outputs: on ALL ranks when export_all_ranks=True, else only on logging rank
     disk_logger: reward_logging.DiskRewardLogger | None = None
-    if generation_export_config is not None and is_logging_rank:
-        disk_logger = reward_logging.make_disk_reward_logger(generation_export_config)
-        loggers.append(disk_logger)
+    if generation_export_config is not None:
+        should_create_disk = is_logging_rank or generation_export_config.export_all_ranks
+        if should_create_disk:
+            rank = _resolve_export_rank() if generation_export_config.export_all_ranks else None
+            disk_logger = reward_logging.make_disk_reward_logger(generation_export_config, rank=rank)
+            loggers.append(disk_logger)
     reward_logger: reward_types.RewardLogger | None = None
     if len(loggers) == 1:
         reward_logger = loggers[0]

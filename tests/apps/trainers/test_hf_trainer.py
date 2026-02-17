@@ -1548,11 +1548,11 @@ async def test_main_local_rank0_non_global_rank0_gating(
 
         return unittest.mock.Mock(spec=pyine.data.datamodule.ConversationDataModule)
 
-    # simulate: local_rank=0 but not confirmed global main
+    # simulate: local_rank=0 but not global main
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.distrib,
-        "is_confirmed_global_main",
-        lambda: False,
+        "is_main_process",
+        lambda rank=None: False,
     )
     monkeypatch.setattr(
         pyine.apps.trainers.hf_trainer.pyine.utils.distrib,
