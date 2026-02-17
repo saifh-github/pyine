@@ -82,7 +82,7 @@ ______________________________________________________________________
 config:
   # Existing fields (unchanged)
   lmdb_path: /path/to/lmdb
-  label_metric_key: "soft_match/is_match"
+  label_metric_key: "reward/metrics/soft_match/is_match"
   selection_strategy: latest
   # ...
 
@@ -126,7 +126,7 @@ When `code_type_filter` is set (e.g., `["original", "hinted", "misleading"]`), o
 ```yaml
 config:
   lmdb_path: /path/to/rl-run/reward_logs.lmdb
-  label_metric_key: "soft_match/is_match"
+  label_metric_key: "reward/metrics/soft_match/is_match"
 
   # Use eval-only mode
   use_eval_only_split: true
@@ -326,7 +326,7 @@ def _filter_by_code_type(
 ```python
 def load_probe_dataset_from_lmdb(
     lmdb_path: str | Path,
-    label_metric_key: str = "soft_match/is_match",
+    label_metric_key: str = "reward/metrics/soft_match/is_match",
     train_key_prefix: str = "train/",
     valid_key_prefix: str = "eval/",
     selection_strategy: str = "latest",

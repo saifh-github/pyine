@@ -311,7 +311,7 @@ class TestLoadProbeDatasetFromLmdb:
         """recompute_labels=True with soft_match works."""
         ds = load_probe_dataset_from_lmdb(
             debug_lmdb,
-            label_metric_key="soft_match/is_match",
+            label_metric_key="reward/metrics/soft_match/is_match",
             recompute_labels=True,
         )
         labels = set(ds["train"]["label"])
@@ -321,7 +321,7 @@ class TestLoadProbeDatasetFromLmdb:
         """recompute_labels=True with hard_match works."""
         ds = load_probe_dataset_from_lmdb(
             debug_lmdb,
-            label_metric_key="hard_match/is_match",
+            label_metric_key="reward/metrics/hard_match/is_match",
             recompute_labels=True,
         )
         labels = set(ds["train"]["label"])
@@ -449,14 +449,14 @@ class TestSkipMalformedRecords:
         ser = SerializationConfig(method=SerializationMethod.JSON_ZSTD)
         with LMDBWriter(lmdb_path, serialization_config=ser) as writer:
             # Missing prompt and model_output
-            writer.put("train/bad_sample/1", {"reward_metrics": {"soft_match/is_match": 1}})
+            writer.put("train/bad_sample/1", {"reward_metrics": {"reward/metrics/soft_match/is_match": 1}})
             # Valid record
             writer.put(
                 "eval/good_sample/1",
                 {
                     "prompt": "p",
                     "model_output": "o",
-                    "reward_metrics": {"soft_match/is_match": 1},
+                    "reward_metrics": {"reward/metrics/soft_match/is_match": 1},
                 },
             )
 
@@ -471,7 +471,9 @@ class TestSkipMalformedRecords:
         ser = SerializationConfig(method=SerializationMethod.JSON_ZSTD)
         with LMDBWriter(lmdb_path, serialization_config=ser) as writer:
             # Bad record (missing prompt)
-            writer.put("train/bad/1", {"model_output": "o", "reward_metrics": {"soft_match/is_match": 0}})
+            writer.put(
+                "train/bad/1", {"model_output": "o", "reward_metrics": {"reward/metrics/soft_match/is_match": 0}}
+            )
             # Good records
             for i in range(5):
                 writer.put(
@@ -479,7 +481,7 @@ class TestSkipMalformedRecords:
                     {
                         "prompt": f"prompt {i}",
                         "model_output": f"output {i}",
-                        "reward_metrics": {"soft_match/is_match": i % 2},
+                        "reward_metrics": {"reward/metrics/soft_match/is_match": i % 2},
                     },
                 )
             # Valid eval records
@@ -489,7 +491,7 @@ class TestSkipMalformedRecords:
                     {
                         "prompt": f"eval prompt {i}",
                         "model_output": f"eval output {i}",
-                        "reward_metrics": {"soft_match/is_match": i % 2},
+                        "reward_metrics": {"reward/metrics/soft_match/is_match": i % 2},
                     },
                 )
 

@@ -84,7 +84,7 @@ class TestProbeTrainerAppMainConfig:
         cfg = ProbeTrainerAppMainConfig(
             **self._make_minimal_config(
                 recompute_labels=True,
-                label_metric_key="soft_match/is_match",
+                label_metric_key="reward/metrics/soft_match/is_match",
             )
         )
         assert cfg.recompute_labels is True

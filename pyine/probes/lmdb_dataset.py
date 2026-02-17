@@ -20,6 +20,7 @@ import typing
 import datasets  # noqa: TC002 — used at runtime (Dataset.from_list, DatasetDict)
 
 from pyine.data.utils.lmdb_io import LMDBReader
+from pyine.probes.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
 
 if typing.TYPE_CHECKING:
     from pathlib import Path
@@ -28,7 +29,7 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_RECOMPUTABLE_METRICS = frozenset({"soft_match/is_match", "hard_match/is_match"})
+_RECOMPUTABLE_METRICS = frozenset({SOFT_MATCH_KEY, HARD_MATCH_KEY})
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +197,10 @@ def _recompute_label(
     """Re-compute a binary label from expected/predicted outputs."""
     from pyine.organisms.models.rewards.terms.code_exec.utils import compute_hard_match, compute_soft_match
 
-    if label_metric_key == "soft_match/is_match":
+    if label_metric_key == SOFT_MATCH_KEY:
         result = compute_soft_match(expected=expected, predicted=predicted, options=compare_options)
         return int(result.equal)
-    if label_metric_key == "hard_match/is_match":
+    if label_metric_key == HARD_MATCH_KEY:
         return int(compute_hard_match(expected=expected, predicted=predicted))
     raise ValueError(
         f"recompute_labels=True is only supported for label_metric_key in "
@@ -396,7 +397,7 @@ def _validate_probe_split(split_name: str, dataset: datasets.Dataset) -> None:
 
 def load_probe_dataset_from_lmdb(
     lmdb_path: str | Path,
-    label_metric_key: str = "soft_match/is_match",
+    label_metric_key: str = SOFT_MATCH_KEY,
     train_key_prefix: str = "train/",
     valid_key_prefix: str = "eval/",
     selection_strategy: str = "latest",

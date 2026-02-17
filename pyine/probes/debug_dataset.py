@@ -21,6 +21,7 @@ import typing
 from pathlib import Path
 
 from pyine.data.utils.lmdb_io import LMDBWriter, SerializationConfig, SerializationMethod
+from pyine.probes.reward_keys import HARD_MATCH_KEY, REWARD_TERMS_PREFIX, SOFT_MATCH_KEY
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -109,10 +110,13 @@ def _make_record(
         "final_answer": final_answer,
         "reasoning": None,
         "reward_total": float(label),
-        "reward_terms": {"soft_match": float(label), "hard_match": float(label)},
+        "reward_terms": {
+            f"{REWARD_TERMS_PREFIX}soft_match": float(label),
+            f"{REWARD_TERMS_PREFIX}hard_match": float(label),
+        },
         "reward_metrics": {
-            "soft_match/is_match": label,
-            "hard_match/is_match": label,
+            SOFT_MATCH_KEY: label,
+            HARD_MATCH_KEY: label,
         },
         "reward_terms_raw": None,
         "predict_type": "program_output",

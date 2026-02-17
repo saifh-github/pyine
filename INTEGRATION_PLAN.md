@@ -10,7 +10,7 @@ Replace the probe trainer's current HuggingFace dataset interface (`dataset_path
 | --------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | **Data source**       | Pre-processed HF dataset on disk (`datasets.load_from_disk`) | LMDB database(s) exported by `DiskRewardLogger`                                          |
 | **Input text**        | `messages` column (chat format) or plain `text` column       | `prompt` + `model_output` concatenated from LMDB record (plain text, post-chat-template) |
-| **Label**             | Pre-computed `label` column (0/1)                            | Derived from `reward_metrics["soft_match/is_match"]` in LMDB record                      |
+| **Label**             | Pre-computed `label` column (0/1)                            | Derived from `reward_metrics["reward/metrics/soft_match/is_match"]` in LMDB record       |
 | **Train/valid split** | Separate HF dataset splits (`train`/`valid`)                 | Key prefix filtering on LMDB keys (e.g., `"train/"`, `"eval/"`)                          |
 | **Config**            | `dataset_path`, `text_field`, `label_field`                  | `lmdb_path`, `label_metric_key`, `train_key_prefix`, `valid_key_prefix`                  |
 | **Debug dataset**     | Chat-format messages with keyword signal                     | Mock LMDB records matching `DiskRewardLogger` format                                     |
@@ -42,7 +42,7 @@ LMDB (from DiskRewardLogger)
   load_probe_dataset_from_lmdb()
     - Filter by key_prefix → train/valid splits
     - Extract text = prompt + model_output
-    - Extract label = reward_metrics[label_metric_key] (e.g., "soft_match/is_match")
+    - Extract label = reward_metrics[label_metric_key] (e.g., "reward/metrics/soft_match/is_match")
     - Validate labels are binary
     - Return HF DatasetDict with "train"/"valid" splits
        ↓
@@ -95,7 +95,7 @@ This handles multi-segment `sample_id` values (e.g., `"TACO/train/p000001/s0000"
 
 **Serialization**: Records are stored using `SerializationMethod.JSON_ZSTD` (orjson + zstandard compression), matching `DiskRewardLogger`'s write format.
 
-**Metric key for labels**: `reward_metrics["soft_match/is_match"]` — value is `1` (correct) or `0` (incorrect). The term name prefix (e.g., `"soft_match/"`) is added by `RewardManager` during aggregation. Hard match is also available as `"hard_match/is_match"`.
+**Metric key for labels**: `reward_metrics["reward/metrics/soft_match/is_match"]` — value is `1` (correct) or `0` (incorrect). The `reward/metrics/` prefix is added by `RewardManager` during aggregation, producing full keys like `"reward/metrics/soft_match/is_match"`. Hard match is also available as `"reward/metrics/hard_match/is_match"`.
 
 ______________________________________________________________________
 
@@ -106,8 +106,8 @@ ______________________________________________________________________
 The `SoftMatchTerm` (and `HardMatchTerm`) emit an `is_match` metric that is stored in the LMDB record under `reward_metrics`. The full key path in the record is:
 
 ```
-reward_metrics["soft_match/is_match"] → 1 or 0
-reward_metrics["hard_match/is_match"] → 1 or 0
+reward_metrics["reward/metrics/soft_match/is_match"] → 1 or 0
+reward_metrics["reward/metrics/hard_match/is_match"] → 1 or 0
 ```
 
 This is the recommended approach because:
@@ -118,25 +118,25 @@ This is the recommended approach because:
 
 ### 4.2 Fallback: Re-compute Match
 
-If `reward_metrics` is `None` or the specified metric key is missing, fall back to re-computing the match. **Re-computation is only supported when `label_metric_key` is `"soft_match/is_match"` or `"hard_match/is_match"`**. If `recompute_labels=True` is set with any other `label_metric_key`, a `ValueError` is raised at startup.
+If `reward_metrics` is `None` or the specified metric key is missing, fall back to re-computing the match. **Re-computation is only supported when `label_metric_key` is `"reward/metrics/soft_match/is_match"` or `"reward/metrics/hard_match/is_match"`**. If `recompute_labels=True` is set with any other `label_metric_key`, a `ValueError` is raised at startup.
 
 ```python
 from pyine.organisms.models.rewards.terms.code_exec.utils import compute_soft_match, compute_hard_match
 
-if label_metric_key == "soft_match/is_match":
+if label_metric_key == "reward/metrics/soft_match/is_match":
     result = compute_soft_match(
         expected=record["expected_output"],
         predicted=record["final_answer"],  # or model_output if final_answer is None
     )
-elif label_metric_key == "hard_match/is_match":
+elif label_metric_key == "reward/metrics/hard_match/is_match":
     result = compute_hard_match(
         expected=record["expected_output"],
         predicted=record["final_answer"],
     )
 else:
     raise ValueError(
-        f"recompute_labels=True is only supported for 'soft_match/is_match' and "
-        f"'hard_match/is_match', got '{label_metric_key}'"
+        f"recompute_labels=True is only supported for 'reward/metrics/soft_match/is_match' and "
+        f"'reward/metrics/hard_match/is_match', got '{label_metric_key}'"
     )
 label = int(result.equal)
 ```
@@ -145,13 +145,13 @@ This ensures that the recompute path always produces labels consistent with `lab
 
 ### 4.3 Configurable Label Source
 
-The config will expose a `label_metric_key` field (default: `"soft_match/is_match"`) that specifies which metric to use as the binary label. This allows:
+The config will expose a `label_metric_key` field (default: `"reward/metrics/soft_match/is_match"`) that specifies which metric to use as the binary label. This allows:
 
-- `"soft_match/is_match"` — semantic match with numeric tolerance (default)
-- `"hard_match/is_match"` — exact string match
+- `"reward/metrics/soft_match/is_match"` — semantic match with numeric tolerance (default)
+- `"reward/metrics/hard_match/is_match"` — exact string match
 - Any other binary metric stored in `reward_metrics` (but `recompute_labels` is not supported for arbitrary metrics)
 
-A boolean `recompute_labels` flag (default: `False`) forces re-computation instead of using stored metrics. **Only valid when `label_metric_key` is `"soft_match/is_match"` or `"hard_match/is_match"`** — enforced in two places:
+A boolean `recompute_labels` flag (default: `False`) forces re-computation instead of using stored metrics. **Only valid when `label_metric_key` is `"reward/metrics/soft_match/is_match"` or `"reward/metrics/hard_match/is_match"`** — enforced in two places:
 
 1. **Config validation** (pydantic `model_validator`): fails early before any data loading.
 2. **Runtime check** at the top of `load_probe_dataset_from_lmdb()`: defensive guard for direct callers that bypass the config layer.
@@ -227,7 +227,7 @@ This module handles loading LMDB completion records and converting them into an 
 ```python
 def load_probe_dataset_from_lmdb(
     lmdb_path: str | Path,
-    label_metric_key: str = "soft_match/is_match",
+    label_metric_key: str = "reward/metrics/soft_match/is_match",
     train_key_prefix: str = "train/",
     valid_key_prefix: str = "eval/",
     selection_strategy: str = "latest",
@@ -251,10 +251,10 @@ def load_probe_dataset_from_lmdb(
         valid_key_prefix: Key prefix for validation records.
         selection_strategy: "latest" or "best_reward" for deduplication.
         recompute_labels: If True, re-compute match instead of using stored metrics.
-            Only supported for label_metric_key in {"soft_match/is_match",
-            "hard_match/is_match"} — raises ValueError otherwise.
+            Only supported for label_metric_key in {"reward/metrics/soft_match/is_match",
+            "reward/metrics/hard_match/is_match"} — raises ValueError otherwise.
         compare_options: CompareOptions for soft match re-computation. Ignored when
-            recompute_labels=False or when label_metric_key is "hard_match/is_match"
+            recompute_labels=False or when label_metric_key is "reward/metrics/hard_match/is_match"
             (hard match is a strict string comparison with no tolerance parameters).
         max_samples_per_split: Cap samples per split (for debugging/fast iteration).
         skip_malformed_records: If True, skip records missing required fields and log
@@ -327,10 +327,10 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="Path to LMDB database exported by DiskRewardLogger.",
     )
     label_metric_key: str = pydantic.Field(
-        default="soft_match/is_match",
+        default="reward/metrics/soft_match/is_match",
         description=(
             "Key in reward_metrics dict for binary label derivation. "
-            "Common values: 'soft_match/is_match', 'hard_match/is_match'."
+            "Common values: 'reward/metrics/soft_match/is_match', 'reward/metrics/hard_match/is_match'."
         ),
     )
     train_key_prefix: str = pydantic.Field(
@@ -352,8 +352,8 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         default=False,
         description=(
             "If True, re-compute labels instead of using stored reward_metrics. "
-            "Only valid when label_metric_key is 'soft_match/is_match' or "
-            "'hard_match/is_match' — validated at config construction time."
+            "Only valid when label_metric_key is 'reward/metrics/soft_match/is_match' or "
+            "'reward/metrics/hard_match/is_match' — validated at config construction time."
         ),
     )
     max_samples_per_split: int | None = pydantic.Field(
@@ -375,7 +375,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_recompute_label_metric(self) -> "ProbeTrainerAppMainConfig":
-        _RECOMPUTABLE = {"soft_match/is_match", "hard_match/is_match"}
+        _RECOMPUTABLE = {"reward/metrics/soft_match/is_match", "reward/metrics/hard_match/is_match"}
         if self.recompute_labels and self.label_metric_key not in _RECOMPUTABLE:
             raise ValueError(
                 f"recompute_labels=True is only supported for label_metric_key in "
@@ -464,7 +464,7 @@ def create_debug_probe_lmdb(
     Creates LMDB records in DiskRewardLogger format with:
     - Synthetic prompts (code analysis questions)
     - Synthetic model completions (with learnable signal)
-    - Pre-computed reward_metrics with soft_match/is_match labels
+    - Pre-computed reward_metrics with reward/metrics/soft_match/is_match labels
     - Train/eval key prefixes for split filtering
 
     The signal: label=1 samples contain the keyword "helper" in the
@@ -493,10 +493,10 @@ record = {
     "final_answer": "42",
     "reward_total": 1.0,
     "reward_metrics": {
-        "soft_match/is_match": 1,      # Binary label
-        "hard_match/is_match": 1,
+        "reward/metrics/soft_match/is_match": 1,      # Binary label
+        "reward/metrics/hard_match/is_match": 1,
     },
-    "reward_terms": {"soft_match": 1.0, "hard_match": 1.0},
+    "reward_terms": {"reward/terms/soft_match": 1.0, "reward/terms/hard_match": 1.0},
     "predict_type": "program_output",
     "code_type": "original",
     "tags": ["debug"],
@@ -534,7 +534,7 @@ config:
 
   # Data source (LMDB from DiskRewardLogger)
   lmdb_path: /path/to/rl-run/reward_logs.lmdb
-  label_metric_key: soft_match/is_match
+  label_metric_key: reward/metrics/soft_match/is_match
   train_key_prefix: train/
   valid_key_prefix: eval/
   selection_strategy: latest
@@ -615,7 +615,7 @@ class TestRecordToSample:
         """Label extracted from reward_metrics[label_metric_key]."""
 
     def test_label_from_hard_match(self):
-        """Can use hard_match/is_match as label source."""
+        """Can use reward/metrics/hard_match/is_match as label source."""
 
     def test_missing_metrics_with_recompute(self):
         """When reward_metrics is None and recompute_labels=True, label is re-computed."""
@@ -636,7 +636,7 @@ class TestRecordToSample:
         """recompute_labels=True calls compute_soft_match with expected and final_answer."""
 
     def test_recompute_uses_hard_match(self):
-        """recompute_labels=True with label_metric_key='hard_match/is_match' uses compute_hard_match."""
+        """recompute_labels=True with label_metric_key='reward/metrics/hard_match/is_match' uses compute_hard_match."""
 
     def test_recompute_unsupported_metric_raises(self):
         """recompute_labels=True with non-soft/hard label_metric_key raises ValueError."""
@@ -810,7 +810,7 @@ def test_lmdb_path_required(self):
     """Config without lmdb_path raises."""
 
 def test_label_metric_key_default(self):
-    """Default label_metric_key is 'soft_match/is_match'."""
+    """Default label_metric_key is 'reward/metrics/soft_match/is_match'."""
 
 def test_selection_strategy_values(self):
     """selection_strategy accepts 'latest' and 'best_reward'."""
@@ -825,10 +825,10 @@ def test_recompute_with_unsupported_metric_rejected(self):
     """recompute_labels=True with arbitrary label_metric_key is rejected by model_validator."""
 
 def test_recompute_with_soft_match_accepted(self):
-    """recompute_labels=True with 'soft_match/is_match' passes config validation."""
+    """recompute_labels=True with 'reward/metrics/soft_match/is_match' passes config validation."""
 
 def test_recompute_with_hard_match_accepted(self):
-    """recompute_labels=True with 'hard_match/is_match' passes config validation."""
+    """recompute_labels=True with 'reward/metrics/hard_match/is_match' passes config validation."""
 ```
 
 ### 9.5 New Fixtures: `tests/probes/conftest.py`
@@ -971,7 +971,7 @@ Plain text tokenization of `prompt + model_output` produces tokens identical to 
 
 **Decision: Pre-computed by default, re-computation as fallback.**
 
-Pre-computed `reward_metrics["soft_match/is_match"]` is:
+Pre-computed `reward_metrics["reward/metrics/soft_match/is_match"]` is:
 
 - Always available when `DiskRewardLogger` logged with `log_metrics=True`
 - Exactly what was used during RL (no evaluation drift)
@@ -1000,7 +1000,7 @@ ______________________________________________________________________
 
 | Scenario                                                        | Handling                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| LMDB record has `reward_metrics = None`                         | If `recompute_labels=True` (and `label_metric_key` is `soft_match/is_match` or `hard_match/is_match`), re-compute via the matching function. Otherwise raise `ValueError` with clear message.                                                                                                                                                                                                   |
+| LMDB record has `reward_metrics = None`                         | If `recompute_labels=True` (and `label_metric_key` is `reward/metrics/soft_match/is_match` or `reward/metrics/hard_match/is_match`), re-compute via the matching function. Otherwise raise `ValueError` with clear message.                                                                                                                                                                     |
 | `label_metric_key` not found in `reward_metrics`                | Same as above — fallback or raise.                                                                                                                                                                                                                                                                                                                                                              |
 | `recompute_labels=True` with unsupported `label_metric_key`     | Raise `ValueError` — enforced in config validation (pydantic `model_validator`) and mirrored by runtime check in `load_probe_dataset_from_lmdb()`.                                                                                                                                                                                                                                              |
 | Record missing required fields (see below)                      | **Default**: raise `ValueError` (fail fast). If `skip_malformed_records=True`, skip and log count at `WARNING` level. **Required fields per mode**: `recompute_labels=False` requires `prompt`, `model_output`, `reward_metrics[label_metric_key]`; `recompute_labels=True` requires `prompt`, `model_output`, `expected_output` (`final_answer` may be `None` — falls back to `model_output`). |
@@ -1033,25 +1033,25 @@ The following summarizes the review feedback from `INTEGRATION_PLAN_CODEX.md` an
 
 ### A.1 Accepted Changes
 
-| #   | Finding                                                                                                               | Assessment                                                                                                   | Action Taken                                                                                                                                                                                   |
-| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Ambiguous key parsing** — plan didn't specify how multi-segment `sample_id` is split from `generation_count`        | Valid. The existing codebase uses `rfind("/")` in `_load_pregenerated_outputs()` and handles `"none"` → `0`. | Added explicit key parsing rules (Section 3), new tests for multi-segment IDs, `"none"` generation count, and non-numeric errors (Section 9.1).                                                |
-| 2   | **Recompute/label_metric_key mismatch** — recompute always used `compute_soft_match` regardless of `label_metric_key` | Valid. Restricting recompute to supported metrics is cleaner than computing all and selecting.               | Restricted `recompute_labels=True` to `soft_match/is_match` and `hard_match/is_match` only; raises `ValueError` otherwise (Section 4.2, 4.3). Added test for unsupported metric (Section 9.1). |
-| 3   | **Prefix filtering source of truth** — LMDB key vs. record field `key_prefix` could diverge                           | Valid but low-risk. LMDB key is authoritative since it determines iteration order.                           | LMDB key is source of truth; record field is validated with warning on mismatch (Section 6.1). Added test for mismatch warning (Section 9.1).                                                  |
-| 4   | **Missing `add_special_tokens=False`** — tokenization didn't specify special token handling                           | Valid and important. Codebase consistently uses `add_special_tokens=False` for post-template text.           | Added `add_special_tokens=False` to `_tokenize_split()` with documented rationale (Sections 5.1, 7.3). Added no-special-tokens test (Section 9.3).                                             |
-| 5   | **`reward_total=None` with `best_reward` strategy** — undefined sort behavior                                         | Valid. `None` comparison would raise `TypeError` in Python.                                                  | Raise `ValueError` when `best_reward` encounters `None` reward (Section 6.2, 13). Added test (Section 9.1).                                                                                    |
-| 6   | **"Skip with warning" conflicts with fail-fast ethos** — silent data loss on `None` prompt/model_output               | Partially valid. Fail fast is correct default, but a permissive mode is useful for noisy exports.            | Default: raise `ValueError`. Added `skip_malformed_records` config flag for permissive mode with logged counts (Sections 7.1, 7.2, 13). Added tests for both paths (Section 9.1).              |
-| 7   | **Debug LMDB serialization unspecified** — could differ from production `DiskRewardLogger` format                     | Valid. Serialization mismatch would make debug data unreadable.                                              | Specified `SerializationMethod.JSON_ZSTD` for debug LMDB writer (Section 7.4, Step 2). Added round-trip read test (Section 9.2).                                                               |
-| 8   | **Warning location unspecified** — unclear logging convention                                                         | Minor but valid.                                                                                             | Specified `logging.getLogger(__name__).warning()` in all warning locations (Section 13).                                                                                                       |
+| #   | Finding                                                                                                               | Assessment                                                                                                   | Action Taken                                                                                                                                                                                                                 |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Ambiguous key parsing** — plan didn't specify how multi-segment `sample_id` is split from `generation_count`        | Valid. The existing codebase uses `rfind("/")` in `_load_pregenerated_outputs()` and handles `"none"` → `0`. | Added explicit key parsing rules (Section 3), new tests for multi-segment IDs, `"none"` generation count, and non-numeric errors (Section 9.1).                                                                              |
+| 2   | **Recompute/label_metric_key mismatch** — recompute always used `compute_soft_match` regardless of `label_metric_key` | Valid. Restricting recompute to supported metrics is cleaner than computing all and selecting.               | Restricted `recompute_labels=True` to `reward/metrics/soft_match/is_match` and `reward/metrics/hard_match/is_match` only; raises `ValueError` otherwise (Section 4.2, 4.3). Added test for unsupported metric (Section 9.1). |
+| 3   | **Prefix filtering source of truth** — LMDB key vs. record field `key_prefix` could diverge                           | Valid but low-risk. LMDB key is authoritative since it determines iteration order.                           | LMDB key is source of truth; record field is validated with warning on mismatch (Section 6.1). Added test for mismatch warning (Section 9.1).                                                                                |
+| 4   | **Missing `add_special_tokens=False`** — tokenization didn't specify special token handling                           | Valid and important. Codebase consistently uses `add_special_tokens=False` for post-template text.           | Added `add_special_tokens=False` to `_tokenize_split()` with documented rationale (Sections 5.1, 7.3). Added no-special-tokens test (Section 9.3).                                                                           |
+| 5   | **`reward_total=None` with `best_reward` strategy** — undefined sort behavior                                         | Valid. `None` comparison would raise `TypeError` in Python.                                                  | Raise `ValueError` when `best_reward` encounters `None` reward (Section 6.2, 13). Added test (Section 9.1).                                                                                                                  |
+| 6   | **"Skip with warning" conflicts with fail-fast ethos** — silent data loss on `None` prompt/model_output               | Partially valid. Fail fast is correct default, but a permissive mode is useful for noisy exports.            | Default: raise `ValueError`. Added `skip_malformed_records` config flag for permissive mode with logged counts (Sections 7.1, 7.2, 13). Added tests for both paths (Section 9.1).                                            |
+| 7   | **Debug LMDB serialization unspecified** — could differ from production `DiskRewardLogger` format                     | Valid. Serialization mismatch would make debug data unreadable.                                              | Specified `SerializationMethod.JSON_ZSTD` for debug LMDB writer (Section 7.4, Step 2). Added round-trip read test (Section 9.2).                                                                                             |
+| 8   | **Warning location unspecified** — unclear logging convention                                                         | Minor but valid.                                                                                             | Specified `logging.getLogger(__name__).warning()` in all warning locations (Section 13).                                                                                                                                     |
 
 ### A.2 Open Questions Resolved
 
-| #   | Question                                                         | Answer                                                                                                                                                                                 |
-| --- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Should split selection use LMDB key prefixes exclusively?        | Yes. LMDB key is source of truth. Record `key_prefix` field is validated with warning on mismatch but not used for split assignment.                                                   |
-| 2   | Can generation count be non-numeric (e.g., `"final"`)?           | Only `"none"` is a known non-numeric value (emitted by `DiskRewardLogger` when `generation_count is None`). Any other non-numeric value raises `ValueError`.                           |
-| 3   | Is `reward_metrics` a flat dict?                                 | Yes. `RewardManager` stores metrics as `{"{term_name}/{metric_name}": value}` — always a flat dict with string keys. `label_metric_key` is a simple key lookup, not a path expression. |
-| 4   | Should we preserve additional fields (tags, predict_type, etc.)? | Not for v1. The dataset schema is `{text, label, sample_id}`. Additional fields can be added later if needed for downstream analysis (see Section 14, Future Extensions).              |
+| #   | Question                                                         | Answer                                                                                                                                                                                                |
+| --- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Should split selection use LMDB key prefixes exclusively?        | Yes. LMDB key is source of truth. Record `key_prefix` field is validated with warning on mismatch but not used for split assignment.                                                                  |
+| 2   | Can generation count be non-numeric (e.g., `"final"`)?           | Only `"none"` is a known non-numeric value (emitted by `DiskRewardLogger` when `generation_count is None`). Any other non-numeric value raises `ValueError`.                                          |
+| 3   | Is `reward_metrics` a flat dict?                                 | Yes. `RewardManager` stores metrics as `{"reward/metrics/{term_name}/{metric_name}": value}` — always a flat dict with string keys. `label_metric_key` is a simple key lookup, not a path expression. |
+| 4   | Should we preserve additional fields (tags, predict_type, etc.)? | Not for v1. The dataset schema is `{text, label, sample_id}`. Additional fields can be added later if needed for downstream analysis (see Section 14, Future Extensions).                             |
 
 ### A.3 Second Review — Accepted Changes
 

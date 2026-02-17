@@ -45,8 +45,8 @@ class TestCreateDebugProbeLmdb:
                 assert "model_output" in record
                 assert "expected_output" in record
                 assert "reward_metrics" in record
-                assert "soft_match/is_match" in record["reward_metrics"]
-                assert "hard_match/is_match" in record["reward_metrics"]
+                assert "reward/metrics/soft_match/is_match" in record["reward_metrics"]
+                assert "reward/metrics/hard_match/is_match" in record["reward_metrics"]
 
     def test_deterministic_with_seed(self, tmp_path: Path) -> None:
         """Same seed produces identical LMDB content."""
@@ -225,14 +225,14 @@ class TestDebugLmdbLabelDistribution:
     def test_hinted_biased_toward_label_1(self, eval_records: dict[str, dict[str, typing.Any]]) -> None:
         """Hinted records have label=1 in >60% of cases (biased toward correct)."""
         hinted = [rec for rec in eval_records.values() if rec["code_type"] == "hinted"]
-        label_1_count = sum(1 for rec in hinted if rec["reward_metrics"]["soft_match/is_match"] == 1)
+        label_1_count = sum(1 for rec in hinted if rec["reward_metrics"]["reward/metrics/soft_match/is_match"] == 1)
         ratio = label_1_count / len(hinted)
         assert ratio > 0.6, f"Hinted label=1 ratio was {ratio}, expected > 0.6"
 
     def test_misleading_biased_toward_label_0(self, eval_records: dict[str, dict[str, typing.Any]]) -> None:
         """Misleading records have label=0 in >50% of cases (biased toward incorrect)."""
         misleading = [rec for rec in eval_records.values() if rec["code_type"] == "misleading"]
-        label_0_count = sum(1 for rec in misleading if rec["reward_metrics"]["soft_match/is_match"] == 0)
+        label_0_count = sum(1 for rec in misleading if rec["reward_metrics"]["reward/metrics/soft_match/is_match"] == 0)
         ratio = label_0_count / len(misleading)
         assert ratio > 0.5, f"Misleading label=0 ratio was {ratio}, expected > 0.5"
 

@@ -28,7 +28,7 @@ config:
 
   # LMDB data source
   lmdb_path: /path/to/lmdb  # LMDB exported by DiskRewardLogger
-  label_metric_key: "soft_match/is_match"
+  label_metric_key: "reward/metrics/soft_match/is_match"
   train_key_prefix: "train/"
   valid_key_prefix: "eval/"
   selection_strategy: latest

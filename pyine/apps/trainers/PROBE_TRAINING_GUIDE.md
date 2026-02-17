@@ -30,7 +30,7 @@ frozen language model. Given a dataset of text inputs with binary labels, the tr
 The trainer reads completion records from an **LMDB database** exported by `DiskRewardLogger` during RL
 training. Each record contains the prompt, model output, and reward metrics. The trainer constructs
 input text as `prompt + model_output` and derives binary labels from reward metrics
-(e.g., `reward_metrics["soft_match/is_match"]`).
+(e.g., `reward_metrics["reward/metrics/soft_match/is_match"]`).
 
 Train/valid splits are determined by LMDB key prefixes (default: `train/` and `eval/`), or via
 **eval-only mode** which reads from a single prefix and splits internally (see [Eval-Only Split Mode](#eval-only-split-mode)).
@@ -119,7 +119,7 @@ config:
 
   # LMDB data source
   lmdb_path: /path/to/lmdb          # LMDB exported by DiskRewardLogger
-  label_metric_key: "soft_match/is_match"  # Key in reward_metrics for binary label
+  label_metric_key: "reward/metrics/soft_match/is_match"  # Key in reward_metrics for binary label
   train_key_prefix: "train/"         # LMDB key prefix for training records
   valid_key_prefix: "eval/"          # LMDB key prefix for validation records
   selection_strategy: latest          # Deduplication: "latest" or "best_reward"
@@ -219,7 +219,7 @@ Each LMDB record is a JSON dict. The fields used by the probe trainer:
 | ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`          | Always    | The prompt text sent to the model                                                                                                                         |
 | `model_output`    | Always    | The model's completion text                                                                                                                               |
-| `reward_metrics`  | Default   | Dict with metric keys (e.g., `soft_match/is_match`)                                                                                                       |
+| `reward_metrics`  | Default   | Dict with metric keys (e.g., `reward/metrics/soft_match/is_match`)                                                                                        |
 | `expected_output` | Recompute | Expected output (required when `recompute_labels=True`)                                                                                                   |
 | `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)                                                                                                       |
 | `reward_total`    | Optional  | Used when `selection_strategy: best_reward`                                                                                                               |
@@ -233,12 +233,12 @@ uses `add_special_tokens=False` since the text is already formatted.
 Labels are derived from LMDB records in one of two ways:
 
 **From stored metrics** (default, `recompute_labels: false`): The label is read from
-`reward_metrics[label_metric_key]` and cast to int. Common keys: `soft_match/is_match`,
-`hard_match/is_match`.
+`reward_metrics[label_metric_key]` and cast to int. Common keys: `reward/metrics/soft_match/is_match`,
+`reward/metrics/hard_match/is_match`.
 
 **Re-computed** (`recompute_labels: true`): The label is re-derived by running `compute_soft_match()` or
 `compute_hard_match()` on `expected_output` vs. `final_answer`. Only supported for
-`label_metric_key` in `{soft_match/is_match, hard_match/is_match}`.
+`label_metric_key` in `{reward/metrics/soft_match/is_match, reward/metrics/hard_match/is_match}`.
 
 ### Deduplication
 
@@ -524,7 +524,7 @@ config:
 
   # LMDB data source
   lmdb_path: /path/to/lmdb          # LMDB from DiskRewardLogger (required)
-  label_metric_key: "soft_match/is_match"  # Key in reward_metrics for binary label (default)
+  label_metric_key: "reward/metrics/soft_match/is_match"  # Key in reward_metrics for binary label (default)
   train_key_prefix: "train/"         # LMDB key prefix for training records (default: "train/")
   valid_key_prefix: "eval/"          # LMDB key prefix for validation records (default: "eval/")
   selection_strategy: latest          # "latest" or "best_reward" for dedup (default: "latest")
@@ -706,7 +706,7 @@ An LMDB record is missing the `prompt` or `model_output` field. Either fix the e
 
 **`ValueError: recompute_labels=True is only supported for label_metric_key in ...`**
 
-`recompute_labels` only works with `soft_match/is_match` or `hard_match/is_match`. For other metrics, use
+`recompute_labels` only works with `reward/metrics/soft_match/is_match` or `reward/metrics/hard_match/is_match`. For other metrics, use
 stored labels (`recompute_labels: false`).
 
 **`ValueError: best_reward selection requires reward_total for all records`**

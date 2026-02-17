@@ -16,6 +16,7 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.utils.reprod
 from pyine.probes.base import ProbeConfig  # noqa: TC001
+from pyine.probes.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,10 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="Path to LMDB database exported by DiskRewardLogger.",
     )
     label_metric_key: str = pydantic.Field(
-        default="soft_match/is_match",
+        default=SOFT_MATCH_KEY,
         description=(
             "Key in reward_metrics dict for binary label derivation. "
-            "Common values: 'soft_match/is_match', 'hard_match/is_match'."
+            f"Common values: '{SOFT_MATCH_KEY}', '{HARD_MATCH_KEY}'."
         ),
     )
     train_key_prefix: str = pydantic.Field(
@@ -76,8 +77,8 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         default=False,
         description=(
             "If True, re-compute labels instead of using stored reward_metrics. "
-            "Only valid when label_metric_key is 'soft_match/is_match' or "
-            "'hard_match/is_match' — validated at config construction time."
+            f"Only valid when label_metric_key is '{SOFT_MATCH_KEY}' or "
+            f"'{HARD_MATCH_KEY}' — validated at config construction time."
         ),
     )
     max_samples_per_split: int | None = pydantic.Field(
@@ -196,7 +197,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_recompute_label_metric(self) -> ProbeTrainerAppMainConfig:
-        recomputable = {"soft_match/is_match", "hard_match/is_match"}
+        recomputable = {SOFT_MATCH_KEY, HARD_MATCH_KEY}
         if self.recompute_labels and self.label_metric_key not in recomputable:
             raise ValueError(
                 f"recompute_labels=True is only supported for label_metric_key in "
