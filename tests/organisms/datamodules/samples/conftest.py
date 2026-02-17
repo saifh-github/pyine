@@ -13,7 +13,7 @@ from pyine.organisms.datamodules.samples.common import (
     SampleTransformStrategy,
 )
 from pyine.organisms.datamodules.samples.configs import SampleTransformConfig
-from pyine.organisms.datamodules.samples.selection import SelectedSample
+from pyine.organisms.datamodules.samples.selection import SampleSelectionSource, SelectedSample
 
 # test code snippets for various scenarios
 
@@ -209,5 +209,6 @@ def make_selected_sample(
         trace_id=trace_id,
         trace_meta=trace_meta,
         code_type=code_type or SampleCodeTypeSet.create_default(),
+        selection_source=SampleSelectionSource.full_trace,
         code_override=code_override,
     )

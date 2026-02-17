@@ -17,6 +17,7 @@ from pyine.organisms.datamodules.samples.common import (
 )
 from pyine.organisms.datamodules.samples.configs import SampleSelectionConfig
 from pyine.organisms.datamodules.samples.selection import (
+    SampleSelectionSource,
     SelectedSample,
     _filter_traces_by_base_type,
     _find_lmdb_trace_with_hint_type,
@@ -64,12 +65,14 @@ class TestSelectedSample:
             trace_id=trace_id,
             trace_meta=trace_meta,
             code_type=SampleCodeTypeSet.create_default(),
+            selection_source=SampleSelectionSource.full_trace,
             code_override=None,
         )
         assert sample.parent_id == parent_id
         assert sample.trace_id == trace_id
         assert sample.code_type.is_original
         assert sample.code_override is None
+        assert sample.selection_source == SampleSelectionSource.full_trace
 
     def test_with_code_override(self, small_fake_reader: FakeTraceDatasetReader) -> None:
         trace_meta = small_fake_reader.trace_metadata[0]
@@ -81,6 +84,7 @@ class TestSelectedSample:
             trace_id=trace_id,
             trace_meta=trace_meta,
             code_type=SampleCodeTypeSet(frozenset({SampleCodeType.hinted})),
+            selection_source=SampleSelectionSource.full_trace,
             code_override=override_code,
         )
         assert sample.code_override == override_code

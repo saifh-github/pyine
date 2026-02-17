@@ -340,6 +340,8 @@ def merge_configs(
             return _to_primitives(dataclasses.asdict(obj))
         if isinstance(obj, collections.abc.Mapping):
             return {k: _to_primitives(v) for k, v in obj.items()}  # type: ignore[reportUnknownVariableType]
+        if isinstance(obj, (set, frozenset)):
+            return [_to_primitives(v) for v in obj]  # type: ignore[reportUnknownVariableType]
         if isinstance(obj, collections.abc.Sequence) and not isinstance(obj, (str, bytes, bytearray)):  # type: ignore[reportUnknownVariableType]
             return [_to_primitives(v) for v in obj]  # type: ignore[reportUnknownVariableType]
         return obj
