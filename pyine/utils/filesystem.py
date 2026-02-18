@@ -1,3 +1,4 @@
+import collections.abc
 import contextlib
 import getpass
 import logging
@@ -7,6 +8,7 @@ import re
 import shutil
 import sys
 import tempfile
+import typing
 
 import dotenv
 
@@ -267,6 +269,48 @@ def slugify(text: str) -> str:
     text = text.lower()
     text = re.sub(r"[^\w\s-]", "", text)
     return re.sub(r"[\s_-]+", "-", text).strip("-")
+
+
+def normalize_path_tuple(
+    value: object,
+    *,
+    field_name: str = "paths",
+) -> tuple[pathlib.Path, ...] | None:
+    """Normalize a flexible path-or-paths-or-None input into a tuple of ``pathlib.Path``.
+
+    Handles common config input shapes (strings, ``os.PathLike``, sequences including
+    ``omegaconf.ListConfig``) and returns a canonicalized tuple. Intended for use in
+    pydantic before-validators or manual config normalization.
+
+    Args:
+        value: A single path (``str`` or ``os.PathLike``), a sequence of paths, or ``None``.
+        field_name: Name of the config field, used in error messages.
+
+    Returns:
+        ``None`` if *value* is ``None``, otherwise a non-empty tuple of ``pathlib.Path``.
+
+    Raises:
+        ValueError: If *value* is an empty sequence, contains ``bytes``/``bytearray`` elements,
+            or is an unsupported type.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"{field_name}: expected path string, not {type(value).__name__}")
+    if isinstance(value, str):
+        return (pathlib.Path(value),)
+    if isinstance(value, os.PathLike):
+        return (pathlib.Path(os.fspath(value)),)  # pyright: ignore[reportUnknownArgumentType]
+    if isinstance(value, collections.abc.Sequence):
+        if not value:
+            raise ValueError(f"{field_name} received an empty sequence; use None to disable")
+        items: list[pathlib.Path] = []
+        for item in value:  # pyright: ignore[reportUnknownVariableType]
+            if isinstance(item, (bytes, bytearray)):
+                raise ValueError(f"{field_name} sequence contains {type(item).__name__} element; expected path strings")
+            items.append(pathlib.Path(typing.cast("str", item)))
+        return tuple(items)
+    raise ValueError(f"{field_name}: expected path, sequence of paths, or None; got {type(value).__name__}")
 
 
 _SHARED_FS_TYPES: set[str] = {
