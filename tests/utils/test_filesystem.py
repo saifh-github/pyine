@@ -224,6 +224,43 @@ def test_check_output_path_overwrite_deletes_when_forced(
     assert not out.exists()
 
 
+class TestNormalizePathTuple:
+    def test_none_returns_none(self) -> None:
+        assert fs.normalize_path_tuple(None) is None
+
+    def test_single_string(self) -> None:
+        result = fs.normalize_path_tuple("/some/path")
+        assert result == (pathlib.Path("/some/path"),)
+
+    def test_pathlike(self) -> None:
+        result = fs.normalize_path_tuple(pathlib.Path("/a"))
+        assert result == (pathlib.Path("/a"),)
+
+    def test_list_of_strings(self) -> None:
+        result = fs.normalize_path_tuple(["/a", "/b"])
+        assert result == (pathlib.Path("/a"), pathlib.Path("/b"))
+
+    def test_empty_sequence_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty sequence"):
+            fs.normalize_path_tuple([])
+
+    def test_bytes_rejected(self) -> None:
+        with pytest.raises(ValueError, match="bytes"):
+            fs.normalize_path_tuple(b"/path")
+
+    def test_bytes_inside_sequence_rejected(self) -> None:
+        with pytest.raises(ValueError, match="bytes.*element"):
+            fs.normalize_path_tuple([b"/path"])
+
+    def test_unsupported_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="got int"):
+            fs.normalize_path_tuple(42)
+
+    def test_field_name_in_error(self) -> None:
+        with pytest.raises(ValueError, match="my_field"):
+            fs.normalize_path_tuple(42, field_name="my_field")
+
+
 class TestSharedFilesystemDetection:
     def test_assumes_shared_on_non_linux(
         self,

@@ -241,3 +241,50 @@ class TestLMDBWriteAndRead:
             typing.cast("typing.Any", reader).get_indices(123)
 
         reader.close()
+
+
+def _make_lmdb_dir(parent: pathlib.Path, name: str = "test.lmdb") -> pathlib.Path:
+    """Create a minimal LMDB directory with a data.mdb file."""
+    lmdb_dir = parent / name
+    lmdb_dir.mkdir(parents=True, exist_ok=True)
+    (lmdb_dir / "data.mdb").touch()
+    return lmdb_dir
+
+
+class TestResolveLmdbPaths:
+    def test_single_path(self, tmp_path: pathlib.Path) -> None:
+        lmdb_dir = _make_lmdb_dir(tmp_path)
+        result = lmdb_io.resolve_lmdb_paths((lmdb_dir,))
+        assert len(result) == 1
+        assert result[0] == lmdb_dir.resolve()
+
+    def test_glob_resolves(self, tmp_path: pathlib.Path) -> None:
+        for rank_idx in range(2):
+            _make_lmdb_dir(tmp_path, f"rank_{rank_idx}")
+        result = lmdb_io.resolve_lmdb_paths((pathlib.Path(str(tmp_path / "rank_*")),))
+        assert len(result) == 2
+
+    def test_auto_discover_rank_subdirs(self, tmp_path: pathlib.Path) -> None:
+        for rank_idx in range(2):
+            _make_lmdb_dir(tmp_path / "output", f"rank_{rank_idx}")
+        result = lmdb_io.resolve_lmdb_paths((tmp_path / "output",))
+        assert len(result) == 2
+
+    def test_glob_no_match_raises(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(ValueError, match="matched zero paths"):
+            lmdb_io.resolve_lmdb_paths((pathlib.Path(str(tmp_path / "nonexistent_*")),))
+
+    def test_nonexistent_path_raises(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(ValueError, match="does not exist"):
+            lmdb_io.resolve_lmdb_paths((tmp_path / "nonexistent",))
+
+    def test_missing_data_mdb_raises(self, tmp_path: pathlib.Path) -> None:
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="data.mdb"):
+            lmdb_io.resolve_lmdb_paths((empty_dir,))
+
+    def test_duplicate_paths_deduplicated(self, tmp_path: pathlib.Path) -> None:
+        lmdb_dir = _make_lmdb_dir(tmp_path)
+        result = lmdb_io.resolve_lmdb_paths((lmdb_dir, lmdb_dir))
+        assert len(result) == 1
