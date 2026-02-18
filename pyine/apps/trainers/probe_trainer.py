@@ -15,6 +15,7 @@ import pathlib
 import statistics
 import typing
 
+import sklearn.metrics
 import torch
 import transformers
 
@@ -398,8 +399,6 @@ def validate_probes(
                 logger.warning(f"Skipping AUROC for {name}: only labels {unique_labels} present")
                 auroc = float("nan")
             else:
-                import sklearn.metrics
-
                 auroc_score: float = float(
                     sklearn.metrics.roc_auc_score(labels_np, probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
                 )
