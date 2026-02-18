@@ -98,6 +98,7 @@ packages = ["pyine"]
 "pyine" = ["**/*.yaml"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow to run due to data/compute (deselect with '-m \"not slow\"')",
     "integration: marks end-to-end or cross-service tests that rely on external resources/APIs (deselect with '-m \"not integration\"')",
