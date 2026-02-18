@@ -1333,7 +1333,38 @@ class DiskRewardLogger:
         pregenerated_output: str | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        """Write a per-sample reward record to LMDB."""
+        """Write a per-sample reward record to LMDB.
+
+        Args:
+            sample_id: Unique identifier for the sample.
+            generation_count: Generation index for deduplication.
+            batch_count: Batch number within the training run.
+            local_batch_idx: Index within the local batch.
+            completion_idx: Completion index for multi-completion samples.
+            rank: DDP rank that produced this record.
+            total: Total reward score.
+            terms: Scoped reward term values (e.g. ``reward/terms/soft_match``).
+            metrics: Scoped reward metric values (e.g. ``reward/metrics/soft_match/is_match``).
+            raw_terms: Raw (unscoped) reward term values.
+            step: Training step number.
+            prompt: Full prompt text sent to the model.
+            expected_output: Ground-truth expected output.
+            model_output: Model-generated completion text.
+            reasoning: Extracted reasoning chain, if any.
+            final_answer: Extracted final answer from model output.
+            categories: Problem category labels.
+            tags: Metadata tags for the sample.
+            difficulty_source: Source of difficulty annotation.
+            difficulty_score: Numeric difficulty score.
+            difficulty_bin: Discretised difficulty bin.
+            difficulty_raw_primary: Raw primary difficulty metric.
+            difficulty_secondary_json: JSON-encoded secondary difficulty metrics.
+            predict_type: Prediction type (e.g. ``"program_output"``).
+            code_type: Code augmentation type (e.g. ``"original"``, ``"hinted"``).
+            has_code_override: Whether the code was overridden by augmentation.
+            pregenerated_output: Pre-generated model output, if any.
+            **kwargs: Additional fields (ignored).
+        """
         if not self._key_prefix:
             logger.debug("DiskRewardLogger.log_sample() called with empty key_prefix")
         gen_count_str = str(generation_count) if generation_count is not None else "none"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from pyine.probes.base import BaseProbe, ProbeConfig
+from pyine.probes.base import BaseProbe, ProbeConfig  # noqa: TID252 -- avoids circular import via __init__
 
 
 class MeanProbe(BaseProbe):
@@ -21,7 +21,7 @@ class MeanProbe(BaseProbe):
     ) -> torch.Tensor:
         # mask: (batch, seq_len, 1)
         mask = attention_mask.unsqueeze(-1).to(hidden_states.dtype)
-        # Masked sum / count
+        # masked sum / count
         summed = (hidden_states * mask).sum(dim=1)  # (batch, hidden_dim)
         lengths = mask.sum(dim=1).clamp(min=1)  # (batch, 1)
         pooled = summed / lengths  # (batch, hidden_dim)

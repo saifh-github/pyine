@@ -14,9 +14,9 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.probes.base  # noqa: TC001
+import pyine.probes.reward_keys
 import pyine.utils.reprod
-from pyine.probes.base import ProbeConfig  # noqa: TC001
-from pyine.probes.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     )
 
     # --- Probe configurations ---
-    probe_configs: list[ProbeConfig] = pydantic.Field(
+    probe_configs: list[pyine.probes.base.ProbeConfig] = pydantic.Field(
         ...,
         description="List of probe configs, each specifying architecture, layer, and hyperparams.",
     )
@@ -52,10 +52,10 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="Path to LMDB database exported by DiskRewardLogger.",
     )
     label_metric_key: str = pydantic.Field(
-        default=SOFT_MATCH_KEY,
+        default=pyine.probes.reward_keys.SOFT_MATCH_KEY,
         description=(
             "Key in reward_metrics dict for binary label derivation. "
-            f"Common values: '{SOFT_MATCH_KEY}', '{HARD_MATCH_KEY}'."
+            f"Common values: '{pyine.probes.reward_keys.SOFT_MATCH_KEY}', '{pyine.probes.reward_keys.HARD_MATCH_KEY}'."
         ),
     )
     train_key_prefix: str = pydantic.Field(
@@ -77,8 +77,8 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         default=False,
         description=(
             "If True, re-compute labels instead of using stored reward_metrics. "
-            f"Only valid when label_metric_key is '{SOFT_MATCH_KEY}' or "
-            f"'{HARD_MATCH_KEY}' — validated at config construction time."
+            f"Only valid when label_metric_key is '{pyine.probes.reward_keys.SOFT_MATCH_KEY}' or "
+            f"'{pyine.probes.reward_keys.HARD_MATCH_KEY}' -- validated at config construction time."
         ),
     )
     max_samples_per_split: int | None = pydantic.Field(
@@ -197,7 +197,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_recompute_label_metric(self) -> ProbeTrainerAppMainConfig:
-        recomputable = {SOFT_MATCH_KEY, HARD_MATCH_KEY}
+        recomputable = {pyine.probes.reward_keys.SOFT_MATCH_KEY, pyine.probes.reward_keys.HARD_MATCH_KEY}
         if self.recompute_labels and self.label_metric_key not in recomputable:
             raise ValueError(
                 f"recompute_labels=True is only supported for label_metric_key in "
@@ -216,7 +216,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_probe_names_unique(self) -> ProbeTrainerAppMainConfig:
-        names = [pc.name for pc in self.probe_configs]
+        names = [probe_config.name for probe_config in self.probe_configs]
         if len(names) != len(set(names)):
             raise ValueError(f"Probe names must be unique. Got duplicates in: {names}")
         return self
@@ -243,7 +243,7 @@ def register_hydra_configs(
     eval_type: pyine.evals.common.EvalType,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers probe-trainer-specific configs in hydra and returns config descriptions."""
-    # Import here to avoid circular imports at module load time
+    # import here to avoid circular imports at module load time
     from pyine.apps.trainers.probe_trainer import async_probe_trainer_main_wrapper
 
     pyine.utils.reprod.load_dotenv()
@@ -268,7 +268,7 @@ def register_hydra_configs(
     app_configs = _get_app_configs(group="config")
     configs_to_register = [entrypoint_config, *app_configs]
 
-    # Pick up external experiment YAMLs
+    # pick up external experiment YAMLs
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
         app_name="probe_trainer",
         eval_type=eval_type,

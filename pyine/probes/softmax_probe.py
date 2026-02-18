@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from pyine.probes.base import BaseProbe, ProbeConfig
+from pyine.probes.base import BaseProbe, ProbeConfig  # noqa: TID252 -- avoids circular import via __init__
 
 
 class SoftmaxProbe(BaseProbe):
@@ -20,14 +20,14 @@ class SoftmaxProbe(BaseProbe):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # Per-token scores: (batch, seq_len, 1)
+        # per-token scores: (batch, seq_len, 1)
         scores = self.head(hidden_states)
 
-        # Masked softmax with temperature
+        # masked softmax with temperature
         mask = attention_mask.unsqueeze(-1).bool()  # (batch, seq_len, 1)
         scaled = scores / self.temperature
         scaled = scaled.masked_fill(~mask, float("-inf"))
         weights = torch.softmax(scaled, dim=1)  # (batch, seq_len, 1)
 
-        # Weighted sum
+        # weighted sum
         return (weights * scores).sum(dim=1)  # (batch, 1)

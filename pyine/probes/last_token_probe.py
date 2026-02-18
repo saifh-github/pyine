@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from pyine.probes.base import BaseProbe, ProbeConfig
+from pyine.probes.base import BaseProbe, ProbeConfig  # noqa: TID252 -- avoids circular import via __init__
 
 
 class LastTokenProbe(BaseProbe):

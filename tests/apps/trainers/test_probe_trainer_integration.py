@@ -19,8 +19,6 @@ import torch
     reason="CUDA GPU required for probe training integration test",
 )
 class TestProbeTrainerIntegration:
-    """End-to-end integration test with a real small model."""
-
     def test_probe_training_end_to_end(self, tmp_path: pathlib.Path) -> None:
         """Full pipeline: load model, tokenize debug dataset, train probes, validate, save.
 

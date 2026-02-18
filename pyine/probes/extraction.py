@@ -1,19 +1,19 @@
-"""ActivationExtractor — hook-based hidden-state extraction from frozen LLMs."""
+"""ActivationExtractor -- hook-based hidden-state extraction from frozen LLMs."""
 
 from __future__ import annotations
 
+import collections.abc
 import logging
 import typing
-from collections.abc import Callable
 
 import torch
 
 logger = logging.getLogger(__name__)
 
-# Forward hooks return objects with a .remove() method.
+# forward hooks return objects with a .remove() method.
 # torch.utils.hooks.RemovableHook is not exported in the PyTorch stubs,
 # so we define a minimal protocol to type the hooks list.
-_ForwardHookFn = Callable[
+_ForwardHookFn = collections.abc.Callable[
     [torch.nn.Module, tuple[torch.Tensor, ...], torch.Tensor | tuple[torch.Tensor, ...]],
     None,
 ]
@@ -77,24 +77,25 @@ class ActivationExtractor:
         Handles raw tensors, tuples, and ``BaseModelOutput``-like objects.
         Validates the result is 3D ``(batch, seq_len, hidden_dim)``.
         """
-        h: torch.Tensor
+        hidden_states: torch.Tensor
         if isinstance(output, torch.Tensor):
-            h = output
+            hidden_states = output
         elif isinstance(output, tuple):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime duck-typing safety
-            h = output[0]
+            hidden_states = output[0]
         else:
-            # Duck-typing fallback for BaseModelOutput-like objects
+            # duck-typing fallback for BaseModelOutput-like objects
             # (not covered by the declared type annotation, but needed at runtime)
-            lhs = getattr(output, "last_hidden_state", None)
-            if isinstance(lhs, torch.Tensor):
-                h = lhs
+            last_hidden_state = getattr(output, "last_hidden_state", None)
+            if isinstance(last_hidden_state, torch.Tensor):
+                hidden_states = last_hidden_state
             else:
                 raise TypeError(f"Unexpected output type {type(output)} from layer {layer_idx}")
-        if h.ndim != 3:
+        if hidden_states.ndim != 3:
             raise ValueError(
-                f"Expected 3D activation (batch, seq_len, hidden_dim) from layer {layer_idx}, got shape {h.shape}"
+                f"Expected 3D activation (batch, seq_len, hidden_dim) from layer {layer_idx}, "
+                f"got shape {hidden_states.shape}"
             )
-        return h
+        return hidden_states
 
     def _make_hook(self, layer_idx: int) -> _ForwardHookFn:
         def hook_fn(
@@ -102,10 +103,10 @@ class ActivationExtractor:
             input: tuple[torch.Tensor, ...],
             output: torch.Tensor | tuple[torch.Tensor, ...],
         ) -> None:
-            h = self._normalize_layer_output(output, layer_idx).detach()
+            hidden_states = self._normalize_layer_output(output, layer_idx).detach()
             if self._activation_dtype is not None:
-                h = h.to(self._activation_dtype)
-            self._activations[layer_idx] = h
+                hidden_states = hidden_states.to(self._activation_dtype)
+            self._activations[layer_idx] = hidden_states
 
         return hook_fn
 

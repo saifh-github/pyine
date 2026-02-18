@@ -6,10 +6,10 @@ These match the prefixed format produced by
 by ``DiskRewardLogger``.
 """
 
-# Canonical key prefixes
+# canonical key prefixes
 REWARD_METRICS_PREFIX = "reward/metrics/"
 REWARD_TERMS_PREFIX = "reward/terms/"
 
-# Canonical metric keys used by probe training
+# canonical metric keys used by probe training
 SOFT_MATCH_KEY = f"{REWARD_METRICS_PREFIX}soft_match/is_match"
 HARD_MATCH_KEY = f"{REWARD_METRICS_PREFIX}hard_match/is_match"

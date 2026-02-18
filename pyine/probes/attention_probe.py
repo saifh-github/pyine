@@ -6,16 +6,16 @@ import math
 
 import torch
 
-from pyine.probes.base import BaseProbe, ProbeConfig
+from pyine.probes.base import BaseProbe, ProbeConfig  # noqa: TID252 -- avoids circular import via __init__
 
 
 class AttentionProbe(BaseProbe):
     """Learned query/value projections with attention-weighted pooling.
 
-    Parameters:
-        W_q: ``(hidden_dim, attn_dim)`` — key projection
-        Q_global: ``(attn_dim,)`` — learned query vector
-        W_v: ``(hidden_dim, 1)`` — value projection
+    Attributes:
+        W_q: ``(hidden_dim, attn_dim)`` -- key projection.
+        Q_global: ``(attn_dim,)`` -- learned query vector.
+        W_v: ``(hidden_dim, 1)`` -- value projection.
     """
 
     def __init__(self, config: ProbeConfig) -> None:
@@ -32,19 +32,19 @@ class AttentionProbe(BaseProbe):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # Key projection: (batch, seq_len, attn_dim)
+        # key projection: (batch, seq_len, attn_dim)
         key = self.W_q(hidden_states)
 
-        # Attention scores: (batch, seq_len, 1)
+        # attention scores: (batch, seq_len, 1)
         attn_scores = (key @ self.Q_global.unsqueeze(-1)) / self._scale
 
-        # Masked softmax
+        # masked softmax
         mask = attention_mask.unsqueeze(-1).bool()  # (batch, seq_len, 1)
         attn_scores = attn_scores.masked_fill(~mask, float("-inf"))
         attn_weights = torch.softmax(attn_scores, dim=1)  # (batch, seq_len, 1)
 
-        # Value projection: (batch, seq_len, 1)
+        # value projection: (batch, seq_len, 1)
         value = self.W_v(hidden_states)
 
-        # Weighted sum: (batch, 1)
+        # weighted sum: (batch, 1)
         return (attn_weights * value).sum(dim=1)

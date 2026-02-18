@@ -9,12 +9,11 @@ if typing.TYPE_CHECKING:
 
 import pytest
 
+from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
 from pyine.probes.base import ProbeConfig
 
 
 class TestProbeTrainerAppMainConfig:
-    """Tests for ProbeTrainerAppMainConfig validation."""
-
     def _make_minimal_config(self, **overrides: object) -> dict:
         """Minimal valid config kwargs."""
         base = {
@@ -28,17 +27,11 @@ class TestProbeTrainerAppMainConfig:
         return base
 
     def test_valid_config_construction(self) -> None:
-        """Config with all required fields validates successfully."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert len(cfg.probe_configs) == 1
         assert cfg.lmdb_path == "/tmp/fake-lmdb"  # noqa: S108
 
     def test_duplicate_probe_names_raises(self) -> None:
-        """Config rejects probe_configs with duplicate names."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError, match="unique"):
             ProbeTrainerAppMainConfig(
                 **self._make_minimal_config(
@@ -50,25 +43,16 @@ class TestProbeTrainerAppMainConfig:
             )
 
     def test_evals_config_optional(self) -> None:
-        """evals_config defaults to None without error."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.evals_config is None
 
     def test_target_dtype_property(self) -> None:
-        """target_dtype returns a torch dtype."""
         import torch
-
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
 
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.target_dtype in (torch.bfloat16, torch.float16)
 
     def test_recompute_labels_invalid_metric_raises(self) -> None:
-        """recompute_labels=True with unsupported label_metric_key raises ValueError."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError, match="recompute_labels"):
             ProbeTrainerAppMainConfig(
                 **self._make_minimal_config(
@@ -78,9 +62,6 @@ class TestProbeTrainerAppMainConfig:
             )
 
     def test_recompute_labels_valid_metric_accepted(self) -> None:
-        """recompute_labels=True with soft_match/is_match is accepted."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(
             **self._make_minimal_config(
                 recompute_labels=True,
@@ -91,14 +72,11 @@ class TestProbeTrainerAppMainConfig:
 
 
 class TestHydraConfigRegistration:
-    """Tests for Hydra-zen config registration."""
-
     def test_register_hydra_configs_no_errors(
         self,
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """register_hydra_configs() completes without exceptions."""
         import pyine.apps.trainers.probe_trainer_configs as ptc
         import pyine.evals.common
         import pyine.utils.filesystem
@@ -109,15 +87,13 @@ class TestHydraConfigRegistration:
 
         # Should have an entrypoint config
         entrypoint = next(
-            (c for c in configs if c.name == "entrypoint" and c.group is None),
+            (cfg for cfg in configs if cfg.name == "entrypoint" and cfg.group is None),
             None,
         )
         assert entrypoint is not None
 
 
 class TestProbeTrainerConfigReplicas:
-    """Tests for replica-related config fields on ProbeTrainerAppMainConfig."""
-
     def _make_minimal_config(self, **overrides: object) -> dict:
         """Minimal valid config kwargs."""
         base: dict[str, object] = {
@@ -131,23 +107,14 @@ class TestProbeTrainerConfigReplicas:
         return base
 
     def test_num_replicas_default_is_1(self) -> None:
-        """Default num_replicas is 1."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.num_replicas == 1
 
     def test_num_replicas_must_be_positive(self) -> None:
-        """num_replicas < 1 raises validation error (ge=1 constraint)."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError):
             ProbeTrainerAppMainConfig(**self._make_minimal_config(num_replicas=0))
 
     def test_replica_fields_accepted(self) -> None:
-        """num_replicas, replica_base_seed, log_individual_replicas are accepted without error."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(
             **self._make_minimal_config(
                 num_replicas=5,
@@ -160,23 +127,15 @@ class TestProbeTrainerConfigReplicas:
         assert cfg.log_individual_replicas is True
 
     def test_replica_base_seed_default_is_0(self) -> None:
-        """Default replica_base_seed is 0."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.replica_base_seed == 0
 
     def test_log_individual_replicas_default_is_false(self) -> None:
-        """Default log_individual_replicas is False."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.log_individual_replicas is False
 
 
 class TestProbeTrainerConfigEvalOnly:
-    """Tests for eval-only split config fields."""
-
     def _make_minimal_config(self, **overrides: object) -> dict:
         """Minimal valid config kwargs."""
         base: dict[str, object] = {
@@ -190,25 +149,16 @@ class TestProbeTrainerConfigEvalOnly:
         return base
 
     def test_use_eval_only_split_default_false(self) -> None:
-        """Default is False."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.use_eval_only_split is False
 
     def test_train_split_ratio_bounds(self) -> None:
-        """Rejects ratio <= 0 or >= 1."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError):
             ProbeTrainerAppMainConfig(**self._make_minimal_config(train_split_ratio=0.0))
         with pytest.raises(ValueError):
             ProbeTrainerAppMainConfig(**self._make_minimal_config(train_split_ratio=1.0))
 
     def test_eval_only_fields_accepted(self) -> None:
-        """All new fields are accepted without error."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(
             **self._make_minimal_config(
                 use_eval_only_split=True,
@@ -227,32 +177,20 @@ class TestProbeTrainerConfigEvalOnly:
         assert cfg.log_per_code_type_metrics is True
 
     def test_code_type_filter_accepts_list(self) -> None:
-        """code_type_filter accepts a list of strings."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(
             **self._make_minimal_config(code_type_filter=["original", "hinted", "misleading"])
         )
         assert cfg.code_type_filter == ["original", "hinted", "misleading"]
 
     def test_code_type_filter_default_none(self) -> None:
-        """Default code_type_filter is None."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         cfg = ProbeTrainerAppMainConfig(**self._make_minimal_config())
         assert cfg.code_type_filter is None
 
     def test_code_type_filter_empty_list_rejected(self) -> None:
-        """Empty list code_type_filter raises ValidationError."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError, match="empty list"):
             ProbeTrainerAppMainConfig(**self._make_minimal_config(code_type_filter=[]))
 
     def test_eval_only_empty_prefix_rejected(self) -> None:
-        """Empty eval_only_source_prefix when use_eval_only_split=True raises ValueError."""
-        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-
         with pytest.raises(ValueError, match="eval_only_source_prefix"):
             ProbeTrainerAppMainConfig(
                 **self._make_minimal_config(

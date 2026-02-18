@@ -9,6 +9,7 @@ import pathlib
 import typing
 
 import click
+import pydantic
 import yaml
 
 import pyine.data.traces.dataset_reader
@@ -90,7 +91,7 @@ def build_dataset_reader(
     if dataset_loader_name:
         try:
             loader = pyine.utils.portability.import_from_dotted_path(dataset_loader_name)
-        except Exception as exc:
+        except (ImportError, AttributeError, TypeError) as exc:
             raise click.ClickException(f"could not resolve dataset loader '{dataset_loader_name}': {exc}") from exc
         if not callable(loader):
             raise click.BadParameter(f"dotted path '{dataset_loader_name}' does not resolve to a callable")
@@ -118,7 +119,7 @@ def build_dataset_reader(
             "pyine.data.traces.dataset_reader.DatasetProtocol",
             pyine.data.traces.dataset_reader.DatasetCollection(dataset_paths),
         )
-    except Exception as exc:
+    except (TypeError, ValueError, OSError) as exc:
         raise click.ClickException(f"Failed to instantiate dataset reader; original error: {exc}") from exc
 
 
@@ -138,7 +139,7 @@ def resolve_dataset_paths(
     if dataset_latest_from is not None:
         try:
             resolved_path = pyine.data.traces.dataset_utils.get_latest_dataset_path(dataset_latest_from)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError, OSError) as exc:
             raise click.ClickException(
                 f"could not resolve latest trace dataset for source '{dataset_latest_from}': {exc}"
             ) from exc
@@ -178,7 +179,7 @@ def build_llm_provider_config(
         logger.debug(f"parsed LLM options: {llm_kwargs}")
     try:
         return pyine.utils.llm_providers.LLMProviderConfig.from_dict(llm_kwargs)
-    except Exception as exc:
+    except (pydantic.ValidationError, ValueError, TypeError) as exc:
         raise click.BadParameter("llm options resulted in an invalid provider config") from exc
 
 

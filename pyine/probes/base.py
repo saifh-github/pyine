@@ -17,15 +17,15 @@ class ProbeConfig(pydantic.BaseModel):
     architecture: str
     layer: int
     hidden_dim: int | None = None
-    # Architecture-specific hyperparams
+    # architecture-specific hyperparams
     window_size: int = 16
     temperature: float = 1.0
     attn_dim: int = 64
-    # Training hyperparams (per-probe)
+    # training hyperparams (per-probe)
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
 
-    # Replica metadata (populated at runtime by expand_probe_configs_with_replicas, not set by user)
+    # replica metadata (populated at runtime by expand_probe_configs_with_replicas, not set by user)
     replica_idx: int | None = None
     replica_seed: int | None = None
     base_name: str | None = None
@@ -55,9 +55,9 @@ class BaseProbe(torch.nn.Module, abc.ABC):
         """Forward pass.
 
         Args:
-            hidden_states: ``(batch, seq_len, hidden_dim)`` – detached
+            hidden_states: ``(batch, seq_len, hidden_dim)`` -- detached
                 activations from the frozen LLM.
-            attention_mask: ``(batch, seq_len)`` – 1 for real tokens,
+            attention_mask: ``(batch, seq_len)`` -- 1 for real tokens,
                 0 for padding.
 
         Returns:

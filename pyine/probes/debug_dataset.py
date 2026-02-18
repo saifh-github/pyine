@@ -16,17 +16,17 @@ CLI usage::
 from __future__ import annotations
 
 import argparse
+import pathlib
 import random
 import typing
-from pathlib import Path
 
-from pyine.data.utils.lmdb_io import LMDBWriter, SerializationConfig, SerializationMethod
-from pyine.probes.reward_keys import HARD_MATCH_KEY, REWARD_TERMS_PREFIX, SOFT_MATCH_KEY
+import pyine.data.utils.lmdb_io
+import pyine.probes.reward_keys
 
 if typing.TYPE_CHECKING:
     import datasets
 
-# Keywords and content pools for generating synthetic records
+# keywords and content pools for generating synthetic records
 _SIGNAL_KEYWORD = "helper"
 _CODE_SNIPPETS_WITH_SIGNAL = [
     "def helper(x):\n    return x * 2",
@@ -54,10 +54,10 @@ _COMPLETIONS_WITHOUT_SIGNAL = [
 ]
 _NOISE_RATE = 0.1
 
-# Code types for eval family variants
+# code types for eval family variants
 _EVAL_CODE_TYPES = ["original", "hinted", "misleading"]
 
-# Augmentation category mapping for constructing /a: suffixes
+# augmentation category mapping for constructing /a: suffixes
 _CODE_TYPE_TO_AUGMENT = {
     "hinted": "hints_docs",
     "misleading": "issues_docs",
@@ -96,7 +96,7 @@ def _make_record(
 
     prompt = f"You are an AI assistant.\n\nAnalyze the following code:\n```python\n{code}\n```"
 
-    # Tags include augmentation info when code_type is not "original"
+    # tags include augmentation info when code_type is not "original"
     tags = ["debug"]
     if code_type == "hinted":
         tags.append("augment:hinted")
@@ -111,12 +111,12 @@ def _make_record(
         "reasoning": None,
         "reward_total": float(label),
         "reward_terms": {
-            f"{REWARD_TERMS_PREFIX}soft_match": float(label),
-            f"{REWARD_TERMS_PREFIX}hard_match": float(label),
+            f"{pyine.probes.reward_keys.REWARD_TERMS_PREFIX}soft_match": float(label),
+            f"{pyine.probes.reward_keys.REWARD_TERMS_PREFIX}hard_match": float(label),
         },
         "reward_metrics": {
-            SOFT_MATCH_KEY: label,
-            HARD_MATCH_KEY: label,
+            pyine.probes.reward_keys.SOFT_MATCH_KEY: label,
+            pyine.probes.reward_keys.HARD_MATCH_KEY: label,
         },
         "reward_terms_raw": None,
         "predict_type": "program_output",
@@ -130,12 +130,12 @@ def _make_record(
 
 
 def create_debug_probe_lmdb(
-    output_path: str | Path,
+    output_path: str | pathlib.Path,
     n_train: int = 200,
     n_eval_families: int = 30,
     seed: int = 42,
     noise_rate: float = _NOISE_RATE,
-) -> Path:
+) -> pathlib.Path:
     """Generate a mock LMDB database for probe training testing.
 
     Train records have flat IDs and ``code_type="original"``.
@@ -158,34 +158,36 @@ def create_debug_probe_lmdb(
     Returns:
         Path to the created LMDB directory.
     """
-    output_path = Path(output_path)
+    output_path = pathlib.Path(output_path)
     rng = random.Random(seed)
 
-    serialization_config = SerializationConfig(method=SerializationMethod.JSON_ZSTD)
+    serialization_config = pyine.data.utils.lmdb_io.SerializationConfig(
+        method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+    )
 
-    with LMDBWriter(output_path, serialization_config=serialization_config) as writer:
-        # --- Train records: flat structure, all "original" ---
-        for i in range(n_train):
+    with pyine.data.utils.lmdb_io.LMDBWriter(output_path, serialization_config=serialization_config) as writer:
+        # --- train records: flat structure, all "original" ---
+        for sample_idx in range(n_train):
             base_label = rng.randint(0, 1)
             label = 1 - base_label if rng.random() < noise_rate else base_label
-            sample_id = f"debug_sample_{i:04d}"
+            sample_id = f"debug_sample_{sample_idx:04d}"
             key, record = _make_record(label, rng, "train/", sample_id, code_type="original")
             writer.put(key, record)
 
-        # --- Eval records: family-structured with code type variants ---
+        # --- eval records: family-structured with code type variants ---
         for family_idx in range(n_eval_families):
             base_id = f"debug_problem_{family_idx:03d}/s0000/t0000"
             family_base_label = rng.randint(0, 1)
 
             for code_type in _EVAL_CODE_TYPES:
-                # Construct sample_id with augmentation suffix for non-original
+                # construct sample_id with augmentation suffix for non-original
                 if code_type == "original":
                     sample_id = base_id
                 else:
                     augment_cat = _CODE_TYPE_TO_AUGMENT[code_type]
                     sample_id = f"{base_id}/a:{augment_cat}:000"
 
-                # Label may differ per variant
+                # label may differ per variant
                 if code_type == "hinted":
                     label = 1 if rng.random() > 0.2 else 0  # ~80% correct
                 elif code_type == "misleading":
@@ -201,7 +203,7 @@ def create_debug_probe_lmdb(
 
 
 def create_debug_probe_dataset(
-    output_path: str | Path | None = None,
+    output_path: str | pathlib.Path | None = None,
     n_train: int = 200,
     n_eval_families: int = 30,
     seed: int = 42,
@@ -229,16 +231,16 @@ def create_debug_probe_dataset(
     """
     import tempfile
 
-    from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+    import pyine.probes.lmdb_dataset
 
     if output_path is None:
         tmp_dir = tempfile.mkdtemp(prefix="probe_debug_lmdb_")
-        lmdb_path = Path(tmp_dir) / "debug.lmdb"
+        lmdb_path = pathlib.Path(tmp_dir) / "debug.lmdb"
     else:
-        lmdb_path = Path(output_path)
+        lmdb_path = pathlib.Path(output_path)
 
     create_debug_probe_lmdb(lmdb_path, n_train=n_train, n_eval_families=n_eval_families, seed=seed)
-    return load_probe_dataset_from_lmdb(
+    return pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
         lmdb_path,
         use_eval_only_split=use_eval_only_split,
         code_type_filter=code_type_filter,

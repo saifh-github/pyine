@@ -17,24 +17,21 @@ import logging
 import random
 import typing
 
-import datasets  # noqa: TC002 — used at runtime (Dataset.from_list, DatasetDict)
+import datasets  # noqa: TC002 -- used at runtime (Dataset.from_list, DatasetDict)
 
-from pyine.data.utils.lmdb_io import LMDBReader
-from pyine.probes.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
+import pyine.data.utils.lmdb_io
+import pyine.utils.code.output_compare
+from pyine.probes.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
+    HARD_MATCH_KEY,
+    SOFT_MATCH_KEY,
+)
 
 if typing.TYPE_CHECKING:
-    from pathlib import Path
-
-    import pyine.utils.code.output_compare
+    import pathlib
 
 logger = logging.getLogger(__name__)
 
 _RECOMPUTABLE_METRICS = frozenset({SOFT_MATCH_KEY, HARD_MATCH_KEY})
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _parse_lmdb_key(
@@ -73,7 +70,7 @@ def _parse_lmdb_key(
 
 
 def _load_lmdb_records(
-    reader: LMDBReader,
+    reader: pyine.data.utils.lmdb_io.LMDBReader,
     key_prefix: str,
     selection_strategy: str,
 ) -> list[tuple[str, dict[str, typing.Any]]]:
@@ -87,7 +84,7 @@ def _load_lmdb_records(
     Returns:
         List of (sample_id, record) tuples after deduplication.
     """
-    # Group records by sample_id
+    # group records by sample_id
     grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {}
     for key in reader.key_map:
         if not key.startswith(key_prefix):
@@ -95,7 +92,7 @@ def _load_lmdb_records(
         sample_id, gen_count = _parse_lmdb_key(key, key_prefix)
         record: dict[str, typing.Any] = reader.get(key)
 
-        # Validate key_prefix field consistency
+        # validate key_prefix field consistency
         record_prefix = record.get("key_prefix")
         if record_prefix is not None and record_prefix != key_prefix:
             logger.warning(
@@ -107,7 +104,7 @@ def _load_lmdb_records(
 
         grouped.setdefault(sample_id, []).append((gen_count, record))
 
-    # Deduplicate
+    # deduplicate
     result: list[tuple[str, dict[str, typing.Any]]] = []
     for sample_id, entries in grouped.items():
         if selection_strategy == "latest":
@@ -148,7 +145,7 @@ def _record_to_probe_sample(
     prompt = record.get("prompt")
     model_output = record.get("model_output")
 
-    # Check required fields: prompt and model_output are always needed
+    # check required fields: prompt and model_output are always needed
     if prompt is None or model_output is None:
         msg = f"record for sample_id '{sample_id}' is missing prompt or model_output"
         if skip_malformed:
@@ -157,7 +154,7 @@ def _record_to_probe_sample(
 
     text = prompt + model_output
 
-    # Derive label
+    # derive label
     if recompute_labels:
         expected_output = record.get("expected_output")
         if expected_output is None:
@@ -180,7 +177,7 @@ def _record_to_probe_sample(
             raise ValueError(msg)
         label = int(reward_metrics[label_metric_key])
 
-    # Extract code_type (always present after DiskRewardLogger export)
+    # extract code_type (always present after DiskRewardLogger export)
     code_type = record.get("code_type")
     if code_type is None:
         code_type = "unknown"
@@ -195,13 +192,22 @@ def _recompute_label(
     compare_options: pyine.utils.code.output_compare.CompareOptions | None,
 ) -> int:
     """Re-compute a binary label from expected/predicted outputs."""
-    from pyine.organisms.models.rewards.terms.code_exec.utils import compute_hard_match, compute_soft_match
+    import pyine.organisms.models.rewards.terms.code_exec.utils
 
     if label_metric_key == SOFT_MATCH_KEY:
-        result = compute_soft_match(expected=expected, predicted=predicted, options=compare_options)
+        result = pyine.organisms.models.rewards.terms.code_exec.utils.compute_soft_match(
+            expected=expected,
+            predicted=predicted,
+            options=compare_options,
+        )
         return int(result.equal)
     if label_metric_key == HARD_MATCH_KEY:
-        return int(compute_hard_match(expected=expected, predicted=predicted))
+        return int(
+            pyine.organisms.models.rewards.terms.code_exec.utils.compute_hard_match(
+                expected=expected,
+                predicted=predicted,
+            )
+        )
     raise ValueError(
         f"recompute_labels=True is only supported for label_metric_key in "
         f"{set(_RECOMPUTABLE_METRICS)}, got '{label_metric_key}'"
@@ -244,7 +250,7 @@ def _filter_by_code_type(
         Filtered list of (sample_id, record) tuples.
     """
     allowed = set(code_type_filter)
-    return [(sid, rec) for sid, rec in records if (rec.get("code_type") or "unknown") in allowed]
+    return [(sample_id, record) for sample_id, record in records if (record.get("code_type") or "unknown") in allowed]
 
 
 def _split_records_by_family(
@@ -272,7 +278,7 @@ def _split_records_by_family(
     Raises:
         ValueError: If fewer than 2 families exist.
     """
-    # Group samples by family ID
+    # group samples by family ID
     families: dict[str, list[dict[str, str | int]]] = {}
     for sample in samples:
         family_id = _extract_family_id(str(sample["sample_id"]))
@@ -285,14 +291,14 @@ def _split_records_by_family(
             "use split_by_family=False or provide more data"
         )
 
-    # Deterministic shuffle of family IDs
+    # deterministic shuffle of family IDs
     family_ids = sorted(families.keys())
     rng = random.Random(seed)
     rng.shuffle(family_ids)
 
-    # Split families
+    # split families
     n_train = max(1, int(n_families * train_ratio))
-    # Ensure at least 1 valid family
+    # ensure at least 1 valid family
     if n_train >= n_families:
         n_train = n_families - 1
 
@@ -300,9 +306,9 @@ def _split_records_by_family(
 
     train_samples: list[dict[str, str | int]] = []
     valid_samples: list[dict[str, str | int]] = []
-    for fid in family_ids:
-        target = train_samples if fid in train_family_ids else valid_samples
-        target.extend(families[fid])
+    for family_id in family_ids:
+        target = train_samples if family_id in train_family_ids else valid_samples
+        target.extend(families[family_id])
 
     return train_samples, valid_samples
 
@@ -369,7 +375,10 @@ def _convert_records_to_samples(
     return samples, skipped
 
 
-def _validate_probe_split(split_name: str, dataset: datasets.Dataset) -> None:
+def _validate_probe_split(
+    split_name: str,
+    dataset: datasets.Dataset,
+) -> None:
     """Validate a single split of the probe dataset."""
     unique_labels: set[int] = set(
         typing.cast("list[int]", dataset.unique("label"))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
@@ -378,25 +387,20 @@ def _validate_probe_split(split_name: str, dataset: datasets.Dataset) -> None:
         raise ValueError(f"split '{split_name}': expected binary labels {{0, 1}}, got {unique_labels}")
 
     texts = typing.cast("list[str]", dataset["text"])
-    if any(not t for t in texts):
+    if any(not text for text in texts):
         raise ValueError(f"split '{split_name}': found empty text fields")
 
     if len(unique_labels) < 2:
         logger.warning(
-            "split '%s' has only label(s) %s (%d samples) — probe training may be degenerate",
+            "split '%s' has only label(s) %s (%d samples) -- probe training may be degenerate",
             split_name,
             unique_labels,
             len(dataset),
         )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def load_probe_dataset_from_lmdb(
-    lmdb_path: str | Path,
+    lmdb_path: str | pathlib.Path,
     label_metric_key: str = SOFT_MATCH_KEY,
     train_key_prefix: str = "train/",
     valid_key_prefix: str = "eval/",
@@ -455,7 +459,7 @@ def load_probe_dataset_from_lmdb(
         ValueError: If recompute_labels=True with unsupported label_metric_key,
             if no records match a key prefix, or if code_type_filter excludes all.
     """
-    # Defensive runtime check (also enforced in config validator)
+    # defensive runtime check (also enforced in config validator)
     if recompute_labels and label_metric_key not in _RECOMPUTABLE_METRICS:
         raise ValueError(
             f"recompute_labels=True is only supported for label_metric_key in "
@@ -501,7 +505,7 @@ def load_probe_dataset_from_lmdb(
 
 
 def _load_two_prefix(
-    lmdb_path: str | Path,
+    lmdb_path: str | pathlib.Path,
     train_key_prefix: str,
     valid_key_prefix: str,
     selection_strategy: str,
@@ -515,7 +519,7 @@ def _load_two_prefix(
 ) -> dict[str, datasets.Dataset]:
     """Two-prefix loading mode (original behavior)."""
     splits: dict[str, datasets.Dataset] = {}
-    with LMDBReader(lmdb_path) as reader:
+    with pyine.data.utils.lmdb_io.LMDBReader(lmdb_path) as reader:
         for split_name, prefix in [("train", train_key_prefix), ("valid", valid_key_prefix)]:
             records = _load_lmdb_records(reader, prefix, selection_strategy)
             if not records:
@@ -564,7 +568,7 @@ def _load_two_prefix(
 
 
 def _load_eval_only(
-    lmdb_path: str | Path,
+    lmdb_path: str | pathlib.Path,
     eval_only_source_prefix: str,
     selection_strategy: str,
     label_metric_key: str,
@@ -578,7 +582,7 @@ def _load_eval_only(
     seed: int,
 ) -> dict[str, datasets.Dataset]:
     """Eval-only loading mode: single prefix, internal train/valid split."""
-    with LMDBReader(lmdb_path) as reader:
+    with pyine.data.utils.lmdb_io.LMDBReader(lmdb_path) as reader:
         records = _load_lmdb_records(reader, eval_only_source_prefix, selection_strategy)
 
     if not records:
@@ -592,7 +596,7 @@ def _load_eval_only(
         if not records:
             raise ValueError(f"no records remain after code_type_filter={code_type_filter}")
 
-    # Convert to samples
+    # convert to samples
     samples, skipped = _convert_records_to_samples(
         records,
         label_metric_key,
@@ -611,19 +615,24 @@ def _load_eval_only(
     if not samples:
         raise ValueError(f"eval-only mode: all {len(records)} records were malformed; no valid samples to train on")
 
-    # Split into train/valid
+    # split into train/valid
     if split_by_family:
         train_samples, valid_samples = _split_records_by_family(samples, train_split_ratio, seed)
     else:
         train_samples, valid_samples = _split_records_random(samples, train_split_ratio, seed)
 
-    # Log per-split code type distribution
+    # log per-split code type distribution
     for name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
-        ct_counts: dict[str, int] = {}
-        for s in split_samples:
-            ct = str(s["code_type"])
-            ct_counts[ct] = ct_counts.get(ct, 0) + 1
-        logger.info("eval-only %s split: %d samples, code_type distribution: %s", name, len(split_samples), ct_counts)
+        code_type_counts: dict[str, int] = {}
+        for sample in split_samples:
+            code_type = str(sample["code_type"])
+            code_type_counts[code_type] = code_type_counts.get(code_type, 0) + 1
+        logger.info(
+            "eval-only %s split: %d samples, code_type distribution: %s",
+            name,
+            len(split_samples),
+            code_type_counts,
+        )
 
     splits: dict[str, datasets.Dataset] = {}
     for split_name, split_samples in [("train", train_samples), ("valid", valid_samples)]:

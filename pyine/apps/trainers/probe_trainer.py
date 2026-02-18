@@ -1,19 +1,19 @@
-"""Probe training app — trains lightweight probe classifiers on frozen LLM activations.
+"""Probe training app -- trains lightweight probe classifiers on frozen LLM activations.
 
-See PROBES_CLAUDE.md for the full implementation plan.
+See pyine/apps/trainers/PROBE_TRAINING_GUIDE.md for the full GUIDE.
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import json
 import logging
 import math
+import pathlib
 import statistics
 import typing
-from collections import defaultdict
-from pathlib import Path
 
 import torch
 import transformers
@@ -21,27 +21,22 @@ import transformers
 import pyine.apps.trainers.probe_trainer_configs as probe_trainer_configs
 import pyine.configs.schemas
 import pyine.evals.common
-from pyine.probes.collection import ProbeCollection
-from pyine.probes.extraction import ActivationExtractor
-from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+import pyine.probes.collection
+import pyine.probes.extraction
+import pyine.probes.lmdb_dataset
 
 if typing.TYPE_CHECKING:
+    import accelerate
     import datasets
     import numpy as np
     import numpy.typing as npt
-    from accelerate import Accelerator
 
-    from pyine.probes.base import BaseProbe, ProbeConfig
+    import pyine.probes.base
 
     _DL = torch.utils.data.DataLoader[dict[str, torch.Tensor]]
-    _PreparedResult = tuple[ProbeCollection, torch.optim.AdamW, _DL, _DL]
+    _PreparedResult = tuple[pyine.probes.collection.ProbeCollection, torch.optim.AdamW, _DL, _DL]
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Dataset helpers
-# ---------------------------------------------------------------------------
 
 
 def _tokenize_split(
@@ -61,18 +56,18 @@ def _tokenize_split(
             max_length=max_seq_length,
             truncation=True,
             padding=False,
-            add_special_tokens=False,  # Post-template text — don't add BOS/EOS/chat markers
+            add_special_tokens=False,  # post-template text -- don't add BOS/EOS/chat markers
         )
         tokenized["labels"] = examples["label"]
-        # Map code_type string → integer ID for DDP gathering
-        tokenized["code_type_id"] = [code_type_to_id[ct] for ct in examples["code_type"]]  # type: ignore[index]
+        # map code_type string -> integer ID for DDP gathering
+        tokenized["code_type_id"] = [code_type_to_id[code_type] for code_type in examples["code_type"]]  # type: ignore[index]
         return tokenized
 
     ds = dataset.map(  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         _tokenize,
         batched=True,
         remove_columns=[
-            c for c in dataset.column_names if c not in ("input_ids", "attention_mask", "labels", "code_type_id")
+            col for col in dataset.column_names if col not in ("input_ids", "attention_mask", "labels", "code_type_id")
         ],
     )
     ds.set_format("torch", columns=["input_ids", "attention_mask", "labels", "code_type_id"])  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
@@ -98,12 +93,11 @@ def build_dataloader(
     )
 
 
-# ---------------------------------------------------------------------------
-# Replica helpers
-# ---------------------------------------------------------------------------
-
-
-def _stable_replica_seed(base_seed: int, name: str, replica_idx: int) -> int:
+def _stable_replica_seed(
+    base_seed: int,
+    name: str,
+    replica_idx: int,
+) -> int:
     """Deterministic seed from (base_seed, probe_name, replica_idx).
 
     Uses blake2b instead of Python's hash(), which is randomized per process
@@ -115,10 +109,10 @@ def _stable_replica_seed(base_seed: int, name: str, replica_idx: int) -> int:
 
 
 def expand_probe_configs_with_replicas(
-    probe_configs: list[ProbeConfig],
+    probe_configs: list[pyine.probes.base.ProbeConfig],
     num_replicas: int,
     replica_base_seed: int,
-) -> list[ProbeConfig]:
+) -> list[pyine.probes.base.ProbeConfig]:
     """Expand probe configs by creating N replicas of each, with unique seeds.
 
     When num_replicas == 1, returns the original list unchanged (no modification).
@@ -134,17 +128,17 @@ def expand_probe_configs_with_replicas(
     if num_replicas <= 1:
         return probe_configs
 
-    expanded: list[ProbeConfig] = []
-    for pc in probe_configs:
-        for r in range(num_replicas):
-            seed = _stable_replica_seed(replica_base_seed, pc.name, r)
+    expanded: list[pyine.probes.base.ProbeConfig] = []
+    for probe_config in probe_configs:
+        for replica_idx in range(num_replicas):
+            seed = _stable_replica_seed(replica_base_seed, probe_config.name, replica_idx)
             expanded.append(
-                pc.model_copy(
+                probe_config.model_copy(
                     update={
-                        "name": f"{pc.name}_r{r}",
-                        "replica_idx": r,
+                        "name": f"{probe_config.name}_r{replica_idx}",
+                        "replica_idx": replica_idx,
                         "replica_seed": seed,
-                        "base_name": pc.name,
+                        "base_name": probe_config.name,
                     }
                 )
             )
@@ -153,7 +147,7 @@ def expand_probe_configs_with_replicas(
 
 def aggregate_replica_metrics(
     per_probe_values: dict[str, float],
-    probe_configs_by_name: dict[str, ProbeConfig],
+    probe_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
 ) -> dict[str, dict[str, float]]:
     """Group metric values by base_name and compute mean/std/min/max.
 
@@ -169,7 +163,7 @@ def aggregate_replica_metrics(
         {base_name: {"mean": float, "std": float, "min": float, "max": float}}
         For non-replicated probes, base_name == probe_name and std is 0.0.
     """
-    groups: dict[str, list[float]] = defaultdict(list)
+    groups: dict[str, list[float]] = collections.defaultdict(list)
     for name, value in per_probe_values.items():
         pc = probe_configs_by_name[name]
         base = pc.base_name if pc.base_name is not None else pc.name
@@ -202,7 +196,7 @@ def aggregate_replica_metrics(
 
 def build_train_replica_table(
     per_probe_losses: dict[str, float],
-    expanded_configs_by_name: dict[str, ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
     global_step: int,
     epoch: int,
 ) -> typing.Any:
@@ -243,7 +237,7 @@ def build_train_replica_table(
 
 def build_valid_replica_table(
     per_probe_metrics: dict[str, dict[str, float]],
-    expanded_configs_by_name: dict[str, ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
     global_step: int,
 ) -> typing.Any:
     """Build a W&B Table with raw per-replica validation metrics.
@@ -266,7 +260,7 @@ def build_valid_replica_table(
             "auroc",
         ]
     )
-    for name, m in per_probe_metrics.items():
+    for name, metric_values in per_probe_metrics.items():
         pc = expanded_configs_by_name[name]
         table.add_data(  # pyright: ignore[reportUnknownMemberType]  # wandb stubs
             name,
@@ -275,16 +269,16 @@ def build_valid_replica_table(
             pc.layer,
             pc.replica_idx if pc.replica_idx is not None else 0,
             global_step,
-            m["loss"],
-            m["auroc"],
+            metric_values["loss"],
+            metric_values["auroc"],
         )
     return table
 
 
 def save_replica_summary(
-    output_dir: Path,
+    output_dir: pathlib.Path,
     final_metrics: dict[str, dict[str, float]],
-    expanded_configs_by_name: dict[str, ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
 ) -> None:
     """Save aggregated replica summary as JSON."""
     loss_agg = aggregate_replica_metrics(
@@ -301,8 +295,10 @@ def save_replica_summary(
         base_name: {
             "loss": loss_agg.get(base_name, {}),
             "auroc": auroc_agg.get(base_name, {}),
-            "num_replicas": len(
-                [pc for pc in expanded_configs_by_name.values() if (pc.base_name or pc.name) == base_name]
+            "num_replicas": sum(
+                1
+                for probe_config in expanded_configs_by_name.values()
+                if (probe_config.base_name or probe_config.name) == base_name
             ),
         }
         for base_name in sorted(base_names)
@@ -311,22 +307,17 @@ def save_replica_summary(
     logger.info(f"Saved replica summary to {output_dir / 'replica_summary.json'}")
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-
 def validate_probes(
-    probe_collection: ProbeCollection,
+    probe_collection: pyine.probes.collection.ProbeCollection,
     model: torch.nn.Module,
-    extractor: ActivationExtractor,
+    extractor: pyine.probes.extraction.ActivationExtractor,
     valid_loader: torch.utils.data.DataLoader[dict[str, torch.Tensor]],
     loss_fn: torch.nn.Module,
     global_step: int,
-    accelerator: Accelerator,
+    accelerator: accelerate.Accelerator,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
     *,
-    expanded_configs_by_name: dict[str, ProbeConfig] | None = None,
+    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig] | None = None,
     log_individual_replicas: bool = False,
     id_to_code_type: dict[int, str] | None = None,
     log_per_code_type_metrics: bool = False,
@@ -338,9 +329,9 @@ def validate_probes(
     """
     probe_collection.eval()
 
-    # Handle both DDP-wrapped and raw ProbeCollection
+    # Handle both DDP-wrapped and raw pyine.probes.collection.ProbeCollection
     raw = typing.cast(
-        "ProbeCollection",
+        "pyine.probes.collection.ProbeCollection",
         getattr(probe_collection, "module", probe_collection),
     )
     probes_dict = raw.probes
@@ -472,9 +463,11 @@ def validate_probes(
 
             logger.info(
                 f"[step {global_step}] validation (aggregated): "
-                + ", ".join(f"{base}: loss={s['mean']:.4f}+-{s['std']:.4f}" for base, s in loss_agg.items())
+                + ", ".join(f"{base}: loss={stats['mean']:.4f}+-{stats['std']:.4f}" for base, stats in loss_agg.items())
                 + " | "
-                + ", ".join(f"{base}: auroc={s['mean']:.4f}+-{s['std']:.4f}" for base, s in auroc_agg.items())
+                + ", ".join(
+                    f"{base}: auroc={stats['mean']:.4f}+-{stats['std']:.4f}" for base, stats in auroc_agg.items()
+                )
             )
         else:
             if runtime and runtime.wandb_run:
@@ -540,32 +533,27 @@ def _log_per_code_type_metrics(
             )
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint saving
-# ---------------------------------------------------------------------------
-
-
 def save_probe_checkpoints(
-    probe_collection: ProbeCollection,
+    probe_collection: pyine.probes.collection.ProbeCollection,
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-    accelerator: Accelerator,
-) -> Path | None:
+    accelerator: accelerate.Accelerator,
+) -> pathlib.Path | None:
     """Save probe weights + configs. Only on main process."""
     if not accelerator.is_main_process:
         return None
 
     raw_collection = typing.cast(
-        "ProbeCollection",
+        "pyine.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
     if runtime is not None:
-        output_dir = Path(runtime.output_dir) / "probes"
+        output_dir = pathlib.Path(runtime.output_dir) / "probes"
     else:
-        output_dir = Path("probes_output")
+        output_dir = pathlib.Path("probes_output")
 
     for name, module in raw_collection.probes.items():
-        probe = typing.cast("BaseProbe", module)
+        probe = typing.cast("pyine.probes.base.BaseProbe", module)
         probe_dir = output_dir / name
         probe_dir.mkdir(parents=True, exist_ok=True)
         torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
@@ -575,19 +563,14 @@ def save_probe_checkpoints(
     return output_dir
 
 
-# ---------------------------------------------------------------------------
-# Core training loop
-# ---------------------------------------------------------------------------
-
-
 def probe_train(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> ProbeCollection:
+) -> pyine.probes.collection.ProbeCollection:
     """Core probe training loop."""
-    from accelerate import Accelerator
+    import accelerate
 
-    accelerator = Accelerator(
+    accelerator = accelerate.Accelerator(
         gradient_accumulation_steps=config.gradient_accumulation_steps,
     )
 
@@ -595,25 +578,27 @@ def probe_train(
     logger.info("Loading frozen LLM...")
     checkpoint_path = config.llm_checkpoint_path
     model = config.get_model(
-        checkpoint_path=Path(checkpoint_path) if checkpoint_path else None,
+        checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None,
     )
     model.eval()
     model.requires_grad_(False)
     tokenizer = config.get_tokenizer(
-        checkpoint_path=Path(checkpoint_path) if checkpoint_path else None,
+        checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None,
     )
 
     # --- 2. Build ProbeCollection + optimizer ---
     hidden_dim: int = model.config.hidden_size
 
-    # Expand probe configs with replicas if num_replicas > 1
+    # expand probe configs with replicas if num_replicas > 1
     expanded_probe_configs = expand_probe_configs_with_replicas(
         config.probe_configs,
         config.num_replicas,
         config.replica_base_seed,
     )
     has_replicas = config.num_replicas > 1
-    expanded_configs_by_name: dict[str, ProbeConfig] = {pc.name: pc for pc in expanded_probe_configs}
+    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig] = {
+        probe_config.name: probe_config for probe_config in expanded_probe_configs
+    }
 
     if has_replicas:
         logger.info(
@@ -622,13 +607,13 @@ def probe_train(
         )
 
     logger.info(f"Building ProbeCollection with hidden_dim={hidden_dim}, {len(expanded_probe_configs)} probes")
-    probe_collection = ProbeCollection(expanded_probe_configs, hidden_dim)
+    probe_collection = pyine.probes.collection.ProbeCollection(expanded_probe_configs, hidden_dim)
     probe_collection = probe_collection.to(dtype=config.target_dtype)
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
     # --- 3. Prepare datasets ---
     logger.info(f"Loading probe dataset from LMDB: {config.lmdb_path}")
-    raw_ds = load_probe_dataset_from_lmdb(
+    raw_ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
         lmdb_path=config.lmdb_path,
         label_metric_key=config.label_metric_key,
         train_key_prefix=config.train_key_prefix,
@@ -644,21 +629,21 @@ def probe_train(
         code_type_filter=config.code_type_filter,
     )
 
-    # Build code_type → integer ID mapping (consistent across splits)
+    # build code_type -> integer ID mapping (consistent across splits)
     all_code_types: list[str] = sorted(
         set(typing.cast("list[str]", raw_ds["train"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
         | set(typing.cast("list[str]", raw_ds["valid"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
     )
-    code_type_to_id: dict[str, int] = {ct: i for i, ct in enumerate(all_code_types)}
-    id_to_code_type: dict[int, str] = {i: ct for ct, i in code_type_to_id.items()}
+    code_type_to_id: dict[str, int] = {code_type: idx for idx, code_type in enumerate(all_code_types)}
+    id_to_code_type: dict[int, str] = {idx: code_type for code_type, idx in code_type_to_id.items()}
 
     if accelerator.is_main_process:
         for split_name in ["train", "valid"]:
             code_types = typing.cast("list[str]", raw_ds[split_name]["code_type"])  # pyright: ignore[reportIndexIssue]  # datasets stubs
-            ct_counts: dict[str, int] = {}
-            for ct in code_types:
-                ct_counts[ct] = ct_counts.get(ct, 0) + 1
-            logger.info(f"  {split_name} code_type distribution: {ct_counts}")
+            code_type_counts: dict[str, int] = {}
+            for code_type in code_types:
+                code_type_counts[code_type] = code_type_counts.get(code_type, 0) + 1
+            logger.info(f"  {split_name} code_type distribution: {code_type_counts}")
 
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
@@ -697,7 +682,7 @@ def probe_train(
     # --- 5. Register activation hooks ---
     target_layers = sorted({pc.layer for pc in expanded_probe_configs})
     logger.info(f"Registering activation hooks on layers: {target_layers}")
-    extractor = ActivationExtractor(model, target_layers, activation_dtype=config.target_dtype)
+    extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers, activation_dtype=config.target_dtype)
 
     # --- 6. Training loop ---
     loss_fn = torch.nn.BCEWithLogitsLoss()
@@ -715,15 +700,15 @@ def probe_train(
                 attention_mask = batch["attention_mask"]
                 labels = batch["labels"]
 
-                # Single LLM forward pass (no grad)
+                # single LLM forward pass (no grad)
                 with torch.no_grad():
                     model(input_ids=input_ids, attention_mask=attention_mask)
                 activations = extractor.get_activations()
 
-                # Forward through all probes
+                # forward through all probes
                 probe_logits = probe_collection(activations, attention_mask)
 
-                # Compute per-probe losses and sum for backward
+                # compute per-probe losses and sum for backward
                 per_probe_losses: dict[str, torch.Tensor] = {}
                 total_loss = torch.tensor(0.0, device=accelerator.device)
                 for name, logits in probe_logits.items():
@@ -735,7 +720,7 @@ def probe_train(
                 optimizer.step()  # pyright: ignore[reportUnknownMemberType]  # torch stubs
                 optimizer.zero_grad()
 
-            # Logging + eval gated on actual optimizer steps
+            # logging + eval gated on actual optimizer steps
             if accelerator.sync_gradients:  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
                 global_step += 1
                 if global_step % config.logging_steps == 0:
@@ -746,7 +731,7 @@ def probe_train(
                             agg = aggregate_replica_metrics(per_probe_loss_values, expanded_configs_by_name)
                             log_msg = f"[epoch {epoch + 1}/{config.num_epochs}, step {global_step}] "
                             log_msg += ", ".join(
-                                f"{base}: {s['mean']:.4f} (std={s['std']:.4f})" for base, s in agg.items()
+                                f"{base}: {stats['mean']:.4f} (std={stats['std']:.4f})" for base, stats in agg.items()
                             )
                             logger.info(log_msg)
 
@@ -785,7 +770,7 @@ def probe_train(
                                 train_log_dict["train/epoch"] = epoch
                                 runtime.wandb_run.log(train_log_dict, step=global_step)
 
-                # Mid-epoch validation
+                # mid-epoch validation
                 if config.eval_steps > 0 and global_step % config.eval_steps == 0:
                     validate_probes(
                         probe_collection,
@@ -803,7 +788,7 @@ def probe_train(
                     )
                     probe_collection.train()
 
-        # End-of-epoch validation
+        # end-of-epoch validation
         final_metrics = validate_probes(
             probe_collection,
             model,
@@ -830,14 +815,9 @@ def probe_train(
 
     logger.info("Probe training complete.")
     return typing.cast(
-        "ProbeCollection",
+        "pyine.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
 
 async def main(
@@ -854,7 +834,7 @@ async def main(
     )
 
     if runtime is not None and runtime.dry_run:
-        logger.info("dry run mode — skipping probe training")
+        logger.info("dry run mode -- skipping probe training")
         return
 
     probe_train(config=config, runtime=runtime)
@@ -876,7 +856,7 @@ if __name__ == "__main__":
 
     import pyine.apps.trainers.common
 
-    # Filter DeepSpeed's --local_rank to avoid Hydra conflict
+    # filter DeepSpeed's --local_rank to avoid Hydra conflict
     sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
 
     pyine.apps.trainers.common.hydra_main(

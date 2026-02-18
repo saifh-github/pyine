@@ -1,4 +1,4 @@
-"""ProbeCollection — DDP-friendly wrapper for multiple probes."""
+"""ProbeCollection -- DDP-friendly wrapper for multiple probes."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import typing
 import torch
 
 if typing.TYPE_CHECKING:
-    from pyine.probes.base import BaseProbe, ProbeConfig
+    import pyine.probes.base
 
-# Avoid circular import at module level; build_probe is imported lazily.
+# avoid circular import at module level; build_probe is imported lazily.
 
 
 class ProbeCollection(torch.nn.Module):
@@ -19,25 +19,29 @@ class ProbeCollection(torch.nn.Module):
     in gradient synchronisation with a single all-reduce call.
     """
 
-    def __init__(self, probe_configs: list[ProbeConfig], hidden_dim: int) -> None:
+    def __init__(
+        self,
+        probe_configs: list[pyine.probes.base.ProbeConfig],
+        hidden_dim: int,
+    ) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # nn.Module stub
-        from pyine.probes import build_probe
+        import pyine.probes
 
-        self._probe_configs: dict[str, ProbeConfig] = {}
+        self._probe_configs: dict[str, pyine.probes.base.ProbeConfig] = {}
         probes: dict[str, torch.nn.Module] = {}
 
-        # Save RNG state so replica seeding doesn't affect downstream randomness
-        any_seeded = any(pc.replica_seed is not None for pc in probe_configs)
+        # save RNG state so replica seeding doesn't affect downstream randomness
+        any_seeded = any(probe_config.replica_seed is not None for probe_config in probe_configs)
         saved_rng_state = torch.random.get_rng_state() if any_seeded else None
 
-        for pc in probe_configs:
-            pc = pc.model_copy(update={"hidden_dim": hidden_dim})
-            if pc.replica_seed is not None:
-                torch.manual_seed(pc.replica_seed)  # pyright: ignore[reportUnknownMemberType]  # torch stubs
-            probes[pc.name] = build_probe(pc)
-            self._probe_configs[pc.name] = pc
+        for probe_config in probe_configs:
+            probe_config = probe_config.model_copy(update={"hidden_dim": hidden_dim})
+            if probe_config.replica_seed is not None:
+                torch.manual_seed(probe_config.replica_seed)  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+            probes[probe_config.name] = pyine.probes.build_probe(probe_config)
+            self._probe_configs[probe_config.name] = probe_config
 
-        # Restore RNG state after seeded construction
+        # restore RNG state after seeded construction
         if saved_rng_state is not None:
             torch.random.set_rng_state(saved_rng_state)
 
@@ -59,23 +63,23 @@ class ProbeCollection(torch.nn.Module):
         """
         results: dict[str, torch.Tensor] = {}
         for name, module in self.probes.items():
-            probe = typing.cast("BaseProbe", module)
-            h = activations[probe.config.layer]
-            results[name] = probe(h, attention_mask)
+            probe = typing.cast("pyine.probes.base.BaseProbe", module)
+            hidden_states = activations[probe.config.layer]
+            results[name] = probe(hidden_states, attention_mask)
         return results
 
     def get_parameter_groups(self) -> list[dict[str, list[torch.nn.Parameter] | float]]:
         """Per-probe parameter groups with individual learning rates."""
         groups: list[dict[str, list[torch.nn.Parameter] | float]] = []
         for name, probe in self.probes.items():
-            pc = self._probe_configs[name]
+            probe_config = self._probe_configs[name]
             params = list(probe.parameters())
             assert len(params) > 0, f"Probe '{name}' has no parameters"
             groups.append(
                 {
                     "params": params,
-                    "lr": pc.learning_rate,
-                    "weight_decay": pc.weight_decay,
+                    "lr": probe_config.learning_rate,
+                    "weight_decay": probe_config.weight_decay,
                 }
             )
         return groups

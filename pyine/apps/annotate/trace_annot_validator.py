@@ -272,7 +272,7 @@ async def main(
 
     shared_tags_list: list[str] | None = None
     if shared_tags:
-        shared_tags_list = [t.strip() for t in shared_tags.split(",") if t.strip()]
+        shared_tags_list = [tag.strip() for tag in shared_tags.split(",") if tag.strip()]
         logger.debug(f"parsed shared tags: {shared_tags_list}")
 
     shared_meta_dict: dict[str, typing.Any] = {}
@@ -285,7 +285,7 @@ async def main(
         for reserved_key in _validator_utils.LINEAGE_META_KEYS & inline_meta.keys():
             logger.warning(f"--shared-meta key '{reserved_key}' is reserved for lineage and will be ignored")
         shared_meta_dict.update(
-            {key: val for key, val in inline_meta.items() if key not in _validator_utils.LINEAGE_META_KEYS}
+            {key: value for key, value in inline_meta.items() if key not in _validator_utils.LINEAGE_META_KEYS}
         )
 
     # -------- prepare prompt chain config --------

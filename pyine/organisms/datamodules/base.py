@@ -634,7 +634,15 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         subset_traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
         subset_name: pyine.data.datamodule.SubsetNameType,
     ) -> dict[str, typing.Any]:
-        """Build kwargs dict for SampleBuilder instantiation, injecting pregenerated outputs."""
+        """Build kwargs dict for SampleBuilder instantiation, injecting pregenerated outputs.
+
+        Args:
+            source_data: Raw source data for the problem (e.g. TACO/APPS record).
+            subset_traces: List of trace metadata objects for this problem subset.
+
+        Returns:
+            Kwargs dict for SampleBuilder constructor.
+        """
         kwargs: dict[str, typing.Any] = {
             "source_data": source_data,
             "traces": subset_traces,

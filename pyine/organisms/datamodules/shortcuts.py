@@ -712,7 +712,7 @@ class ShortcutBiasDataModule(
                 pyine.prompts.names.PromptNames.VALIDATION_MISLEADING,
                 tag_filter_rule="+verdict:misleading",
             )
-            # NOTE: rec.identifier here is the validation record's identifier, which the
+            # note: rec.identifier here is the validation record's identifier, which the
             # trace_annot_validator sets to the source annotation record's record_uid
             # (see validator.py:176). This is the join key used to match annotation records
             # against their validation verdicts downstream.
@@ -862,8 +862,8 @@ class ShortcutBiasDataModule(
     ) -> None:
         """Raises NotImplementedError if an LMDB misleading trace is encountered with validation active."""
         if self.config.require_validated_misleading:
-            # TODO @@@@@ check LMDB trace dataset entry tags, those should contain validation status?
-            #            (will need to update tracing app to include validation status directly)
+            # TODO: check LMDB trace dataset entry tags, those should contain validation status
+            #       (will need to update tracing app to include validation status directly)
             raise NotImplementedError(
                 f"LMDB misleading trace {trace_id} encountered with "
                 f"require_validated_misleading=True. Validation filtering for LMDB-native "

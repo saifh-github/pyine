@@ -39,6 +39,16 @@ def build_validation_tags(
     """Builds tags for a validation record.
 
     The verdict tag (e.g. "verdict:misleading") is appended later by the validator closure.
+
+    Args:
+        problem: Coding problem metadata with problem-level tags.
+        trace: Execution trace result with trace-level tags.
+        source_record: Source annotation record whose augmentation tags are carried over.
+        llm_provider_config: LLM provider config for tagging the provider/model used.
+        shared_tags: Additional user-supplied tags from CLI ``--shared-tags``.
+
+    Returns:
+        Deduplicated list of tags for the validation record.
     """
     tags: list[str] = []
     tags.extend(problem.problem_tags)
@@ -57,7 +67,14 @@ def build_validation_tags(
 def filter_misleading_records(
     records: list[pyine.prompts.result_db.PromptResultRecord],
 ) -> tuple[list[pyine.prompts.result_db.PromptResultRecord], int]:
-    """Keeps only records whose tags imply the misleading code type, returning filtered list and skip count."""
+    """Keeps only records whose tags imply the misleading code type.
+
+    Args:
+        records: Annotation records to filter.
+
+    Returns:
+        Tuple of (filtered records, skip count).
+    """
     filtered: list[pyine.prompts.result_db.PromptResultRecord] = []
     skipped = 0
     for rec in records:
@@ -74,7 +91,14 @@ def filter_misleading_records(
 def filter_bugged_records(
     records: list[pyine.prompts.result_db.PromptResultRecord],
 ) -> tuple[list[pyine.prompts.result_db.PromptResultRecord], int]:
-    """Removes records with bugged code types in tags, returning filtered list and skip count."""
+    """Removes records with bugged code types in tags.
+
+    Args:
+        records: Annotation records to filter.
+
+    Returns:
+        Tuple of (filtered records, skip count).
+    """
     filtered: list[pyine.prompts.result_db.PromptResultRecord] = []
     skipped = 0
     for rec in records:
@@ -97,6 +121,13 @@ def make_validator(
     The closure mutates ``meta_ref`` and ``tags_ref`` in place. This works because
     ``fetch_or_generate_prompt_results`` reads ``meta`` and ``tags`` *after* the validator runs.
     This execution ordering dependency is pinned by a regression test in test_trace_annot_validator.py.
+
+    Args:
+        meta_ref: Mutable metadata dict; the closure injects ``verdict`` and ``explanation``.
+        tags_ref: Mutable tags list; the closure appends ``verdict:<verdict>``.
+
+    Returns:
+        A validator callable compatible with ``fetch_or_generate_prompt_results``.
     """
 
     def _validate(
@@ -128,6 +159,16 @@ def resolve_record(
     string if the record should be skipped. Dataset reads happen here (main thread) to avoid
     thread-safety issues with the DatasetReader's internal cache (see annotator.py for the
     same pattern).
+
+    Args:
+        record: Source annotation record to validate.
+        dataset: Dataset reader for fetching trace data.
+        target_keys: If not None, only process records whose identifier is in this set.
+        already_validated_uids: Record UIDs that already have a validation verdict.
+        force_generation: If True, re-validate even already-validated records.
+
+    Returns:
+        ``(trace, problem)`` tuple if the record should be processed, or a skip-reason string.
     """
     if not force_generation and record.record_uid in already_validated_uids:
         return "skipped_validated"
@@ -162,6 +203,22 @@ def process_one_validation(
 
     Dataset reads must be done before calling this function (on the main thread)
     to avoid thread-safety issues with DatasetReader's internal cache.
+
+    Args:
+        record: Source annotation record to validate.
+        trace: Execution trace result for the record.
+        problem: Coding problem metadata for the record.
+        chain_config: Prompt chain build config for the LLM validation call.
+        llm_provider_config: LLM provider config for tagging.
+        db: Prompt result DB for storing validation results.
+        shared_tags_list: Additional user-supplied tags from CLI ``--shared-tags``.
+        shared_meta_dict: Additional user-supplied metadata from CLI ``--shared-meta``.
+        max_unsatisfactory_retries: Max retries for unsatisfactory LLM responses.
+        force_generation: If True, bypass existing results and re-generate.
+        dry_run: If True, do not persist results to DB.
+
+    Returns:
+        Verdict string (e.g. ``"misleading"``, ``"not_misleading"``), or ``"error"`` on failure.
     """
     # build mutable meta dict; apply shared_meta first, then lineage keys so they can't be clobbered
     meta: dict[str, typing.Any] = {}

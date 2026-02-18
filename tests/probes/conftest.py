@@ -7,12 +7,13 @@ import typing
 import pytest
 import torch
 
-from pyine.probes.base import ProbeConfig
+import pyine.apps.trainers.probe_trainer
+import pyine.probes.base
+import pyine.probes.collection
+import pyine.probes.debug_dataset
 
 if typing.TYPE_CHECKING:
-    from pathlib import Path
-
-    from pyine.probes.collection import ProbeCollection
+    import pathlib
 
 PROBE_HIDDEN_DIM = 64
 PROBE_SEQ_LEN = 32
@@ -40,43 +41,40 @@ def random_attention_mask() -> torch.Tensor:
 
 
 @pytest.fixture
-def sample_probe_configs() -> list[ProbeConfig]:
+def sample_probe_configs() -> list[pyine.probes.base.ProbeConfig]:
     """Minimal probe configs covering all 6 architectures."""
     return [
-        ProbeConfig(name="mean_L0", architecture="mean", layer=0),
-        ProbeConfig(name="max_L0", architecture="max", layer=0),
-        ProbeConfig(name="last_L4", architecture="last_token", layer=4),
-        ProbeConfig(name="rolling_L4", architecture="rolling_mean", layer=4, window_size=4),
-        ProbeConfig(name="softmax_L8", architecture="softmax", layer=8, temperature=0.5),
-        ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
+        pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+        pyine.probes.base.ProbeConfig(name="max_L0", architecture="max", layer=0),
+        pyine.probes.base.ProbeConfig(name="last_L4", architecture="last_token", layer=4),
+        pyine.probes.base.ProbeConfig(name="rolling_L4", architecture="rolling_mean", layer=4, window_size=4),
+        pyine.probes.base.ProbeConfig(name="softmax_L8", architecture="softmax", layer=8, temperature=0.5),
+        pyine.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
     ]
 
 
 @pytest.fixture
-def replica_probe_configs() -> list[ProbeConfig]:
+def replica_probe_configs() -> list[pyine.probes.base.ProbeConfig]:
     """Two base configs expanded to 3 replicas each (6 total), with replica metadata."""
-    from pyine.apps.trainers.probe_trainer import expand_probe_configs_with_replicas
-
     base_configs = [
-        ProbeConfig(name="mean_L0", architecture="mean", layer=0),
-        ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
+        pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+        pyine.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8, attn_dim=16),
     ]
-    return expand_probe_configs_with_replicas(base_configs, num_replicas=3, replica_base_seed=42)
+    return pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
+        base_configs, num_replicas=3, replica_base_seed=42
+    )
 
 
 @pytest.fixture
-def replica_probe_collection(replica_probe_configs: list[ProbeConfig]) -> ProbeCollection:
-    """ProbeCollection built from replica-expanded configs."""
-    from pyine.probes.collection import ProbeCollection
-
-    return ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
+def replica_probe_collection(
+    replica_probe_configs: list[pyine.probes.base.ProbeConfig],
+) -> pyine.probes.collection.ProbeCollection:
+    return pyine.probes.collection.ProbeCollection(replica_probe_configs, hidden_dim=PROBE_HIDDEN_DIM)
 
 
 @pytest.fixture
-def debug_lmdb_path(tmp_path: Path) -> Path:
+def debug_lmdb_path(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a debug LMDB at tmp_path and return its path."""
-    from pyine.probes.debug_dataset import create_debug_probe_lmdb
-
     lmdb_path = tmp_path / "debug.lmdb"
-    create_debug_probe_lmdb(lmdb_path, n_train=50, n_valid=20, seed=42)
+    pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_valid=20, seed=42)
     return lmdb_path

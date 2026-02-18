@@ -42,8 +42,6 @@ def _make_record(
 
 
 class TestLoadPregeneratedOutputs:
-    """Tests for _load_pregenerated_outputs via ShortcutBiasDataModule."""
-
     def _make_loader(
         self,
         lmdb_paths: tuple[pathlib.Path, ...],
@@ -335,8 +333,6 @@ class TestResolveLmdbPaths:
 
 
 class TestDiskRewardLoggerRoundTrip:
-    """End-to-end: write with DiskRewardLogger, read back with LMDBReader."""
-
     def test_full_round_trip(self, tmp_path: pathlib.Path) -> None:
         output_dir = tmp_path / "gen"
         disk_logger = reward_logging.DiskRewardLogger(output_path=output_dir)
@@ -375,8 +371,6 @@ class TestDiskRewardLoggerRoundTrip:
 
 
 class TestSampleBuilderPregeneratedOverride:
-    """Tests for SampleBuilder pregenerated output override logic."""
-
     def test_program_output_override(self) -> None:
         sample = samples_common.SampleData(
             identifier="test/s0001/t0001",
@@ -480,8 +474,6 @@ class TestSampleBuilderPregeneratedOverride:
 
 
 class TestPregeneratedOutputsConfigValidation:
-    """Tests for pregenerated output config fields on ShortcutBiasDataModuleConfig."""
-
     def test_phase_prefix_normalization(self) -> None:
         import pyine.utils.parsing
 

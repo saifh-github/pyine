@@ -1,4 +1,4 @@
-"""Probe module library — lightweight classifiers on frozen LLM activations."""
+"""Probe module library -- lightweight classifiers on frozen LLM activations."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from pyine.probes.rolling_mean_probe import RollingMeanProbe
 from pyine.probes.softmax_probe import SoftmaxProbe
 
 if typing.TYPE_CHECKING:
-    from pyine.probes.base import BaseProbe, ProbeConfig
+    import pyine.probes.base
 
-PROBE_REGISTRY: dict[str, type[BaseProbe]] = {
+PROBE_REGISTRY: dict[str, type[pyine.probes.base.BaseProbe]] = {
     "mean": MeanProbe,
     "max": MaxProbe,
     "last_token": LastTokenProbe,
@@ -25,7 +25,7 @@ PROBE_REGISTRY: dict[str, type[BaseProbe]] = {
 }
 
 
-def build_probe(config: ProbeConfig) -> BaseProbe:
+def build_probe(config: pyine.probes.base.ProbeConfig) -> pyine.probes.base.BaseProbe:
     """Instantiate a probe from its config."""
     if config.hidden_dim is None:
         raise ValueError(f"hidden_dim must be set before building probe '{config.name}'")
