@@ -487,6 +487,7 @@ def validate_probes(
     return metrics
 
 
+@typing.no_type_check
 def _log_per_code_type_metrics(
     name: str,
     logits_cpu: torch.Tensor,
@@ -498,11 +499,11 @@ def _log_per_code_type_metrics(
     global_step: int,
 ) -> None:
     """Compute and log per-code-type loss and AUROC for a single probe."""
-    unique_ct_ids: list[int] = gathered_ct_ids.unique().tolist()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
-    for ct_id in unique_ct_ids:  # pyright: ignore[reportUnknownVariableType]  # element of torch-derived list
-        ct = id_to_code_type[int(ct_id)]  # pyright: ignore[reportUnknownArgumentType]  # torch stubs
-        ct_mask: torch.Tensor = (gathered_ct_ids == ct_id).nonzero(as_tuple=True)[0]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
-        if len(ct_mask) < 2:  # pyright: ignore[reportUnknownArgumentType]  # torch stubs
+    unique_ct_ids: list[int] = gathered_ct_ids.unique().tolist()
+    for ct_id in unique_ct_ids:
+        ct = id_to_code_type[int(ct_id)]
+        ct_mask: torch.Tensor = (gathered_ct_ids == ct_id).nonzero(as_tuple=True)[0]
+        if len(ct_mask) < 2:
             continue
 
         ct_logits = logits_cpu[ct_mask]
@@ -510,17 +511,15 @@ def _log_per_code_type_metrics(
 
         ct_loss = loss_fn(ct_logits, ct_labels.float()).item()
 
-        ct_labels_np: npt.NDArray[np.int_] = ct_labels.numpy()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
+        ct_labels_np: npt.NDArray[np.int_] = ct_labels.numpy()
         ct_unique: set[int] = {int(v) for v in ct_labels_np.tolist()}
         if len(ct_unique) < 2:
             ct_auroc = float("nan")
         else:
             import sklearn.metrics
 
-            ct_probs: npt.NDArray[np.floating[typing.Any]] = torch.sigmoid(ct_logits).numpy()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # torch stubs
-            ct_auroc = float(
-                sklearn.metrics.roc_auc_score(ct_labels_np, ct_probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
-            )
+            ct_probs: npt.NDArray[np.floating[typing.Any]] = torch.sigmoid(ct_logits).numpy()
+            ct_auroc = float(sklearn.metrics.roc_auc_score(ct_labels_np, ct_probs))
 
         if runtime and runtime.wandb_run:
             runtime.wandb_run.log(
