@@ -30,6 +30,7 @@ import pyine.prompts.manager
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "PregeneratedOutputRecord",
     "SampleCodeType",
     "SampleCodeTypeSet",
     "SampleCodeTypeSetProbMap",
@@ -399,19 +400,21 @@ def hint_type_to_sample_code_type(
 
 
 def strip_id_suffix(identifier: str) -> str:
-    """Remove the hint partition suffix from an identifier string.
+    """Remove known identifier suffixes added by dataset wrappers.
 
     IMPORTANT: This should ONLY be applied to `SampleData.identifier` (string), NEVER to
-    `TraceIdentifier` objects. The suffix is added by `SampleHintIdentifierWrapper` for cache
-    uniqueness; this helper removes it before LMDB/prompt-DB lookups.
+    `TraceIdentifier` objects. Suffixes are added by ``SampleHintIdentifierWrapper``
+    (``::hinted``, ``::misleading``, ``::hintless``) and ``SampleKeywordManipulatorWrapper``
+    (``::cf_with``, ``::cf_without``) for cache/eval uniqueness; this helper removes them
+    before trace ID parsing and LMDB/prompt-DB lookups.
 
     Args:
-        identifier: string identifier, possibly with "::hinted", "::misleading", or "::hintless" suffix.
+        identifier: string identifier, possibly with a ``::`` suffix from a dataset wrapper.
 
     Returns:
         Identifier with suffix stripped (or unchanged if no suffix present).
     """
-    for suffix in ("::hinted", "::misleading", "::hintless"):
+    for suffix in ("::hinted", "::misleading", "::hintless", "::cf_with", "::cf_without"):
         if identifier.endswith(suffix):
             return identifier[: -len(suffix)]
     return identifier
@@ -469,6 +472,23 @@ class SampleTransformStrategy(enum.StrEnum):
     """Attempt to create partial samples with a fixed probability."""
     hybrid = enum.auto()
     """Attempt to create partial samples if the trace is too long, otherwise with a configured probability."""
+
+
+class PregeneratedOutputRecord(typing.NamedTuple):
+    """Selected pregenerated output with source provenance for LMDB lookup."""
+
+    model_output: str
+    """The pregenerated model output string (pseudolabel)."""
+    source_lmdb_path: str
+    """Path to the LMDB database this record was loaded from."""
+    source_key: str
+    """Key within the LMDB database that refers to this record (e.g. 'train/TACO/s0001/t0001/500')."""
+    full_record: collections.abc.Mapping[str, typing.Any]
+    """Complete record from the LMDB, including reward terms, reasoning, etc.
+
+    Treat as read-only. This is the original deserialized record dict from the LMDB; mutating it
+    would affect shared internal state.
+    """
 
 
 class SampleData(typing.NamedTuple):
@@ -560,6 +580,22 @@ class SampleData(typing.NamedTuple):
 
     When not None, this value was loaded from a prior RL run's exported generations.
     The original ``expected_output`` from the trace execution is always preserved unchanged.
+    The source LMDB and key are recorded in ``pregenerated_output_lmdb_path`` and
+    ``pregenerated_output_lmdb_key`` in case more data is required by consumers;  the full record
+    metadata can be obtained via ``BiasDataModuleBase.pregenerated_output_records``.
+    """
+    pregenerated_output_lmdb_path: str | None = None
+    """Path to the source LMDB from which the pregenerated output was loaded.
+
+    Together with ``pregenerated_output_lmdb_key``, this identifies the exact LMDB record
+    used. The full record (including reward terms, reasoning, etc.) is available via
+    ``BiasDataModuleBase.pregenerated_output_records`` when the datamodule is accessible.
+    """
+    pregenerated_output_lmdb_key: str | None = None
+    """Key within the source LMDB identifying the exact record used.
+
+    See ``pregenerated_output_lmdb_path`` and ``BiasDataModuleBase.pregenerated_output_records``
+    for accessing the full record metadata.
     """
 
     def has_bugged_code(self) -> bool:

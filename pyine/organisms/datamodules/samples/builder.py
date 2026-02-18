@@ -61,7 +61,8 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
             pyine.organisms.datamodules.samples.configs.SampleTransformConfig | dict[str, typing.Any] | None
         ) = None,
         prompt_result_db_path: str | None = None,  # if none, will use framework default
-        pregenerated_outputs: dict[str, str] | None = None,
+        pregenerated_outputs: dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord]
+        | None = None,
         only_with_pregenerated_output: bool = False,
         validated_misleading_record_uids: frozenset[str] | None = None,
     ) -> None:
@@ -82,8 +83,9 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                 ``SampleTransformConfig``. If None, defaults are used.
             prompt_result_db_path: Path to a prompt result database. If None, the framework
                 default database is used.
-            pregenerated_outputs: Optional mapping from sample identifiers to pregenerated model
-                output strings, used to override normal sample construction with e.g. pseudolabels.
+            pregenerated_outputs: Optional mapping from sample identifiers to
+                ``PregeneratedOutputRecord`` instances, used to override normal sample construction
+                with e.g. pseudolabels. Each record carries provenance (source LMDB path and key).
             only_with_pregenerated_output: If True, only keep samples whose trace identifier
                 has a matching entry in ``pregenerated_outputs``. Requires ``pregenerated_outputs``
                 to be set.
@@ -326,8 +328,11 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                     f"pregenerated output overrides are only supported for program_output predict_type, "
                     f"got {sample.predict_type} for sample {sample.identifier}"
                 )
+            pregen_record = self._pregenerated_outputs[sample.identifier]
             sample = sample._replace(
-                pregenerated_output=self._pregenerated_outputs[sample.identifier],
+                pregenerated_output=pregen_record.model_output,
+                pregenerated_output_lmdb_path=pregen_record.source_lmdb_path,
+                pregenerated_output_lmdb_key=pregen_record.source_key,
             )
         # compute stats using sample here @@@@@
         # @@@@ consider caching results here too? (if they're expensive to compute, and not too voluminous?)

@@ -784,6 +784,12 @@ class TestStripIdSuffix:
         identifier = "TACO/train/p000001/s0000/t0000"
         assert strip_id_suffix(identifier) == identifier
 
+    def test_strips_cf_with_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::cf_with") == "TACO/train/p000001/s0000/t0000"
+
+    def test_strips_cf_without_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::cf_without") == "TACO/train/p000001/s0000/t0000"
+
     def test_works_with_augmented_trace_ids(self) -> None:
         augmented_id = "TACO/train/p000001/s0000/t0000/a:obfuscated+hints_docs:001::hinted"
         assert strip_id_suffix(augmented_id) == "TACO/train/p000001/s0000/t0000/a:obfuscated+hints_docs:001"
@@ -887,6 +893,46 @@ class TestGetTraceIdWithSuffix:
     def test_suffixed_identifier_returns_valid_trace_id(self) -> None:
         sample = SampleData(
             identifier="FAKE/test/p000001/s0001/t0000::hinted",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        trace_id = sample.get_trace_id()
+        assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"
+
+    def test_cf_with_suffix_returns_valid_trace_id(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000::cf_with",
+            code="",
+            description="",
+            entrypoint="",
+            first_line=0,
+            last_line=0,
+            inputs="",
+            expected_output="",
+            predict_type=SamplePredictType.program_output,
+            code_type="original",
+            trace_step_count=0,
+            comma_separated_tags="",
+            has_code_override=False,
+            complexity_metrics={},
+        )
+        trace_id = sample.get_trace_id()
+        assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"
+
+    def test_cf_without_suffix_returns_valid_trace_id(self) -> None:
+        sample = SampleData(
+            identifier="FAKE/test/p000001/s0001/t0000::cf_without",
             code="",
             description="",
             entrypoint="",

@@ -1356,14 +1356,119 @@ class ShortcutBiasDataModule(
                 other_ids |= {t.identifier for t in self._metadata.derived_subsets[key].traces}
         return frozenset(current_ids & other_ids)
 
+    _HINT_SUFFIX_MAP: typing.ClassVar[dict[str, str]] = {
+        "_hinted": "::hinted",
+        "_misleading": "::misleading",
+        "_hintless": "::hintless",
+    }
+
+    @typing.override
+    def _resolve_pregenerated_outputs_for_subset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord]:
+        """Filter and re-key pregenerated outputs based on the subset's hint suffix context.
+
+        For wrapped subsets (e.g. train_hinted), selects entries with the matching ``::hinted``
+        suffix and strips it so keys are base trace IDs (matching ``sample.identifier`` before
+        ``SampleHintIdentifierWrapper`` adds the suffix). Non-suffixed entries (for non-overlapping
+        traces) are included in all subsets.
+        """
+        if self._pregenerated_outputs is None:
+            return {}
+        all_hint_suffixes = set(self._HINT_SUFFIX_MAP.values())
+        # determine target suffix for this subset
+        target_suffix: str | None = None
+        matched_subset_suffix: str | None = None
+        matched_hint_name: str | None = None  # e.g. "hinted" (without ::)
+        for subset_suffix, id_suffix in self._HINT_SUFFIX_MAP.items():
+            if subset_name.endswith(subset_suffix):
+                target_suffix = id_suffix
+                matched_subset_suffix = subset_suffix
+                matched_hint_name = id_suffix.lstrip(":")
+                break
+        resolved: dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord] = {}
+        for sample_id, record in self._pregenerated_outputs.items():
+            has_any_hint_suffix = any(sample_id.endswith(suffix) for suffix in all_hint_suffixes)
+            has_any_cf_suffix = sample_id.endswith("::cf_with") or sample_id.endswith("::cf_without")
+            if has_any_cf_suffix:
+                raise ValueError(
+                    f"pregenerated output key '{sample_id}' has a keyword counterfactual suffix "
+                    "(::cf_with/::cf_without); these suffixes are not handled by "
+                    "ShortcutBiasDataModule, they belong to KeywordBiasDataModule's "
+                    "counterfactual evaluation mode"
+                )
+            if target_suffix is not None and sample_id.endswith(target_suffix):
+                base_id = sample_id[: -len(target_suffix)]
+                if base_id in resolved:
+                    existing = resolved[base_id]
+                    raise ValueError(
+                        f"conflicting pregenerated outputs for base trace ID '{base_id}': "
+                        f"new entry '{sample_id}' (source_key='{record.source_key}') conflicts "
+                        f"with existing entry (source_key='{existing.source_key}'); "
+                        f"this can happen if the LMDB contains both suffixed and unsuffixed "
+                        f"entries for the same trace across different export runs"
+                    )
+                resolved[base_id] = record
+            elif not has_any_hint_suffix:
+                if "::" in sample_id:
+                    raise ValueError(
+                        f"pregenerated output key '{sample_id}' contains unrecognized '::' "
+                        f"suffix; recognized suffixes for ShortcutBiasDataModule are: "
+                        f"{sorted(all_hint_suffixes)}"
+                    )
+                if sample_id in resolved:
+                    existing = resolved[sample_id]
+                    raise ValueError(
+                        f"conflicting pregenerated outputs for base trace ID '{sample_id}': "
+                        f"new unsuffixed entry (source_key='{record.source_key}') conflicts "
+                        f"with existing entry (source_key='{existing.source_key}')"
+                    )
+                resolved[sample_id] = record
+            # else: different hint suffix -> skip (belongs to a different hint subset)
+        # reject ambiguous non-suffixed entries for overlapping traces:
+        # if a trace appears in multiple hint subsets, it MUST have a suffixed LMDB entry
+        # matching this subset's target suffix; an unsuffixed entry is ambiguous
+        if target_suffix is not None:
+            assert matched_subset_suffix is not None and matched_hint_name is not None
+            parent_subset = subset_name[: -len(matched_subset_suffix)]
+            overlapping_ids = self._get_overlapping_trace_ids(parent_subset, matched_hint_name)
+            for base_id in list(resolved):
+                if base_id in overlapping_ids:
+                    # for overlapping traces in resolved, require the target suffix entry specifically
+                    if f"{base_id}{target_suffix}" not in self._pregenerated_outputs:
+                        raise ValueError(
+                            f"pregenerated output for overlapping trace '{base_id}' is missing "
+                            f"the required suffix entry '{base_id}{target_suffix}'; "
+                            f"overlapping traces must have per-suffix LMDB entries to "
+                            f"disambiguate which variant was generated"
+                        )
+            # also check overlapping IDs that have entries in other suffixes but not this one
+            for base_id in overlapping_ids:
+                if base_id not in resolved:
+                    has_other_suffix = any(
+                        f"{base_id}{suffix}" in self._pregenerated_outputs
+                        for suffix in all_hint_suffixes
+                        if suffix != target_suffix
+                    )
+                    if has_other_suffix:
+                        raise ValueError(
+                            f"pregenerated output for overlapping trace '{base_id}' is missing "
+                            f"the required suffix entry '{base_id}{target_suffix}'; "
+                            f"overlapping traces must have per-suffix LMDB entries to "
+                            f"disambiguate which variant was generated"
+                        )
+        return resolved
+
     @typing.override
     def _build_parser_kwargs(
         self,
         source_data: typing.Any,
         subset_traces: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        subset_name: pyine.data.datamodule.SubsetNameType,
     ) -> dict[str, typing.Any]:
         """Extend base parser kwargs with validated misleading UIDs when available."""
-        kwargs = super()._build_parser_kwargs(source_data, subset_traces)
+        kwargs = super()._build_parser_kwargs(source_data, subset_traces, subset_name)
         if self._validated_misleading_uids is not None:
             kwargs["validated_misleading_record_uids"] = self._validated_misleading_uids
         return kwargs

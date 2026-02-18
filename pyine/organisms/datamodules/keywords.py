@@ -19,6 +19,7 @@ import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.base
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.datamodules.samples.keyword_ops
 import pyine.utils.code.variables
 import pyine.utils.filesystem
@@ -804,6 +805,124 @@ class KeywordBiasDataModule(
             refactor_trace_ids=refactor_trace_ids,
             counterfactual_mode=counterfactual_mode,
         )  # type: ignore[return-value]
+
+    _CF_SUFFIX_MAP: typing.ClassVar[dict[str, str]] = {
+        "_with_keyword": "::cf_with",
+        "_without_keyword": "::cf_without",
+    }
+
+    @typing.override
+    def _resolve_pregenerated_outputs_for_subset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord]:
+        """Resolve pregenerated outputs with keyword counterfactual suffix routing.
+
+        Handles three cases depending on subset type and evaluation strategy:
+
+        1. **Base eval subsets in counterfactual mode** (e.g. ``valid``): accepts
+           ``::cf_with`` / ``::cf_without`` suffixed entries. Returns both base-ID keys
+           (for ``SampleBuilder`` filter/lookup) and cf-suffixed keys (for
+           ``SampleKeywordManipulatorWrapper`` to apply the correct variant's output after
+           doubling). Unsuffixed entries are rejected as ambiguous.
+
+        2. **Derived subsets** (``_with_keyword`` / ``_without_keyword``): maps matching
+           cf suffix to base trace ID (same pattern as shortcut hint suffixes). Unsuffixed
+           entries pass through for non-overlapping traces.
+
+        3. **Train subsets and non-counterfactual eval**: only unsuffixed entries are accepted,
+           cf-suffixed entries are silently skipped (they belong to other subsets).
+        """
+        if self._pregenerated_outputs is None:
+            return {}
+        _suffix_sep = "::"
+        all_cf_suffixes = set(self._CF_SUFFIX_MAP.values())
+        is_counterfactual = self.config.evaluation_strategy == EvaluationStrategy.counterfactual
+        is_base_eval = self._is_base_eval_subset(subset_name)
+        # determine target cf suffix for derived subsets
+        target_suffix: str | None = None
+        for subset_suffix, id_suffix in self._CF_SUFFIX_MAP.items():
+            if subset_name.endswith(subset_suffix):
+                target_suffix = id_suffix
+                break
+        resolved: dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord] = {}
+        if is_counterfactual and is_base_eval:
+            # case 1: cf base eval; route ::cf_with/::cf_without, reject unsuffixed
+            cf_grouped: dict[str, dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord]] = {}
+            for sample_id, record in self._pregenerated_outputs.items():
+                matched_suffix = next((s for s in all_cf_suffixes if sample_id.endswith(s)), None)
+                if matched_suffix is not None:
+                    base_id = sample_id[: -len(matched_suffix)]
+                    cf_grouped.setdefault(base_id, {})[matched_suffix] = record
+                elif _suffix_sep in sample_id:
+                    raise ValueError(
+                        f"pregenerated output key '{sample_id}' has unrecognized '::' suffix; "
+                        f"expected ::cf_with or ::cf_without for counterfactual base eval subset"
+                    )
+                else:
+                    raise ValueError(
+                        f"pregenerated output key '{sample_id}' is unsuffixed for base eval "
+                        f"subset '{subset_name}' in counterfactual mode; counterfactual "
+                        f"evaluation doubles samples, so each trace needs both ::cf_with and "
+                        f"::cf_without entries to disambiguate which variant was generated"
+                    )
+            for base_id, suffix_map in cf_grouped.items():
+                missing = all_cf_suffixes - set(suffix_map.keys())
+                if missing:
+                    raise ValueError(
+                        f"trace '{base_id}' is missing counterfactual variant(s): "
+                        f"{sorted(missing)}; both ::cf_with and ::cf_without are required"
+                    )
+                # base-ID entry for builder filter + __getitem__ (placeholder, overwritten by wrapper)
+                resolved[base_id] = suffix_map["::cf_with"]
+                # cf-suffixed entries for wrapper lookup
+                for suffix, rec in suffix_map.items():
+                    resolved[f"{base_id}{suffix}"] = rec
+        elif is_counterfactual and target_suffix is not None:
+            # case 2: derived subset in counterfactual mode; map matching cf suffix to base ID
+            # NOTE: in counterfactual mode, both _with_keyword and _without_keyword contain
+            # the same traces; if someone separately exports both derived subsets (rather than
+            # the base eval subset), unsuffixed LMDB keys would collide. This is unlikely in
+            # practice (cf mode uses the base eval subset), but if it becomes a concern,
+            # derived subsets in cf mode should require ::cf_* suffixed entries only.
+            for sample_id, record in self._pregenerated_outputs.items():
+                matched_suffix = next((s for s in all_cf_suffixes if sample_id.endswith(s)), None)
+                if matched_suffix is not None and matched_suffix == target_suffix:
+                    base_id = sample_id[: -len(matched_suffix)]
+                    if base_id in resolved:
+                        raise ValueError(
+                            f"conflicting pregenerated outputs for base trace ID '{base_id}' in subset '{subset_name}'"
+                        )
+                    resolved[base_id] = record
+                elif matched_suffix is not None:
+                    continue  # different cf suffix, belongs to other derived subset
+                elif _suffix_sep in sample_id:
+                    raise ValueError(
+                        f"pregenerated output key '{sample_id}' has unrecognized '::' suffix; "
+                        f"recognized suffixes for KeywordBiasDataModule are: "
+                        f"{sorted(all_cf_suffixes)}"
+                    )
+                else:
+                    # unsuffixed entry: include for derived subsets (non-overlapping traces)
+                    if sample_id in resolved:
+                        raise ValueError(
+                            f"conflicting pregenerated outputs for trace ID '{sample_id}' in subset '{subset_name}'"
+                        )
+                    resolved[sample_id] = record
+        else:
+            # case 3: train or non-cf eval; only unsuffixed entries
+            for sample_id, record in self._pregenerated_outputs.items():
+                has_cf = any(sample_id.endswith(s) for s in all_cf_suffixes)
+                if has_cf:
+                    continue  # skip cf entries for non-cf subsets
+                if _suffix_sep in sample_id:
+                    raise ValueError(
+                        f"pregenerated output key '{sample_id}' has unrecognized '::' suffix; "
+                        f"recognized suffixes for KeywordBiasDataModule are: "
+                        f"{sorted(all_cf_suffixes)}"
+                    )
+                resolved[sample_id] = record
+        return resolved
 
     @property
     def keyword(self) -> str:

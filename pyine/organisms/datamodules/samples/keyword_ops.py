@@ -454,26 +454,57 @@ class SampleKeywordManipulatorWrapper:
             if not sample_has_keyword:
                 code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(underlying_index))
                 tags += ",keyword_injected:1"
-                return sample._replace(
+                sample = sample._replace(
                     identifier=new_identifier,
                     code=code,
                     has_code_override=True,
                     comma_separated_tags=tags,
                 )
-            return sample._replace(identifier=new_identifier, comma_separated_tags=tags)
+            else:
+                sample = sample._replace(identifier=new_identifier, comma_separated_tags=tags)
+            return self._maybe_apply_cf_pregenerated_output(sample)
         # "without keyword" version: refactor if sample has keyword, otherwise just tag
         new_identifier = f"{sample.identifier}::cf_without"
         tags += ",counterfactual_version:without,has_bias_keyword:0"
         if sample_has_keyword:
             code = self._refactorer.refactor(sample.code)
             tags += f",keyword_refactored:1,repl_keyword:{self._refactorer.replacement_template}"
-            return sample._replace(
+            sample = sample._replace(
                 identifier=new_identifier,
                 code=code,
                 has_code_override=True,
                 comma_separated_tags=tags,
             )
-        return sample._replace(identifier=new_identifier, comma_separated_tags=tags)
+        else:
+            sample = sample._replace(identifier=new_identifier, comma_separated_tags=tags)
+        return self._maybe_apply_cf_pregenerated_output(sample)
+
+    def _maybe_apply_cf_pregenerated_output(
+        self,
+        sample: pyine.organisms.datamodules.samples.common.SampleData,
+    ) -> pyine.organisms.datamodules.samples.common.SampleData:
+        """Apply pregenerated output for a counterfactual variant if available.
+
+        Accesses the pregenerated outputs dict from the wrapped builder via attribute
+        forwarding. The dict is expected to contain cf-suffixed keys (e.g.
+        ``trace_id::cf_with``) placed there by the keyword datamodule's resolver.
+        """
+        import pyine.organisms.datamodules.samples.common as _samples_common
+
+        pregen_outputs = getattr(self._wrapped, "_pregenerated_outputs", None)
+        if pregen_outputs is None or sample.identifier not in pregen_outputs:
+            return sample
+        if sample.predict_type != _samples_common.SamplePredictType.program_output:
+            raise NotImplementedError(
+                f"pregenerated output overrides are only supported for program_output predict_type, "
+                f"got {sample.predict_type} for sample {sample.identifier}"
+            )
+        pregen_record = pregen_outputs[sample.identifier]
+        return sample._replace(
+            pregenerated_output=pregen_record.model_output,
+            pregenerated_output_lmdb_path=pregen_record.source_lmdb_path,
+            pregenerated_output_lmdb_key=pregen_record.source_key,
+        )
 
     @property
     def keyword(self) -> str:

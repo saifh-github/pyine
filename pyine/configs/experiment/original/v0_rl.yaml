@@ -143,10 +143,10 @@ config:
     add_line_numbers: false  # whether to add line numbers to formatted code strings
     add_block_markers: false  # whether to add block-of-interest markers to formatted code strings
     # if we want to IMPORT pregenerated output overrides from a previous run, uncomment these lines:
-    #pregenerated_outputs_lmdb_path: null # path to LMDB exported by DiskRewardLogger
-    #pregenerated_outputs_selection: latest # "latest" (highest gen count) or "best_reward"
-    #pregenerated_outputs_phase_prefix: "" # empty = load all phases (safe with problem-level splits)
-    #pregenerated_outputs_only_matched: false # true = only keep samples with a matching override
+    #pregenerated_outputs_lmdb_paths: null  # single path, list of paths, or glob (e.g. output/rank_*)
+    #pregenerated_outputs_selection: latest  # "latest" (highest gen count) or "best_reward"
+    #pregenerated_outputs_phase_prefix: ""  # empty = load all phases (safe with problem-level splits)
+    #pregenerated_outputs_only_matched: false  # true = only keep samples with a matching override
 
   # if we want to EXPORT generations for later experiments, uncomment these lines:
   # (note: )requires logging.enabled=true, logging.log_total=true, logging.main_process_only=true)

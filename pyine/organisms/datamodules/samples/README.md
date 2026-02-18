@@ -83,25 +83,27 @@ needed for a training sample:
 
 ```python
 SampleData(
-    identifier: str,                  # unique trace identifier
-    code: str,                        # full code snippet (always included for context)
-    description: str,                 # high-level code description (may be empty)
-    entrypoint: str,                  # function name for callable programs, or empty
-    first_line: int,                  # first execution line (0 for full execs)
-    last_line: int,                   # last potential execution line
-    inputs: str,                      # execution inputs or intermediate program state
-    expected_output: str,             # ground-truth target prediction value
-    predict_type: SamplePredictType,  # prediction (task) type
-    code_type: str,                   # augmentation type(s) associated with the code
-    trace_step_count: int,            # number of execution steps to completion
-    comma_separated_tags: str,        # filterable metadata (for e.g. evals)
-    has_code_override: bool,          # whether code was augmented using prompt result DB
-    complexity_metrics: dict,         # code complexity measurements
-    first_line_hit: int,              # which visit to first_line (for code segments)
-    last_line_hit: int,               # which visit to last_line (for code segments)
-    first_step_idx: int,              # absolute trace index of segment start
-    last_step_idx: int,               # absolute trace index of segment end
-    pregenerated_output: str | None,  # pseudolabel from a prior run (None when not applicable)
+    identifier: str,                            # unique trace identifier
+    code: str,                                  # full code snippet (always included for context)
+    description: str,                           # high-level code description (may be empty)
+    entrypoint: str,                            # function name for callable programs, or empty
+    first_line: int,                            # first execution line (0 for full execs)
+    last_line: int,                             # last potential execution line
+    inputs: str,                                # execution inputs or intermediate program state
+    expected_output: str,                       # ground-truth target prediction value
+    predict_type: SamplePredictType,            # prediction (task) type
+    code_type: str,                             # augmentation type(s) associated with the code
+    trace_step_count: int,                      # number of execution steps to completion
+    comma_separated_tags: str,                  # filterable metadata (for e.g. evals)
+    has_code_override: bool,                    # whether code was augmented using prompt result DB
+    complexity_metrics: dict,                   # code complexity measurements
+    first_line_hit: int,                        # which visit to first_line (for code segments)
+    last_line_hit: int,                         # which visit to last_line (for code segments)
+    first_step_idx: int,                        # absolute trace index of segment start
+    last_step_idx: int,                         # absolute trace index of segment end
+    pregenerated_output: str | None,            # pseudolabel from a prior run (None when not applicable)
+    pregenerated_output_lmdb_path: str | None,  # source LMDB path for the pregenerated output
+    pregenerated_output_lmdb_key: str | None,   # source LMDB key for the pregenerated output
 )
 ```
 
@@ -294,6 +296,33 @@ in the provided dict get their `pregenerated_output` field populated with the ps
 
 - `expected_output` always retains the original ground truth from the trace execution;
 - The `only_with_pregenerated_output` flag on the builder filters to keep only matched samples.
+
+**Multi-path import**: the `pregenerated_outputs_lmdb_paths` config field accepts a single path,
+a list of paths, or a glob pattern (e.g. `output/rank_*`). A directory without `data.mdb` that
+contains `rank_*/` subdirs is automatically expanded. Records from all LMDBs are merged and
+deduplicated per sample_id using the configured selection strategy.
+
+**Provenance tracking**: each pregenerated output is wrapped in a `PregeneratedOutputRecord`
+(NamedTuple) carrying `model_output`, `source_lmdb_path`, `source_key`, and `full_record`.
+The `SampleData` fields `pregenerated_output_lmdb_path` and `pregenerated_output_lmdb_key`
+identify the exact source LMDB record. The full selected records are also available via
+`BiasDataModuleBase.pregenerated_output_records` (keyed by sample identifiers with full suffixes).
+
+**Identifier suffix requirements**: when the export LMDB was written during a run that modified
+sample identifiers (e.g. shortcut hint evaluation, keyword counterfactual evaluation), the LMDB
+keys carry those suffixes. During re-import, each datamodule resolves suffixed entries per-subset:
+
+- **ShortcutBiasDataModule**: For overlapping traces (traces appearing in multiple hint subsets),
+  the LMDB must contain per-suffix entries (`trace_id::hinted`, `trace_id::hintless`, and/or
+  `trace_id::misleading`). Non-overlapping traces may use unsuffixed keys. Unknown `::` suffixes
+  are rejected.
+- **KeywordBiasDataModule**: In counterfactual mode, base eval subsets (e.g. `valid`) require
+  both `trace_id::cf_with` and `trace_id::cf_without` entries per trace. The resolver passes
+  cf-suffixed entries to `SampleKeywordManipulatorWrapper`, which applies the correct variant's
+  output after doubling each sample. Unsuffixed entries are rejected for cf base eval subsets
+  (ambiguous). For `_with_keyword`/`_without_keyword` derived subsets, `::cf_with` maps to
+  `_with_keyword` and `::cf_without` maps to `_without_keyword`. Non-counterfactual subsets
+  use only unsuffixed entries.
 
 ### Strong Coupling Warning
 
