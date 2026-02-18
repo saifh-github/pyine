@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import enum
 import fnmatch
+import glob as glob_mod
+import os
 import pathlib
 import pickle
 import struct
@@ -23,6 +25,7 @@ __all__ = [
     "SerializationConfig",
     "LMDBWriter",
     "LMDBReader",
+    "resolve_lmdb_paths",
 ]
 
 
@@ -100,6 +103,70 @@ def _get_database_size(path: pathlib.Path | str) -> int:
     if not path.is_dir():
         raise ValueError(f"Path '{path}' is not a valid directory.")
     return sum(f.stat().st_size for f in path.iterdir() if f.is_file())
+
+
+_GLOB_CHARS = frozenset("*?[")
+"""Characters that indicate a glob pattern in a path string."""
+
+
+def resolve_lmdb_paths(
+    raw_paths: tuple[pathlib.Path, ...],
+) -> list[pathlib.Path]:
+    """Resolve glob patterns, auto-discover rank subdirs, validate, and deduplicate LMDB paths.
+
+    All paths must ultimately point to LMDB directories (containing ``data.mdb``).
+    Each input path is ``~``-expanded, then handled as follows:
+
+    - **Glob pattern** (contains ``*``, ``?``, or ``[``): expanded via ``glob.glob``
+      with ``recursive=True`` (supports ``**``). Raises if zero matches.
+    - **Directory without** ``data.mdb`` **but with** ``rank_*/`` **subdirs**: auto-discovers
+      those subdirs (common for multi-rank distributed exports).
+    - **Otherwise**: treated as a literal LMDB directory path.
+
+    After expansion, each resolved path is validated (must exist, be a directory, and
+    contain ``data.mdb``). Duplicate paths are removed while preserving input order.
+
+    Args:
+        raw_paths: Input paths, possibly containing glob patterns or parent directories.
+
+    Returns:
+        Deduplicated list of resolved, validated LMDB directory paths.
+
+    Raises:
+        ValueError: If any path fails validation or a glob matches nothing.
+    """
+    expanded: list[pathlib.Path] = []
+    for path in raw_paths:
+        path = pathlib.Path(os.path.expanduser(str(path)))
+        path_str = str(path)
+        if _GLOB_CHARS.intersection(path_str):
+            matches = sorted(pathlib.Path(m) for m in glob_mod.glob(path_str, recursive=True))
+            if not matches:
+                raise ValueError(
+                    f"glob pattern '{path_str}' matched zero paths; "
+                    "check that the directory exists and contains the expected subdirectories"
+                )
+            expanded.extend(matches)
+        elif path.is_dir() and not (path / "data.mdb").is_file():
+            rank_subdirs = sorted(path.glob("rank_*"))
+            if not rank_subdirs:
+                raise ValueError(
+                    f"path '{path}' is a directory but does not contain data.mdb or rank_* "
+                    "subdirectories; expected an LMDB directory or a parent of rank-specific exports"
+                )
+            expanded.extend(rank_subdirs)
+        else:
+            expanded.append(path)
+    expanded = [path.expanduser().resolve() for path in expanded]
+    resolved = list(dict.fromkeys(expanded))
+    for path in resolved:
+        if not path.exists():
+            raise ValueError(f"LMDB path does not exist: {path}")
+        if not path.is_dir():
+            raise ValueError(f"LMDB path is not a directory: {path}")
+        if not (path / "data.mdb").is_file():
+            raise ValueError(f"path '{path}' does not contain data.mdb; expected an LMDB directory")
+    return resolved
 
 
 class LMDBWriter:
