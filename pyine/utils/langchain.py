@@ -117,26 +117,31 @@ def get_sampling_temperature_from_chain(
     bound kwargs (from ``.bind(temperature=...)``) take precedence over the inner model's
     attribute.
     """
+    # this function is inherently duck-typed: it inspects opaque LangChain internal
+    # attributes (kwargs, temperature, first/last, bound) that don't exist on the base
+    # Runnable type. use Any to silence pyright for the dynamic attribute accesses.
+    obj: typing.Any = chain
     # RunnableBinding kwargs override (from .bind(temperature=...)); if temperature is present
     # in bound kwargs, treat it as authoritative and stop traversal (even if None/non-numeric)
-    if hasattr(chain, "kwargs"):
-        if isinstance(chain.kwargs, dict) and "temperature" in chain.kwargs:
-            temp = chain.kwargs["temperature"]
+    if hasattr(obj, "kwargs"):
+        bound_kwargs = typing.cast("dict[str, typing.Any] | None", obj.kwargs)
+        if isinstance(bound_kwargs, dict) and "temperature" in bound_kwargs:
+            temp = bound_kwargs["temperature"]
             return float(temp) if isinstance(temp, (int, float)) else None
     # direct attribute (e.g. bare BaseChatModel)
-    if hasattr(chain, "temperature"):
-        if isinstance(chain.temperature, (int, float)):
-            return float(chain.temperature)
+    if hasattr(obj, "temperature"):
+        if isinstance(obj.temperature, (int, float)):
+            return float(obj.temperature)
     # RunnableSequence: walk first, middle steps, and last
-    if hasattr(chain, "first") and hasattr(chain, "last"):
-        steps = [chain.first, *getattr(chain, "middle", []), chain.last]
+    if hasattr(obj, "first") and hasattr(obj, "last"):
+        steps: list[typing.Any] = [obj.first, *getattr(obj, "middle", []), obj.last]
         for step in steps:
             result = get_sampling_temperature_from_chain(step)
             if result is not None:
                 return result
     # RunnableBinding: unwrap .with_retry(), .bind(), etc.
-    if hasattr(chain, "bound"):
-        return get_sampling_temperature_from_chain(chain.bound)
+    if hasattr(obj, "bound"):
+        return get_sampling_temperature_from_chain(obj.bound)
     return None
 
 
