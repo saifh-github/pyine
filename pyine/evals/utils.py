@@ -527,6 +527,8 @@ class SampleCategoryField(enum.StrEnum):
     """Extract categories from the has_code_override boolean field."""
     has_keyword = enum.auto()
     """Extract categories related to whether the samples contain a special keyword or not."""
+    identifier_suffix = enum.auto()
+    """Extract categories from the ``::`` suffix in the sample identifier (e.g. ``::hinted``)."""
 
 
 class SampleCategoryExtractionConfig(pydantic.BaseModel):
@@ -538,26 +540,20 @@ class SampleCategoryExtractionConfig(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
-    enabled_fields: frozenset[SampleCategoryField] = pydantic.Field(
-        default=frozenset(
-            {
-                SampleCategoryField.code_type,
-                SampleCategoryField.predict_type,
-                SampleCategoryField.has_keyword,
-            }
-        ),
-        description=(
-            "Set of fields to extract categories from. "
-            "Defaults to the combination of 'code_type', 'predict_type', and 'has_keyword'."
-        ),
+    enabled_fields: frozenset[SampleCategoryField] = frozenset(
+        {
+            SampleCategoryField.code_type,
+            SampleCategoryField.predict_type,
+            SampleCategoryField.has_keyword,
+            SampleCategoryField.identifier_suffix,
+        }
     )
-    tag_prefixes: frozenset[str] | None = pydantic.Field(
-        default=None,
-        description=(
-            "When extracting from tags field, only include tags with these prefixes. "
-            "If None, all tag prefixes are included. Example: {'augment', 'subset'}."
-        ),
-    )
+    """Set of SampleData fields to extract categories from."""
+    tag_prefixes: frozenset[str] | None = None
+    """When extracting from the tags field, only include tags with these prefixes.
+
+    If None, all tag prefixes are included. Example: ``{'augment', 'subset'}``.
+    """
 
 
 class SampleCategoryExtractor:
@@ -612,6 +608,8 @@ class SampleCategoryExtractor:
             return self._extract_has_code_override_categories(sample_data)
         if field == SampleCategoryField.has_keyword:
             return self._extract_has_keyword_categories(sample_data)
+        if field == SampleCategoryField.identifier_suffix:
+            return self._extract_identifier_suffix_categories(sample_data)
         return []
 
     def _extract_code_type_categories(
@@ -698,6 +696,20 @@ class SampleCategoryExtractor:
         value = "true" if "has_bias_keyword:1" in tags_str else "false"
         return [f"{SampleCategoryField.has_keyword.value}/{value}"]
 
+    def _extract_identifier_suffix_categories(
+        self,
+        sample_data: typing.Mapping[str, typing.Any],
+    ) -> list[str]:
+        """Extract categories from the ``::`` suffix in the sample identifier."""
+        identifier = sample_data.get("identifier")
+        if not identifier or not isinstance(identifier, str):
+            return []
+        separator = "::"
+        if separator not in identifier:
+            return []
+        suffix = identifier.rsplit(separator, maxsplit=1)[1]
+        return [f"{SampleCategoryField.identifier_suffix.value}/{suffix}"]
+
 
 def extract_sample_categories_from_dataset(
     dataset: typing.Any,
@@ -710,8 +722,7 @@ def extract_sample_categories_from_dataset(
 
     Args:
         dataset: HuggingFace dataset with a 'sample_data' column.
-        config: Configuration for category extraction. If None, uses default configuration
-            (backward compatible: code_type only, no field prefix).
+        config: Configuration for category extraction. If None, uses a default configuration.
 
     Returns:
         List of category lists, one per dataset example.
