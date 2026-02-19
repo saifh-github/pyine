@@ -288,3 +288,97 @@ class TestResolveLmdbPaths:
         lmdb_dir = _make_lmdb_dir(tmp_path)
         result = lmdb_io.resolve_lmdb_paths((lmdb_dir, lmdb_dir))
         assert len(result) == 1
+
+
+class TestParseLmdbSampleKey:
+    """Tests for parse_lmdb_sample_key()."""
+
+    def test_simple_key(self) -> None:
+        sample_id, gen_count = lmdb_io.parse_lmdb_sample_key("train/sample_0001/3", "train/")
+        assert sample_id == "sample_0001"
+        assert gen_count == 3
+
+    def test_nested_sample_id(self) -> None:
+        sample_id, gen_count = lmdb_io.parse_lmdb_sample_key("train/TACO/train/p000001/s0000/5", "train/")
+        assert sample_id == "TACO/train/p000001/s0000"
+        assert gen_count == 5
+
+    def test_generation_count_none(self) -> None:
+        sample_id, gen_count = lmdb_io.parse_lmdb_sample_key("eval/sample_0001/none", "eval/")
+        assert sample_id == "sample_0001"
+        assert gen_count == 0
+
+    def test_empty_prefix_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            lmdb_io.parse_lmdb_sample_key("train/sample_001/1", "")
+
+    def test_no_separator_raises(self) -> None:
+        with pytest.raises(ValueError, match="no '/' separator"):
+            lmdb_io.parse_lmdb_sample_key("train/flat_key", "train/")
+
+    def test_non_numeric_gen_count_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-numeric"):
+            lmdb_io.parse_lmdb_sample_key("train/sample_001/abc", "train/")
+
+
+class TestDeduplicateByStrategy:
+    """Tests for deduplicate_by_strategy()."""
+
+    def test_latest_strategy(self) -> None:
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {
+            "s1": [(1, {"val": "a"}), (3, {"val": "c"}), (2, {"val": "b"})],
+        }
+        result = lmdb_io.deduplicate_by_strategy(grouped, "latest")
+        assert result["s1"]["val"] == "c"  # gen_count=3
+
+    def test_best_reward_strategy(self) -> None:
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {
+            "s1": [
+                (1, {"reward_total": 0.5}),
+                (2, {"reward_total": 0.9}),
+                (3, {"reward_total": 0.3}),
+            ],
+        }
+        result = lmdb_io.deduplicate_by_strategy(grouped, "best_reward")
+        assert result["s1"]["reward_total"] == 0.9
+
+    def test_best_reward_missing_total_raises(self) -> None:
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {
+            "s1": [(1, {"reward_total": None})],
+        }
+        with pytest.raises(ValueError, match="reward_total"):
+            lmdb_io.deduplicate_by_strategy(grouped, "best_reward")
+
+    def test_invalid_strategy_raises(self) -> None:
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {
+            "s1": [(1, {"val": "a"})],
+        }
+        with pytest.raises(ValueError, match="unknown selection_strategy"):
+            lmdb_io.deduplicate_by_strategy(grouped, "invalid")  # type: ignore[arg-type]
+
+
+class TestLoadAndDeduplicateLmdbRecords:
+    """Tests for load_and_deduplicate_lmdb_records() with a real LMDB."""
+
+    def test_end_to_end(self, tmp_path: pathlib.Path) -> None:
+        import pyine.probes.debug_dataset
+
+        lmdb_path = tmp_path / "debug.lmdb"
+        pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
+        with lmdb_io.LMDBReader(lmdb_path) as reader:
+            records = lmdb_io.load_and_deduplicate_lmdb_records(reader, "train/", "latest")
+        assert len(records) == 10
+        # Should be sorted by sample_id
+        sample_ids = [sid for sid, _rec in records]
+        assert sample_ids == sorted(sample_ids)
+
+    def test_prefix_filters(self, tmp_path: pathlib.Path) -> None:
+        import pyine.probes.debug_dataset
+
+        lmdb_path = tmp_path / "debug.lmdb"
+        pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
+        with lmdb_io.LMDBReader(lmdb_path) as reader:
+            train = lmdb_io.load_and_deduplicate_lmdb_records(reader, "train/", "latest")
+            valid = lmdb_io.load_and_deduplicate_lmdb_records(reader, "eval/", "latest")
+        assert len(train) == 10
+        assert len(valid) == 15  # 5 families * 3 code types

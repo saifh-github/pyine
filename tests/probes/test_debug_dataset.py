@@ -206,17 +206,21 @@ class TestDebugLmdbIntegrationWithEvalOnly:
         return lmdb_path
 
     def test_eval_only_loads_both_splits(self, debug_lmdb: Path) -> None:
+        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
         from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
-        ds = load_probe_dataset_from_lmdb(debug_lmdb, use_eval_only_split=True)
+        config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
+        ds = load_probe_dataset_from_lmdb(config)
         assert "train" in ds
         assert "valid" in ds
         assert len(ds["train"]) + len(ds["valid"]) == 90
 
     def test_eval_only_code_type_column_present(self, debug_lmdb: Path) -> None:
+        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
         from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
-        ds = load_probe_dataset_from_lmdb(debug_lmdb, use_eval_only_split=True)
+        config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
+        ds = load_probe_dataset_from_lmdb(config)
         for split in ("train", "valid"):
             assert "code_type" in ds[split].column_names
             for code_type in ds[split]["code_type"]:
@@ -224,29 +228,35 @@ class TestDebugLmdbIntegrationWithEvalOnly:
                 assert len(code_type) > 0
 
     def test_eval_only_family_split_no_leakage(self, debug_lmdb: Path) -> None:
+        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
         from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
-        ds = load_probe_dataset_from_lmdb(debug_lmdb, use_eval_only_split=True, split_by_family=True)
+        config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True, split_by_family=True)
+        ds = load_probe_dataset_from_lmdb(config)
         train_families = {_extract_family_id(sid) for sid in ds["train"]["sample_id"]}
         valid_families = {_extract_family_id(sid) for sid in ds["valid"]["sample_id"]}
         assert train_families.isdisjoint(valid_families)
 
     def test_eval_only_code_type_filter(self, debug_lmdb: Path) -> None:
+        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
         from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
-        ds = load_probe_dataset_from_lmdb(
-            debug_lmdb,
+        config = ProbeDataModuleConfig(
+            lmdb_path=str(debug_lmdb),
             use_eval_only_split=True,
             code_type_filter=["original", "hinted"],
         )
+        ds = load_probe_dataset_from_lmdb(config)
         for split in ("train", "valid"):
             code_types = set(ds[split]["code_type"])
             assert "misleading" not in code_types
 
     def test_eval_only_all_code_types_in_train_split(self, debug_lmdb: Path) -> None:
+        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
         from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
 
-        ds = load_probe_dataset_from_lmdb(debug_lmdb, use_eval_only_split=True)
+        config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
+        ds = load_probe_dataset_from_lmdb(config)
         train_code_types = set(ds["train"]["code_type"])
         assert train_code_types == {"original", "hinted", "misleading"}
 

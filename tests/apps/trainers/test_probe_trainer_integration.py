@@ -28,20 +28,22 @@ class TestProbeTrainerIntegration:
         - Probe checkpoints are saved to disk
         - Validation AUROC is computed (>= 0.0, not NaN)
         """
+        from unittest.mock import MagicMock
+
         from pyine.apps.trainers.probe_trainer import probe_train
         from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
         from pyine.probes.base import ProbeConfig
-        from pyine.probes.debug_dataset import create_debug_probe_dataset
+        from pyine.probes.debug_dataset import create_debug_probe_lmdb
 
-        # Create debug dataset
-        ds_path = tmp_path / "debug-dataset"
-        create_debug_probe_dataset(output_path=ds_path, n_train=40, n_valid=10, seed=42)
+        # Create debug LMDB
+        lmdb_path = tmp_path / "debug.lmdb"
+        create_debug_probe_lmdb(lmdb_path, n_train=40, n_eval_families=10, seed=42)
 
         config = ProbeTrainerAppMainConfig(
             base_model="HuggingFaceTB/SmolLM2-135M-Instruct",
-            dataset_path=str(ds_path),
-            text_field="messages",
-            label_field="label",
+            datamodule_config={
+                "lmdb_path": str(lmdb_path),
+            },
             max_seq_length=256,
             num_epochs=2,
             train_batch_size=4,
@@ -59,8 +61,6 @@ class TestProbeTrainerIntegration:
         )
 
         # Mock runtime with output_dir
-        from unittest.mock import MagicMock
-
         runtime = MagicMock()
         runtime.output_dir = str(tmp_path / "output")
         runtime.wandb_run = None

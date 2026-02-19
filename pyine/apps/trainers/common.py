@@ -832,11 +832,12 @@ def prepare_datamodule(
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]
-        for eval_subset_name in config.datamodule_config.eval_subset_names:
-            config.evals_config.define_metrics_for_wandb(
-                wandb_run=runtime.wandb_run,
-                prefix=f"predict/{eval_subset_name}",
-            )
+        if config.evals_config is not None:  # pyright: ignore[reportUnnecessaryComparison]  # None in ProbeTrainerAppMainConfig
+            for eval_subset_name in config.datamodule_config.eval_subset_names:
+                config.evals_config.define_metrics_for_wandb(
+                    wandb_run=runtime.wandb_run,
+                    prefix=f"predict/{eval_subset_name}",
+                )
     return dm
 
 

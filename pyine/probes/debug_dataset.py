@@ -232,6 +232,7 @@ def create_debug_probe_dataset(
     import tempfile
 
     import pyine.probes.lmdb_dataset
+    from pyine.probes.datamodule_configs import ProbeDataModuleConfig
 
     if output_path is None:
         tmp_dir = tempfile.mkdtemp(prefix="probe_debug_lmdb_")
@@ -240,11 +241,12 @@ def create_debug_probe_dataset(
         lmdb_path = pathlib.Path(output_path)
 
     create_debug_probe_lmdb(lmdb_path, n_train=n_train, n_eval_families=n_eval_families, seed=seed)
-    return pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
-        lmdb_path,
+    config = ProbeDataModuleConfig(
+        lmdb_path=str(lmdb_path),
         use_eval_only_split=use_eval_only_split,
         code_type_filter=code_type_filter,
     )
+    return pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(config)
 
 
 if __name__ == "__main__":

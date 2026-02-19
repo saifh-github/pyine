@@ -26,15 +26,26 @@ config:
   base_model: Qwen/Qwen3-4B-Instruct-2507
   llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from checkpoint
 
-  # LMDB data source
-  lmdb_path: /path/to/lmdb  # LMDB exported by DiskRewardLogger
-  label_metric_key: "reward/metrics/soft_match/is_match"
-  train_key_prefix: "train/"
-  valid_key_prefix: "eval/"
-  selection_strategy: latest
-  recompute_labels: false
-  max_samples_per_split: null
-  skip_malformed_records: false
+  # Data source (ProbeDataModuleConfig)
+  datamodule_config:
+    lmdb_path: /path/to/lmdb  # LMDB exported by DiskRewardLogger
+    label_metric_key: "reward/metrics/soft_match/is_match"
+    train_key_prefix: "train/"
+    valid_key_prefix: "eval/"
+    selection_strategy: latest
+    recompute_labels: false
+    max_samples_per_split: null
+    skip_malformed_records: false
+  #  use_eval_only_split: true          # Default: false (use train_key_prefix + valid_key_prefix)
+  #  eval_only_source_prefix: "eval/"   # Which prefix to read in eval-only mode
+  #  train_split_ratio: 0.8            # Fraction of families/samples assigned to train
+  #  split_by_family: true             # Split by family ID to prevent data leakage
+  #  code_type_filter:                  # null = include all; or a list of code_type strings:
+  #    - original
+  #    - hinted
+  #    - misleading
+
+
   max_seq_length: 3000
 
   # Training loop
@@ -52,17 +63,6 @@ config:
   # replica_base_seed: 0        # Base seed for reproducible replica initialization
   # log_individual_replicas: false  # Also log per-replica metrics to W&B
 
-  # Eval-only split mode — use eval prefix as sole data source, split internally
-  # use_eval_only_split: true          # Default: false (use train_key_prefix + valid_key_prefix)
-  # eval_only_source_prefix: "eval/"   # Which prefix to read in eval-only mode
-  # train_split_ratio: 0.8            # Fraction of families/samples assigned to train
-  # split_by_family: true             # Split by family ID to prevent data leakage
-
-  # Code type filtering and metrics
-  # code_type_filter:                  # null = include all; or a list of code_type strings:
-  #   - original
-  #   - hinted
-  #   - misleading
   log_per_code_type_metrics: true      # Log per-code-type validation metrics to W&B
 
   auto_model_config:

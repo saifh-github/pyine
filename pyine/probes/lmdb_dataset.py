@@ -21,52 +21,15 @@ import datasets  # noqa: TC002 -- used at runtime (Dataset.from_list, DatasetDic
 
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.output_compare
+from pyine.probes.datamodule_configs import ProbeDataModuleConfig
 from pyine.probes.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
     HARD_MATCH_KEY,
     SOFT_MATCH_KEY,
 )
 
-if typing.TYPE_CHECKING:
-    import pathlib
-
 logger = logging.getLogger(__name__)
 
 _RECOMPUTABLE_METRICS = frozenset({SOFT_MATCH_KEY, HARD_MATCH_KEY})
-
-
-def _parse_lmdb_key(
-    key: str,
-    key_prefix: str,
-) -> tuple[str, int]:
-    """Parse an LMDB key into (sample_id, generation_count).
-
-    Reuses the rfind("/") convention from BiasDataModuleBase._load_pregenerated_outputs().
-
-    Args:
-        key: Full LMDB key (e.g., "train/TACO/train/p000001/s0000/3").
-        key_prefix: Prefix to strip (e.g., "train/").
-
-    Returns:
-        Tuple of (sample_id, generation_count).
-
-    Raises:
-        ValueError: If the key has no "/" separator after the prefix, or if
-            the generation count segment is non-numeric and not "none".
-    """
-    suffix = key[len(key_prefix) :]
-    sep = suffix.rfind("/")
-    if sep == -1:
-        raise ValueError(f"unexpected key format (no '/' separator after prefix): {key}")
-    sample_id = suffix[:sep]
-    gen_str = suffix[sep + 1 :]
-    if gen_str == "none":
-        return sample_id, 0
-    try:
-        return sample_id, int(gen_str)
-    except ValueError:
-        raise ValueError(
-            f"non-numeric generation count '{gen_str}' in key '{key}' (expected integer or 'none')"
-        ) from None
 
 
 def _load_lmdb_records(
@@ -76,6 +39,9 @@ def _load_lmdb_records(
 ) -> list[tuple[str, dict[str, typing.Any]]]:
     """Load and deduplicate LMDB records for a given key prefix.
 
+    Delegates to :func:`pyine.data.utils.lmdb_io.load_and_deduplicate_lmdb_records`
+    for key parsing and deduplication, then validates key_prefix field consistency.
+
     Args:
         reader: Open LMDBReader instance.
         key_prefix: Key prefix to filter by (e.g., "train/").
@@ -84,45 +50,22 @@ def _load_lmdb_records(
     Returns:
         List of (sample_id, record) tuples after deduplication.
     """
-    # group records by sample_id
-    grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {}
-    for key in reader.key_map:
-        if not key.startswith(key_prefix):
-            continue
-        sample_id, gen_count = _parse_lmdb_key(key, key_prefix)
-        record: dict[str, typing.Any] = reader.get(key)
-
-        # validate key_prefix field consistency
+    records = pyine.data.utils.lmdb_io.load_and_deduplicate_lmdb_records(
+        reader,
+        key_prefix,
+        selection_strategy,  # type: ignore[arg-type]
+    )
+    # validate key_prefix field consistency on deduplicated records
+    for sample_id, record in records:
         record_prefix = record.get("key_prefix")
         if record_prefix is not None and record_prefix != key_prefix:
             logger.warning(
-                "LMDB key prefix '%s' disagrees with record field key_prefix='%s' for key '%s'; trusting LMDB key",
+                "LMDB key prefix '%s' disagrees with record field key_prefix='%s' for sample '%s'; trusting LMDB key",
                 key_prefix,
                 record_prefix,
-                key,
+                sample_id,
             )
-
-        grouped.setdefault(sample_id, []).append((gen_count, record))
-
-    # deduplicate
-    result: list[tuple[str, dict[str, typing.Any]]] = []
-    for sample_id, entries in grouped.items():
-        if selection_strategy == "latest":
-            best = max(entries, key=lambda entry: entry[0])
-        elif selection_strategy == "best_reward":
-            for gen_count, record in entries:
-                if record.get("reward_total") is None:
-                    raise ValueError(
-                        f"best_reward selection requires reward_total for all records, "
-                        f"but sample_id '{sample_id}' (generation_count={gen_count}) has None; "
-                        "ensure logging.log_total=True during export"
-                    )
-            best = max(entries, key=lambda entry: entry[1]["reward_total"])
-        else:
-            raise ValueError(f"unknown selection_strategy: {selection_strategy!r}")
-        result.append((sample_id, best[1]))
-
-    return result
+    return records
 
 
 def _record_to_probe_sample(
@@ -400,22 +343,8 @@ def _validate_probe_split(
 
 
 def load_probe_dataset_from_lmdb(
-    lmdb_path: str | pathlib.Path,
-    label_metric_key: str = SOFT_MATCH_KEY,
-    train_key_prefix: str = "train/",
-    valid_key_prefix: str = "eval/",
-    selection_strategy: str = "latest",
-    recompute_labels: bool = False,
+    config: ProbeDataModuleConfig,
     compare_options: pyine.utils.code.output_compare.CompareOptions | None = None,
-    max_samples_per_split: int | None = None,
-    skip_malformed_records: bool = False,
-    seed: int = 42,
-    # --- Eval-only split mode ---
-    use_eval_only_split: bool = False,
-    eval_only_source_prefix: str = "eval/",
-    train_split_ratio: float = 0.8,
-    split_by_family: bool = True,
-    code_type_filter: list[str] | None = None,
 ) -> datasets.DatasetDict:
     """Load LMDB completion records and create a probe training dataset.
 
@@ -423,30 +352,17 @@ def load_probe_dataset_from_lmdb(
     extracts prompt+completion as input text and derives binary labels
     from reward metrics.
 
-    Supports two modes:
+    Supports two modes (controlled by ``config.use_eval_only_split``):
 
-    - **Two-prefix mode** (``use_eval_only_split=False``, default): Load train
-      records from ``train_key_prefix`` and valid records from ``valid_key_prefix``.
-    - **Eval-only mode** (``use_eval_only_split=True``): Load all records from
-      ``eval_only_source_prefix`` and split internally into train/valid.
+    - **Two-prefix mode** (default): Load train records from
+      ``config.train_key_prefix`` and valid records from ``config.valid_key_prefix``.
+    - **Eval-only mode**: Load all records from ``config.eval_only_source_prefix``
+      and split internally into train/valid.
 
     Args:
-        lmdb_path: Path to LMDB database from DiskRewardLogger.
-        label_metric_key: Key in reward_metrics for binary label.
-        train_key_prefix: Key prefix for training records (two-prefix mode).
-        valid_key_prefix: Key prefix for validation records (two-prefix mode).
-        selection_strategy: "latest" or "best_reward" for deduplication.
-        recompute_labels: If True, re-compute match instead of using stored metrics.
+        config: Probe data module configuration containing LMDB path, label key,
+            split strategy, and all other dataset parameters.
         compare_options: CompareOptions for soft match re-computation.
-        max_samples_per_split: Cap samples per split (for debugging/fast iteration).
-        skip_malformed_records: If True, skip records missing required fields.
-        seed: Random seed for shuffling.
-        use_eval_only_split: If True, use eval-only mode (single prefix, internal split).
-        eval_only_source_prefix: LMDB prefix to read when ``use_eval_only_split=True``.
-        train_split_ratio: Fraction of data for training (eval-only mode).
-        split_by_family: Split by family ID to prevent data leakage (eval-only mode).
-        code_type_filter: If set, only include records with matching code_type.
-            ``None`` includes all records. Applies in both modes.
 
     Returns:
         DatasetDict with "train" and "valid" splits, each containing:
@@ -460,41 +376,16 @@ def load_probe_dataset_from_lmdb(
             if no records match a key prefix, or if code_type_filter excludes all.
     """
     # defensive runtime check (also enforced in config validator)
-    if recompute_labels and label_metric_key not in _RECOMPUTABLE_METRICS:
+    if config.recompute_labels and config.label_metric_key not in _RECOMPUTABLE_METRICS:
         raise ValueError(
             f"recompute_labels=True is only supported for label_metric_key in "
-            f"{set(_RECOMPUTABLE_METRICS)}, got '{label_metric_key}'"
+            f"{set(_RECOMPUTABLE_METRICS)}, got '{config.label_metric_key}'"
         )
 
-    if use_eval_only_split:
-        splits = _load_eval_only(
-            lmdb_path=lmdb_path,
-            eval_only_source_prefix=eval_only_source_prefix,
-            selection_strategy=selection_strategy,
-            label_metric_key=label_metric_key,
-            recompute_labels=recompute_labels,
-            compare_options=compare_options,
-            skip_malformed_records=skip_malformed_records,
-            train_split_ratio=train_split_ratio,
-            split_by_family=split_by_family,
-            code_type_filter=code_type_filter,
-            max_samples_per_split=max_samples_per_split,
-            seed=seed,
-        )
+    if config.use_eval_only_split:
+        splits = _load_eval_only(config, compare_options)
     else:
-        splits = _load_two_prefix(
-            lmdb_path=lmdb_path,
-            train_key_prefix=train_key_prefix,
-            valid_key_prefix=valid_key_prefix,
-            selection_strategy=selection_strategy,
-            label_metric_key=label_metric_key,
-            recompute_labels=recompute_labels,
-            compare_options=compare_options,
-            skip_malformed_records=skip_malformed_records,
-            code_type_filter=code_type_filter,
-            max_samples_per_split=max_samples_per_split,
-            seed=seed,
-        )
+        splits = _load_two_prefix(config, compare_options)
 
     logger.info(
         "Loaded probe dataset: train=%d samples, valid=%d samples",
@@ -505,42 +396,33 @@ def load_probe_dataset_from_lmdb(
 
 
 def _load_two_prefix(
-    lmdb_path: str | pathlib.Path,
-    train_key_prefix: str,
-    valid_key_prefix: str,
-    selection_strategy: str,
-    label_metric_key: str,
-    recompute_labels: bool,
+    config: ProbeDataModuleConfig,
     compare_options: pyine.utils.code.output_compare.CompareOptions | None,
-    skip_malformed_records: bool,
-    code_type_filter: list[str] | None,
-    max_samples_per_split: int | None,
-    seed: int,
 ) -> dict[str, datasets.Dataset]:
     """Two-prefix loading mode (original behavior)."""
     splits: dict[str, datasets.Dataset] = {}
-    with pyine.data.utils.lmdb_io.LMDBReader(lmdb_path) as reader:
-        for split_name, prefix in [("train", train_key_prefix), ("valid", valid_key_prefix)]:
-            records = _load_lmdb_records(reader, prefix, selection_strategy)
+    with pyine.data.utils.lmdb_io.LMDBReader(config.lmdb_path) as reader:
+        for split_name, prefix in [("train", config.train_key_prefix), ("valid", config.valid_key_prefix)]:
+            records = _load_lmdb_records(reader, prefix, config.selection_strategy)
             if not records:
                 raise ValueError(
-                    f"no records match key prefix '{prefix}' in LMDB at {lmdb_path}; "
+                    f"no records match key prefix '{prefix}' in LMDB at {config.lmdb_path}; "
                     "check that the prefix matches the key_prefix used during export"
                 )
 
-            if code_type_filter is not None:
-                records = _filter_by_code_type(records, code_type_filter)
+            if config.code_type_filter is not None:
+                records = _filter_by_code_type(records, config.code_type_filter)
                 if not records:
                     raise ValueError(
-                        f"no records remain after code_type_filter={code_type_filter} for split '{split_name}'"
+                        f"no records remain after code_type_filter={config.code_type_filter} for split '{split_name}'"
                     )
 
             samples, skipped = _convert_records_to_samples(
                 records,
-                label_metric_key,
-                recompute_labels,
+                config.label_metric_key,
+                config.recompute_labels,
                 compare_options,
-                skip_malformed_records,
+                config.skip_malformed_records,
             )
 
             if skipped > 0:
@@ -558,8 +440,8 @@ def _load_two_prefix(
 
             ds = datasets.Dataset.from_list(samples)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
-            if max_samples_per_split is not None and len(ds) > max_samples_per_split:
-                ds = ds.shuffle(seed=seed).select(range(max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+            if config.max_samples_per_split is not None and len(ds) > config.max_samples_per_split:
+                ds = ds.shuffle(seed=config.split_seed).select(range(config.max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
             _validate_probe_split(split_name, ds)
             splits[split_name] = ds
@@ -568,41 +450,31 @@ def _load_two_prefix(
 
 
 def _load_eval_only(
-    lmdb_path: str | pathlib.Path,
-    eval_only_source_prefix: str,
-    selection_strategy: str,
-    label_metric_key: str,
-    recompute_labels: bool,
+    config: ProbeDataModuleConfig,
     compare_options: pyine.utils.code.output_compare.CompareOptions | None,
-    skip_malformed_records: bool,
-    train_split_ratio: float,
-    split_by_family: bool,
-    code_type_filter: list[str] | None,
-    max_samples_per_split: int | None,
-    seed: int,
 ) -> dict[str, datasets.Dataset]:
     """Eval-only loading mode: single prefix, internal train/valid split."""
-    with pyine.data.utils.lmdb_io.LMDBReader(lmdb_path) as reader:
-        records = _load_lmdb_records(reader, eval_only_source_prefix, selection_strategy)
+    with pyine.data.utils.lmdb_io.LMDBReader(config.lmdb_path) as reader:
+        records = _load_lmdb_records(reader, config.eval_only_source_prefix, config.selection_strategy)
 
     if not records:
         raise ValueError(
-            f"no records match key prefix '{eval_only_source_prefix}' in LMDB at {lmdb_path}; "
+            f"no records match key prefix '{config.eval_only_source_prefix}' in LMDB at {config.lmdb_path}; "
             "check that the prefix matches the key_prefix used during export"
         )
 
-    if code_type_filter is not None:
-        records = _filter_by_code_type(records, code_type_filter)
+    if config.code_type_filter is not None:
+        records = _filter_by_code_type(records, config.code_type_filter)
         if not records:
-            raise ValueError(f"no records remain after code_type_filter={code_type_filter}")
+            raise ValueError(f"no records remain after code_type_filter={config.code_type_filter}")
 
     # convert to samples
     samples, skipped = _convert_records_to_samples(
         records,
-        label_metric_key,
-        recompute_labels,
+        config.label_metric_key,
+        config.recompute_labels,
         compare_options,
-        skip_malformed_records,
+        config.skip_malformed_records,
     )
 
     if skipped > 0:
@@ -616,10 +488,11 @@ def _load_eval_only(
         raise ValueError(f"eval-only mode: all {len(records)} records were malformed; no valid samples to train on")
 
     # split into train/valid
-    if split_by_family:
-        train_samples, valid_samples = _split_records_by_family(samples, train_split_ratio, seed)
+    seed = config.split_seed
+    if config.split_by_family:
+        train_samples, valid_samples = _split_records_by_family(samples, config.train_split_ratio, seed)
     else:
-        train_samples, valid_samples = _split_records_random(samples, train_split_ratio, seed)
+        train_samples, valid_samples = _split_records_random(samples, config.train_split_ratio, seed)
 
     # log per-split code type distribution
     for name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
@@ -638,8 +511,8 @@ def _load_eval_only(
     for split_name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
         ds = datasets.Dataset.from_list(split_samples)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
-        if max_samples_per_split is not None and len(ds) > max_samples_per_split:
-            ds = ds.shuffle(seed=seed).select(range(max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+        if config.max_samples_per_split is not None and len(ds) > config.max_samples_per_split:
+            ds = ds.shuffle(seed=seed).select(range(config.max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
         _validate_probe_split(split_name, ds)
         splits[split_name] = ds

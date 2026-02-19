@@ -15,7 +15,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.probes.base  # noqa: TC001
-import pyine.probes.reward_keys
+import pyine.probes.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -24,14 +24,16 @@ logger = logging.getLogger(__name__)
 class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBase):
     """Configuration for probe training on frozen LLM activations."""
 
-    # --- Override: evals and datamodule not needed for probe training ---
+    # --- Override: evals not needed for probe training ---
     evals_config: pyine.evals.common.BaseEvalsConfig | None = pydantic.Field(  # type: ignore[assignment]
         default=None,
         description="Not used for probe training. Kept for AppMainConfig compatibility.",
     )
-    datamodule_config: typing.Any = pydantic.Field(  # type: ignore[assignment]
-        default=None,
-        description="Not used for probe training. Kept for AppMainConfig compatibility.",
+
+    # --- Override: use ProbeDataModuleConfig instead of generic BaseDataModuleConfig ---
+    datamodule_config: pydantic.SerializeAsAny[pyine.probes.datamodule_configs.ProbeDataModuleConfig] = pydantic.Field(  # type: ignore[assignment]
+        ...,
+        description="Probe data configuration (LMDB source, splitting, filtering).",
     )
 
     # --- LLM checkpoint ---
@@ -46,93 +48,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         description="List of probe configs, each specifying architecture, layer, and hyperparams.",
     )
 
-    # --- LMDB data source ---
-    lmdb_path: str = pydantic.Field(
-        ...,
-        description="Path to LMDB database exported by DiskRewardLogger.",
-    )
-    label_metric_key: str = pydantic.Field(
-        default=pyine.probes.reward_keys.SOFT_MATCH_KEY,
-        description=(
-            "Key in reward_metrics dict for binary label derivation. "
-            f"Common values: '{pyine.probes.reward_keys.SOFT_MATCH_KEY}', '{pyine.probes.reward_keys.HARD_MATCH_KEY}'."
-        ),
-    )
-    train_key_prefix: str = pydantic.Field(
-        default="train/",
-        description="LMDB key prefix for training records.",
-    )
-    valid_key_prefix: str = pydantic.Field(
-        default="eval/",
-        description="LMDB key prefix for validation records.",
-    )
-    selection_strategy: typing.Literal["latest", "best_reward"] = pydantic.Field(
-        default="latest",
-        description=(
-            "Strategy for deduplicating multiple generations per sample. "
-            "'latest' uses highest generation_count, 'best_reward' uses highest reward_total."
-        ),
-    )
-    recompute_labels: bool = pydantic.Field(
-        default=False,
-        description=(
-            "If True, re-compute labels instead of using stored reward_metrics. "
-            f"Only valid when label_metric_key is '{pyine.probes.reward_keys.SOFT_MATCH_KEY}' or "
-            f"'{pyine.probes.reward_keys.HARD_MATCH_KEY}' -- validated at config construction time."
-        ),
-    )
-    max_samples_per_split: int | None = pydantic.Field(
-        default=None,
-        description="Cap samples per split. Useful for debugging or fast iteration.",
-    )
-    skip_malformed_records: bool = pydantic.Field(
-        default=False,
-        description=(
-            "If True, skip records missing required fields instead of raising. "
-            "Skipped records are counted and logged at WARNING level. "
-            "If False (default), raise ValueError on any malformed record."
-        ),
-    )
-
-    # --- Eval-only split mode ---
-    use_eval_only_split: bool = pydantic.Field(
-        default=False,
-        description=(
-            "When True, read data from a single LMDB prefix (eval_only_source_prefix) "
-            "and split internally into train/valid. When False (default), use separate "
-            "train_key_prefix and valid_key_prefix as before."
-        ),
-    )
-    eval_only_source_prefix: str = pydantic.Field(
-        default="eval/",
-        description="LMDB key prefix to read from when use_eval_only_split=True.",
-    )
-    train_split_ratio: float = pydantic.Field(
-        default=0.8,
-        gt=0.0,
-        lt=1.0,
-        description=(
-            "Fraction of data used for training when use_eval_only_split=True. Remainder is used for validation."
-        ),
-    )
-    split_by_family: bool = pydantic.Field(
-        default=True,
-        description=(
-            "When True (default), split by family (problem) ID so that all code-type "
-            "variants of the same problem go to the same split. Prevents data leakage "
-            "from shared problem structure. When False, split randomly at the record level."
-        ),
-    )
-
-    # --- Code type filtering and metrics ---
-    code_type_filter: list[str] | None = pydantic.Field(
-        default=None,
-        description=(
-            "If set, only include records with code_type matching one of the listed values. "
-            "Example: ['original', 'hinted', 'misleading']. "
-            "None (default) includes all records."
-        ),
-    )
+    # --- Training/logging options (not data-related, stay here) ---
     log_per_code_type_metrics: bool = pydantic.Field(
         default=True,
         description=(
@@ -196,25 +112,6 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
         return torch.float16
 
     @pydantic.model_validator(mode="after")
-    def _validate_recompute_label_metric(self) -> ProbeTrainerAppMainConfig:
-        recomputable = {pyine.probes.reward_keys.SOFT_MATCH_KEY, pyine.probes.reward_keys.HARD_MATCH_KEY}
-        if self.recompute_labels and self.label_metric_key not in recomputable:
-            raise ValueError(
-                f"recompute_labels=True is only supported for label_metric_key in "
-                f"{recomputable}, got '{self.label_metric_key}'"
-            )
-        return self
-
-    @pydantic.model_validator(mode="after")
-    def _validate_eval_only_split_config(self) -> ProbeTrainerAppMainConfig:
-        if self.use_eval_only_split:
-            if not self.eval_only_source_prefix:
-                raise ValueError("eval_only_source_prefix must be non-empty when use_eval_only_split=True")
-        if self.code_type_filter is not None and len(self.code_type_filter) == 0:
-            raise ValueError("code_type_filter must be None (include all) or a non-empty list; got an empty list")
-        return self
-
-    @pydantic.model_validator(mode="after")
     def _validate_probe_names_unique(self) -> ProbeTrainerAppMainConfig:
         names = [probe_config.name for probe_config in self.probe_configs]
         if len(names) != len(set(names)):
@@ -226,6 +123,19 @@ def _get_app_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns probe trainer application configs for hydra zen storage."""
+    # --- Probe datamodule config ---
+    datamodule_config = pyine.configs.utils.make_config_description(
+        pyine.probes.datamodule_configs.ProbeDataModuleConfig,
+        name="probe_base",
+        group=f"{group}/datamodule_config",
+        description="Base probe datamodule settings (LMDB source, splitting, filtering).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+
+    # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         ProbeTrainerAppMainConfig,
         name="base",
@@ -234,9 +144,13 @@ def _get_app_configs(
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
+            "hydra_defaults": [
+                "_self_",
+                {"datamodule_config": "probe_base"},
+            ],
         },
     )
-    return [app_main_config]
+    return [app_main_config, datamodule_config]
 
 
 def register_hydra_configs(

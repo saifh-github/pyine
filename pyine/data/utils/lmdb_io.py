@@ -26,6 +26,10 @@ __all__ = [
     "LMDBWriter",
     "LMDBReader",
     "resolve_lmdb_paths",
+    # Sample-key parsing and deduplication
+    "parse_lmdb_sample_key",
+    "deduplicate_by_strategy",
+    "load_and_deduplicate_lmdb_records",
 ]
 
 
@@ -739,3 +743,120 @@ class LMDBReader:
                 batch = []
         if batch:
             yield batch
+
+
+# --- Sample-key parsing and deduplication utilities ---
+# Used by probe training (pyine.probes.lmdb_dataset) and datamodule pregenerated-output
+# loading (pyine.organisms.datamodules.base) to avoid duplicating LMDB key conventions.
+
+
+def parse_lmdb_sample_key(key: str, key_prefix: str) -> tuple[str, int]:
+    """Parse an LMDB key into (sample_id, generation_count).
+
+    Key format: ``{key_prefix}{sample_id}/{generation_count}``
+
+    Strips *key_prefix*, splits on the **last** ``/`` to separate the sample
+    identifier from the trailing generation count.  The literal string
+    ``"none"`` is interpreted as generation count 0.
+
+    Args:
+        key: Full LMDB key (e.g., ``"train/TACO/train/p000001/s0000/3"``).
+        key_prefix: Prefix to strip (e.g., ``"train/"``).
+
+    Returns:
+        Tuple of ``(sample_id, generation_count)``.
+
+    Raises:
+        ValueError: If *key_prefix* is empty, or if the key has no ``/``
+            separator after the prefix, or if the trailing segment is not a
+            valid integer / ``"none"``.
+    """
+    if not key_prefix:
+        raise ValueError("key_prefix must be non-empty")
+    suffix = key[len(key_prefix) :]
+    sep = suffix.rfind("/")
+    if sep == -1:
+        raise ValueError(f"unexpected key format (no '/' separator after prefix): {key}")
+    sample_id = suffix[:sep]
+    gen_str = suffix[sep + 1 :]
+    if gen_str == "none":
+        return sample_id, 0
+    try:
+        return sample_id, int(gen_str)
+    except ValueError:
+        raise ValueError(
+            f"non-numeric generation count '{gen_str}' in key '{key}' (expected integer or 'none')"
+        ) from None
+
+
+def deduplicate_by_strategy(
+    grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]],
+    selection_strategy: typing.Literal["latest", "best_reward"],
+) -> dict[str, dict[str, typing.Any]]:
+    """Pick the single best record per sample_id according to *selection_strategy*.
+
+    Args:
+        grouped: ``{sample_id: [(generation_count, record_dict), ...]}``.
+        selection_strategy:
+            ``"latest"``  -- pick the entry with the highest generation_count.
+            ``"best_reward"`` -- pick the entry whose ``record["reward_total"]``
+            is highest.  Raises ``ValueError`` if any record has
+            ``reward_total is None``.
+
+    Returns:
+        ``{sample_id: best_record_dict}``
+
+    Raises:
+        ValueError: If *selection_strategy* is unknown, or if ``"best_reward"``
+            encounters a record with ``reward_total is None``.
+    """
+    result: dict[str, dict[str, typing.Any]] = {}
+    for sample_id, entries in grouped.items():
+        if selection_strategy == "latest":
+            best = max(entries, key=lambda entry: entry[0])
+        elif selection_strategy == "best_reward":
+            for gen_count, record in entries:
+                if record.get("reward_total") is None:
+                    raise ValueError(
+                        f"best_reward selection requires reward_total for all records, "
+                        f"but sample_id '{sample_id}' (generation_count={gen_count}) has None; "
+                        "ensure logging.log_total=True during export"
+                    )
+            best = max(entries, key=lambda entry: entry[1]["reward_total"])
+        else:
+            raise ValueError(f"unknown selection_strategy: {selection_strategy!r}")
+        result[sample_id] = best[1]
+    return result
+
+
+def load_and_deduplicate_lmdb_records(
+    reader: LMDBReader,
+    key_prefix: str,
+    selection_strategy: typing.Literal["latest", "best_reward"],
+) -> list[tuple[str, dict[str, typing.Any]]]:
+    """Load LMDB records under *key_prefix*, group by sample_id, and deduplicate.
+
+    Convenience wrapper that combines key parsing, grouping, and
+    :func:`deduplicate_by_strategy` into one call.
+
+    Returns a list sorted by ``sample_id`` for deterministic ordering
+    regardless of LMDB iteration order.
+
+    Args:
+        reader: Open :class:`LMDBReader` instance.
+        key_prefix: Key prefix to filter by (e.g., ``"train/"``). Must be
+            non-empty.
+        selection_strategy: ``"latest"`` or ``"best_reward"``.
+
+    Returns:
+        ``[(sample_id, best_record_dict), ...]`` sorted by ``sample_id``.
+    """
+    grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {}
+    for key in reader.key_map:
+        if not key.startswith(key_prefix):
+            continue
+        sample_id, gen_count = parse_lmdb_sample_key(key, key_prefix)
+        record: dict[str, typing.Any] = reader.get(key)
+        grouped.setdefault(sample_id, []).append((gen_count, record))
+    deduped = deduplicate_by_strategy(grouped, selection_strategy)
+    return sorted(deduped.items(), key=lambda item: item[0])

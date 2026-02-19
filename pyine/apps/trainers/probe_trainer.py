@@ -19,12 +19,13 @@ import sklearn.metrics
 import torch
 import transformers
 
+import pyine.apps.trainers.common
 import pyine.apps.trainers.probe_trainer_configs as probe_trainer_configs
 import pyine.configs.schemas
 import pyine.evals.common
 import pyine.probes.collection
+import pyine.probes.datamodule
 import pyine.probes.extraction
-import pyine.probes.lmdb_dataset
 
 if typing.TYPE_CHECKING:
     import accelerate
@@ -609,31 +610,13 @@ def probe_train(
     probe_collection = probe_collection.to(dtype=config.target_dtype)
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
-    # --- 3. Prepare datasets ---
-    logger.info(f"Loading probe dataset from LMDB: {config.lmdb_path}")
-    raw_ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
-        lmdb_path=config.lmdb_path,
-        label_metric_key=config.label_metric_key,
-        train_key_prefix=config.train_key_prefix,
-        valid_key_prefix=config.valid_key_prefix,
-        selection_strategy=config.selection_strategy,
-        recompute_labels=config.recompute_labels,
-        max_samples_per_split=config.max_samples_per_split,
-        skip_malformed_records=config.skip_malformed_records,
-        use_eval_only_split=config.use_eval_only_split,
-        eval_only_source_prefix=config.eval_only_source_prefix,
-        train_split_ratio=config.train_split_ratio,
-        split_by_family=config.split_by_family,
-        code_type_filter=config.code_type_filter,
-    )
-
-    # build code_type -> integer ID mapping (consistent across splits)
-    all_code_types: list[str] = sorted(
-        set(typing.cast("list[str]", raw_ds["train"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
-        | set(typing.cast("list[str]", raw_ds["valid"]["code_type"]))  # pyright: ignore[reportIndexIssue]  # datasets stubs
-    )
-    code_type_to_id: dict[str, int] = {code_type: idx for idx, code_type in enumerate(all_code_types)}
-    id_to_code_type: dict[int, str] = {idx: code_type for code_type, idx in code_type_to_id.items()}
+    # --- 3. Prepare datasets via DataModule ---
+    logger.info(f"Loading probe dataset from LMDB: {config.datamodule_config.lmdb_path}")
+    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    assert isinstance(datamodule, pyine.probes.datamodule.ProbeDataModule)
+    raw_ds = datamodule.get_probe_dataset()
+    code_type_to_id = datamodule.code_type_to_id
+    id_to_code_type = datamodule.id_to_code_type
 
     if accelerator.is_main_process:
         for split_name in ["train", "valid"]:
