@@ -19,9 +19,11 @@ import typing
 
 import datasets  # noqa: TC002 -- used at runtime (Dataset.from_list, DatasetDict)
 
+if typing.TYPE_CHECKING:
+    from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.output_compare
-from pyine.probes.datamodule_configs import ProbeDataModuleConfig
 from pyine.probes.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
     HARD_MATCH_KEY,
     SOFT_MATCH_KEY,

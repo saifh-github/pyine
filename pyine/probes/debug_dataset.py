@@ -241,7 +241,7 @@ def create_debug_probe_dataset(
         lmdb_path = pathlib.Path(output_path)
 
     create_debug_probe_lmdb(lmdb_path, n_train=n_train, n_eval_families=n_eval_families, seed=seed)
-    config = ProbeDataModuleConfig(
+    config = ProbeDataModuleConfig(  # type: ignore[call-arg]  -- base fields have pydantic Field defaults invisible to pyright
         lmdb_path=str(lmdb_path),
         use_eval_only_split=use_eval_only_split,
         code_type_filter=code_type_filter,
