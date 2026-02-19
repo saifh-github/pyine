@@ -125,6 +125,46 @@ def test_deepseek_explicit_keys_override_env(
     assert llm.init_kwargs["base_url"] == "https://explicit.example"
 
 
+class TestGetDefaultPassAtKSamplingConfig:
+    """Tests for get_default_pass_at_k_sampling_config."""
+
+    def test_returns_defaults(self) -> None:
+        config = lp.get_default_pass_at_k_sampling_config()
+        assert config == {"temperature": 0.2, "top_p": 0.95, "max_tokens": 10_000}
+
+    def test_custom_values(self) -> None:
+        config = lp.get_default_pass_at_k_sampling_config(temperature=0.8, top_p=0.9, max_tokens=512)
+        assert config == {"temperature": 0.8, "top_p": 0.9, "max_tokens": 512}
+
+    def test_zero_temperature_raises(self) -> None:
+        with pytest.raises(ValueError, match="temperature must be > 0"):
+            lp.get_default_pass_at_k_sampling_config(temperature=0)
+
+    def test_negative_temperature_raises(self) -> None:
+        with pytest.raises(ValueError, match="temperature must be > 0"):
+            lp.get_default_pass_at_k_sampling_config(temperature=-0.5)
+
+    def test_zero_top_p_raises(self) -> None:
+        with pytest.raises(ValueError, match="top_p must be in"):
+            lp.get_default_pass_at_k_sampling_config(top_p=0)
+
+    def test_top_p_above_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="top_p must be in"):
+            lp.get_default_pass_at_k_sampling_config(top_p=1.5)
+
+    def test_top_p_one_is_valid(self) -> None:
+        config = lp.get_default_pass_at_k_sampling_config(top_p=1.0)
+        assert config["top_p"] == 1.0
+
+    def test_zero_max_tokens_raises(self) -> None:
+        with pytest.raises(ValueError, match="max_tokens must be > 0"):
+            lp.get_default_pass_at_k_sampling_config(max_tokens=0)
+
+    def test_negative_max_tokens_raises(self) -> None:
+        with pytest.raises(ValueError, match="max_tokens must be > 0"):
+            lp.get_default_pass_at_k_sampling_config(max_tokens=-100)
+
+
 def test_llm_provider_config_from_dict_requires_provider() -> None:
     with pytest.raises(ValueError):
         lp.LLMProviderConfig.from_dict({"model": "gpt"})
