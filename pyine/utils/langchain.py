@@ -103,6 +103,43 @@ def is_invocable_chain(obj: typing.Any) -> bool:
     )
 
 
+def get_sampling_temperature_from_chain(
+    chain: langchain_core.runnables.Runnable[typing.Any, typing.Any],
+) -> float | None:
+    """Best-effort extraction of sampling temperature from a LangChain runnable.
+
+    Walks the runnable's internal structure looking for a component with a ``temperature``
+    attribute (e.g. a ``BaseChatModel``). Returns the value if found, ``None`` if the chain
+    structure is opaque or no temperature is set.
+
+    Handles common patterns: bare models, ``RunnableSequence`` (prompt | model), and
+    ``RunnableBinding`` (``.with_retry()``, ``.bind()``, etc.). For ``RunnableBinding``,
+    bound kwargs (from ``.bind(temperature=...)``) take precedence over the inner model's
+    attribute.
+    """
+    # RunnableBinding kwargs override (from .bind(temperature=...)); if temperature is present
+    # in bound kwargs, treat it as authoritative and stop traversal (even if None/non-numeric)
+    if hasattr(chain, "kwargs"):
+        if isinstance(chain.kwargs, dict) and "temperature" in chain.kwargs:
+            temp = chain.kwargs["temperature"]
+            return float(temp) if isinstance(temp, (int, float)) else None
+    # direct attribute (e.g. bare BaseChatModel)
+    if hasattr(chain, "temperature"):
+        if isinstance(chain.temperature, (int, float)):
+            return float(chain.temperature)
+    # RunnableSequence: walk first, middle steps, and last
+    if hasattr(chain, "first") and hasattr(chain, "last"):
+        steps = [chain.first, *getattr(chain, "middle", []), chain.last]
+        for step in steps:
+            result = get_sampling_temperature_from_chain(step)
+            if result is not None:
+                return result
+    # RunnableBinding: unwrap .with_retry(), .bind(), etc.
+    if hasattr(chain, "bound"):
+        return get_sampling_temperature_from_chain(chain.bound)
+    return None
+
+
 def get_default_structured_output_chain_retry_config(
     max_retries: int = 3,
 ) -> dict[str, typing.Any]:

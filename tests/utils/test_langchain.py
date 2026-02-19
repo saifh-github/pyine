@@ -1,5 +1,7 @@
 import langchain_core.messages
 import langchain_core.outputs
+import langchain_core.prompts
+import langchain_core.runnables
 import langchain_openai
 import pytest
 
@@ -42,6 +44,54 @@ def test_capture_llm_handler_manual_event_sequence() -> None:
     assert start_event.kwargs == {"invocation_params": {"temperature": 0}}
 
     assert handler.get_latest_event("missing") is None  # noqa
+
+
+class TestGetSamplingTemperatureFromChain:
+    """Tests for get_sampling_temperature_from_chain."""
+
+    def test_bare_model(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key="fake")
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(llm) == pytest.approx(0.7)
+
+    def test_bare_model_zero_temperature(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key="fake")
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(llm) == pytest.approx(0.0)
+
+    def test_prompt_pipe_model(self) -> None:
+        prompt = langchain_core.prompts.ChatPromptTemplate.from_messages([("user", "{input}")])
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.2, api_key="fake")
+        chain = prompt | llm
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) == pytest.approx(0.2)
+
+    def test_model_with_retry(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.5, api_key="fake")
+        chain = llm.with_retry(stop_after_attempt=3)
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) == pytest.approx(0.5)
+
+    def test_prompt_pipe_model_with_retry(self) -> None:
+        prompt = langchain_core.prompts.ChatPromptTemplate.from_messages([("user", "{input}")])
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key="fake")
+        chain = (prompt | llm).with_retry(stop_after_attempt=2)
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) == pytest.approx(0.3)
+
+    def test_bind_temperature_overrides_model(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key="fake")
+        chain = llm.bind(temperature=0.2)
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) == pytest.approx(0.2)
+
+    def test_bind_temperature_after_retry(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key="fake")
+        chain = llm.with_retry(stop_after_attempt=3).bind(temperature=0.1)
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) == pytest.approx(0.1)
+
+    def test_bind_temperature_none_stops_traversal(self) -> None:
+        llm = langchain_openai.ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key="fake")
+        chain = llm.bind(temperature=None)  # explicit None should not fall through to inner model
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) is None
+
+    def test_opaque_lambda_returns_none(self) -> None:
+        chain = langchain_core.runnables.RunnableLambda(lambda x: x)
+        assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) is None
 
 
 @pytest.mark.integration
