@@ -5,10 +5,11 @@
 
 defaults:
   - original/v0_rl
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_full
   - _self_
 
 runtime:
-  exp_name: original/traces_recording
+  exp_name: original/traces_recording_full_new_ds
   run_name: "${runtime.exp_name}"
   tags:
     - "model:checkpoint-500"
@@ -26,5 +27,13 @@ config:
     gradient_accumulation_steps: 8
     learning_rate: 0.0  # Lower than SFT (2e-4) for RL stability
     # ------------
-    max_steps: 20 # alternative to num_train_epochs
+    max_steps: 1 # alternative to num_train_epochs
     eval_steps: 100
+
+  lora_config:
+    r: 4
+    lora_alpha: 8
+    lora_dropout: 0.1
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]

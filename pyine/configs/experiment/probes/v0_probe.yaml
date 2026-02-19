@@ -11,10 +11,10 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: probes/v0_probe
+  exp_name: probes/v0_probes_RL_HT_44_checkpoint500_eval_only
   run_name: "${runtime.exp_name}"
   tags:
-    - "model:${config.base_model}"
+    - "model:checkpoint-500-RL_HT_44_full_ds"
     - "probe-training"
   seed: 42
   dry_run: false
@@ -23,12 +23,12 @@ config:
   _target_: pyine.apps.trainers.probe_trainer_configs.ProbeTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: Qwen/Qwen3-4B-Instruct-2507
+  base_model: "./checkpoints/checkpoint-500"
   llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from checkpoint
 
   # Data source (ProbeDataModuleConfig)
   datamodule_config:
-    lmdb_path: /path/to/lmdb  # LMDB exported by DiskRewardLogger
+    lmdb_path: "./logs/runs/rl_trainer/original/traces_recording_full_new_ds/original/traces_recording_full_new_ds/generation_export.lmdb"
     label_metric_key: "reward/metrics/soft_match/is_match"
     train_key_prefix: "train/"
     valid_key_prefix: "eval/"
@@ -46,7 +46,7 @@ config:
   #    - misleading
 
 
-  max_seq_length: 3000
+  max_seq_length: 13000
 
   # Training loop
   num_epochs: 50
@@ -59,9 +59,9 @@ config:
   save_probes: true
 
   # Replica settings — train N copies of each probe with different init seeds
-  # num_replicas: 5             # Default: 1 (no replication)
-  # replica_base_seed: 0        # Base seed for reproducible replica initialization
-  # log_individual_replicas: false  # Also log per-replica metrics to W&B
+  num_replicas: 5             # Default: 1 (no replication)
+  replica_base_seed: 0        # Base seed for reproducible replica initialization
+  log_individual_replicas: false  # Also log per-replica metrics to W&B
 
   log_per_code_type_metrics: true      # Log per-code-type validation metrics to W&B
 
