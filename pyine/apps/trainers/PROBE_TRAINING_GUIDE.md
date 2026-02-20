@@ -42,7 +42,7 @@ useful for smoke tests and verifying your setup before training on real data:
 
 ```bash
 # Generate a debug LMDB
-uv run python -m pyine.probes.debug_dataset --output /tmp/probe-debug-lmdb
+uv run python -m pyine.probes.data.debug_dataset --output /tmp/probe-debug-lmdb
 ```
 
 The debug LMDB contains records with a learnable keyword-correlated signal, so probes can actually learn
@@ -55,7 +55,7 @@ augmentation suffixes matching `TraceIdentifier` conventions.
 Options:
 
 ```bash
-uv run python -m pyine.probes.debug_dataset \
+uv run python -m pyine.probes.data.debug_dataset \
     --output /tmp/probe-debug-lmdb \
     --n-train 200 \           # Number of training records (default: 200)
     --n-eval-families 30 \    # Number of eval families, each produces 3 records (default: 30)
@@ -65,7 +65,7 @@ uv run python -m pyine.probes.debug_dataset \
 Or from Python:
 
 ```python
-from pyine.probes.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
+from pyine.probes.data.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
 
 # Create a debug LMDB on disk
 create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_eval_families=30, seed=42)
@@ -756,8 +756,5 @@ For other architectures, the fallback chain in `ActivationExtractor._resolve_lay
 
 ## Additional Resources
 
-- LMDB integration plan: `INTEGRATION_PLAN.md` (repository root)
-- Implementation plan: `PROBES_CLAUDE.md` (repository root)
-- Dataset reworking plan: `PROBE_DATASET_REWORKING_PLAN.md` (repository root)
 - Existing experiment config: [`pyine/configs/experiment/probes/v0_probe.yaml`](../../configs/experiment/probes/v0_probe.yaml)
 - RL Training Guide: [`RL_TRAINING_GUIDE.md`](./RL_TRAINING_GUIDE.md)

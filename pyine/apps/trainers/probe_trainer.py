@@ -24,7 +24,7 @@ import pyine.apps.trainers.probe_trainer_configs as probe_trainer_configs
 import pyine.configs.schemas
 import pyine.evals.common
 import pyine.probes.collection
-import pyine.probes.datamodule
+import pyine.probes.data.datamodule
 import pyine.probes.extraction
 
 if typing.TYPE_CHECKING:
@@ -613,7 +613,7 @@ def probe_train(
     # --- 3. Prepare datasets via DataModule ---
     logger.info(f"Loading probe dataset from LMDB: {config.datamodule_config.lmdb_path}")
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.probes.datamodule.ProbeDataModule)
+    assert isinstance(datamodule, pyine.probes.data.datamodule.ProbeDataModule)
     raw_ds = datamodule.get_probe_dataset()
     code_type_to_id = datamodule.code_type_to_id
     id_to_code_type = datamodule.id_to_code_type

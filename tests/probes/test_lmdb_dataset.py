@@ -9,9 +9,9 @@ import pydantic
 import pytest
 
 import pyine.data.utils.lmdb_io
-import pyine.probes.debug_dataset
-import pyine.probes.lmdb_dataset
-from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+import pyine.probes.data.debug_dataset
+import pyine.probes.data.lmdb_dataset
+from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
 
 
 class TestParseLmdbKey:
@@ -52,23 +52,23 @@ class TestParseLmdbKey:
 class TestExtractFamilyId:
     def test_original_sample_id(self) -> None:
         assert (
-            pyine.probes.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000")
+            pyine.probes.data.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000")
             == "TACO/train/p000001/s0000/t0000"
         )
 
     def test_augmented_sample_id(self) -> None:
         assert (
-            pyine.probes.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:hints_docs:001")
+            pyine.probes.data.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:hints_docs:001")
             == "TACO/train/p000001/s0000/t0000"
         )
         assert (
-            pyine.probes.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:issues_docs:001")
+            pyine.probes.data.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:issues_docs:001")
             == "TACO/train/p000001/s0000/t0000"
         )
 
     def test_multi_segment_sample_id(self) -> None:
         assert (
-            pyine.probes.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:obfuscated:000")
+            pyine.probes.data.lmdb_dataset._extract_family_id("TACO/train/p000001/s0000/t0000/a:obfuscated:000")
             == "TACO/train/p000001/s0000/t0000"
         )
 
@@ -76,7 +76,7 @@ class TestExtractFamilyId:
         """The string '/a:' must be the augmentation marker, not part of a dataset name."""
         # A sample_id that has 'a' in a path segment but NOT as '/a:' marker
         assert (
-            pyine.probes.lmdb_dataset._extract_family_id("dataset_a/train/p000001/s0000/t0000")
+            pyine.probes.data.lmdb_dataset._extract_family_id("dataset_a/train/p000001/s0000/t0000")
             == "dataset_a/train/p000001/s0000/t0000"
         )
 
@@ -88,13 +88,13 @@ class TestFilterByCodeType:
             ("s2", {"code_type": "hinted"}),
             ("s3", {"code_type": "misleading"}),
         ]
-        filtered = pyine.probes.lmdb_dataset._filter_by_code_type(records, ["original", "hinted"])
+        filtered = pyine.probes.data.lmdb_dataset._filter_by_code_type(records, ["original", "hinted"])
         assert len(filtered) == 2
         assert {sid for sid, _ in filtered} == {"s1", "s2"}
 
     def test_empty_filter_list_returns_empty(self) -> None:
         records = [("s1", {"code_type": "original"})]
-        assert pyine.probes.lmdb_dataset._filter_by_code_type(records, []) == []
+        assert pyine.probes.data.lmdb_dataset._filter_by_code_type(records, []) == []
 
     def test_null_code_type_excluded(self) -> None:
         """Records with code_type=None are excluded unless 'unknown' is in the filter list."""
@@ -103,11 +103,11 @@ class TestFilterByCodeType:
             ("s2", {"code_type": "original"}),
         ]
         # Without "unknown" in filter
-        filtered = pyine.probes.lmdb_dataset._filter_by_code_type(records, ["original"])
+        filtered = pyine.probes.data.lmdb_dataset._filter_by_code_type(records, ["original"])
         assert len(filtered) == 1
 
         # With "unknown" in filter
-        filtered = pyine.probes.lmdb_dataset._filter_by_code_type(records, ["original", "unknown"])
+        filtered = pyine.probes.data.lmdb_dataset._filter_by_code_type(records, ["original", "unknown"])
         assert len(filtered) == 2
 
 
@@ -134,15 +134,15 @@ class TestSplitRecordsByFamily:
 
     def test_all_family_members_in_same_split(self) -> None:
         samples = self._make_family_samples(n_families=20)
-        train, valid = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train, valid = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
 
-        train_families = {pyine.probes.lmdb_dataset._extract_family_id(str(s["sample_id"])) for s in train}
-        valid_families = {pyine.probes.lmdb_dataset._extract_family_id(str(s["sample_id"])) for s in valid}
+        train_families = {pyine.probes.data.lmdb_dataset._extract_family_id(str(s["sample_id"])) for s in train}
+        valid_families = {pyine.probes.data.lmdb_dataset._extract_family_id(str(s["sample_id"])) for s in valid}
         assert train_families.isdisjoint(valid_families), "Family ID found in both train and valid"
 
     def test_train_ratio_approximate(self) -> None:
         samples = self._make_family_samples(n_families=20)
-        train, valid = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train, valid = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
 
         # 20 families * 0.8 = 16 train families (48 samples), 4 valid families (12 samples)
         assert len(train) == 48
@@ -150,15 +150,15 @@ class TestSplitRecordsByFamily:
 
     def test_deterministic_with_seed(self) -> None:
         samples = self._make_family_samples(n_families=20)
-        train1, valid1 = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
-        train2, valid2 = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train1, valid1 = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train2, valid2 = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
         assert [s["sample_id"] for s in train1] == [s["sample_id"] for s in train2]
         assert [s["sample_id"] for s in valid1] == [s["sample_id"] for s in valid2]
 
     def test_different_seed_different_split(self) -> None:
         samples = self._make_family_samples(n_families=20)
-        train1, _ = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
-        train2, _ = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=99)
+        train1, _ = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train2, _ = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=99)
         # Different seeds should produce different family assignments
         ids1 = {s["sample_id"] for s in train1}
         ids2 = {s["sample_id"] for s in train2}
@@ -169,7 +169,7 @@ class TestSplitRecordsByFamily:
             {"text": f"text_{i}", "label": i % 2, "sample_id": f"sample_{i:03d}", "code_type": "original"}
             for i in range(10)
         ]
-        train, valid = pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+        train, valid = pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
         assert len(train) + len(valid) == 10
 
     def test_too_few_families_raises(self) -> None:
@@ -178,7 +178,7 @@ class TestSplitRecordsByFamily:
             {"text": "t", "label": 1, "sample_id": "fam_0/s0000/t0000/a:hints_docs:000", "code_type": "hinted"},
         ]
         with pytest.raises(ValueError, match="at least 2 families"):
-            pyine.probes.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
+            pyine.probes.data.lmdb_dataset._split_records_by_family(samples, train_ratio=0.8, seed=42)
 
 
 class TestSplitRecordsRandom:
@@ -186,7 +186,7 @@ class TestSplitRecordsRandom:
         samples = [
             {"text": f"text_{i}", "label": i % 2, "sample_id": f"s_{i}", "code_type": "original"} for i in range(100)
         ]
-        train, valid = pyine.probes.lmdb_dataset._split_records_random(samples, train_ratio=0.8, seed=42)
+        train, valid = pyine.probes.data.lmdb_dataset._split_records_random(samples, train_ratio=0.8, seed=42)
         assert len(train) == 80
         assert len(valid) == 20
 
@@ -194,8 +194,8 @@ class TestSplitRecordsRandom:
         samples = [
             {"text": f"text_{i}", "label": i % 2, "sample_id": f"s_{i}", "code_type": "original"} for i in range(50)
         ]
-        train1, valid1 = pyine.probes.lmdb_dataset._split_records_random(samples, train_ratio=0.7, seed=42)
-        train2, valid2 = pyine.probes.lmdb_dataset._split_records_random(samples, train_ratio=0.7, seed=42)
+        train1, valid1 = pyine.probes.data.lmdb_dataset._split_records_random(samples, train_ratio=0.7, seed=42)
+        train2, valid2 = pyine.probes.data.lmdb_dataset._split_records_random(samples, train_ratio=0.7, seed=42)
         assert [s["sample_id"] for s in train1] == [s["sample_id"] for s in train2]
         assert [s["sample_id"] for s in valid1] == [s["sample_id"] for s in valid2]
 
@@ -214,16 +214,16 @@ class TestLoadProbeDatasetFromLmdb:
         n_eval_families=20 creates 60 eval records (20 families * 3 code types).
         """
         lmdb_path = tmp_path / "debug.lmdb"
-        pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=20, seed=42)
+        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=20, seed=42)
         return lmdb_path
 
     def test_returns_train_and_valid_splits(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         assert "train" in ds
         assert "valid" in ds
 
     def test_columns_present(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         for split in ("train", "valid"):
             cols = ds[split].column_names
             assert "text" in cols
@@ -232,35 +232,37 @@ class TestLoadProbeDatasetFromLmdb:
             assert "code_type" in cols
 
     def test_labels_binary(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         for split in ("train", "valid"):
             labels = set(ds[split]["label"])
             assert labels.issubset({0, 1})
 
     def test_split_sizes(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         assert len(ds["train"]) == 50
         assert len(ds["valid"]) == 60  # 20 families * 3 code types
 
     def test_max_samples_per_split(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb, max_samples_per_split=10))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
+            _make_config(debug_lmdb, max_samples_per_split=10)
+        )
         assert len(ds["train"]) == 10
         assert len(ds["valid"]) == 10
 
     def test_text_is_nonempty_string(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         for text in ds["train"]["text"]:
             assert isinstance(text, str)
             assert len(text) > 0
 
     def test_selection_strategy_latest(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(debug_lmdb, selection_strategy="latest")
         )
         assert len(ds["train"]) > 0
 
     def test_selection_strategy_best_reward(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(debug_lmdb, selection_strategy="best_reward")
         )
         assert len(ds["train"]) > 0
@@ -271,12 +273,12 @@ class TestLoadProbeDatasetFromLmdb:
 
     def test_wrong_prefix_raises(self, debug_lmdb: Path) -> None:
         with pytest.raises(ValueError, match="no records match"):
-            pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+            pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
                 _make_config(debug_lmdb, train_key_prefix="nonexistent/")
             )
 
     def test_recompute_labels_soft_match(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(
                 debug_lmdb,
                 label_metric_key="reward/metrics/soft_match/is_match",
@@ -287,7 +289,7 @@ class TestLoadProbeDatasetFromLmdb:
         assert labels.issubset({0, 1})
 
     def test_recompute_labels_hard_match(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(
                 debug_lmdb,
                 label_metric_key="reward/metrics/hard_match/is_match",
@@ -306,7 +308,7 @@ class TestLoadProbeDatasetFromLmdb:
             )
 
     def test_code_type_column_present(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         for split in ("train", "valid"):
             assert "code_type" in ds[split].column_names
             for code_type in ds[split]["code_type"]:
@@ -314,7 +316,7 @@ class TestLoadProbeDatasetFromLmdb:
                 assert len(code_type) > 0
 
     def test_code_type_filter_in_two_prefix_mode(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(debug_lmdb, code_type_filter=["original"])
         )
         # Train records are all "original", so train should be unchanged
@@ -330,22 +332,26 @@ class TestLoadProbeDatasetEvalOnly:
     def debug_lmdb(self, tmp_path: Path) -> Path:
         """Create a debug LMDB with family-structured eval records."""
         lmdb_path = tmp_path / "debug.lmdb"
-        pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=30, seed=42)
+        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=30, seed=42)
         return lmdb_path
 
     def test_returns_train_and_valid_splits(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb, use_eval_only_split=True))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
+            _make_config(debug_lmdb, use_eval_only_split=True)
+        )
         assert "train" in ds
         assert "valid" in ds
         assert len(ds["train"]) + len(ds["valid"]) == 90  # 30 families * 3
 
     def test_code_type_column_present(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb, use_eval_only_split=True))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
+            _make_config(debug_lmdb, use_eval_only_split=True)
+        )
         for split in ("train", "valid"):
             assert "code_type" in ds[split].column_names
 
     def test_code_type_filter_applied(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(
                 debug_lmdb,
                 use_eval_only_split=True,
@@ -358,20 +364,20 @@ class TestLoadProbeDatasetEvalOnly:
             assert "misleading" not in code_types
 
     def test_family_split_no_leakage(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(
                 debug_lmdb,
                 use_eval_only_split=True,
                 split_by_family=True,
             )
         )
-        train_families = {pyine.probes.lmdb_dataset._extract_family_id(sid) for sid in ds["train"]["sample_id"]}
-        valid_families = {pyine.probes.lmdb_dataset._extract_family_id(sid) for sid in ds["valid"]["sample_id"]}
+        train_families = {pyine.probes.data.lmdb_dataset._extract_family_id(sid) for sid in ds["train"]["sample_id"]}
+        valid_families = {pyine.probes.data.lmdb_dataset._extract_family_id(sid) for sid in ds["valid"]["sample_id"]}
         assert train_families.isdisjoint(valid_families), "Data leakage: family in both splits"
 
     def test_code_type_filter_all_excluded_raises(self, debug_lmdb: Path) -> None:
         with pytest.raises(ValueError, match="no records remain"):
-            pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+            pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
                 _make_config(
                     debug_lmdb,
                     use_eval_only_split=True,
@@ -380,13 +386,15 @@ class TestLoadProbeDatasetEvalOnly:
             )
 
     def test_both_labels_in_each_split(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb, use_eval_only_split=True))
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
+            _make_config(debug_lmdb, use_eval_only_split=True)
+        )
         for split in ("train", "valid"):
             labels = set(ds[split]["label"])
             assert labels == {0, 1}, f"Expected {{0, 1}} in {split}, got {labels}"
 
     def test_random_split_mode(self, debug_lmdb: Path) -> None:
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(
                 debug_lmdb,
                 use_eval_only_split=True,
@@ -416,7 +424,7 @@ class TestSkipMalformedRecords:
             )
 
         with pytest.raises(ValueError, match="missing prompt or model_output"):
-            pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(lmdb_path))
+            pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(lmdb_path))
 
     def test_malformed_record_skipped_when_enabled(self, tmp_path: Path) -> None:
         from pyine.data.utils.lmdb_io import LMDBWriter, SerializationConfig, SerializationMethod
@@ -449,7 +457,7 @@ class TestSkipMalformedRecords:
                     },
                 )
 
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
             _make_config(lmdb_path, skip_malformed_records=True)
         )
         assert len(ds["train"]) == 5  # bad record skipped

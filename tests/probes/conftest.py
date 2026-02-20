@@ -10,7 +10,7 @@ import torch
 import pyine.apps.trainers.probe_trainer
 import pyine.probes.base
 import pyine.probes.collection
-import pyine.probes.debug_dataset
+import pyine.probes.data.debug_dataset
 
 if typing.TYPE_CHECKING:
     import pathlib
@@ -76,5 +76,5 @@ def replica_probe_collection(
 def debug_lmdb_path(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a debug LMDB at tmp_path and return its path."""
     lmdb_path = tmp_path / "debug.lmdb"
-    pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_valid=20, seed=42)
+    pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_valid=20, seed=42)
     return lmdb_path

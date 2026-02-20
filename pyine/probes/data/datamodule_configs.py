@@ -8,7 +8,7 @@ import pydantic
 
 import pyine.data.datamodule
 import pyine.utils.portability
-from pyine.probes.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
+from pyine.probes.data.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
     HARD_MATCH_KEY,
     SOFT_MATCH_KEY,
 )
@@ -18,7 +18,7 @@ _RECOMPUTABLE_METRICS = frozenset({SOFT_MATCH_KEY, HARD_MATCH_KEY})
 
 def _get_probe_datamodule_fqn() -> str:
     """Return the fully-qualified name of :class:`ProbeDataModule` for lazy import."""
-    return "pyine.probes.datamodule.ProbeDataModule"
+    return "pyine.probes.data.datamodule.ProbeDataModule"
 
 
 class ProbeDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):

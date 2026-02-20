@@ -56,7 +56,7 @@ class TestProbeTrainerAppMainConfig:
         assert cfg.target_dtype in (torch.bfloat16, torch.float16)
 
     def test_datamodule_config_accessible(self) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
 
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
         assert isinstance(cfg.datamodule_config, ProbeDataModuleConfig)

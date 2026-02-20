@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import typing
 
-from pyine.probes.attention_probe import AttentionProbe
-from pyine.probes.last_token_probe import LastTokenProbe
-from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb as load_probe_dataset_from_lmdb
-from pyine.probes.max_probe import MaxProbe
-from pyine.probes.mean_probe import MeanProbe
-from pyine.probes.rolling_mean_probe import RollingMeanProbe
-from pyine.probes.softmax_probe import SoftmaxProbe
+from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb as load_probe_dataset_from_lmdb
+from pyine.probes.models.attention_probe import AttentionProbe
+from pyine.probes.models.last_token_probe import LastTokenProbe
+from pyine.probes.models.max_probe import MaxProbe
+from pyine.probes.models.mean_probe import MeanProbe
+from pyine.probes.models.rolling_mean_probe import RollingMeanProbe
+from pyine.probes.models.softmax_probe import SoftmaxProbe
 
 if typing.TYPE_CHECKING:
     import pyine.probes.base

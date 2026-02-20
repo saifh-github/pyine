@@ -10,17 +10,17 @@ if typing.TYPE_CHECKING:
 import datasets
 import pytest
 
-import pyine.probes.datamodule
-import pyine.probes.debug_dataset
-from pyine.probes.datamodule import ProbeDataModule
-from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+import pyine.probes.data.datamodule
+import pyine.probes.data.debug_dataset
+from pyine.probes.data.datamodule import ProbeDataModule
+from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
 
 
 @pytest.fixture
 def debug_lmdb(tmp_path: Path) -> Path:
     """Create a debug LMDB at tmp_path and return its path."""
     lmdb_path = tmp_path / "debug.lmdb"
-    pyine.probes.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=20, n_eval_families=10, seed=42)
+    pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=20, n_eval_families=10, seed=42)
     return lmdb_path
 
 

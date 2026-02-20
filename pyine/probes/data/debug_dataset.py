@@ -10,7 +10,7 @@ augmentation suffixes matching ``TraceIdentifier`` conventions.
 
 CLI usage::
 
-    python -m pyine.probes.debug_dataset --output /tmp/probe-debug-lmdb
+    python -m pyine.probes.data.debug_dataset --output /tmp/probe-debug-lmdb
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import random
 import typing
 
 import pyine.data.utils.lmdb_io
-import pyine.probes.reward_keys
+import pyine.probes.data.reward_keys
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -111,12 +111,12 @@ def _make_record(
         "reasoning": None,
         "reward_total": float(label),
         "reward_terms": {
-            f"{pyine.probes.reward_keys.REWARD_TERMS_PREFIX}soft_match": float(label),
-            f"{pyine.probes.reward_keys.REWARD_TERMS_PREFIX}hard_match": float(label),
+            f"{pyine.probes.data.reward_keys.REWARD_TERMS_PREFIX}soft_match": float(label),
+            f"{pyine.probes.data.reward_keys.REWARD_TERMS_PREFIX}hard_match": float(label),
         },
         "reward_metrics": {
-            pyine.probes.reward_keys.SOFT_MATCH_KEY: label,
-            pyine.probes.reward_keys.HARD_MATCH_KEY: label,
+            pyine.probes.data.reward_keys.SOFT_MATCH_KEY: label,
+            pyine.probes.data.reward_keys.HARD_MATCH_KEY: label,
         },
         "reward_terms_raw": None,
         "predict_type": "program_output",
@@ -231,8 +231,8 @@ def create_debug_probe_dataset(
     """
     import tempfile
 
-    import pyine.probes.lmdb_dataset
-    from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+    import pyine.probes.data.lmdb_dataset
+    from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
 
     if output_path is None:
         tmp_dir = tempfile.mkdtemp(prefix="probe_debug_lmdb_")
@@ -246,7 +246,7 @@ def create_debug_probe_dataset(
         use_eval_only_split=use_eval_only_split,
         code_type_filter=code_type_filter,
     )
-    return pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(config)
+    return pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(config)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-from pyine.probes.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
+from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+from pyine.probes.data.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
 
 
 class TestProbeDataModuleConfig:
@@ -88,9 +88,9 @@ class TestProbeDataModuleConfig:
 
     def test_datamodule_class_path_resolves(self) -> None:
         cfg = ProbeDataModuleConfig(**self._make_minimal())
-        assert cfg.datamodule_class_path == "pyine.probes.datamodule.ProbeDataModule"
+        assert cfg.datamodule_class_path == "pyine.probes.data.datamodule.ProbeDataModule"
         # Verify that instantiate_datamodule works
-        from pyine.probes.datamodule import ProbeDataModule
+        from pyine.probes.data.datamodule import ProbeDataModule
 
         dm = cfg.instantiate_datamodule()
         assert isinstance(dm, ProbeDataModule)

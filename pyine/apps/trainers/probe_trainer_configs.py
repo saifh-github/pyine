@@ -15,7 +15,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.probes.base  # noqa: TC001
-import pyine.probes.datamodule_configs  # noqa: TC001
+import pyine.probes.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -25,84 +25,53 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     """Configuration for probe training on frozen LLM activations."""
 
     # --- Override: evals not needed for probe training ---
-    evals_config: pyine.evals.common.BaseEvalsConfig | None = pydantic.Field(  # type: ignore[assignment]
-        default=None,
-        description="Not used for probe training. Kept for AppMainConfig compatibility.",
-    )
+    evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
+    """Not used for probe training. Kept for AppMainConfig compatibility."""
 
     # --- Override: use ProbeDataModuleConfig instead of generic BaseDataModuleConfig ---
-    datamodule_config: pydantic.SerializeAsAny[pyine.probes.datamodule_configs.ProbeDataModuleConfig] = pydantic.Field(  # type: ignore[assignment]
-        ...,
-        description="Probe data configuration (LMDB source, splitting, filtering).",
-    )
+    datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
+    """Probe data configuration (LMDB source, splitting, filtering)."""
 
     # --- LLM checkpoint ---
-    llm_checkpoint_path: str | None = pydantic.Field(
-        default=None,
-        description="Path to model checkpoint. If None, uses base_model directly.",
-    )
+    llm_checkpoint_path: str | None = None
+    """Path to model checkpoint. If None, uses base_model directly."""
 
     # --- Probe configurations ---
-    probe_configs: list[pyine.probes.base.ProbeConfig] = pydantic.Field(
-        ...,
-        description="List of probe configs, each specifying architecture, layer, and hyperparams.",
-    )
+    probe_configs: list[pyine.probes.base.ProbeConfig]
+    """List of probe configs, each specifying architecture, layer, and hyperparams."""
 
     # --- Training/logging options (not data-related, stay here) ---
-    log_per_code_type_metrics: bool = pydantic.Field(
-        default=True,
-        description=(
-            "Log per-code-type validation metrics (loss, AUROC) to W&B. "
-            "Requires code_type column in the dataset (always present)."
-        ),
-    )
+    log_per_code_type_metrics: bool = True
+    """Log per-code-type validation metrics (loss, AUROC) to W&B.
+    Requires code_type column in the dataset (always present)."""
 
     # --- Training loop ---
-    num_epochs: int = pydantic.Field(default=10)
-    train_batch_size: int = pydantic.Field(default=4)
-    eval_batch_size: int = pydantic.Field(default=8)
-    max_seq_length: int = pydantic.Field(
-        default=3000,
-        description="Maximum sequence length for tokenization.",
-    )
-    gradient_accumulation_steps: int = pydantic.Field(
-        default=1,
-        description="Number of gradient accumulation steps before optimizer update.",
-    )
-    logging_steps: int = pydantic.Field(default=10)
-    eval_steps: int = pydantic.Field(
-        default=-1,
-        description="Run validation every N optimizer steps. -1 = only at epoch end.",
-    )
-    dataloader_num_workers: int = pydantic.Field(default=4)
+    num_epochs: int = 10
+    train_batch_size: int = 4
+    eval_batch_size: int = 8
+    max_seq_length: int = 20000
+    """Maximum sequence length for tokenization."""
+    gradient_accumulation_steps: int = 1
+    """Number of gradient accumulation steps before optimizer update."""
+    logging_steps: int = 10
+    eval_steps: int = -1
+    """Run validation every N optimizer steps. -1 = only at epoch end."""
+    dataloader_num_workers: int = 4
 
     # --- Output ---
-    save_probes: bool = pydantic.Field(
-        default=True,
-        description="Whether to save trained probe weights at the end of training.",
-    )
+    save_probes: bool = True
+    """Whether to save trained probe weights at the end of training."""
 
     # --- Replica settings ---
-    num_replicas: int = pydantic.Field(
-        default=1,
-        ge=1,
-        description=(
-            "Number of replicas per probe config. Each replica is initialized with a "
-            "different random seed. Metrics are aggregated (mean/std) across replicas. "
-            "Default 1 = no replication."
-        ),
-    )
-    replica_base_seed: int = pydantic.Field(
-        default=0,
-        description="Base seed for deterministic replica initialization.",
-    )
-    log_individual_replicas: bool = pydantic.Field(
-        default=False,
-        description=(
-            "When true, also log per-replica metrics to W&B (in addition to "
-            "aggregated mean/std). Useful for debugging but adds many metrics."
-        ),
-    )
+    num_replicas: int = pydantic.Field(default=1, ge=1)
+    """Number of replicas per probe config. Each replica is initialized with a
+    different random seed. Metrics are aggregated (mean/std) across replicas.
+    Default 1 = no replication."""
+    replica_base_seed: int = 0
+    """Base seed for deterministic replica initialization."""
+    log_individual_replicas: bool = False
+    """When true, also log per-replica metrics to W&B (in addition to
+    aggregated mean/std). Useful for debugging but adds many metrics."""
 
     @property
     @typing.override
@@ -125,7 +94,7 @@ def _get_app_configs(
     """Generates and returns probe trainer application configs for hydra zen storage."""
     # --- Probe datamodule config ---
     datamodule_config = pyine.configs.utils.make_config_description(
-        pyine.probes.datamodule_configs.ProbeDataModuleConfig,
+        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig,
         name="probe_base",
         group=f"{group}/datamodule_config",
         description="Base probe datamodule settings (LMDB source, splitting, filtering).",

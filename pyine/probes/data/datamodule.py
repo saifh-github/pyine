@@ -9,12 +9,12 @@ import typing
 import datasets
 
 import pyine.data.datamodule
-import pyine.probes.lmdb_dataset
+import pyine.probes.data.lmdb_dataset
 import pyine.utils.filesystem
 import pyine.utils.reprod
 
 if typing.TYPE_CHECKING:
-    from pyine.probes.datamodule_configs import ProbeDataModuleConfig
+    from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class ProbeDataModule(pyine.data.datamodule.BaseDataModule["ProbeDataModuleConfi
             logger.info("Using cached probe dataset at %s (hash: %s)", cache_path, cache_path.name)
             return
 
-        ds = pyine.probes.lmdb_dataset.load_probe_dataset_from_lmdb(self.config)
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(self.config)
         ds.save_to_disk(str(cache_path))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         logger.info("Saved probe dataset to %s (hash: %s)", cache_path, cache_path.name)
 

@@ -9,8 +9,8 @@ if typing.TYPE_CHECKING:
 
 import pytest
 
-from pyine.probes.debug_dataset import create_debug_probe_dataset, create_debug_probe_lmdb
-from pyine.probes.lmdb_dataset import _extract_family_id
+from pyine.probes.data.debug_dataset import create_debug_probe_dataset, create_debug_probe_lmdb
+from pyine.probes.data.lmdb_dataset import _extract_family_id
 
 
 class TestCreateDebugProbeLmdb:
@@ -206,8 +206,8 @@ class TestDebugLmdbIntegrationWithEvalOnly:
         return lmdb_path
 
     def test_eval_only_loads_both_splits(self, debug_lmdb: Path) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-        from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb
 
         config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
         ds = load_probe_dataset_from_lmdb(config)
@@ -216,8 +216,8 @@ class TestDebugLmdbIntegrationWithEvalOnly:
         assert len(ds["train"]) + len(ds["valid"]) == 90
 
     def test_eval_only_code_type_column_present(self, debug_lmdb: Path) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-        from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb
 
         config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
         ds = load_probe_dataset_from_lmdb(config)
@@ -228,8 +228,8 @@ class TestDebugLmdbIntegrationWithEvalOnly:
                 assert len(code_type) > 0
 
     def test_eval_only_family_split_no_leakage(self, debug_lmdb: Path) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-        from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb
 
         config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True, split_by_family=True)
         ds = load_probe_dataset_from_lmdb(config)
@@ -238,8 +238,8 @@ class TestDebugLmdbIntegrationWithEvalOnly:
         assert train_families.isdisjoint(valid_families)
 
     def test_eval_only_code_type_filter(self, debug_lmdb: Path) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-        from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb
 
         config = ProbeDataModuleConfig(
             lmdb_path=str(debug_lmdb),
@@ -252,8 +252,8 @@ class TestDebugLmdbIntegrationWithEvalOnly:
             assert "misleading" not in code_types
 
     def test_eval_only_all_code_types_in_train_split(self, debug_lmdb: Path) -> None:
-        from pyine.probes.datamodule_configs import ProbeDataModuleConfig
-        from pyine.probes.lmdb_dataset import load_probe_dataset_from_lmdb
+        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.probes.data.lmdb_dataset import load_probe_dataset_from_lmdb
 
         config = ProbeDataModuleConfig(lmdb_path=str(debug_lmdb), use_eval_only_split=True)
         ds = load_probe_dataset_from_lmdb(config)
