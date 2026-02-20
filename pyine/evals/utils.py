@@ -297,7 +297,7 @@ def print_metrics(
 ) -> None:
     """Helper that prints the given metrics using the provided callable logger (or stdout)."""
     eval_output_strs: list[str] = []
-    prefix = f"predict/{subset}" if subset is not None else "predict"
+    prefix = f"benchmark/{subset}" if subset is not None else "benchmark"
     for key, val in metrics.items():
         if isinstance(val, float):
             eval_output_strs.append(f"\t{prefix}/{key}: {val:.3f}")

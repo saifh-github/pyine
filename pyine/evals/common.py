@@ -59,39 +59,12 @@ class BaseEvalsConfig(pydantic.BaseModel):
     eval_type: EvalType | None = None
     """Type of evaluation that should be conducted. If None, no evaluation occurs in the main app."""
 
-    eval_generation_config: pydantic.SerializeAsAny[pyine.utils.transformers.GenerationConfig] | None = pydantic.Field(
-        default=None,
-        description="Generation configuration args used when generating predictions in evals.",
-    )
-    eval_generation_max_new_tokens_override: pydantic.PositiveInt | None = pydantic.Field(
-        default=1024,
-        description="Optional override for maximum number of tokens that can be generated in evals.",
-    )
-    eval_batch_size: pydantic.PositiveInt = pydantic.Field(
-        default=1,
-        description="Batch size to use when generating predictions in evals.",
-    )
-    eval_padding_side: typing.Literal["left", "right"] = pydantic.Field(
-        default="left",
-        description="Padding side to use when generating predictions in evals.",
-    )
-    eval_runnable_config: RunnableEvalConfig = pydantic.Field(
-        default=RunnableEvalConfig(),
-        description="Configuration for runnable code execution evaluations.",
-    )
+    eval_runnable_config: RunnableEvalConfig = RunnableEvalConfig()
+    """Configuration for runnable evaluations."""
     category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = pydantic.Field(
-        default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,  # defaults to code_type+predict_type
-        description="Configuration for extracting eval categories from sample data; set to None to disable.",
+        default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,
     )
-    vllm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = pydantic.Field(
-        default=None,
-        description="Provider configuration for vLLM server for model inference during evaluation.",
-    )
-
-    @property
-    def use_vllm_server(self) -> bool:
-        """Whether to use a vLLM server for inference."""
-        return self.vllm_provider_config is not None
+    """Configuration for extracting eval categories from sample data; set to None to disable."""
 
     # ---------------- public overridable evaluation methods ----------------
 
@@ -156,7 +129,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, EvalResult],
         *,
-        table_key: str = "predict/metrics_table",
+        table_key: str = "benchmark/metrics_table",
         step: int | None = None,
     ) -> wandb.Table | None:
         """Log aggregated evaluation metrics to a W&B table.
@@ -204,7 +177,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
             table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `predict/<subset_name>/predictions` key.
+                If not provided, the table will be logged to the `benchmark/<subset_name>/predictions` key.
             max_rows: Maximum number of prediction rows to log (default: 32).
             max_text_length: Maximum length per text field before truncation.
             step: Optional W&B step override.
@@ -243,7 +216,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
             table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `predict/<subset_name>/sample_metrics` key.
+                If not provided, the table will be logged to the `benchmark/<subset_name>/sample_metrics` key.
             step: Optional W&B step override.
 
         Returns:
@@ -256,3 +229,92 @@ class BaseEvalsConfig(pydantic.BaseModel):
         if self.eval_type is None:
             return None
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+
+
+class GenerationEvalsConfig(BaseEvalsConfig):
+    """Configuration for generation-based evaluation tasks.
+
+    Extends BaseEvalsConfig with fields specific to text generation pipelines (HF models,
+    runnable chains): generation parameters, multi-sample/Pass@K settings, batching, and
+    inference server configuration.
+    """
+
+    eval_generation_config: pydantic.SerializeAsAny[pyine.utils.transformers.GenerationConfig] | None = None
+    """Generation configuration args used when generating predictions in evals."""
+    eval_generation_max_new_tokens_override: pydantic.PositiveInt | None = 1024
+    """Optional override for maximum number of tokens that can be generated in evals."""
+    eval_batch_size: pydantic.PositiveInt = 1
+    """Batch size to use when generating predictions in evals."""
+    eval_padding_side: typing.Literal["left", "right"] = "left"
+    """Padding side to use in prompts when generating predictions in evals."""
+    num_attempts_per_sample: pydantic.PositiveInt = 1
+    """Number of generation attempts per sample (K for Pass@K). When >1, enables multi-sample metrics."""
+    pass_at_k_values: list[pydantic.PositiveInt] | None = None
+    """K values for Pass@K computation. Auto-derived from num_attempts_per_sample when None."""
+    sampling_temperature_override: float | None = None
+    """Optional temperature override for HF generation when num_attempts_per_sample > 1."""
+    vllm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
+    """Provider configuration for vLLM server for model inference during evaluation."""
+
+    @pydantic.model_validator(mode="after")
+    def _validate_multi_sample_config(self) -> "GenerationEvalsConfig":
+        """Derives and validates pass_at_k_values from num_attempts_per_sample.
+
+        When num_attempts_per_sample == 1, pass_at_k_values stays None (no Pass@K grouping or
+        validation is needed for single-attempt evals). When > 1, auto-derives [1, K]. Users can
+        always override with an explicit list.
+        """
+        if self.pass_at_k_values is None and self.num_attempts_per_sample > 1:
+            derived = sorted({1, self.num_attempts_per_sample})
+            object.__setattr__(self, "pass_at_k_values", derived)
+        k_values = self.pass_at_k_values
+        if k_values is not None:
+            if not k_values:
+                raise ValueError("pass_at_k_values must not be empty")
+            if k_values != sorted(set(k_values)):
+                raise ValueError(f"pass_at_k_values must be sorted and unique, got {k_values}")
+            if any(k > self.num_attempts_per_sample for k in k_values):
+                raise ValueError(
+                    f"all pass_at_k_values must be <= num_attempts_per_sample "
+                    f"({self.num_attempts_per_sample}), got {k_values}"
+                )
+        return self
+
+    @property
+    def use_vllm_server(self) -> bool:
+        """Whether to use a vLLM server for inference."""
+        return self.vllm_provider_config is not None
+
+    @classmethod
+    def for_pass_at_k(
+        cls,
+        num_attempts_per_sample: int = 10,
+        temperature: float = 0.2,
+        top_p: float = 0.95,
+        max_new_tokens: int = 10_000,
+        **kwargs: typing.Any,
+    ) -> "GenerationEvalsConfig":
+        """Creates a config with literature-standard Pass@K defaults (nucleus sampling).
+
+        Default values follow LiveCodeBench conventions for code generation evaluation.
+        Explicit arguments override the built-in defaults; any additional keyword arguments
+        are forwarded to the ``GenerationEvalsConfig`` constructor.
+
+        If ``eval_generation_config`` is passed in ``kwargs``, it takes precedence over the
+        generation config built from ``temperature``/``top_p``.
+
+        Args:
+            num_attempts_per_sample: Number of generation attempts per sample (K).
+            temperature: Sampling temperature.
+            top_p: Nucleus sampling probability threshold.
+            max_new_tokens: Maximum number of new tokens to generate.
+            **kwargs: Additional fields forwarded to the config constructor.
+        """
+        defaults: dict[str, typing.Any] = {
+            "num_attempts_per_sample": num_attempts_per_sample,
+            "eval_generation_max_new_tokens_override": max_new_tokens,
+            "eval_generation_config": pyine.utils.transformers.GenerationConfig(
+                **{"do_sample": True, "temperature": temperature, "top_p": top_p},
+            ),
+        }
+        return cls(**(defaults | kwargs))

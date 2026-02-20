@@ -49,38 +49,120 @@ class TestExtractRunMetrics:
     def test_extracts_all_accuracy_types(self) -> None:
         """extract_run_metrics extracts hard, soft, and grader accuracy."""
         summary = {
-            "predict/test/accuracy_hard": 0.85,
-            "predict/test/accuracy_soft": 0.90,
-            "predict/test/accuracy_grader": 0.88,
+            "benchmark/test/accuracy_hard": 0.85,
+            "benchmark/test/accuracy_soft": 0.90,
+            "benchmark/test/accuracy_grader": 0.88,
         }
         run = MockWandBRun(summary=summary)
         metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
         assert metrics.run_id == "run-123"
         assert metrics.run_name == "test-run"
-        assert metrics.accuracy_hard == 0.85
-        assert metrics.accuracy_soft == 0.90
-        assert metrics.accuracy_grader == 0.88
+        assert metrics.accuracy["hard"].value == 0.85
+        assert metrics.accuracy["soft"].value == 0.90
+        assert metrics.accuracy["grader"].value == 0.88
 
     def test_handles_missing_metrics(self) -> None:
-        """extract_run_metrics returns None for missing metrics."""
-        summary = {"predict/test/accuracy_hard": 0.75}
+        """extract_run_metrics returns empty dict entries for missing metrics."""
+        summary = {"benchmark/test/accuracy_hard": 0.75}
         run = MockWandBRun(summary=summary)
         metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
-        assert metrics.accuracy_hard == 0.75
-        assert metrics.accuracy_soft is None
-        assert metrics.accuracy_grader is None
+        assert metrics.accuracy["hard"].value == 0.75
+        assert "soft" not in metrics.accuracy
+        assert "grader" not in metrics.accuracy
 
     def test_uses_correct_subset_prefix(self) -> None:
         """extract_run_metrics uses subset_name in metric prefix."""
         summary = {
-            "predict/valid/accuracy_hard": 0.70,
-            "predict/test/accuracy_hard": 0.80,
+            "benchmark/valid/accuracy_hard": 0.70,
+            "benchmark/test/accuracy_hard": 0.80,
         }
         run = MockWandBRun(summary=summary)
         val_metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="valid")
         test_metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
-        assert val_metrics.accuracy_hard == 0.70
-        assert test_metrics.accuracy_hard == 0.80
+        assert val_metrics.accuracy["hard"].value == 0.70
+        assert test_metrics.accuracy["hard"].value == 0.80
+
+    def test_extracts_accuracy_cis(self) -> None:
+        """extract_run_metrics extracts CI bounds into MetricWithCI."""
+        summary = {
+            "benchmark/test/accuracy_hard": 0.80,
+            "benchmark/test/accuracy_hard_ci_lower": 0.72,
+            "benchmark/test/accuracy_hard_ci_upper": 0.87,
+        }
+        run = MockWandBRun(summary=summary)
+        metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+        hard = metrics.accuracy["hard"]
+        assert hard.value == 0.80
+        assert hard.ci_lower == 0.72
+        assert hard.ci_upper == 0.87
+
+    def test_extracts_pass_at_k_with_cis(self) -> None:
+        """extract_run_metrics extracts Pass@K metrics as dict[int, dict[MatchType, MetricWithCI]]."""
+        summary = {
+            "benchmark/test/pass_at_1_hard": 0.80,
+            "benchmark/test/pass_at_1_hard_ci_lower": 0.72,
+            "benchmark/test/pass_at_1_hard_ci_upper": 0.87,
+            "benchmark/test/pass_at_5_soft": 0.95,
+        }
+        run = MockWandBRun(summary=summary)
+        metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+        assert 1 in metrics.pass_at_k
+        assert metrics.pass_at_k[1]["hard"].value == 0.80
+        assert metrics.pass_at_k[1]["hard"].ci_lower == 0.72
+        assert metrics.pass_at_k[1]["hard"].ci_upper == 0.87
+        assert 5 in metrics.pass_at_k
+        assert metrics.pass_at_k[5]["soft"].value == 0.95
+
+
+class TestKeywordPresence:
+    """Tests for keyword_presence extraction edge cases."""
+
+    def test_keyword_presence_zero_when_no_keywords_found(self) -> None:
+        """keyword_presence is 0.0 (not None) when has_keyword_count=0 and sample_count is known."""
+        summary = {
+            "benchmark/test/accuracy_hard": 0.80,
+            "benchmark/test/sample_count": 100,
+        }
+        run = MockWandBRun(summary=summary)
+        metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+        assert metrics.keyword_presence == 0.0
+
+    def test_keyword_presence_none_when_sample_count_unknown(self) -> None:
+        """keyword_presence is None when sample_count is not available and has_keyword_count=0."""
+        summary = {"benchmark/test/accuracy_hard": 0.80}
+        run = MockWandBRun(summary=summary)
+        metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+        assert metrics.keyword_presence is None
+
+    def test_keyword_presence_raises_when_positive_but_no_sample_count(self) -> None:
+        """keyword_presence raises ValueError when has_keyword_count>0 but sample_count is None."""
+        summary = {
+            "benchmark/test/accuracy_hard": 0.80,
+            "benchmark/test/has_keyword/true/sample_count": 5,
+        }
+        run = MockWandBRun(summary=summary)
+        with pytest.raises(ValueError, match="sample_count is None"):
+            pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+
+    def test_keyword_presence_zero_when_sample_count_zero(self) -> None:
+        """keyword_presence is 0.0 when sample_count=0 and has_keyword_count=0 (empty subset)."""
+        summary = {
+            "benchmark/test/accuracy_hard": 0.0,
+            "benchmark/test/sample_count": 0,
+        }
+        run = MockWandBRun(summary=summary)
+        metrics = pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
+        assert metrics.keyword_presence == 0.0
+
+    def test_keyword_presence_raises_when_positive_but_sample_count_zero(self) -> None:
+        """keyword_presence raises ValueError when has_keyword_count>0 but sample_count=0."""
+        summary = {
+            "benchmark/test/sample_count": 0,
+            "benchmark/test/has_keyword/true/sample_count": 3,
+        }
+        run = MockWandBRun(summary=summary)
+        with pytest.raises(ValueError, match="sample_count=0"):
+            pyine.evals.code_exec.analysis.extract_run_metrics(run, subset_name="test")
 
 
 class TestExtractCategoryMetrics:
@@ -89,26 +171,26 @@ class TestExtractCategoryMetrics:
     def test_extracts_category_metrics(self) -> None:
         """extract_category_metrics parses category-wise metrics from summary."""
         summary = {
-            "predict/test/code_type/original/accuracy_hard": 0.90,
-            "predict/test/code_type/original/accuracy_soft": 0.92,
-            "predict/test/code_type/original/count": 50,
-            "predict/test/predict_type/output/accuracy_hard": 0.75,
-            "predict/test/predict_type/output/count": 30,
+            "benchmark/test/code_type/original/accuracy_hard": 0.90,
+            "benchmark/test/code_type/original/accuracy_soft": 0.92,
+            "benchmark/test/code_type/original/count": 50,
+            "benchmark/test/predict_type/output/accuracy_hard": 0.75,
+            "benchmark/test/predict_type/output/count": 30,
         }
         run = MockWandBRun(summary=summary)
         categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
         assert len(categories) == 2
         code_type_cat = next(c for c in categories if c.category == "code_type/original")
-        assert code_type_cat.accuracy_hard == 0.90
-        assert code_type_cat.accuracy_soft == 0.92
-        assert code_type_cat.count == 50
+        assert code_type_cat.accuracy["hard"].value == 0.90
+        assert code_type_cat.accuracy["soft"].value == 0.92
+        assert code_type_cat.sample_count == 50
         predict_type_cat = next(c for c in categories if c.category == "predict_type/output")
-        assert predict_type_cat.accuracy_hard == 0.75
-        assert predict_type_cat.count == 30
+        assert predict_type_cat.accuracy["hard"].value == 0.75
+        assert predict_type_cat.sample_count == 30
 
     def test_returns_empty_for_no_categories(self) -> None:
         """extract_category_metrics returns empty list when no category metrics found."""
-        summary = {"predict/test/accuracy_hard": 0.80}
+        summary = {"benchmark/test/accuracy_hard": 0.80}
         run = MockWandBRun(summary=summary)
         categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
         assert categories == []
@@ -116,17 +198,81 @@ class TestExtractCategoryMetrics:
     def test_handles_grader_accuracy(self) -> None:
         """extract_category_metrics includes grader accuracy when present."""
         summary = {
-            "predict/test/tags/augment/obfuscated/accuracy_hard": 0.60,
-            "predict/test/tags/augment/obfuscated/accuracy_grader": 0.65,
-            "predict/test/tags/augment/obfuscated/count": 20,
+            "benchmark/test/tags/augment/obfuscated/accuracy_hard": 0.60,
+            "benchmark/test/tags/augment/obfuscated/accuracy_grader": 0.65,
+            "benchmark/test/tags/augment/obfuscated/count": 20,
         }
         run = MockWandBRun(summary=summary)
         categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
         assert len(categories) == 1
         cat = categories[0]
         assert cat.category == "tags/augment/obfuscated"
-        assert cat.accuracy_hard == 0.60
-        assert cat.accuracy_grader == 0.65
+        assert cat.accuracy["hard"].value == 0.60
+        assert cat.accuracy["grader"].value == 0.65
+        assert cat.sample_count == 20
+
+    def test_captures_structured_accuracy_pass_at_k_and_extra_metrics(self) -> None:
+        """extract_category_metrics routes accuracy, pass@k, and other metrics to correct fields."""
+        summary = {
+            "benchmark/test/code_type/original/accuracy_hard": 0.80,
+            "benchmark/test/code_type/original/accuracy_hard_ci_lower": 0.70,
+            "benchmark/test/code_type/original/accuracy_hard_ci_upper": 0.88,
+            "benchmark/test/code_type/original/pass_at_1_hard": 0.80,
+            "benchmark/test/code_type/original/pass_at_1_hard_ci_lower": 0.72,
+            "benchmark/test/code_type/original/pass_at_1_hard_ci_upper": 0.87,
+            "benchmark/test/code_type/original/majority_correct_hard": 0.75,
+            "benchmark/test/code_type/original/mean_output_diversity": 0.45,
+            "benchmark/test/code_type/original/sample_count": 50,
+            "benchmark/test/code_type/original/attempt_count": 150,
+        }
+        run = MockWandBRun(summary=summary)
+        categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
+        assert len(categories) == 1
+        cat = categories[0]
+        # accuracy goes into structured accuracy dict
+        assert cat.accuracy["hard"].value == 0.80
+        assert cat.accuracy["hard"].ci_lower == pytest.approx(0.70)
+        assert cat.accuracy["hard"].ci_upper == pytest.approx(0.88)
+        assert cat.sample_count == 50
+        assert cat.attempt_count == 150
+        # pass@k goes into structured pass_at_k dict
+        assert 1 in cat.pass_at_k
+        assert cat.pass_at_k[1]["hard"].value == pytest.approx(0.80)
+        assert cat.pass_at_k[1]["hard"].ci_lower == pytest.approx(0.72)
+        assert cat.pass_at_k[1]["hard"].ci_upper == pytest.approx(0.87)
+        # remaining metrics go into extra_metrics
+        assert cat.extra_metrics["majority_correct_hard"].value == pytest.approx(0.75)
+        assert cat.extra_metrics["mean_output_diversity"].value == pytest.approx(0.45)
+        # accuracy and pass@k should NOT appear in extra_metrics
+        assert "accuracy_hard" not in cat.extra_metrics
+        assert "pass_at_1_hard" not in cat.extra_metrics
+
+    def test_excludes_token_usage_and_complexity_from_categories(self) -> None:
+        """extract_category_metrics excludes token_usage and complexity sub-keys as fake categories."""
+        summary = {
+            # real category metric
+            "benchmark/test/code_type/python/accuracy_hard": 0.80,
+            "benchmark/test/code_type/python/sample_count": 50,
+            # non-category: complexity sub-namespace on a real category
+            "benchmark/test/code_type/python/complexity/loc_mean": 25.0,
+            "benchmark/test/code_type/python/complexity/loc_median": 20.0,
+            # non-category: token usage sub-namespace on a real category
+            "benchmark/test/code_type/python/attempt_token_usage/mean_total_tokens_mean": 100.0,
+            # non-category: top-level token usage
+            "benchmark/test/attempt_token_usage/mean_total_tokens_mean": 150.0,
+            # non-category: top-level complexity
+            "benchmark/test/complexity/loc_mean": 30.0,
+        }
+        run = MockWandBRun(summary=summary)
+        categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
+        category_names = [c.category for c in categories]
+        assert "code_type/python" in category_names
+        # none of the spurious categories should appear
+        assert "code_type/python/complexity" not in category_names
+        assert "code_type/python/attempt_token_usage" not in category_names
+        assert "attempt_token_usage" not in category_names
+        assert "complexity" not in category_names
+        assert len(categories) == 1
 
 
 class TestFilterRunsByDate:
@@ -190,9 +336,11 @@ class TestSummarizeRunsToDataframe:
                     entity="entity",
                     created_at="2025-01-01T00:00:00",
                     subset_name="test",
-                    accuracy_hard=0.80,
-                    accuracy_soft=0.85,
-                    accuracy_grader=0.82,
+                    accuracy={
+                        "hard": pyine.evals.code_exec.analysis.MetricWithCI(0.80),
+                        "soft": pyine.evals.code_exec.analysis.MetricWithCI(0.85),
+                        "grader": pyine.evals.code_exec.analysis.MetricWithCI(0.82),
+                    },
                 ),
                 category_metrics=[],
             ),
@@ -205,7 +353,7 @@ class TestSummarizeRunsToDataframe:
                     entity="entity",
                     created_at="2025-01-02T00:00:00",
                     subset_name="test",
-                    accuracy_hard=0.75,
+                    accuracy={"hard": pyine.evals.code_exec.analysis.MetricWithCI(0.75)},
                 ),
                 category_metrics=[],
             ),
@@ -229,15 +377,15 @@ class TestFetchEvalSummary:
     def test_combines_all_metrics(self) -> None:
         """fetch_eval_summary combines run, category, and complexity metrics."""
         summary_dict = {
-            "predict/test/accuracy_hard": 0.85,
-            "predict/test/accuracy_soft": 0.90,
-            "predict/test/code_type/original/accuracy_hard": 0.88,
-            "predict/test/code_type/original/count": 100,
+            "benchmark/test/accuracy_hard": 0.85,
+            "benchmark/test/accuracy_soft": 0.90,
+            "benchmark/test/code_type/original/accuracy_hard": 0.88,
+            "benchmark/test/code_type/original/count": 100,
         }
         run = MockWandBRun(summary=summary_dict)
         eval_summary = pyine.evals.code_exec.analysis.fetch_eval_summary(run, subset_name="test")
-        assert eval_summary.run_info.accuracy_hard == 0.85
-        assert eval_summary.run_info.accuracy_soft == 0.90
+        assert eval_summary.run_info.accuracy["hard"].value == 0.85
+        assert eval_summary.run_info.accuracy["soft"].value == 0.90
         assert len(eval_summary.category_metrics) == 1
         assert eval_summary.category_metrics[0].category == "code_type/original"
 
@@ -423,7 +571,7 @@ class TestFetchSampleMetricsTable:
             ],
         }
         file = MockWandBFile(
-            name="media/table/predict/test/sample_metrics_abc123.table.json",
+            name="media/table/benchmark/test/sample_metrics_abc123.table.json",
             table_data=table_data,
         )
         run = MockWandBRunWithFiles(run_id="r1", files=[file])

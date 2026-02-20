@@ -15,7 +15,7 @@ import pyine.evals.utils
 import pyine.utils.code.complexity_metrics
 
 
-class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
+class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
     """Configuration for code execution evaluations."""
 
     eval_type: pyine.evals.common.EvalType | None = pyine.evals.common.EvalType.CODE_EXEC
@@ -104,10 +104,11 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         prefix: str | None = None,
     ) -> None:
         """Defines the evaluation metrics for the given wandb run."""
-        # @@@@@ TODO: missing init for eval categories (subsets are OK though)
         pyine.evals.code_exec.utils.define_metrics_for_wandb(  # type: ignore[reportUnknownMemberType]
             wandb_run=wandb_run,
             prefix=prefix,
+            pass_at_k_values=self.pass_at_k_values,
+            num_attempts_per_sample=self.num_attempts_per_sample,
         )
 
     @typing.override
@@ -117,7 +118,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, pyine.evals.common.EvalResult],
         *,
-        table_key: str = "predict/metrics_table",
+        table_key: str = "benchmark/metrics_table",
         step: int | None = None,
     ) -> wandb.Table:
         """Log aggregated metrics to a W&B table.
@@ -152,7 +153,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             for metric_name in ordered_metric_names:
                 curr_row.append(subset_metrics.get(metric_name))
             table.add_data(*curr_row)
-            summary_prefix = f"predict/{subset_name}"
+            summary_prefix = f"benchmark/{subset_name}"
             for metric_name, metric_val in subset_metrics.items():
                 wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val
         if step is None:
@@ -184,8 +185,8 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `predict/<subset_name>/predictions` key.
+            table_key: Optional override for the W&B key under which the table is logged. If not
+                provided, the table will be logged to the `benchmark/<subset_name>/predictions` key.
             max_rows: Maximum number of prediction rows to log (default: 32).
             include_only_incorrect: Whether to restrict the table to incorrect predictions.
             max_text_length: Maximum length per text field before truncation.
@@ -199,7 +200,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             log_metrics: For subset-level aggregated metrics.
         """
         if table_key is None:
-            table_key = f"predict/{subset_name}/predictions"
+            table_key = f"benchmark/{subset_name}/predictions"
         assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
         incorrect: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         correct: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
@@ -227,6 +228,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             columns=[
                 "subset",
                 "identifier",
+                "attempt_index",
                 "code_type",
                 "predict_type",
                 "inputs",
@@ -244,6 +246,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             row = [
                 subset_name,
                 prediction.identifier,
+                prediction.eval_result.attempt_index,
                 str(prediction.sample.code_type),
                 str(prediction.sample.predict_type),
                 _truncate_text(prediction.sample.inputs, max_text_length),
@@ -287,8 +290,8 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `predict/<subset_name>/sample_metrics` key.
+            table_key: Optional override for the W&B key under which the table is logged. If not
+                provided, the table will be logged to the `benchmark/<subset_name>/sample_metrics` key.
             step: Optional W&B step override.
 
         Returns:
@@ -301,7 +304,7 @@ class CodeExecEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             artifact_to_sample_metrics_row: The shared row extraction logic in utils.
         """
         if table_key is None:
-            table_key = f"predict/{subset_name}/sample_metrics"
+            table_key = f"benchmark/{subset_name}/sample_metrics"
         assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
         columns = pyine.evals.code_exec.utils.get_sample_metrics_columns()
         table = wandb.Table(columns=columns)

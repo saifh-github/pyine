@@ -63,7 +63,7 @@ class FakeEvaluationResult(pyine.evals.common.EvalResult):
     artifacts: list[str]
 
 
-class DummyEvalsConfig(pyine.evals.common.BaseEvalsConfig):
+class DummyEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, frozen=False)
 
     eval_type: str = "code_exec"
@@ -133,8 +133,8 @@ def test_prepare_datamodule_with_wandb_logging() -> None:
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
     assert [call["prefix"] for call in evals_config.define_metrics_calls] == [
-        "predict/valid",
-        "predict/test",
+        "benchmark/valid",
+        "benchmark/test",
     ]
 
 

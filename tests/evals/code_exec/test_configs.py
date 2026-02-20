@@ -85,8 +85,11 @@ def impl_monkeypatches(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     async def fake_get_metrics(
         evaluator: FakeOutcomeEvaluator,
         token_usage: typing.Any,
-        sample_token_usage: typing.Any,
+        attempt_token_usage: typing.Any,
         sample_data_store: typing.Any,
+        pass_at_k_values: typing.Any = None,
+        num_attempts_per_sample: int = 1,
+        partial: bool = False,
     ) -> dict[str, typing.Any]:
         return {
             "accuracy": len(evaluator.results),
@@ -199,10 +202,10 @@ class TestEvaluateRunnableModel:
 
         async def fake_run_with_sliding_window(
             *,
-            input_items: typing.Iterable[int],
+            input_items: typing.Iterable[typing.Any],
             submit_one: typing.Callable[..., typing.Any],
-            process_result: typing.Callable[[int, typing.Any], None],
-            progress_callback: typing.Callable[[list[typing.Any], list[int]], typing.Awaitable[None]],
+            process_result: typing.Callable[[typing.Any, typing.Any], None],
+            progress_callback: typing.Callable[[list[typing.Any], list[typing.Any]], typing.Awaitable[None]],
             **_kwargs: typing.Any,
         ) -> None:
             """Fake sliding window that processes items sequentially."""
@@ -211,7 +214,7 @@ class TestEvaluateRunnableModel:
                 def submit(self, fn: typing.Callable, payload: typing.Any) -> types.SimpleNamespace:
                     return types.SimpleNamespace(result=lambda: fn(payload))
 
-            completed: list[int] = []
+            completed: list[typing.Any] = []
             executor = FakeExecutor()
             for item in input_items:
                 submitted_items.append(item)
@@ -243,7 +246,7 @@ class TestEvaluateRunnableModel:
             verbose=True,
         )
 
-        assert submitted_items == [0, 1, 2]
+        assert submitted_items == [(0, 0), (1, 0), (2, 0)]  # (sample_idx, attempt_idx) tuples
         assert result.metrics["accuracy"] == 3
 
     @pytest.mark.asyncio
@@ -285,8 +288,11 @@ class TestEvaluateHFModel:
         async def fake_get_metrics(
             evaluator: FakeOutcomeEvaluator,
             token_usage: typing.Any,
-            sample_token_usage: typing.Any,
+            attempt_token_usage: typing.Any,
             sample_data_store: typing.Any,
+            pass_at_k_values: typing.Any = None,
+            num_attempts_per_sample: int = 1,
+            partial: bool = False,
         ) -> dict[str, typing.Any]:
             return {
                 "count": len(evaluator.results),
