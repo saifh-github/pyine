@@ -23,7 +23,7 @@ class ConfidenceInterval:
     """Upper bound of the confidence interval."""
 
 
-_FULL_UNCERTAINTY_INTERVAL = ConfidenceInterval(point_estimate=0.0, lower_bound=0.0, upper_bound=1.0)
+FULL_UNCERTAINTY_INTERVAL = ConfidenceInterval(point_estimate=0.0, lower_bound=0.0, upper_bound=1.0)
 """Default interval used when the estimate is undefined or uninformative."""
 
 
@@ -62,7 +62,7 @@ def compute_accuracy_with_ci(
     if num_correct > num_total:
         raise ValueError(f"num_correct ({num_correct}) > num_total ({num_total})")
     if num_total == 0:
-        return _FULL_UNCERTAINTY_INTERVAL
+        return FULL_UNCERTAINTY_INTERVAL
     proportion = num_correct / num_total
     lower, upper = wilson_score_interval(proportion, num_total, confidence_level)
     return ConfidenceInterval(point_estimate=proportion, lower_bound=lower, upper_bound=upper)
@@ -75,23 +75,25 @@ def compute_proportion_ci(
 ) -> ConfidenceInterval:
     """Computes Wilson score confidence interval from a proportion and sample count.
 
-    Edge case behavior: when proportion is None, sample_count <= 0, or proportion is not in [0, 1],
+    Edge case behavior: when proportion is None, sample_count == 0, or proportion is not in [0, 1],
     returns full uncertainty interval (0.0, 0.0, 1.0).
 
     Args:
         proportion: The observed proportion in [0, 1], or None.
-        sample_count: Number of samples.
+        sample_count: Number of samples (must be non-negative).
         confidence_level: Confidence level for the CI (default 0.95).
 
     Returns:
         ConfidenceInterval with the proportion and Wilson score bounds.
 
     Raises:
-        ValueError: If confidence_level is not in (0, 1).
+        ValueError: If confidence_level is not in (0, 1) or sample_count is negative.
     """
     _validate_confidence_level(confidence_level)
-    if sample_count <= 0 or proportion is None or not (0 <= proportion <= 1):
-        return _FULL_UNCERTAINTY_INTERVAL
+    if sample_count < 0:
+        raise ValueError(f"sample_count must be non-negative, got {sample_count}")
+    if sample_count == 0 or proportion is None or not (0 <= proportion <= 1):
+        return FULL_UNCERTAINTY_INTERVAL
     lower, upper = wilson_score_interval(proportion, sample_count, confidence_level)
     return ConfidenceInterval(point_estimate=proportion, lower_bound=lower, upper_bound=upper)
 

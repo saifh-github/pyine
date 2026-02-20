@@ -285,3 +285,162 @@ class TestPassAtKExpm1Precision:
         # n=10000, c=1, k=1 -> pass@1 = 0.0001
         result = msm.compute_pass_at_k(num_total=10000, num_correct=1, k=1)
         assert result == pytest.approx(0.0001, abs=1e-12)
+
+
+class TestMajorityCorrectWithCi:
+    """Tests for compute_majority_correct_with_ci (Wilson CI on binary per-sample indicator)."""
+
+    def test_empty_returns_full_uncertainty(self) -> None:
+        ci = msm.compute_majority_correct_with_ci([])
+        assert ci.point_estimate == 0.0
+        assert ci.lower_bound == 0.0
+        assert ci.upper_bound == 1.0
+
+    def test_all_majority_correct(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=4),
+            msm.SampleAttemptSummary(num_total=5, num_correct=3),
+        ]
+        ci = msm.compute_majority_correct_with_ci(summaries)
+        assert ci.point_estimate == 1.0
+        assert ci.lower_bound > 0.0
+        assert ci.upper_bound == pytest.approx(1.0)
+
+    def test_none_majority_correct(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=2),
+            msm.SampleAttemptSummary(num_total=5, num_correct=1),
+        ]
+        ci = msm.compute_majority_correct_with_ci(summaries)
+        assert ci.point_estimate == 0.0
+        assert ci.lower_bound == 0.0
+        assert ci.upper_bound < 1.0
+
+    def test_mixed_has_ci_bounds(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=4),
+            msm.SampleAttemptSummary(num_total=5, num_correct=1),
+        ]
+        ci = msm.compute_majority_correct_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(0.5)
+        assert ci.lower_bound < ci.point_estimate
+        assert ci.upper_bound > ci.point_estimate
+
+    def test_single_sample(self) -> None:
+        summaries = [msm.SampleAttemptSummary(num_total=5, num_correct=4)]
+        ci = msm.compute_majority_correct_with_ci(summaries)
+        assert ci.point_estimate == 1.0
+
+
+class TestMeanOutputDiversityWithCi:
+    """Tests for compute_mean_output_diversity_with_ci (SEM CI on per-sample ratios)."""
+
+    def test_empty_returns_full_uncertainty(self) -> None:
+        ci = msm.compute_mean_output_diversity_with_ci([])
+        assert ci.point_estimate == 0.0
+        assert ci.lower_bound == 0.0
+        assert ci.upper_bound == 1.0
+
+    def test_single_sample_degenerate(self) -> None:
+        summaries = [msm.SampleAttemptSummary(num_total=5, num_correct=3, num_unique_outputs=3)]
+        ci = msm.compute_mean_output_diversity_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(3 / 5)
+        assert ci.lower_bound == pytest.approx(ci.point_estimate)
+        assert ci.upper_bound == pytest.approx(ci.point_estimate)
+
+    def test_multiple_samples_has_bounds(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=3, num_unique_outputs=1),
+            msm.SampleAttemptSummary(num_total=5, num_correct=1, num_unique_outputs=5),
+        ]
+        ci = msm.compute_mean_output_diversity_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(0.6)  # mean of [1/5, 5/5]
+        assert ci.lower_bound >= 0.0
+        assert ci.upper_bound <= 1.0
+        assert ci.lower_bound < ci.point_estimate
+        assert ci.upper_bound > ci.point_estimate
+
+    def test_bounds_clamped_to_unit(self) -> None:
+        # even with high variance, bounds stay in [0, 1]
+        summaries = [
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=1),
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=10),
+        ]
+        ci = msm.compute_mean_output_diversity_with_ci(summaries)
+        assert ci.lower_bound >= 0.0
+        assert ci.upper_bound <= 1.0
+
+
+class TestMeanUniqueOutputsWithCi:
+    """Tests for compute_mean_unique_outputs_with_ci (SEM CI on per-sample counts)."""
+
+    def test_empty_returns_full_uncertainty(self) -> None:
+        ci = msm.compute_mean_unique_outputs_with_ci([])
+        assert ci.point_estimate == 0.0
+        assert ci.lower_bound == 0.0
+        assert ci.upper_bound == 1.0
+
+    def test_single_sample_degenerate(self) -> None:
+        summaries = [msm.SampleAttemptSummary(num_total=5, num_correct=1, num_unique_outputs=3)]
+        ci = msm.compute_mean_unique_outputs_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(3.0)
+        assert ci.lower_bound == pytest.approx(3.0)
+        assert ci.upper_bound == pytest.approx(3.0)
+
+    def test_multiple_samples_has_bounds(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=1, num_unique_outputs=2),
+            msm.SampleAttemptSummary(num_total=5, num_correct=1, num_unique_outputs=4),
+        ]
+        ci = msm.compute_mean_unique_outputs_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(3.0)
+        assert ci.lower_bound >= 0.0  # clamped to non-negative
+        assert ci.lower_bound < ci.point_estimate
+        assert ci.upper_bound > ci.point_estimate
+
+    def test_lower_bound_clamped_to_zero(self) -> None:
+        # with high variance and low mean, lower bound should clamp to 0
+        summaries = [
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=0),
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=1),
+        ]
+        ci = msm.compute_mean_unique_outputs_with_ci(summaries)
+        assert ci.lower_bound >= 0.0
+
+    def test_upper_bound_not_clamped_to_one(self) -> None:
+        # unique output counts can exceed 1, so upper bound should not be clamped to 1
+        summaries = [
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=8),
+            msm.SampleAttemptSummary(num_total=10, num_correct=0, num_unique_outputs=10),
+        ]
+        ci = msm.compute_mean_unique_outputs_with_ci(summaries)
+        assert ci.point_estimate == pytest.approx(9.0)
+        assert ci.upper_bound > 1.0  # not clamped
+
+
+class TestValidationErrorIndexContext:
+    """Tests that validation errors include index context for list-based functions."""
+
+    def test_pass_at_k_with_ci_reports_index(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=3),
+            msm.SampleAttemptSummary(num_total=5, num_correct=10),  # bad
+        ]
+        with pytest.raises(ValueError, match=r"summary\[1\]"):
+            msm.compute_pass_at_k_with_ci(summaries, k=1)
+
+    def test_majority_correct_reports_index(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=3),
+            msm.SampleAttemptSummary(num_total=-1, num_correct=0),  # bad
+        ]
+        with pytest.raises(ValueError, match=r"summary\[1\]"):
+            msm.compute_majority_correct(summaries)
+
+    def test_diversity_reports_index(self) -> None:
+        summaries = [
+            msm.SampleAttemptSummary(num_total=5, num_correct=3, num_unique_outputs=2),
+            msm.SampleAttemptSummary(num_total=5, num_correct=1, num_unique_outputs=-1),  # bad
+        ]
+        with pytest.raises(ValueError, match=r"summary\[1\]"):
+            msm.compute_mean_output_diversity(summaries)

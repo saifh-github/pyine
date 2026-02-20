@@ -67,11 +67,9 @@ class TestComputeProportionCi:
         assert ci.lower_bound == 0.0
         assert ci.upper_bound == 1.0
 
-    def test_negative_sample_count_returns_full_uncertainty(self) -> None:
-        ci = confidence.compute_proportion_ci(proportion=0.5, sample_count=-1)
-        assert ci.point_estimate == 0.0
-        assert ci.lower_bound == 0.0
-        assert ci.upper_bound == 1.0
+    def test_negative_sample_count_raises(self) -> None:
+        with pytest.raises(ValueError, match="sample_count must be non-negative"):
+            confidence.compute_proportion_ci(proportion=0.5, sample_count=-1)
 
     def test_out_of_range_proportion_returns_full_uncertainty(self) -> None:
         ci = confidence.compute_proportion_ci(proportion=1.5, sample_count=100)
