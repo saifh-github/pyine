@@ -575,23 +575,23 @@ class SampleData(typing.NamedTuple):
     """Absolute trace step index of segment start. 0 if not applicable."""
     last_step_idx: int = 0
     """Absolute trace step index of segment end. 0 if not applicable."""
-    pregenerated_output: str | None = None
+    pregenerated_output: str = ""
     """Pregenerated model output (pseudolabel) injected by the data pipeline.
 
-    When not None, this value was loaded from a prior RL run's exported generations.
+    When non-empty, this value was loaded from a prior RL run's exported generations.
     The original ``expected_output`` from the trace execution is always preserved unchanged.
     The source LMDB and key are recorded in ``pregenerated_output_lmdb_path`` and
     ``pregenerated_output_lmdb_key`` in case more data is required by consumers;  the full record
     metadata can be obtained via ``BiasDataModuleBase.pregenerated_output_records``.
     """
-    pregenerated_output_lmdb_path: str | None = None
+    pregenerated_output_lmdb_path: str = ""
     """Path to the source LMDB from which the pregenerated output was loaded.
 
     Together with ``pregenerated_output_lmdb_key``, this identifies the exact LMDB record
     used. The full record (including reward terms, reasoning, etc.) is available via
     ``BiasDataModuleBase.pregenerated_output_records`` when the datamodule is accessible.
     """
-    pregenerated_output_lmdb_key: str | None = None
+    pregenerated_output_lmdb_key: str = ""
     """Key within the source LMDB identifying the exact record used.
 
     See ``pregenerated_output_lmdb_path`` and ``BiasDataModuleBase.pregenerated_output_records``

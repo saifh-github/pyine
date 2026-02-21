@@ -25,7 +25,7 @@ def _reconstruct_sample_data(
 
     All required fields use direct key access so that a ``KeyError`` is raised immediately if the
     LMDB record is missing expected data (corrupted or incompatible dataset). Only the
-    ``pregenerated_output*`` fields are genuinely optional (nullable on ``SampleData``).
+    ``pregenerated_output*`` fields are genuinely optional (default to empty string on ``SampleData``).
 
     Args:
         record: A single LMDB record as produced by ``DiskEvalLogger``.
@@ -54,9 +54,9 @@ def _reconstruct_sample_data(
         last_line_hit=record["last_line_hit"],
         first_step_idx=record["first_step_idx"],
         last_step_idx=record["last_step_idx"],
-        pregenerated_output=record.get("pregenerated_output"),
-        pregenerated_output_lmdb_path=record.get("pregenerated_output_lmdb_path"),
-        pregenerated_output_lmdb_key=record.get("pregenerated_output_lmdb_key"),
+        pregenerated_output=record.get("pregenerated_output") or "",
+        pregenerated_output_lmdb_path=record.get("pregenerated_output_lmdb_path") or "",
+        pregenerated_output_lmdb_key=record.get("pregenerated_output_lmdb_key") or "",
     )
 
 

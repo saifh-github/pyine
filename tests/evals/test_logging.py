@@ -37,9 +37,9 @@ def _make_sample_data(
     expected_output: str = "1",
     predict_type: str = "program_output",
     code_type: str = "original",
-    pregenerated_output: str | None = None,
-    pregenerated_output_lmdb_path: str | None = None,
-    pregenerated_output_lmdb_key: str | None = None,
+    pregenerated_output: str = "",
+    pregenerated_output_lmdb_path: str = "",
+    pregenerated_output_lmdb_key: str = "",
 ) -> pyine.organisms.datamodules.samples.SampleData:
     return pyine.organisms.datamodules.samples.SampleData(
         identifier=identifier,
@@ -94,8 +94,8 @@ def _make_artifact(
     hard_match: bool = True,
     attempt_index: int = 0,
     parsed_output: pyine.utils.parsing.ParsedOutput | None = None,
-    pregenerated_output_lmdb_path: str | None = None,
-    pregenerated_output_lmdb_key: str | None = None,
+    pregenerated_output_lmdb_path: str = "",
+    pregenerated_output_lmdb_key: str = "",
 ) -> pyine.evals.code_exec.utils.CodeExecEvalArtifact:
     sample = _make_sample_data(
         identifier=identifier,

@@ -467,9 +467,9 @@ class TestSampleBuilderPregeneratedOverride:
         if sample.identifier in overrides:
             record = overrides[sample.identifier]
             sample = sample._replace(pregenerated_output=record.model_output)
-        assert sample.pregenerated_output is None
-        assert sample.pregenerated_output_lmdb_path is None
-        assert sample.pregenerated_output_lmdb_key is None
+        assert sample.pregenerated_output == ""
+        assert sample.pregenerated_output_lmdb_path == ""
+        assert sample.pregenerated_output_lmdb_key == ""
         assert sample.expected_output == "42"
 
 
@@ -1108,5 +1108,5 @@ class TestKeywordWrapperCfPregeneratedOutput:
             counterfactual_mode=True,
         )
         cf_with = wrapper[0]
-        assert cf_with.pregenerated_output is None
-        assert cf_with.pregenerated_output_lmdb_path is None
+        assert cf_with.pregenerated_output == ""
+        assert cf_with.pregenerated_output_lmdb_path == ""
