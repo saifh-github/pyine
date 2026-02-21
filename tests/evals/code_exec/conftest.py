@@ -165,6 +165,7 @@ class FakeDataModule:
 
     def __init__(self, samples: list[FakeSample]) -> None:
         self._samples = samples
+        self.config = {"fake": True}
 
     def get_parser(self, subset_name: str) -> FakeSampleBuilder:
         """Return fake sample builder."""
@@ -233,6 +234,7 @@ class FakeArtifact:
     sample: object
     token_usage: object
     eval_result: object
+    parsed_output: object = None
 
 
 @dataclasses.dataclass

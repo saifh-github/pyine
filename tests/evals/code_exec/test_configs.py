@@ -10,13 +10,18 @@ import types
 import typing
 
 import datasets as hf_datasets
+import langchain_core.messages
 import pytest
 import torch
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 import pyine.evals.code_exec._impl
 import pyine.evals.code_exec.configs
 import pyine.evals.code_exec.utils
 import pyine.evals.common
+import pyine.utils.langchain
 import tests.utils.transformers.utils
 
 from .conftest import (
@@ -28,9 +33,6 @@ from .conftest import (
     FakeSampleBuilder,
     build_ai_message,
 )
-
-if typing.TYPE_CHECKING:
-    import langchain_core.messages
 
 
 # helper for HF model tests; needs different SampleData structure
@@ -273,6 +275,99 @@ class TestEvaluateRunnableModel:
         assert hasattr(result, "artifacts")
         assert "accuracy" in result.metrics
         assert "sample_count" in result.metrics
+
+
+class TestParallelPromptCapture:
+    """Tests for parallel prompt capture with disk export enabled."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_prompt_capture_populates_stores(
+        self,
+        impl_monkeypatches: pytest.MonkeyPatch,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Parallel path with disk_export_config captures prompts for all samples."""
+        samples = [FakeSample("p0"), FakeSample("p1")]
+        data_module = FakeDataModule(samples)
+        captured_configs: list[dict[str, typing.Any] | None] = []
+
+        class MockChain:
+            def invoke(
+                self,
+                payload: dict[str, str],
+                config: dict[str, typing.Any] | None = None,
+            ) -> langchain_core.messages.AIMessage:
+                captured_configs.append(config)
+                return build_ai_message(payload["identifier"])
+
+        async def fake_run_with_sliding_window(
+            *,
+            input_items: typing.Iterable[typing.Any],
+            submit_one: typing.Callable[..., typing.Any],
+            process_result: typing.Callable[[typing.Any, typing.Any], None],
+            progress_callback: typing.Callable[[list[typing.Any], list[typing.Any]], typing.Awaitable[None]],
+            **_kwargs: typing.Any,
+        ) -> None:
+            class FakeExecutor:
+                def submit(
+                    self,
+                    fn: typing.Callable[..., typing.Any],
+                    *args: typing.Any,
+                    **kwargs: typing.Any,
+                ) -> types.SimpleNamespace:
+                    return types.SimpleNamespace(result=lambda: fn(*args, **kwargs))
+
+            completed: list[typing.Any] = []
+            executor = FakeExecutor()
+            for item in input_items:
+                future = submit_one(item, executor=executor)
+                response = future.result() if hasattr(future, "result") else future
+                process_result(item, response)
+                completed.append(item)
+                await progress_callback([], completed)
+
+        monkeypatch.setattr(
+            pyine.evals.code_exec._impl.pyine.utils.concurrency,
+            "run_with_sliding_window",
+            fake_run_with_sliding_window,
+        )
+        # disable actual disk export in _finalize to avoid writing LMDBs during monkeypatched eval
+        monkeypatch.setattr(
+            pyine.evals.code_exec._impl.pyine.evals.logging,
+            "DiskEvalLogger",
+            type(
+                "FakeDiskLogger",
+                (),
+                {
+                    "__init__": lambda self, **kw: None,
+                    "export_results": lambda self, **kw: None,
+                    "close": lambda self: None,
+                },
+            ),
+        )
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            eval_runnable_config=pyine.evals.common.RunnableEvalConfig(
+                parallel=True,
+                max_workers=2,
+                max_in_flight_jobs=2,
+                async_metrics_compute_rate=100,
+            ),
+            disk_export_config=pyine.evals.common.EvalExportConfig(
+                output_path=tmp_path / "export",
+            ),
+        )
+        result = await config.evaluate_runnable_model(
+            chain=MockChain(),
+            datamodule=data_module,
+            eval_subset_name="subset",
+            verbose=False,
+        )
+        assert isinstance(result, FakeEvalResult)
+        assert len(result.artifacts) == 2
+        # verify that callbacks were attached for attempt_idx==0 items (all items here)
+        configs_with_callbacks = [cfg for cfg in captured_configs if cfg is not None and "callbacks" in cfg]
+        assert len(configs_with_callbacks) == 2  # one per sample (attempt_idx=0)
 
 
 class TestEvaluateHFModel:
@@ -557,3 +652,57 @@ class TestComplexityStats:
         stats = pyine.evals.code_exec.utils.compute_aggregated_complexity_stats(samples)
         assert stats["loc_mean"] == pytest.approx(expected_mean)
         assert stats["loc_std"] == pytest.approx(0.0)  # all same value
+
+
+class TestExtractPromptFromHandler:
+    """Tests for _extract_prompt_from_handler event selection logic."""
+
+    def test_prefers_messages_over_prompts(self) -> None:
+        """When both on_llm_start and on_chat_model_start fire, messages win."""
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        handler.on_llm_start(serialized={}, prompts=["plain prompt"])
+        handler.on_chat_model_start(
+            serialized={},
+            messages=[[langchain_core.messages.HumanMessage(content="structured")]],
+        )
+        text_store: dict[str, str] = {}
+        msg_store: dict[str, list[dict[str, typing.Any]]] = {}
+        pyine.evals.code_exec._impl._extract_prompt_from_handler(handler, "s1", text_store, msg_store)
+        assert "s1" not in text_store  # plain prompt should NOT be stored
+        assert "s1" in msg_store
+        assert msg_store["s1"][0]["content"] == "structured"
+
+    def test_falls_back_to_prompts_when_no_messages(self) -> None:
+        """When only on_llm_start fires, plain prompt is stored."""
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        handler.on_llm_start(serialized={}, prompts=["plain prompt"])
+        text_store: dict[str, str] = {}
+        msg_store: dict[str, list[dict[str, typing.Any]]] = {}
+        pyine.evals.code_exec._impl._extract_prompt_from_handler(handler, "s1", text_store, msg_store)
+        assert text_store["s1"] == "plain prompt"
+        assert "s1" not in msg_store
+
+    def test_no_events_stores_nothing(self) -> None:
+        """When no llm_start events exist, nothing is stored (deferred validation)."""
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        text_store: dict[str, str] = {}
+        msg_store: dict[str, list[dict[str, typing.Any]]] = {}
+        pyine.evals.code_exec._impl._extract_prompt_from_handler(handler, "s1", text_store, msg_store)
+        assert "s1" not in text_store
+        assert "s1" not in msg_store
+
+    def test_messages_event_ordering_last_wins(self) -> None:
+        """When multiple chat model starts fire, the latest messages event is used."""
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        handler.on_chat_model_start(
+            serialized={},
+            messages=[[langchain_core.messages.HumanMessage(content="first")]],
+        )
+        handler.on_chat_model_start(
+            serialized={},
+            messages=[[langchain_core.messages.HumanMessage(content="second")]],
+        )
+        text_store: dict[str, str] = {}
+        msg_store: dict[str, list[dict[str, typing.Any]]] = {}
+        pyine.evals.code_exec._impl._extract_prompt_from_handler(handler, "s1", text_store, msg_store)
+        assert msg_store["s1"][0]["content"] == "second"

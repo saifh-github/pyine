@@ -1,4 +1,5 @@
 import enum
+import pathlib
 import typing
 
 import pydantic
@@ -232,6 +233,17 @@ class BaseEvalsConfig(pydantic.BaseModel):
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
 
 
+class EvalExportConfig(pydantic.BaseModel):
+    """Configuration for exporting evaluation results to disk as an LMDB dataset."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    output_path: pathlib.Path
+    """Base directory for LMDB exports. Each subset creates a subdirectory."""
+    store_aggregated_metrics: bool = True
+    """Whether to store aggregated evaluation metrics as LMDB metadata."""
+
+
 class GenerationEvalsConfig(BaseEvalsConfig):
     """Configuration for generation-based evaluation tasks.
 
@@ -262,6 +274,8 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     """Optional temperature override for HF generation when num_attempts_per_sample > 1."""
     vllm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
     """Provider configuration for vLLM server for model inference during evaluation."""
+    disk_export_config: EvalExportConfig | None = None
+    """Configuration for exporting evaluation results to disk as an LMDB dataset."""
 
     @pydantic.model_validator(mode="after")
     def _validate_multi_sample_config(self) -> "GenerationEvalsConfig":

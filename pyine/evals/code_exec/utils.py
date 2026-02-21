@@ -183,9 +183,14 @@ class CodeExecEvalArtifact(pydantic.BaseModel):
     """Structured parsed output (reasoning, final_answer) when output parsing is enabled."""
 
     @property
-    def identifier(self) -> str:
-        """Unique sample id associated with the data sample (used for lookups)."""
+    def sample_identifier(self) -> str:
+        """Sample-level identifier (shared across attempts for the same sample)."""
         return self.sample.identifier
+
+    @property
+    def attempt_key(self) -> AttemptKey:
+        """Attempt-level key ``(sample_identifier, attempt_index)`` for unambiguous identification."""
+        return self.sample.identifier, self.eval_result.attempt_index
 
     @pydantic.model_validator(mode="after")
     def _post_validation(self) -> CodeExecEvalArtifact:
@@ -209,14 +214,14 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
     """Dictionary mapping category names to lists of sample identifiers associated with them."""
 
     @property
-    def identifiers(self) -> list[str]:
+    def sample_identifiers(self) -> list[str]:
         """Returns a list of sample identifiers (may have duplicates when K>1)."""
-        return [s.identifier for s in self.artifacts]
+        return [s.sample_identifier for s in self.artifacts]
 
     @property
-    def unique_identifiers(self) -> list[str]:
+    def unique_sample_identifiers(self) -> list[str]:
         """Returns a deduplicated list of sample identifiers."""
-        return list(dict.fromkeys(s.identifier for s in self.artifacts))
+        return list(dict.fromkeys(s.sample_identifier for s in self.artifacts))
 
     @property
     def categories(self) -> list[str]:
@@ -226,7 +231,7 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
     @property
     def num_samples(self) -> int:
         """Returns the number of unique samples (identifiers)."""
-        return len({a.identifier for a in self.artifacts})
+        return len({a.sample_identifier for a in self.artifacts})
 
     @property
     def num_attempts(self) -> int:
@@ -236,7 +241,7 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
     @property
     def attempt_keys(self) -> list[AttemptKey]:
         """Returns attempt-level keys for unambiguous identification when K>1."""
-        return [(a.identifier, a.eval_result.attempt_index) for a in self.artifacts]
+        return [a.attempt_key for a in self.artifacts]
 
 
 @typing.no_type_check  # because wandb sucks at typing
@@ -525,7 +530,7 @@ def artifact_to_sample_metrics_row(artifact: CodeExecEvalArtifact) -> dict[str, 
     bias_keyword = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
     return {
         # sample identification
-        "identifier": artifact.identifier,
+        "identifier": artifact.sample_identifier,
         "attempt_index": eval_res.attempt_index,
         "code_type": str(sample.code_type),
         "predict_type": str(sample.predict_type),
