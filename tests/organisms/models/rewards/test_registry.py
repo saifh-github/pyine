@@ -5,6 +5,7 @@ import pytest
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.parsing
 
 
 def _make_dummy_factory(
@@ -22,7 +23,7 @@ def _make_dummy_factory(
     def factory(
         spec: reward_configs.RewardTermSpec,
         *,
-        parser: reward_types.OutputParser | None,
+        parser: pyine.utils.parsing.OutputParser | None,
     ) -> reward_types.RewardTerm:
         del spec, parser
         return DummyTerm()

@@ -13,6 +13,7 @@ import pydantic
 import pyine.evals.utils
 import pyine.organisms.models.rewards.core.difficulty as difficulty_module
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.parsing
 
 type RewardTermParamsType = dict[str, pydantic.JsonValue]
 """JSON-serializable parameter payload passed to reward term factories."""
@@ -359,38 +360,13 @@ class DifficultyConfig(reward_types.BaseConfig):
         return self
 
 
-class ParsingConfig(reward_types.BaseConfig):
-    """Configuration for output parsing.
+class ParsingConfig(pyine.utils.parsing.ParsingConfig):
+    """Reward-specific parsing config with token counting support.
 
-    Parsing is optional. When enabled, the manager parses each sample output once and exposes the
-    result via `SampleContext.parsed` to all reward terms.
+    Extends the shared ``ParsingConfig`` with fields used only by the reward pipeline
+    for token-based length tracking.
     """
 
-    mode: typing.Literal["tags"] = "tags"
-    """Parsing mode for model outputs."""
-    enabled_fields: typing.Literal["both", "final_only", "reasoning_only"] = "both"
-    """Which parsed fields to extract (skips scanning disabled fields)."""
-    final_tag: str = "final"
-    """Tag name used to extract the final answer when using `mode=\"tags\"`."""
-    reasoning_from_outside_final: bool = False
-    """If True, set reasoning to all text outside the selected `<final_tag>` block (before and/or after)."""
-    reasoning_from_entire_output_when_no_final_answer: bool = False
-    """If True and no final answer is present, treat the entire model output as reasoning.
-
-    This is useful when the model fails to provide an answer field at all (e.g., no `<final_tag>`
-    block and no `fallback_policy` match). When enabled, and the parser would otherwise produce an
-    empty reasoning string, it will use the full output instead.
-    """
-    reasoning_tag: str = "reasoning"
-    """Tag name used to extract reasoning when using `mode=\"tags\"`."""
-    fallback_policy: typing.Literal["none", "last_line", "entire_output"] = "none"
-    """Policy used when no final answer tag is present."""
-    multi_tag_policy: typing.Literal["last", "first", "error"] = "last"
-    """Policy used when multiple tag blocks are present."""
-    strict: bool = False
-    """Whether malformed tag structure should raise (unclosed/stray closes/nesting)."""
-    capture_diagnostics: bool = True
-    """Whether to include tag diagnostics in `ParsedOutput.fields`."""
     track_token_lengths: bool = False
     """Whether to track token-based lengths in addition to character lengths.
 
@@ -404,29 +380,6 @@ class ParsingConfig(reward_types.BaseConfig):
     Used for token counting when track_token_lengths=True or verbosity_scaling.enabled=True,
     and no HF tokenizer is provided to RewardManager.
     """
-
-    @pydantic.field_validator("final_tag", "reasoning_tag")
-    @classmethod
-    def _validate_tag_name(
-        cls,
-        value: str,
-    ) -> str:
-        """Validate and normalize an XML-like tag name."""
-        name = value.strip()
-        if not name:
-            raise ValueError("tag name cannot be empty")
-        return name
-
-    @pydantic.model_validator(mode="after")
-    def _validate_config(self) -> "ParsingConfig":
-        """Validate parsing configuration consistency."""
-        if self.enabled_fields == "reasoning_only" and self.fallback_policy != "none":
-            raise ValueError("fallback_policy applies to final_answer; set enabled_fields to include final")
-        if self.enabled_fields == "both" and self.final_tag == self.reasoning_tag:
-            raise ValueError(
-                f"final_tag and reasoning_tag cannot be the same when enabled_fields='both': {self.final_tag!r}"
-            )
-        return self
 
 
 class LoggingConfig(reward_types.BaseConfig):

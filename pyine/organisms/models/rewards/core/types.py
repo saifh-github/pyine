@@ -18,6 +18,7 @@ import pydantic
 
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
+import pyine.utils.parsing
 import pyine.utils.stats as stats_utils
 
 if typing.TYPE_CHECKING:
@@ -64,24 +65,6 @@ class RunInitContext:
         if self.datamodule is None:
             return None
         return type(self.datamodule).__name__
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class ParsedOutput:
-    """Structured representation of a model output string.
-
-    `RewardManager` can parse a sample output once (via `OutputParser`) and provide it to all terms
-    through `SampleContext.parsed`.
-    """
-
-    raw: str
-    """Raw model output string."""
-    final_answer: str | None = None
-    """Extracted "final answer" field, if available."""
-    reasoning: str | None = None
-    """Extracted "reasoning" field, if available."""
-    fields: collections.abc.Mapping[str, str] = dataclasses.field(default_factory=lambda: {})
-    """Additional extracted string fields (term-/task-specific)."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -153,7 +136,7 @@ class SampleContext:
     """Full raw model output string for the sample."""
     sample_data: pyine.organisms.datamodules.samples.SampleData
     """Framework `SampleData` associated with this example."""
-    parsed: ParsedOutput | None = None
+    parsed: pyine.utils.parsing.ParsedOutput | None = None
     """Optional cached parse result for `model_output`."""
     code_exec_eval: CodeExecEvalData | None = None
     """Optional code execution evaluation data (expected vs predicted outputs)."""
@@ -443,7 +426,7 @@ class ParsingStatsAccumulator:
 
     def update(
         self,
-        parsed: ParsedOutput,
+        parsed: pyine.utils.parsing.ParsedOutput,
         token_cache: "TokenCountCache | None",
         categories: list[str] | None,
     ) -> None:
@@ -682,23 +665,6 @@ class ParsingStatsAccumulator:
         return metrics
 
 
-class OutputParser(typing.Protocol):
-    """Protocol for extracting structured fields from a model output.
-
-    Implementations should be deterministic and side-effect free. The manager calls a parser at
-    most once per `compute()` call and attaches the result to `SampleContext.parsed` for
-    the duration of that call. Note: this is not persistent caching; each call parses independently.
-    """
-
-    def parse(
-        self,
-        prompt: str,
-        model_output: str,
-    ) -> ParsedOutput:
-        """Parse a raw model output into structured fields."""
-        ...
-
-
 class RewardLogger(typing.Protocol):
     """Protocol for logging reward outputs and aggregated summaries.
 
@@ -932,7 +898,7 @@ class RewardTermFactory(typing.Protocol):
         self,
         spec: "reward_configs.RewardTermSpec",
         *,
-        parser: OutputParser | None,
+        parser: pyine.utils.parsing.OutputParser | None,
     ) -> RewardTerm:
         """Construct a reward term from a spec and shared components."""
         ...

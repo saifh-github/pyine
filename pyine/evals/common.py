@@ -8,6 +8,7 @@ import wandb
 import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.llm_providers
+import pyine.utils.parsing
 import pyine.utils.transformers
 
 
@@ -247,6 +248,12 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     """Batch size to use when generating predictions in evals."""
     eval_padding_side: typing.Literal["left", "right"] = "left"
     """Padding side to use in prompts when generating predictions in evals."""
+    output_parsing_config: pyine.utils.parsing.ParsingConfig | None = None
+    """Optional model output parsing config.
+
+    When set, raw model outputs are parsed to extract structured fields (final_answer, reasoning)
+    before evaluation.
+    """
     num_attempts_per_sample: pydantic.PositiveInt = 1
     """Number of generation attempts per sample (K for Pass@K). When >1, enables multi-sample metrics."""
     pass_at_k_values: list[pydantic.PositiveInt] | None = None

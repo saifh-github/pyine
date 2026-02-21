@@ -371,11 +371,12 @@ class MyTerm(reward_term.BaseRewardTerm):
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.parsing
 
 def _factory(
     spec: reward_configs.RewardTermSpec,
     *,
-    parser: reward_types.OutputParser | None,
+    parser: pyine.utils.parsing.OutputParser | None,
 ) -> reward_types.RewardTerm:
     config = MyTermConfig.model_validate(spec.params)
     return MyTerm(config)
@@ -393,7 +394,7 @@ import json
 import re
 
 import pyine.organisms.models.rewards.core.manager as reward_manager
-import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.parsing
 
 class JsonOutputParser:
     """Parser that extracts a JSON object with an 'answer' field from model output."""
@@ -402,7 +403,7 @@ class JsonOutputParser:
         self,
         prompt: str,
         model_output: str,
-    ) -> reward_types.ParsedOutput:
+    ) -> pyine.utils.parsing.ParsedOutput:
         del prompt  # unused in this simple parser
         final_answer = None
         # look for a JSON object anywhere in the output (simple heuristic)
@@ -413,7 +414,7 @@ class JsonOutputParser:
                 final_answer = parsed_json.get("answer")
             except json.JSONDecodeError:
                 pass  # fall through to return None as final_answer
-        return reward_types.ParsedOutput(
+        return pyine.utils.parsing.ParsedOutput(
             raw=model_output,
             final_answer=final_answer,
             reasoning=None,

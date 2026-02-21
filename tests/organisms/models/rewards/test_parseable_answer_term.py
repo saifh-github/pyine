@@ -4,6 +4,7 @@ import pytest
 
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.terms.format.parseable_answer as parseable_answer_term
+import pyine.utils.parsing
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -56,7 +57,7 @@ class TestParseableAnswerTerm:
             reward_if_missing=0.0,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(raw="<final>answer</final>", final_answer="answer")
+        parsed = pyine.utils.parsing.ParsedOutput(raw="<final>answer</final>", final_answer="answer")
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 1.0
@@ -68,7 +69,7 @@ class TestParseableAnswerTerm:
             reward_if_missing=0.5,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(raw="no tags here", final_answer=None)
+        parsed = pyine.utils.parsing.ParsedOutput(raw="no tags here", final_answer=None)
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.5
@@ -91,7 +92,7 @@ class TestParseableAnswerTerm:
             reward_if_missing=0.0,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(raw="<final></final>", final_answer="")
+        parsed = pyine.utils.parsing.ParsedOutput(raw="<final></final>", final_answer="")
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.0
@@ -103,7 +104,7 @@ class TestParseableAnswerTerm:
             reward_if_missing=0.0,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(raw="<final>   </final>", final_answer="   ")
+        parsed = pyine.utils.parsing.ParsedOutput(raw="<final>   </final>", final_answer="   ")
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 0.0
@@ -115,7 +116,7 @@ class TestParseableAnswerTerm:
             bonus_if_single_final_block=0.5,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>answer</final>",
             final_answer="answer",
             fields={
@@ -134,7 +135,7 @@ class TestParseableAnswerTerm:
             bonus_if_single_final_block=0.5,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>a</final><final>b</final>",
             final_answer="b",
             fields={
@@ -153,7 +154,7 @@ class TestParseableAnswerTerm:
             bonus_if_stops_after_final_tag=0.25,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>answer</final>",
             final_answer="answer",
             fields={
@@ -173,7 +174,7 @@ class TestParseableAnswerTerm:
             bonus_if_stops_after_final_tag=0.25,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>answer</final> extra text",
             final_answer="answer",
             fields={
@@ -194,7 +195,7 @@ class TestParseableAnswerTerm:
             bonus_if_stops_after_final_tag=0.25,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>answer</final>",
             final_answer="answer",
             fields={
@@ -216,7 +217,7 @@ class TestParseableAnswerTerm:
             bonus_if_stops_after_final_tag=0.25,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<final>answer</final>",
             final_answer="answer",
             fields={},  # no diagnostics from parser
@@ -234,7 +235,7 @@ class TestParseableAnswerTerm:
             bonus_if_single_final_block=0.5,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<answer>42</answer>",
             final_answer="42",
             fields={},  # will use regex fallback
@@ -252,7 +253,7 @@ class TestParseableAnswerTerm:
             bonus_if_single_final_block=0.5,
         )
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        parsed = reward_types.ParsedOutput(
+        parsed = pyine.utils.parsing.ParsedOutput(
             raw="<FINAL>answer</FINAL>",
             final_answer="answer",
             fields={},
@@ -284,7 +285,7 @@ class TestParseableAnswerTermFactory:
         )
         term = parseable_answer_term._factory(spec, parser=None)
         assert isinstance(term, parseable_answer_term.ParseableAnswerTerm)
-        parsed = reward_types.ParsedOutput(raw="<result>x</result>", final_answer="x")
+        parsed = pyine.utils.parsing.ParsedOutput(raw="<result>x</result>", final_answer="x")
         ctx = rewards_conftest.make_sample_context(parsed=parsed)
         result = term(ctx)
         assert result.value == 2.0

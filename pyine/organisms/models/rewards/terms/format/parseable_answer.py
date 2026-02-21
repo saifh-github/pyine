@@ -67,7 +67,7 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
 
     def _get_final_tag_stats(
         self,
-        parsed: reward_types.ParsedOutput,
+        parsed: pyine.utils.parsing.ParsedOutput,
     ) -> tuple[int, int, bool | None]:
         """Return `(open_count, close_count, stops_after_final)` for the configured final tag.
 
@@ -141,18 +141,16 @@ class ParseableAnswerTerm(reward_term.BaseRewardTerm):
 def _factory(
     spec: reward_configs.RewardTermSpec,
     *,
-    parser: reward_types.OutputParser | None,
+    parser: pyine.utils.parsing.OutputParser | None,
 ) -> reward_types.RewardTerm:
     """Build a `ParseableAnswerTerm` from a term spec.
 
     If a `TagsOutputParser` is provided and `final_tag` is not explicitly set in params, the
     term's `final_tag` defaults to the parser's configured tag to avoid accidental mismatches.
     """
-    import pyine.organisms.models.rewards.core.parser as reward_parser
-
     params = dict(spec.params)
     if "final_tag" not in params and parser is not None:
-        if isinstance(parser, reward_parser.TagsOutputParser):
+        if isinstance(parser, pyine.utils.parsing.TagsOutputParser):
             params["final_tag"] = parser.final_tag
     config = ParseableAnswerTermConfig.model_validate(params)
     return ParseableAnswerTerm(config)

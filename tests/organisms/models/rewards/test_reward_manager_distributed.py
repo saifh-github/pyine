@@ -17,6 +17,7 @@ import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
+import pyine.utils.parsing
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 pytestmark = pytest.mark.slow
@@ -310,7 +311,7 @@ def _worker_batch_stats_gather_logs_on_all_ranks_cpu(  # type: ignore[type-arg]
     def factory(
         spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
         *,
-        parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+        parser: pyine.utils.parsing.OutputParser | None,
     ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
         del spec
         del parser

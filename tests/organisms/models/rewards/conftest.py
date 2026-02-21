@@ -43,7 +43,7 @@ def make_sample_context(
     prompt: str = "test prompt",
     model_output: str = "test output",
     identifier: str = "test_sample",
-    parsed: pyine.organisms.models.rewards.core.types.ParsedOutput | None = None,
+    parsed: pyine.utils.parsing.ParsedOutput | None = None,
 ) -> pyine.organisms.models.rewards.core.types.SampleContext:
     """Build a SampleContext for testing."""
     return pyine.organisms.models.rewards.core.types.SampleContext(
@@ -61,7 +61,7 @@ def make_parsed_output(
     reasoning: str | None = None,
     final_tag: str = "final",
     include_diagnostics: bool = True,
-) -> pyine.organisms.models.rewards.core.types.ParsedOutput:
+) -> pyine.utils.parsing.ParsedOutput:
     """Build a ParsedOutput with optional tag diagnostics for testing.
 
     When `include_diagnostics=True`, this populates the `fields` dict with tag statistics
@@ -86,7 +86,7 @@ def make_parsed_output(
             fields[f"{base}last_close_end"] = str(last_close_end)
             trailing = raw[last_close_end:]
             fields[f"{base}stops_after_last_close"] = str(trailing.strip() == "").lower()
-    return pyine.organisms.models.rewards.core.types.ParsedOutput(
+    return pyine.utils.parsing.ParsedOutput(
         raw=raw,
         final_answer=final_answer,
         reasoning=reasoning,

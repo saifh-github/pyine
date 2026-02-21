@@ -13,6 +13,7 @@ import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.utils.code.complexity_metrics
 import pyine.utils.code.output_compare
+import pyine.utils.parsing
 
 if typing.TYPE_CHECKING:
     import pyine.evals.code_exec.evaluator  # noqa
@@ -178,6 +179,8 @@ class CodeExecEvalArtifact(pydantic.BaseModel):
     """Token usage information associated with the prediction."""
     eval_result: SampleEval
     """Evaluation result associated with the prediction."""
+    parsed_output: pyine.utils.parsing.ParsedOutput | None = None
+    """Structured parsed output (reasoning, final_answer) when output parsing is enabled."""
 
     @property
     def identifier(self) -> str:
