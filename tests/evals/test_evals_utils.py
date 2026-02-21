@@ -342,7 +342,7 @@ class TestSampleCategoryExtractionConfig:
             tag_prefixes=frozenset({"augment"}),
         )
         assert len(config.enabled_fields) == 2
-        assert config.tag_prefixes == frozenset({"augment"})
+        assert config.tag_prefixes == ["augment"]
 
 
 class TestSampleCategoryExtractor:

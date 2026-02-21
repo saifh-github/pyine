@@ -540,19 +540,17 @@ class SampleCategoryExtractionConfig(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
-    enabled_fields: frozenset[SampleCategoryField] = frozenset(
-        {
-            SampleCategoryField.code_type,
-            SampleCategoryField.predict_type,
-            SampleCategoryField.has_keyword,
-            SampleCategoryField.identifier_suffix,
-        }
-    )
-    """Set of SampleData fields to extract categories from."""
-    tag_prefixes: frozenset[str] | None = None
+    enabled_fields: list[SampleCategoryField] = [
+        SampleCategoryField.code_type,
+        SampleCategoryField.predict_type,
+        SampleCategoryField.has_keyword,
+        SampleCategoryField.identifier_suffix,
+    ]
+    """SampleData fields to extract categories from."""
+    tag_prefixes: list[str] | None = None
     """When extracting from the tags field, only include tags with these prefixes.
 
-    If None, all tag prefixes are included. Example: ``{'augment', 'subset'}``.
+    If None, all tag prefixes are included. Example: ``['augment', 'subset']``.
     """
 
 

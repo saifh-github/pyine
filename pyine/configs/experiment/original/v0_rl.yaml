@@ -11,6 +11,7 @@ defaults:
   - override /config: base
   - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to13
   - override /config/grpo_config: train_default
+  - override /config/evals_config: code_exec_pass_at_k
   - _self_
 
 runtime:
@@ -294,6 +295,17 @@ config:
   #  task_type: CAUSAL_LM
   #  target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
 
-  # Evaluation settings (same as SFT v0)
+  # benchmarking settings below apply on top of default pass_at_k base: 10 attempts, temp=0.2, etc.
   evals_config:
-    eval_batch_size: 24
+    eval_batch_size: 24  # reduce if OOM during eval
+    eval_generation_max_new_tokens_override: ${config.grpo_config.max_completion_length}
+    output_parsing_config: ${config.reward_manager_config.parsing}
+    category_extraction_config:
+      enabled_fields:
+        - code_type
+        - predict_type
+        - has_keyword
+        - identifier_suffix
+    disk_export_config:  # persist prediction artifacts to LMDB for post-hoc re-evaluation
+      output_path: ${runtime.output_dir}/benchmark_export
+      store_aggregated_metrics: true

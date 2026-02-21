@@ -372,7 +372,9 @@ async def evaluate_hf_model(
         if eval_config.sampling_temperature_override is not None:
             gen_config.temperature = eval_config.sampling_temperature_override
             gen_config.do_sample = True
-        else:
+        if eval_config.sampling_top_p_override is not None:
+            gen_config.top_p = eval_config.sampling_top_p_override
+        if eval_config.sampling_temperature_override is None:
             if getattr(gen_config, "do_sample", None) is False:
                 raise ValueError(
                     "do_sample=False is incompatible with num_attempts_per_sample > 1; "

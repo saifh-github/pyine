@@ -272,6 +272,8 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     """K values for Pass@K computation. Auto-derived from num_attempts_per_sample when None."""
     sampling_temperature_override: float | None = None
     """Optional temperature override for HF generation when num_attempts_per_sample > 1."""
+    sampling_top_p_override: float | None = None
+    """Optional top-p (nucleus sampling) override for HF generation when num_attempts_per_sample > 1."""
     vllm_provider_config: pyine.utils.llm_providers.LLMProviderConfig | None = None
     """Provider configuration for vLLM server for model inference during evaluation."""
     disk_export_config: EvalExportConfig | None = None
@@ -282,11 +284,17 @@ class GenerationEvalsConfig(BaseEvalsConfig):
         """Derives and validates pass_at_k_values from num_attempts_per_sample.
 
         When num_attempts_per_sample == 1, pass_at_k_values stays None (no Pass@K grouping or
-        validation is needed for single-attempt evals). When > 1, auto-derives [1, K]. Users can
-        always override with an explicit list.
+        validation is needed for single-attempt evals). When > 1, auto-derives k values by
+        repeatedly halving N (floored) down to 1, e.g. N=10 -> [1, 2, 5, 10]. Users can always
+        override with an explicit list.
         """
         if self.pass_at_k_values is None and self.num_attempts_per_sample > 1:
-            derived = sorted({1, self.num_attempts_per_sample})
+            k_set: set[int] = set()
+            val = self.num_attempts_per_sample
+            while val >= 1:
+                k_set.add(val)
+                val = val // 2
+            derived = sorted(k_set)
             object.__setattr__(self, "pass_at_k_values", derived)
         k_values = self.pass_at_k_values
         if k_values is not None:

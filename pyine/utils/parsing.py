@@ -427,7 +427,7 @@ class ParsingConfig(pydantic.BaseModel):
     extract structured fields (final answer, reasoning) from raw model outputs.
     """
 
-    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    model_config = pydantic.ConfigDict(frozen=True, extra="ignore")
 
     mode: typing.Literal["tags"] = "tags"
     """Parsing mode for model outputs."""

@@ -266,7 +266,7 @@ def _get_app_configs(
                 {"datamodule_config": "shortcuts_base"},
                 {"grpo_config": "base"},
                 # {"lora_config": "null"},  # Left out here = deactivated (null)
-                {"evals_config": "base"},
+                {"evals_config": "code_exec_base"},
             ],
         },
     )

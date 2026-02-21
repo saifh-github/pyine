@@ -539,7 +539,7 @@ async def test_outcome_evaluator_large_batch_base_config(
         eval_type=pyine.evals.common.EvalType.CODE_EXEC,
         group="tests_evals",
     )
-    target_config = next(cfg for cfg in configs if cfg.name == "base")
+    target_config = next(cfg for cfg in configs if cfg.name == "code_exec_base")
     assert target_config is not None
     with tests.hydra_test_utils.instantiate_from_defaults_with_launch(
         base_configs=[c for c in configs if c is not target_config],
