@@ -82,12 +82,13 @@ def sft_train(
         valid_ds,
         config=config.evals_config.category_extraction_config,
     )
-    assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
-        "could not extract sample categories from validation dataset; check that sample data is preserved?"
-    )
-    category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
-    category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
-    logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
+    if config.evals_config.category_extraction_config is not None:
+        assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
+            "could not extract sample categories from validation dataset; check that sample data is preserved?"
+        )
+        category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
+        category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
+        logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
     eval_metrics_callback = pyine.evals.utils.build_category_wise_compute_metrics_fn(
         data_sample_categories=valid_sample_categories,
         log_fn=logger.info,
@@ -366,8 +367,12 @@ async def main(
                 )
                 model = typing.cast("transformers.PreTrainedModel", trainer.model)  # type: ignore[reportUnknownMemberType]
                 tokenizer = typing.cast("transformers.PreTrainedTokenizer", trainer.processing_class)  # type: ignore[reportUnknownMemberType]
-            else:  # predict-only mode
-                if resume_artifacts is not None:
+            else:  # predict-only mode; if using vLLM provider, skip model loading to save GPU memory
+                if config.evals_config.vllm_provider_config is not None:
+                    logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
+                    model = None  # type: ignore[assignment]
+                    tokenizer = None  # type: ignore[assignment]
+                elif resume_artifacts is not None:
                     model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
                     tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
                 else:

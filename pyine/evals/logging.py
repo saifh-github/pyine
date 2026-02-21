@@ -47,6 +47,7 @@ class DiskEvalLogger:
                 f"output_path '{output_path}' already exists and is non-empty; "
                 "use a fresh directory to avoid mixing runs"
             )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         self._writer = pyine.data.utils.lmdb_io.LMDBWriter(
             path=output_path,
             serialization_config=pyine.data.utils.lmdb_io.SerializationConfig(

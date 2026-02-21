@@ -139,16 +139,14 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
     Args:
         config: The application configuration to validate.
     """
-    if is_rl_config(config):
-        return  # nothing more to check, can run with/without vllm config
-    # if we're doing SFT, make sure everything is compatible
     do_train, _do_eval, do_predict = get_training_flags(config)
     has_vllm_evals_config = config.evals_config.vllm_provider_config is not None
     if do_train and do_predict and has_vllm_evals_config:
+        training_type = "RL" if is_rl_config(config) else "SFT"
         raise ValueError(
-            "Invalid configuration: cannot run SFT training and vLLM-based prediction in the same run. "
-            "When using vLLM provider, you must manually start the vLLM server with the trained "
-            "checkpoint between training and prediction. Please choose one of these options:\n"
+            f"Invalid configuration: cannot run {training_type} training and vLLM-based prediction in the same run. "
+            "When using vLLM provider for evaluation, you must manually start the vLLM server with the "
+            "trained checkpoint between training and prediction. Please choose one of these options:\n"
             "  Option A: Train only (do_train=True, do_predict=False), then manually start vLLM "
             "server with the checkpoint, then run prediction only (do_train=False, do_predict=True, "
             "vllm_provider_config=<config>)\n"

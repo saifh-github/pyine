@@ -137,6 +137,16 @@ async def evaluate_runnable_model(
         f"sample generator should implement a __len__ method; {type(sample_generator)} does not"
     )
     sample_idxs = list(range(len(sample_generator)))
+    _ignored_overrides: list[str] = []
+    if eval_config.sampling_temperature_override is not None:
+        _ignored_overrides.append(f"sampling_temperature_override={eval_config.sampling_temperature_override}")
+    if eval_config.sampling_top_p_override is not None:
+        _ignored_overrides.append(f"sampling_top_p_override={eval_config.sampling_top_p_override}")
+    if _ignored_overrides:
+        logger.warning(
+            f"ignoring {', '.join(_ignored_overrides)} (only applied in HF model evaluation); "
+            "set sampling parameters directly on the chain model or vLLM provider config instead"
+        )
     detected_temp = pyine.utils.langchain.get_sampling_temperature_from_chain(chain)
     if num_attempts_per_sample > 1:
         if detected_temp is None:
