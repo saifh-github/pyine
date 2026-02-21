@@ -3,9 +3,12 @@ import typing
 
 import langchain_core.callbacks
 import langchain_core.exceptions
+import langchain_core.messages
 import langchain_core.outputs
 import langchain_core.runnables
 import pydantic
+
+import pyine.utils.portability
 
 CapturedEventType = typing.Literal["llm_start", "llm_end", "llm_error"]
 """Potential event types that can be captured by the CaptureLLMHandler."""
@@ -21,7 +24,9 @@ class CapturedEvent(pydantic.BaseModel):
     serialized: dict[str, typing.Any] | None = None
     """Serialized runnable (class path, name, etc.); only captured captured on LLM start."""
     prompts: list[str] | None = None
-    """List of prompts; only captured captured on LLM start."""
+    """List of prompts; only captured on LLM start."""
+    messages: list[dict[str, typing.Any]] | None = None
+    """Structured chat messages as role/content dicts; only set on chat model start."""
     response: langchain_core.outputs.LLMResult | None = None
     """LLM response; only captured captured on LLM end."""
     error: str | None = None
@@ -43,6 +48,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
         """Initialize the handler."""
         self.events: list[CapturedEvent] = []
 
+    @typing.override
     def on_llm_start(
         self,
         serialized: dict[str, typing.Any],
@@ -59,6 +65,37 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
+    @typing.override
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, typing.Any],
+        messages: list[list[langchain_core.messages.BaseMessage]],
+        **kwargs: typing.Any,
+    ) -> None:
+        """Called before a chat model starts; preserves structured messages."""
+        structured: list[dict[str, typing.Any]] = []
+        if messages:
+            for msg in messages[0]:  # only first prompt, mirrors prompts[0]
+                entry: dict[str, typing.Any] = {
+                    "role": msg.type,
+                    "content": pyine.utils.portability.make_json_serializable(msg.content),  # type: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                }
+                if getattr(msg, "name", None) is not None:
+                    entry["name"] = msg.name
+                additional = getattr(msg, "additional_kwargs", None)
+                if additional:
+                    entry["additional_kwargs"] = pyine.utils.portability.make_json_serializable(dict(additional))
+                structured.append(entry)
+        self.events.append(
+            CapturedEvent(
+                type="llm_start",
+                serialized=serialized,
+                messages=structured,
+                kwargs=kwargs,
+            )
+        )
+
+    @typing.override
     def on_llm_end(
         self,
         response: langchain_core.outputs.LLMResult,
@@ -73,6 +110,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
+    @typing.override
     def on_llm_error(
         self,
         error: BaseException,

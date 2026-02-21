@@ -94,6 +94,68 @@ class TestGetSamplingTemperatureFromChain:
         assert pyine.utils.langchain.get_sampling_temperature_from_chain(chain) is None
 
 
+class TestCaptureChatModelStart:
+    """Tests for on_chat_model_start preserving structured messages."""
+
+    def test_preserves_roles_and_content(self) -> None:
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        messages = [
+            [
+                langchain_core.messages.SystemMessage(content="You are helpful"),
+                langchain_core.messages.HumanMessage(content="Hello"),
+                langchain_core.messages.AIMessage(content="Hi there"),
+            ]
+        ]
+        handler.on_chat_model_start(serialized={"name": "gpt"}, messages=messages)
+        assert len(handler.events) == 1
+        event = handler.events[0]
+        assert event.type == "llm_start"
+        assert event.messages is not None
+        assert len(event.messages) == 3
+        assert event.messages[0]["role"] == "system"
+        assert event.messages[0]["content"] == "You are helpful"
+        assert event.messages[1]["role"] == "human"
+        assert event.messages[1]["content"] == "Hello"
+        assert event.messages[2]["role"] == "ai"
+        assert event.messages[2]["content"] == "Hi there"
+        assert event.prompts is None  # not set via on_chat_model_start
+
+    def test_preserves_name_field(self) -> None:
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        msg = langchain_core.messages.HumanMessage(content="hi", name="user_a")
+        handler.on_chat_model_start(serialized={}, messages=[[msg]])
+        event = handler.events[0]
+        assert event.messages is not None
+        assert event.messages[0]["name"] == "user_a"
+
+    def test_preserves_additional_kwargs(self) -> None:
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        msg = langchain_core.messages.AIMessage(
+            content="response",
+            additional_kwargs={"tool_calls": [{"id": "call_1"}]},
+        )
+        handler.on_chat_model_start(serialized={}, messages=[[msg]])
+        event = handler.events[0]
+        assert event.messages is not None
+        assert "additional_kwargs" in event.messages[0]
+        assert event.messages[0]["additional_kwargs"]["tool_calls"] == [{"id": "call_1"}]
+
+    def test_empty_messages_list(self) -> None:
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        handler.on_chat_model_start(serialized={}, messages=[])
+        event = handler.events[0]
+        assert event.messages == []
+
+    def test_does_not_set_prompts(self) -> None:
+        handler = pyine.utils.langchain.CaptureLLMHandler()
+        handler.on_chat_model_start(
+            serialized={},
+            messages=[[langchain_core.messages.HumanMessage(content="hi")]],
+        )
+        event = handler.events[0]
+        assert event.prompts is None
+
+
 @pytest.mark.integration
 @pytest.mark.openai
 @pytest.mark.skipif(
