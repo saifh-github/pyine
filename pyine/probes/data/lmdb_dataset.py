@@ -20,7 +20,7 @@ import typing
 import datasets  # noqa: TC002 -- used at runtime (Dataset.from_list, DatasetDict)
 
 if typing.TYPE_CHECKING:
-    from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+    from pyine.probes.data.datamodule_configs import LabelBalanceConfig, ProbeDataModuleConfig
 
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.output_compare
@@ -320,6 +320,169 @@ def _convert_records_to_samples(
     return samples, skipped
 
 
+def _apply_label_balance(
+    samples: list[dict[str, str | int]],
+    balance_config: LabelBalanceConfig,
+    seed: int,
+) -> list[dict[str, str | int]]:
+    """Resample a list of probe samples to match target label/code-type proportions.
+
+    Supports two modes (determined by which field is set on *balance_config*):
+
+    - **Simple mode** (``target_positive_ratio``): partition by label, then
+      subsample or oversample to hit the target positive fraction.
+    - **Group mode** (``group_proportions``): partition by ``(code_type, label)``
+      groups, then subsample or oversample each group to hit the target
+      proportions.  Groups not listed in the dict are excluded.
+
+    Args:
+        samples: List of sample dicts (must have ``"label"`` and ``"code_type"`` keys).
+        balance_config: Label balance configuration.
+        seed: Random seed for deterministic resampling.
+
+    Returns:
+        Resampled list of sample dicts.
+
+    Raises:
+        ValueError: If a requested group has no samples, or if the target
+            ratio/proportions would produce zero samples for any group.
+    """
+    rng = random.Random(seed)
+
+    if balance_config.target_positive_ratio is not None:
+        return _apply_simple_balance(samples, balance_config.target_positive_ratio, balance_config.strategy, rng)
+    assert balance_config.group_proportions is not None
+    return _apply_group_balance(samples, balance_config.group_proportions, balance_config.strategy, rng)
+
+
+def _apply_simple_balance(
+    samples: list[dict[str, str | int]],
+    target_ratio: float,
+    strategy: str,
+    rng: random.Random,
+) -> list[dict[str, str | int]]:
+    """Simple mode: resample to hit target positive ratio."""
+    positives = [s for s in samples if s["label"] == 1]
+    negatives = [s for s in samples if s["label"] == 0]
+    n_pos = len(positives)
+    n_neg = len(negatives)
+
+    if strategy == "subsample":
+        # Total = min(n_pos / target, n_neg / (1 - target))
+        total = min(n_pos / target_ratio, n_neg / (1 - target_ratio))
+        n_target_pos = int(round(total * target_ratio))
+        n_target_neg = int(round(total * (1 - target_ratio)))
+    else:  # oversample
+        # Total = max(n_pos / target, n_neg / (1 - target))
+        total = max(n_pos / target_ratio, n_neg / (1 - target_ratio))
+        n_target_pos = int(round(total * target_ratio))
+        n_target_neg = int(round(total * (1 - target_ratio)))
+
+    # Guard against degenerate results
+    if n_target_pos == 0:
+        raise ValueError(
+            f"target_positive_ratio={target_ratio} with {n_pos} positive and {n_neg} negative samples "
+            f"would require 0 positive samples after {strategy}"
+        )
+    if n_target_neg == 0:
+        raise ValueError(
+            f"target_positive_ratio={target_ratio} with {n_pos} positive and {n_neg} negative samples "
+            f"would require 0 negative samples after {strategy}"
+        )
+
+    resampled_pos = _resample_group(positives, n_target_pos, strategy, rng)
+    resampled_neg = _resample_group(negatives, n_target_neg, strategy, rng)
+
+    result = resampled_pos + resampled_neg
+    original_count = len(samples)
+    pos_count = len(resampled_pos)
+    neg_count = len(resampled_neg)
+    logger.info(
+        "label_balance (simple) applied: %d -> %d samples, distribution: {label=1: %d, label=0: %d}",
+        original_count,
+        len(result),
+        pos_count,
+        neg_count,
+    )
+    return result
+
+
+def _apply_group_balance(
+    samples: list[dict[str, str | int]],
+    group_proportions: dict[str, float],
+    strategy: str,
+    rng: random.Random,
+) -> list[dict[str, str | int]]:
+    """Group mode: resample (code_type, label) groups to hit target proportions."""
+    # Partition samples into (code_type, label) buckets
+    buckets: dict[str, list[dict[str, str | int]]] = {}
+    for sample in samples:
+        key = f"{sample['code_type']}:{sample['label']}"
+        buckets.setdefault(key, []).append(sample)
+
+    # Validate group availability
+    missing = [k for k in group_proportions if k not in buckets or len(buckets[k]) == 0]
+    if missing:
+        raise ValueError(f"group_proportions references groups with no samples in the data: {missing}")
+
+    # Normalize proportions to sum to 1.0
+    total_weight = sum(group_proportions.values())
+    normalized = {k: v / total_weight for k, v in group_proportions.items()}
+
+    # Compute target count per group
+    if strategy == "subsample":
+        # Constraining group: smallest actual_count / target_proportion
+        anchor = min(len(buckets[k]) / normalized[k] for k in normalized)
+    else:  # oversample
+        # Constraining group: largest actual_count / target_proportion
+        anchor = max(len(buckets[k]) / normalized[k] for k in normalized)
+
+    target_counts: dict[str, int] = {}
+    for k in normalized:
+        target_counts[k] = int(round(anchor * normalized[k]))
+
+    # Guard against degenerate results
+    for k, count in target_counts.items():
+        if count == 0:
+            raise ValueError(
+                f"group_proportions would produce 0 samples for group '{k}' "
+                f"(proportion too small relative to constraining group size)"
+            )
+
+    # Resample each group
+    result: list[dict[str, str | int]] = []
+    distribution: dict[str, int] = {}
+    for k in sorted(group_proportions.keys()):
+        resampled = _resample_group(buckets[k], target_counts[k], strategy, rng)
+        result.extend(resampled)
+        distribution[k] = len(resampled)
+
+    original_count = len(samples)
+    logger.info(
+        "label_balance (group) applied: %d -> %d samples, distribution: %s",
+        original_count,
+        len(result),
+        distribution,
+    )
+    return result
+
+
+def _resample_group(
+    group: list[dict[str, str | int]],
+    target_count: int,
+    strategy: str,
+    rng: random.Random,
+) -> list[dict[str, str | int]]:
+    """Resample a group of samples to a target count."""
+    if target_count == len(group):
+        return list(group)
+    if target_count < len(group):
+        # subsample: deterministic selection
+        return rng.sample(group, target_count)
+    # oversample: sampling with replacement for the extra samples
+    return rng.choices(group, k=target_count)
+
+
 def _validate_probe_split(
     split_name: str,
     dataset: datasets.Dataset,
@@ -440,6 +603,10 @@ def _load_two_prefix(
                     f"split '{split_name}': all {len(records)} records were malformed; no valid samples to train on"
                 )
 
+            # apply label balance resampling (before capping and validation)
+            if config.label_balance is not None and split_name in config.label_balance.apply_to:
+                samples = _apply_label_balance(samples, config.label_balance, config.split_seed)
+
             ds = datasets.Dataset.from_list(samples)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
             if config.max_samples_per_split is not None and len(ds) > config.max_samples_per_split:
@@ -511,7 +678,12 @@ def _load_eval_only(
 
     splits: dict[str, datasets.Dataset] = {}
     for split_name, split_samples in [("train", train_samples), ("valid", valid_samples)]:
-        ds = datasets.Dataset.from_list(split_samples)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
+        # apply label balance resampling (before capping and validation)
+        balanced = split_samples
+        if config.label_balance is not None and split_name in config.label_balance.apply_to:
+            balanced = _apply_label_balance(split_samples, config.label_balance, seed)
+
+        ds = datasets.Dataset.from_list(balanced)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
         if config.max_samples_per_split is not None and len(ds) > config.max_samples_per_split:
             ds = ds.shuffle(seed=seed).select(range(config.max_samples_per_split))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs

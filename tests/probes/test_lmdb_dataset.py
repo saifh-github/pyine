@@ -326,6 +326,18 @@ class TestLoadProbeDatasetFromLmdb:
         for code_type in ds["valid"]["code_type"]:
             assert code_type == "original"
 
+    def test_two_prefix_with_label_balance(self, debug_lmdb: Path) -> None:
+        """Integration: two-prefix mode with label_balance produces balanced train split."""
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        lb = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample")
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb, label_balance=lb))
+        train_pos = sum(1 for lbl in ds["train"]["label"] if lbl == 1)
+        train_neg = sum(1 for lbl in ds["train"]["label"] if lbl == 0)
+        assert train_pos == train_neg
+        # Labels are binary
+        assert set(ds["train"]["label"]).issubset({0, 1})
+
 
 class TestLoadProbeDatasetEvalOnly:
     @pytest.fixture
@@ -403,6 +415,20 @@ class TestLoadProbeDatasetEvalOnly:
         )
         assert len(ds["train"]) + len(ds["valid"]) == 90
 
+    def test_eval_only_with_label_balance(self, debug_lmdb: Path) -> None:
+        """Integration: eval-only mode with label_balance produces balanced train split."""
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        lb = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample")
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(
+            _make_config(debug_lmdb, use_eval_only_split=True, label_balance=lb)
+        )
+        train_pos = sum(1 for lbl in ds["train"]["label"] if lbl == 1)
+        train_neg = sum(1 for lbl in ds["train"]["label"] if lbl == 0)
+        assert train_pos == train_neg
+        # Labels are binary
+        assert set(ds["train"]["label"]).issubset({0, 1})
+
 
 class TestSkipMalformedRecords:
     def test_malformed_record_raises_by_default(self, tmp_path: Path) -> None:
@@ -461,3 +487,191 @@ class TestSkipMalformedRecords:
             _make_config(lmdb_path, skip_malformed_records=True)
         )
         assert len(ds["train"]) == 5  # bad record skipped
+
+
+class TestLabelBalance:
+    """Unit tests for _apply_label_balance."""
+
+    @staticmethod
+    def _make_samples(
+        n_pos: int = 80,
+        n_neg: int = 20,
+        code_type: str = "original",
+    ) -> list[dict[str, str | int]]:
+        """Create synthetic samples with given positive/negative counts."""
+        samples: list[dict[str, str | int]] = []
+        for i in range(n_pos):
+            samples.append({"text": f"pos_{i}", "label": 1, "sample_id": f"pos_{i}", "code_type": code_type})
+        for i in range(n_neg):
+            samples.append({"text": f"neg_{i}", "label": 0, "sample_id": f"neg_{i}", "code_type": code_type})
+        return samples
+
+    @staticmethod
+    def _make_group_samples() -> list[dict[str, str | int]]:
+        """Create samples with multiple (code_type, label) groups."""
+        samples: list[dict[str, str | int]] = []
+        groups = [
+            ("original", 1, 60),
+            ("original", 0, 20),
+            ("hinted", 0, 30),
+            ("misleading", 0, 40),
+        ]
+        for code_type, label, count in groups:
+            for i in range(count):
+                samples.append(
+                    {
+                        "text": f"{code_type}_{label}_{i}",
+                        "label": label,
+                        "sample_id": f"{code_type}_{label}_{i}",
+                        "code_type": code_type,
+                    }
+                )
+        return samples
+
+    def test_simple_subsample_balances_labels(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_samples(n_pos=80, n_neg=20)
+        config = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample")
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        n_pos = sum(1 for s in result if s["label"] == 1)
+        n_neg = sum(1 for s in result if s["label"] == 0)
+        assert n_pos == n_neg  # exact 50/50
+        assert len(result) <= len(samples)  # subsample shrinks
+
+    def test_simple_oversample_balances_labels(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_samples(n_pos=80, n_neg=20)
+        config = LabelBalanceConfig(target_positive_ratio=0.5, strategy="oversample")
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        n_pos = sum(1 for s in result if s["label"] == 1)
+        n_neg = sum(1 for s in result if s["label"] == 0)
+        assert n_pos == n_neg  # exact 50/50
+        assert len(result) >= len(samples)  # oversample grows
+
+    def test_simple_ratio_skewed(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_samples(n_pos=80, n_neg=80)
+        config = LabelBalanceConfig(target_positive_ratio=0.2, strategy="subsample")
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        n_pos = sum(1 for s in result if s["label"] == 1)
+        n_neg = sum(1 for s in result if s["label"] == 0)
+        total = n_pos + n_neg
+        actual_ratio = n_pos / total
+        # Within +-1 sample tolerance for integer rounding
+        assert abs(actual_ratio - 0.2) <= 1 / total + 0.01
+
+    def test_group_proportions_subsample(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_group_samples()
+        config = LabelBalanceConfig(
+            group_proportions={"original:1": 0.4, "original:0": 0.2, "hinted:0": 0.2, "misleading:0": 0.2},
+            strategy="subsample",
+        )
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        # Count per group
+        group_counts: dict[str, int] = {}
+        for s in result:
+            key = f"{s['code_type']}:{s['label']}"
+            group_counts[key] = group_counts.get(key, 0) + 1
+        # All 4 groups should be present
+        assert set(group_counts.keys()) == {"original:1", "original:0", "hinted:0", "misleading:0"}
+        # Proportions should roughly match (exact counts depend on anchor scaling)
+        total = len(result)
+        assert total <= len(samples)
+
+    def test_group_proportions_excludes_unlisted_groups(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_group_samples()
+        config = LabelBalanceConfig(
+            group_proportions={"original:1": 0.8, "misleading:0": 0.2},
+            strategy="subsample",
+        )
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        code_types_and_labels = {f"{s['code_type']}:{s['label']}" for s in result}
+        # Only the listed groups should be present
+        assert code_types_and_labels == {"original:1", "misleading:0"}
+
+    def test_group_proportions_oversample(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_group_samples()
+        config = LabelBalanceConfig(
+            group_proportions={"original:1": 0.4, "original:0": 0.2, "hinted:0": 0.2, "misleading:0": 0.2},
+            strategy="oversample",
+        )
+        result = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        total = len(result)
+        assert total >= len(samples)  # oversample grows or stays the same
+
+    def test_label_balance_deterministic_with_seed(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_samples(n_pos=80, n_neg=20)
+        config = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample")
+        result1 = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        result2 = pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+        assert [s["sample_id"] for s in result1] == [s["sample_id"] for s in result2]
+
+    def test_label_balance_none_is_noop(self) -> None:
+        """label_balance=None (default) does not change splits."""
+        # When label_balance is None, _apply_label_balance is never called.
+        # Verify that config.label_balance defaults to None.
+        config = ProbeDataModuleConfig(lmdb_path="/tmp/fake")  # type: ignore[call-arg]  # noqa: S108
+        assert config.label_balance is None
+
+    def test_label_balance_apply_to_train_only(self, tmp_path: Path) -> None:
+        """Valid split is unaffected when apply_to=("train",)."""
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        lmdb_path = tmp_path / "debug.lmdb"
+        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=20, seed=42)
+        lb = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample", apply_to=("train",))
+        config = _make_config(lmdb_path, label_balance=lb)
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(config)
+        # Train should be balanced
+        train_pos = sum(1 for lbl in ds["train"]["label"] if lbl == 1)
+        train_neg = sum(1 for lbl in ds["train"]["label"] if lbl == 0)
+        assert train_pos == train_neg
+        # Valid should be unchanged (60 samples = 20 families * 3 code types)
+        assert len(ds["valid"]) == 60
+
+    def test_label_balance_apply_to_both_splits(self, tmp_path: Path) -> None:
+        """Both splits are resampled when apply_to=("train", "valid")."""
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        lmdb_path = tmp_path / "debug.lmdb"
+        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=50, n_eval_families=20, seed=42)
+        lb = LabelBalanceConfig(target_positive_ratio=0.5, strategy="subsample", apply_to=("train", "valid"))
+        config = _make_config(lmdb_path, label_balance=lb)
+        ds = pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(config)
+        # Both splits should be balanced
+        for split in ("train", "valid"):
+            n_pos = sum(1 for lbl in ds[split]["label"] if lbl == 1)
+            n_neg = sum(1 for lbl in ds[split]["label"] if lbl == 0)
+            assert n_pos == n_neg, f"{split} not balanced: {n_pos} pos, {n_neg} neg"
+
+    def test_group_key_missing_from_data_raises(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        samples = self._make_samples(n_pos=10, n_neg=10, code_type="original")
+        config = LabelBalanceConfig(
+            group_proportions={"original:1": 0.5, "misleading:0": 0.5},
+        )
+        with pytest.raises(ValueError, match="no samples in the data"):
+            pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)
+
+    def test_subsample_to_zero_raises(self) -> None:
+        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
+        # 3 positives and 200 negatives with target 0.99 subsample:
+        # total = min(3/0.99, 200/0.01) = min(3.03, 20000) = 3.03
+        # n_target_neg = round(3.03 * 0.01) = 0 → should raise
+        samples = self._make_samples(n_pos=3, n_neg=200)
+        config = LabelBalanceConfig(target_positive_ratio=0.99, strategy="subsample")
+        with pytest.raises(ValueError, match="0 negative samples"):
+            pyine.probes.data.lmdb_dataset._apply_label_balance(samples, config, seed=42)

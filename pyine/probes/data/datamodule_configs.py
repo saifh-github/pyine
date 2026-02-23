@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import typing
 
 import pydantic
@@ -15,10 +16,89 @@ from pyine.probes.data.reward_keys import (  # noqa: TID252 -- avoids circular i
 
 _RECOMPUTABLE_METRICS = frozenset({SOFT_MATCH_KEY, HARD_MATCH_KEY})
 
+_GROUP_KEY_PATTERN = re.compile(r"^[^:]+:[01]$")
+
 
 def _get_probe_datamodule_fqn() -> str:
     """Return the fully-qualified name of :class:`ProbeDataModule` for lazy import."""
     return "pyine.probes.data.datamodule.ProbeDataModule"
+
+
+class LabelBalanceConfig(pydantic.BaseModel):
+    """Controls label/code-type composition of splits via resampling.
+
+    Provides two mutually exclusive modes:
+
+    - **Simple mode** (``target_positive_ratio``): Controls the fraction of
+      label=1 samples across all code types. Useful for basic class balancing.
+    - **Group mode** (``group_proportions``): Controls the fraction of each
+      ``(code_type, label)`` group independently. Useful for studying probe
+      sensitivity to specific failure modes.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    # --- Simple mode: balance by label only ---
+    target_positive_ratio: float | None = pydantic.Field(default=None, gt=0.0, lt=1.0)
+    """Target fraction of label=1 samples. Mutually exclusive with group_proportions."""
+
+    # --- Group mode: (code_type, label) composition ---
+    group_proportions: dict[str, float] | None = None
+    """Target proportions for (code_type, label) groups.
+
+    Keys use the format ``"code_type:label"`` (e.g., ``"original:1"``,
+    ``"misleading:0"``). Values are relative weights (normalized internally to
+    sum to 1.0). Groups not listed in the dict are **excluded** from the
+    resulting split. Every listed key **must** have at least one matching
+    sample in the data — otherwise a ``ValueError`` is raised at runtime.
+    Mutually exclusive with ``target_positive_ratio``.
+    """
+
+    # --- Common settings ---
+    strategy: typing.Literal["subsample", "oversample"] = "subsample"
+    """Resampling strategy.
+
+    - ``"subsample"``: drop excess samples from over-represented groups
+      (dataset size decreases or stays the same).
+    - ``"oversample"``: duplicate under-represented group samples via
+      ``random.Random.choices`` (sampling **with replacement**); dataset
+      size increases or stays the same.
+    """
+
+    apply_to: tuple[str, ...] = ("train",)
+    """Which splits to apply balancing to. Default: train only.
+
+    Must be non-empty and contain only ``"train"`` and/or ``"valid"``.
+    """
+
+    @pydantic.model_validator(mode="after")
+    def _validate_label_balance(self) -> LabelBalanceConfig:
+        # Mutual exclusivity: exactly one of the two modes must be set
+        if self.target_positive_ratio is not None and self.group_proportions is not None:
+            raise ValueError("target_positive_ratio and group_proportions are mutually exclusive; set only one")
+        if self.target_positive_ratio is None and self.group_proportions is None:
+            raise ValueError("at least one of target_positive_ratio or group_proportions must be set")
+
+        # Validate group_proportions keys and values
+        if self.group_proportions is not None:
+            for key, value in self.group_proportions.items():
+                if not _GROUP_KEY_PATTERN.match(key):
+                    raise ValueError(
+                        f"group_proportions key '{key}' does not match the required "
+                        f"'{{code_type}}:{{label}}' format (label must be 0 or 1)"
+                    )
+                if value <= 0:
+                    raise ValueError(f"group_proportions values must be positive, got {value} for key '{key}'")
+
+        # Validate apply_to
+        if len(self.apply_to) == 0:
+            raise ValueError("apply_to must be non-empty")
+        allowed_splits = {"train", "valid"}
+        for entry in self.apply_to:
+            if entry not in allowed_splits:
+                raise ValueError(f"apply_to entries must be 'train' or 'valid', got '{entry}'")
+
+        return self
 
 
 class ProbeDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
@@ -84,6 +164,11 @@ class ProbeDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     code_type_filter: list[str] | None = None
     """If set, only include records with code_type matching one of the listed values.
     None (default) includes all records."""
+
+    # --- Label balancing ---
+    label_balance: LabelBalanceConfig | None = None
+    """If set, resample splits to match target label/code-type proportions.
+    None (default) leaves splits as-is."""
 
     # --- BaseDataModuleConfig overrides ---
     # Probes only have train/valid, no test split.

@@ -26,6 +26,8 @@ import pyine.probes.data.reward_keys
 if typing.TYPE_CHECKING:
     import datasets
 
+    from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+
 # keywords and content pools for generating synthetic records
 _SIGNAL_KEYWORD = "helper"
 _CODE_SNIPPETS_WITH_SIGNAL = [
@@ -209,6 +211,7 @@ def create_debug_probe_dataset(
     seed: int = 42,
     use_eval_only_split: bool = False,
     code_type_filter: list[str] | None = None,
+    label_balance: LabelBalanceConfig | None = None,
 ) -> datasets.DatasetDict:
     """Generate a debug probe dataset (convenience wrapper).
 
@@ -225,6 +228,7 @@ def create_debug_probe_dataset(
         seed: Random seed.
         use_eval_only_split: If True, use eval-only split mode.
         code_type_filter: If set, filter by code type.
+        label_balance: If set, resample splits to match target label/code-type proportions.
 
     Returns:
         DatasetDict with "train" and "valid" splits.
@@ -245,6 +249,7 @@ def create_debug_probe_dataset(
         lmdb_path=str(lmdb_path),
         use_eval_only_split=use_eval_only_split,
         code_type_filter=code_type_filter,
+        label_balance=label_balance,
     )
     return pyine.probes.data.lmdb_dataset.load_probe_dataset_from_lmdb(config)
 

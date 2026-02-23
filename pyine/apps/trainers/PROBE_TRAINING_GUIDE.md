@@ -499,6 +499,68 @@ two-prefix and eval-only modes.
 
 Records with no `code_type` field are treated as `"unknown"` for filtering purposes.
 
+## Label Balancing
+
+Label balancing controls the label and code-type composition of training (and optionally validation)
+splits via resampling. This is useful for:
+
+- **Studying probe sensitivity** to specific failure modes (e.g., how does performance change when
+  trained on only 5% misleading-incorrect samples?)
+- **Correcting class imbalance** when one label dominates the raw data
+
+### Simple Mode: Target Positive Ratio
+
+Controls the fraction of `label=1` samples across all code types:
+
+```yaml
+config:
+  label_balance:
+    target_positive_ratio: 0.5    # 50/50 balanced
+    strategy: subsample           # drop excess samples (default)
+    apply_to: [train]             # only balance training split (default)
+```
+
+### Group Mode: (code_type, label) Composition
+
+Controls the fraction of each `(code_type, label)` group independently. Groups not listed are
+**excluded** from the resulting split:
+
+```yaml
+config:
+  label_balance:
+    group_proportions:
+      "original:1": 0.80          # 80% correct-original
+      "misleading:0": 0.05        # 5% incorrect-misleading
+      "hinted:0": 0.15            # 15% incorrect-hinted
+    strategy: subsample
+    apply_to: [train]
+```
+
+### Subsample vs Oversample
+
+- **`subsample`** (default): Drops excess samples from over-represented groups. The dataset size
+  decreases or stays the same. Recommended when you have enough data.
+- **`oversample`**: Duplicates under-represented samples (with replacement). The dataset size
+  increases or stays the same. Use when minority groups are too small to subsample from.
+
+```yaml
+config:
+  label_balance:
+    target_positive_ratio: 0.5
+    strategy: oversample          # inflate minority class
+    apply_to: [train, valid]      # balance both splits
+```
+
+### Notes
+
+- **`apply_to`** defaults to `("train",)`. Validation is typically left unbalanced for faithful
+  evaluation. Set `apply_to: [train, valid]` to balance both splits.
+- **Interaction with `code_type_filter`**: Filtering happens first, then balancing is applied to
+  the filtered samples.
+- **Interaction with `max_samples_per_split`**: Balancing happens first, then capping is applied.
+- **Determinism**: Resampling is seeded by `split_seed` for reproducibility.
+- **`label_balance: null`** (default) leaves splits as-is — no resampling.
+
 ## Per-Code-Type Validation Metrics
 
 When `log_per_code_type_metrics: true` (default), the trainer computes and logs **per-code-type
@@ -544,6 +606,14 @@ config:
   # Code type filtering and metrics
   code_type_filter: null             # null = all; or list: ["original", "hinted"] (default: null)
   log_per_code_type_metrics: true    # Log per-code-type loss/AUROC during validation (default: true)
+
+  # Label balancing (see Label Balancing section)
+  label_balance: null                # null = no resampling (default: null)
+  # label_balance:
+  #   target_positive_ratio: 0.5    # Simple mode: target fraction of label=1
+  #   # OR group_proportions: {...}  # Group mode: per-(code_type, label) proportions
+  #   strategy: subsample            # "subsample" or "oversample" (default: "subsample")
+  #   apply_to: [train]              # Which splits to balance (default: [train])
 
   # Training loop
   num_epochs: 10                    # Number of training epochs (default: 10)

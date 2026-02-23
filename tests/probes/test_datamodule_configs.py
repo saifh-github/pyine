@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+from pyine.probes.data.datamodule_configs import LabelBalanceConfig, ProbeDataModuleConfig
 from pyine.probes.data.reward_keys import HARD_MATCH_KEY, SOFT_MATCH_KEY
 
 
@@ -94,3 +94,82 @@ class TestProbeDataModuleConfig:
 
         dm = cfg.instantiate_datamodule()
         assert isinstance(dm, ProbeDataModule)
+
+    def test_label_balance_none_default(self) -> None:
+        cfg = ProbeDataModuleConfig(**self._make_minimal())
+        assert cfg.label_balance is None
+
+    def test_probe_data_module_config_with_label_balance(self) -> None:
+        lb = LabelBalanceConfig(target_positive_ratio=0.5)
+        cfg = ProbeDataModuleConfig(**self._make_minimal(label_balance=lb))
+        assert cfg.label_balance is not None
+        assert cfg.label_balance.target_positive_ratio == 0.5
+
+
+class TestLabelBalanceConfig:
+    def test_simple_mode_valid(self) -> None:
+        cfg = LabelBalanceConfig(target_positive_ratio=0.5)
+        assert cfg.target_positive_ratio == 0.5
+        assert cfg.group_proportions is None
+        assert cfg.strategy == "subsample"
+        assert cfg.apply_to == ("train",)
+
+    def test_group_mode_valid(self) -> None:
+        cfg = LabelBalanceConfig(group_proportions={"original:1": 0.8, "misleading:0": 0.2})
+        assert cfg.target_positive_ratio is None
+        assert cfg.group_proportions == {"original:1": 0.8, "misleading:0": 0.2}
+
+    def test_mutual_exclusivity_raises(self) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            LabelBalanceConfig(target_positive_ratio=0.5, group_proportions={"original:1": 1.0})
+
+    def test_neither_set_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one"):
+            LabelBalanceConfig()
+
+    def test_invalid_group_key_raises(self) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            LabelBalanceConfig(group_proportions={"bad_key": 1.0})
+
+    def test_invalid_group_key_label_not_binary_raises(self) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            LabelBalanceConfig(group_proportions={"original:2": 1.0})
+
+    def test_negative_proportion_raises(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            LabelBalanceConfig(group_proportions={"original:1": -0.5})
+
+    def test_zero_proportion_raises(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            LabelBalanceConfig(group_proportions={"original:1": 0.0})
+
+    def test_apply_to_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            LabelBalanceConfig(target_positive_ratio=0.5, apply_to=())
+
+    def test_apply_to_invalid_split_raises(self) -> None:
+        with pytest.raises(ValueError, match="'test'"):
+            LabelBalanceConfig(target_positive_ratio=0.5, apply_to=("test",))
+
+    def test_apply_to_both_splits(self) -> None:
+        cfg = LabelBalanceConfig(target_positive_ratio=0.5, apply_to=("train", "valid"))
+        assert cfg.apply_to == ("train", "valid")
+
+    def test_oversample_strategy(self) -> None:
+        cfg = LabelBalanceConfig(target_positive_ratio=0.5, strategy="oversample")
+        assert cfg.strategy == "oversample"
+
+    def test_label_balance_config_round_trip(self) -> None:
+        """Serialize/deserialize LabelBalanceConfig via model_dump/model_validate."""
+        original = LabelBalanceConfig(
+            group_proportions={"original:1": 0.8, "misleading:0": 0.2},
+            strategy="oversample",
+            apply_to=("train", "valid"),
+        )
+        dumped = original.model_dump()
+        restored = LabelBalanceConfig.model_validate(dumped)
+        assert restored.group_proportions == original.group_proportions
+        assert restored.strategy == original.strategy
+        # Explicitly verify tuple survives round-trip (JSON serializes as list)
+        assert restored.apply_to == ("train", "valid")
+        assert isinstance(restored.apply_to, tuple)
