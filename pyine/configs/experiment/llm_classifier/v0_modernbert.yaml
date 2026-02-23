@@ -1,0 +1,72 @@
+# @package _global_
+#
+# LLM classifier training: fine-tune ModernBERT-base as binary classifier
+#
+# Usage:
+#   Single GPU:  python -m pyine.apps.trainers.llm_classifier_trainer +experiment=llm_classifier/v0_modernbert
+#   Multi-GPU:   torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer +experiment=llm_classifier/v0_modernbert
+
+defaults:
+  - override /config: base
+  - override /config/training_args_config: train_default
+  - _self_
+
+runtime:
+  exp_name: llm_classifier/v0_modernbert
+  run_name: "${runtime.exp_name}"
+  tags:
+    - "model:${config.base_model}"
+    - "llm-classifier"
+  seed: 42
+  dry_run: false
+
+config:
+  _target_: pyine.apps.trainers.llm_classifier_trainer_configs.LLMClassifierTrainerAppMainConfig
+
+  use_wandb_logging: true
+  base_model: answerdotai/ModernBERT-base
+
+  # LMDB data source (nested under datamodule_config — same config as probe trainer)
+  datamodule_config:
+    lmdb_path: /path/to/lmdb
+    label_metric_key: "reward/metrics/soft_match/is_match"
+    train_key_prefix: "train/"
+    valid_key_prefix: "eval/"
+    selection_strategy: latest
+
+  # Tokenization
+  max_seq_length: 3000
+
+  # Code type metrics
+  log_per_code_type_metrics: true
+
+  # Classification head
+  num_labels: 2
+  id2label:
+    0: "incorrect"
+    1: "correct"
+  label2id:
+    incorrect: 0
+    correct: 1
+
+  # Model config
+  auto_model_config:
+    attn_implementation: "flash_attention_2"
+
+  # Save trained model
+  save_model: true
+
+  # Training arguments
+  training_args_config:
+    per_device_train_batch_size: 16
+    per_device_eval_batch_size: 32
+    num_train_epochs: 3
+    learning_rate: 2e-5
+    weight_decay: 0.01
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "epoch"
+    save_strategy: "epoch"
+    load_best_model_at_end: true
+    metric_for_best_model: "auroc"
+    greater_is_better: true

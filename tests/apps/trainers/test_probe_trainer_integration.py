@@ -30,10 +30,11 @@ class TestProbeTrainerIntegration:
         """
         from unittest.mock import MagicMock
 
+        from pyine.probes.debug_dataset import create_debug_probe_lmdb
+
         from pyine.apps.trainers.probe_trainer import probe_train
         from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
         from pyine.probes.base import ProbeConfig
-        from pyine.probes.debug_dataset import create_debug_probe_lmdb
 
         # Create debug LMDB
         lmdb_path = tmp_path / "debug.lmdb"
