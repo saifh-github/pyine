@@ -10,7 +10,7 @@ model's completion is correct (`label=1`) or incorrect (`label=0`) from the conc
 Unlike the probe trainer (which trains lightweight heads on frozen LLM activations), this trainer
 fine-tunes the entire encoder model (or LoRA adapters) end-to-end using HuggingFace `Trainer`.
 
----
+______________________________________________________________________
 
 ## Quick Start
 
@@ -45,7 +45,7 @@ python -m pyine.apps.trainers.llm_classifier_trainer \
     config.max_seq_length=128
 ```
 
----
+______________________________________________________________________
 
 ## Configuration
 
@@ -55,49 +55,49 @@ The main config class is `LLMClassifierTrainerAppMainConfig` in
 
 ### Key Config Fields
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `base_model` | (required) | HuggingFace model ID (e.g., `answerdotai/ModernBERT-base`) |
-| `datamodule_config` | (required) | `ProbeDataModuleConfig` — same as probe trainer |
-| `training_args_config` | (required) | HuggingFace `TrainingArguments` wrapper |
-| `max_seq_length` | `3000` | Max token length for tokenization |
-| `num_labels` | `2` | Number of classification labels |
-| `class_weight_mode` | `"none"` | `"none"` or `"balanced"` for inverse-frequency weighting |
-| `log_per_code_type_metrics` | `True` | Compute per-code-type accuracy/AUROC |
-| `truncation_side` | `None` | `"right"`, `"left"`, or `None` (tokenizer default) |
-| `save_model` | `True` | Save final model after training |
-| `lora_config` | `None` | LoRA adapter config (optional) |
+| Field                       | Default    | Description                                                |
+| --------------------------- | ---------- | ---------------------------------------------------------- |
+| `base_model`                | (required) | HuggingFace model ID (e.g., `answerdotai/ModernBERT-base`) |
+| `datamodule_config`         | (required) | `ProbeDataModuleConfig` — same as probe trainer            |
+| `training_args_config`      | (required) | HuggingFace `TrainingArguments` wrapper                    |
+| `max_seq_length`            | `3000`     | Max token length for tokenization                          |
+| `num_labels`                | `2`        | Number of classification labels                            |
+| `class_weight_mode`         | `"none"`   | `"none"` or `"balanced"` for inverse-frequency weighting   |
+| `log_per_code_type_metrics` | `True`     | Compute per-code-type accuracy/AUROC                       |
+| `truncation_side`           | `None`     | `"right"`, `"left"`, or `None` (tokenizer default)         |
+| `save_model`                | `True`     | Save final model after training                            |
+| `lora_config`               | `None`     | LoRA adapter config (optional)                             |
 
 ### Data Source Config (`datamodule_config`)
 
 Same `ProbeDataModuleConfig` used by the probe trainer:
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `lmdb_path` | (required) | Path to LMDB exported by `DiskRewardLogger` |
-| `label_metric_key` | `reward/metrics/soft_match/is_match` | Key for binary label |
-| `train_key_prefix` | `train/` | LMDB prefix for training records |
-| `valid_key_prefix` | `eval/` | LMDB prefix for validation records |
-| `selection_strategy` | `latest` | Deduplication strategy (`latest` or `best_reward`) |
-| `label_balance` | `None` | Optional `LabelBalanceConfig` for resampling |
-| `code_type_filter` | `None` | Filter to specific code types |
+| Field                | Default                              | Description                                        |
+| -------------------- | ------------------------------------ | -------------------------------------------------- |
+| `lmdb_path`          | (required)                           | Path to LMDB exported by `DiskRewardLogger`        |
+| `label_metric_key`   | `reward/metrics/soft_match/is_match` | Key for binary label                               |
+| `train_key_prefix`   | `train/`                             | LMDB prefix for training records                   |
+| `valid_key_prefix`   | `eval/`                              | LMDB prefix for validation records                 |
+| `selection_strategy` | `latest`                             | Deduplication strategy (`latest` or `best_reward`) |
+| `label_balance`      | `None`                               | Optional `LabelBalanceConfig` for resampling       |
+| `code_type_filter`   | `None`                               | Filter to specific code types                      |
 
 ### Training Arguments (`training_args_config`)
 
 Standard HuggingFace `TrainingArguments`. Key defaults in `train_default`:
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `per_device_train_batch_size` | `16` | Training batch size per GPU |
-| `per_device_eval_batch_size` | `32` | Evaluation batch size per GPU |
-| `num_train_epochs` | `3` | Number of training epochs |
-| `learning_rate` | `2e-5` | Learning rate |
-| `weight_decay` | `0.01` | Weight decay |
-| `warmup_ratio` | `0.1` | Warmup fraction |
-| `eval_strategy` | `epoch` | Evaluate every epoch |
-| `metric_for_best_model` | `auroc` | Model selection metric |
+| Field                         | Default | Description                   |
+| ----------------------------- | ------- | ----------------------------- |
+| `per_device_train_batch_size` | `16`    | Training batch size per GPU   |
+| `per_device_eval_batch_size`  | `32`    | Evaluation batch size per GPU |
+| `num_train_epochs`            | `3`     | Number of training epochs     |
+| `learning_rate`               | `2e-5`  | Learning rate                 |
+| `weight_decay`                | `0.01`  | Weight decay                  |
+| `warmup_ratio`                | `0.1`   | Warmup fraction               |
+| `eval_strategy`               | `epoch` | Evaluate every epoch          |
+| `metric_for_best_model`       | `auroc` | Model selection metric        |
 
----
+______________________________________________________________________
 
 ## YAML Examples
 
@@ -134,25 +134,25 @@ config:
   class_weight_mode: balanced
 ```
 
----
+______________________________________________________________________
 
 ## Metrics
 
 Metrics computed during evaluation:
 
-| Metric | Description |
-| --- | --- |
-| `eval_accuracy` | Classification accuracy |
-| `eval_auroc` | Area under ROC curve |
-| `eval_f1` | F1 score |
-| `eval_precision` | Precision |
-| `eval_recall` | Recall |
-| `eval_accuracy/code_type/{name}` | Per-code-type accuracy |
-| `eval_auroc/code_type/{name}` | Per-code-type AUROC |
+| Metric                           | Description             |
+| -------------------------------- | ----------------------- |
+| `eval_accuracy`                  | Classification accuracy |
+| `eval_auroc`                     | Area under ROC curve    |
+| `eval_f1`                        | F1 score                |
+| `eval_precision`                 | Precision               |
+| `eval_recall`                    | Recall                  |
+| `eval_accuracy/code_type/{name}` | Per-code-type accuracy  |
+| `eval_auroc/code_type/{name}`    | Per-code-type AUROC     |
 
 AUROC returns `NaN` when only one class is present in the evaluation set.
 
----
+______________________________________________________________________
 
 ## Loading Saved Models
 
@@ -168,7 +168,7 @@ probs = torch.softmax(outputs.logits, dim=-1)
 predicted_class = probs.argmax(dim=-1)
 ```
 
----
+______________________________________________________________________
 
 ## Tips
 
