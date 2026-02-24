@@ -10,7 +10,7 @@ if typing.TYPE_CHECKING:
 import pytest
 
 from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-from pyine.probes.base import ProbeConfig
+from pyine.guardrails.probes.base import ProbeConfig
 
 
 def _make_minimal_config(**overrides: object) -> dict:
@@ -56,7 +56,7 @@ class TestProbeTrainerAppMainConfig:
         assert cfg.target_dtype in (torch.bfloat16, torch.float16)
 
     def test_datamodule_config_accessible(self) -> None:
-        from pyine.probes.data.datamodule_configs import ProbeDataModuleConfig
+        from pyine.guardrails.data.datamodule_configs import ProbeDataModuleConfig
 
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
         assert isinstance(cfg.datamodule_config, ProbeDataModuleConfig)
@@ -132,3 +132,32 @@ class TestProbeTrainerConfigReplicas:
     def test_log_individual_replicas_default_is_false(self) -> None:
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.log_individual_replicas is False
+
+
+class TestProbeTrainerConfigCheckpointSaving:
+    """Section 6.2: Config validation tests for save_steps and save_total_limit."""
+
+    def test_save_steps_default(self) -> None:
+        """Test 14: Default save_steps is -1."""
+        cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.save_steps == -1
+
+    def test_save_total_limit_default(self) -> None:
+        """Test 15: Default save_total_limit is None."""
+        cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.save_total_limit is None
+
+    def test_save_total_limit_validation_ge_1(self) -> None:
+        """Test 16: save_total_limit=0 raises ValidationError."""
+        with pytest.raises(ValueError):
+            ProbeTrainerAppMainConfig(**_make_minimal_config(save_total_limit=0))
+
+    def test_save_steps_with_save_probes_false_warns(self) -> None:
+        """Test 17: Warning when save_steps > 0 and save_probes=False."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            ProbeTrainerAppMainConfig(**_make_minimal_config(save_steps=100, save_probes=False))
+            matching = [x for x in w if "save_steps" in str(x.message)]
+            assert len(matching) >= 1, f"Expected warning about save_steps, got: {[str(x.message) for x in w]}"

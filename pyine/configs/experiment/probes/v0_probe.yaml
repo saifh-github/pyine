@@ -57,6 +57,8 @@ config:
   eval_steps: 50
   dataloader_num_workers: 4
   save_probes: true
+  # save_steps: -1              # Save every N optimizer steps (-1 = end only)
+  # save_total_limit: null      # Max mid-training checkpoints to keep (null = all)
 
   # Replica settings — train N copies of each probe with different init seeds
   num_replicas: 5             # Default: 1 (no replication)

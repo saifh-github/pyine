@@ -35,7 +35,7 @@ torchrun --nproc_per_node=NUM_GPUS \
 
 ```bash
 # 1. Generate debug LMDB
-python -m pyine.probes.data.debug_dataset --output /tmp/probe-debug-lmdb
+python -m pyine.guardrails.data.debug_dataset --output /tmp/probe-debug-lmdb
 
 # 2. Train with bert-tiny
 python -m pyine.apps.trainers.llm_classifier_trainer \
@@ -86,16 +86,32 @@ Same `ProbeDataModuleConfig` used by the probe trainer:
 
 Standard HuggingFace `TrainingArguments`. Key defaults in `train_default`:
 
-| Field                         | Default | Description                   |
-| ----------------------------- | ------- | ----------------------------- |
-| `per_device_train_batch_size` | `16`    | Training batch size per GPU   |
-| `per_device_eval_batch_size`  | `32`    | Evaluation batch size per GPU |
-| `num_train_epochs`            | `3`     | Number of training epochs     |
-| `learning_rate`               | `2e-5`  | Learning rate                 |
-| `weight_decay`                | `0.01`  | Weight decay                  |
-| `warmup_ratio`                | `0.1`   | Warmup fraction               |
-| `eval_strategy`               | `epoch` | Evaluate every epoch          |
-| `metric_for_best_model`       | `auroc` | Model selection metric        |
+| Field                         | Default | Description                                         |
+| ----------------------------- | ------- | --------------------------------------------------- |
+| `per_device_train_batch_size` | `16`    | Training batch size per GPU                         |
+| `per_device_eval_batch_size`  | `32`    | Evaluation batch size per GPU                       |
+| `num_train_epochs`            | `3`     | Number of training epochs                           |
+| `learning_rate`               | `2e-5`  | Learning rate                                       |
+| `weight_decay`                | `0.01`  | Weight decay                                        |
+| `warmup_ratio`                | `0.1`   | Warmup fraction                                     |
+| `eval_strategy`               | `epoch` | Evaluate every epoch                                |
+| `metric_for_best_model`       | `auroc` | Model selection metric                              |
+| `save_total_limit`            | `null`  | Max checkpoints to keep on disk (`null` = keep all) |
+
+### Checkpoint Retention
+
+To limit disk usage from periodic checkpoints, set `save_total_limit` in
+`training_args_config` (same pattern as the SFT and RL trainers):
+
+```yaml
+config:
+  training_args_config:
+    save_strategy: "epoch"       # Must be saving checkpoints for limit to apply
+    save_total_limit: 3          # Keep at most 3 checkpoints (default: keep all)
+```
+
+HuggingFace's `Trainer` handles deletion of old `checkpoint-NNNN` directories automatically
+when this limit is exceeded.
 
 ______________________________________________________________________
 

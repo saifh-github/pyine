@@ -18,7 +18,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
-import pyine.probes.data.datamodule_configs  # noqa: TC001
+import pyine.guardrails.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 import pyine.utils.transformers
 
@@ -42,7 +42,9 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     """Not used for classifier training. Kept for AppMainConfig compatibility."""
 
     # --- Override: use ProbeDataModuleConfig (same as probe trainer) ---
-    datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
+    datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
+        pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig
+    ] = ...  # type: ignore[assignment]
     """Probe data configuration (LMDB source, splitting, filtering, label balancing)."""
 
     # --- HuggingFace Training Arguments ---
@@ -220,7 +222,7 @@ def _get_app_configs(
     """Generates and returns classifier trainer app configs for hydra zen storage."""
     # --- Probe datamodule config (reused from probe trainer) ---
     datamodule_config = pyine.configs.utils.make_config_description(
-        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig,
+        pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig,
         name="probe_base",
         group=f"{group}/datamodule_config",
         description="Base probe datamodule settings (LMDB source, splitting, filtering).",

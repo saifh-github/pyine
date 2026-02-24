@@ -22,7 +22,7 @@ import transformers
 import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.evals.common
-import pyine.probes.data.datamodule
+import pyine.guardrails.data.datamodule
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -244,7 +244,7 @@ def classifier_train(
 
     # --- 3. Load LMDB data via DataModule (handles DDP coordination + caching) ---
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.probes.data.datamodule.ProbeDataModule)
+    assert isinstance(datamodule, pyine.guardrails.data.datamodule.ProbeDataModule)
     raw_ds = datamodule.get_probe_dataset()
     code_type_to_id = datamodule.code_type_to_id
     id_to_code_type = datamodule.id_to_code_type
@@ -270,7 +270,8 @@ def classifier_train(
     data_collator = transformers.DataCollatorWithPadding(tokenizer=tokenizer, padding="longest")
 
     training_args_dict = config.training_args_config.model_dump()
-    training_args_dict["output_dir"] = runtime.output_dir if runtime else "output"
+    if runtime is not None:
+        training_args_dict["output_dir"] = runtime.output_dir
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
     pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)

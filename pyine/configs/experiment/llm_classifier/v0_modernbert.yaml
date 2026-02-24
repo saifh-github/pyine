@@ -58,6 +58,7 @@ config:
 
   # Training arguments
   training_args_config:
+    # save_total_limit: null     # Max HF checkpoints to keep (null = all)
     per_device_train_batch_size: 16
     per_device_eval_batch_size: 32
     num_train_epochs: 3
