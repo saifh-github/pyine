@@ -3266,6 +3266,7 @@ requires-dist = [
     { name = "radon", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=14.1.0,<15.0.0" },
     { name = "ruff", specifier = ">=0.13.2,<1.0.0" },
+    { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scikit-learn", specifier = ">=1.8.0,<2.0.0" },
     { name = "scipy", specifier = ">=1.17.1,<2.0.0" },
     { name = "scipy-stubs", specifier = "~=1.17.1" },
