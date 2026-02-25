@@ -13,6 +13,7 @@ import typing
 import pydantic
 import wandb
 
+import pyine.data.datamodule
 import pyine.evals.common
 import pyine.evals.utils
 
@@ -165,6 +166,8 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     async def evaluate_wrapped_model(
         self,
         wrapped_model: typing.Any | typing.Sequence[typing.Any],
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+        eval_subset_name: str,
         verbose: bool = False,
     ) -> pyine.evals.common.EvalResult:
         """Evaluates guardrail scorers on pregenerated LMDB data.
@@ -173,9 +176,17 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         are provided, each is evaluated independently and results are aggregated across
         runs (cross-run mean/std/p5, hierarchical bootstrap CIs).
 
+        Note about the (lack of) datamodule / eval subset usage: unlike the code execution pipeline,
+        the guardrail correctness eval task relies on LMDB eval records that are NOT provided by
+        the datamodule, and instead specified as part of the eval config itself. This allows us to
+        train/validate guardrails on data that is entirely dissociated from the real (final) eval
+        data, which may come from a combination of sources.
+
         Args:
             wrapped_model: A single GuardrailScorer instance, or a sequence of them for
                 multi-run aggregation.
+            datamodule: The datamodule from which to load the evaluation data.
+            eval_subset_name: The name of the subset to fetch from the datamodule and evaluate on.
             verbose: Whether to verbosely report progress.
 
         Returns:
@@ -183,6 +194,8 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         """
         import pyine.evals.correctness._impl as correctness_impl
 
+        del datamodule  # unused; see docstring above
+        del eval_subset_name  # unused; see docstring above
         guardrails: list[typing.Any]
         if isinstance(wrapped_model, (list, tuple)):
             guardrails = list(wrapped_model)  # type: ignore[reportUnknownArgumentType]

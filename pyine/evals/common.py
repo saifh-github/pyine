@@ -136,6 +136,8 @@ class BaseEvalsConfig(pydantic.BaseModel):
     async def evaluate_wrapped_model(
         self,
         wrapped_model: typing.Any | typing.Sequence[typing.Any],
+        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+        eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
         """Evaluates wrapped models (e.g. guardrails, monitors, ...).
@@ -154,6 +156,8 @@ class BaseEvalsConfig(pydantic.BaseModel):
             wrapped_model: A single wrapped model component, or a sequence of them for multi-run
                 aggregation. The concrete type depends on the eval type (e.g. GuardrailScorer for
                 correctness evals).
+            datamodule: The datamodule from which to load the evaluation data.
+            eval_subset_name: The name of the subset to fetch from the datamodule and evaluate on.
             verbose: Whether to verbosely report progress.
 
         Returns:
