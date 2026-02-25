@@ -11,6 +11,11 @@ class TestEvalType:
         assert pyine.evals.common.EvalType.CODE_EXEC == "code_exec"
         assert str(pyine.evals.common.EvalType.CODE_EXEC) == "code_exec"
 
+    def test_correctness_enum(self) -> None:
+        assert hasattr(pyine.evals.common.EvalType, "CORRECTNESS")
+        assert pyine.evals.common.EvalType.CORRECTNESS == "correctness"
+        assert str(pyine.evals.common.EvalType.CORRECTNESS) == "correctness"
+
 
 class TestBaseEvalsConfig:
     @pytest.mark.asyncio
@@ -143,3 +148,30 @@ class TestBaseEvalsConfig:
                 subset_name="test",
                 subset_results={},
             )
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_returns_empty_dict_when_eval_type_none(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig()
+        result = await config.evaluate_wrapped_model(wrapped_model=[mocker.MagicMock()])
+        assert result.metrics == {}
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_accepts_single_model(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig()
+        result = await config.evaluate_wrapped_model(wrapped_model=mocker.MagicMock())
+        assert result.metrics == {}
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_raises_when_eval_type_set(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig(eval_type=pyine.evals.common.EvalType.CODE_EXEC)
+        with pytest.raises(NotImplementedError, match="evaluation type code_exec not implemented"):
+            await config.evaluate_wrapped_model(wrapped_model=[mocker.MagicMock()])

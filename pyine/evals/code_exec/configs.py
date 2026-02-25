@@ -104,7 +104,15 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         wandb_run: wandb.Run,
         prefix: str | None = None,
     ) -> None:
-        """Defines the evaluation metrics for the given wandb run."""
+        """Registers code execution metric definitions with a W&B run.
+
+        Registers metric names (accuracy, Pass@K, token usage, etc.) so W&B can track them
+        as summary metrics. Should be called once before logging any metrics.
+
+        Args:
+            wandb_run: The W&B run object where metric definitions should be registered.
+            prefix: Optional prefix prepended to all metric names (e.g. an eval subset name).
+        """
         pyine.evals.code_exec.utils.define_metrics_for_wandb(  # type: ignore[reportUnknownMemberType]
             wandb_run=wandb_run,
             prefix=prefix,
@@ -119,19 +127,20 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, pyine.evals.common.EvalResult],
         *,
-        table_key: str = "benchmark/metrics_table",
         step: int | None = None,
     ) -> wandb.Table:
-        """Log aggregated metrics to a W&B table.
+        """Log aggregated code execution metrics to a W&B table.
 
-        This logs subset-level aggregated metrics (e.g., overall accuracy) to the wandb run
-        summary and a summary table. For per-sample metrics, use `log_sample_metrics`.
-        For qualitative inspection of individual predictions, use `log_predictions`.
+        Builds a single cross-subset comparison table (one row per subset) and logs it under
+        the ``benchmark/metrics_table`` key. Also writes individual metrics to the run summary
+        under ``benchmark/{subset_name}/{metric_name}`` keys.
+
+        For per-sample metrics, use `log_sample_metrics`. For qualitative inspection of
+        individual predictions, use `log_predictions`.
 
         Args:
             wandb_run: Run object where the table should be logged.
             results_by_subset: Mapping of subset names to evaluation results.
-            table_key: Key under which the table will be logged.
             step: Optional W&B step override.
 
         Returns:
@@ -157,6 +166,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
             summary_prefix = f"benchmark/{subset_name}"
             for metric_name, metric_val in subset_metrics.items():
                 wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val
+        table_key = "benchmark/metrics_table"
         if step is None:
             wandb_run.log({table_key: table})  # noqa
         else:
@@ -170,27 +180,27 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         subset_name: str,
         subset_results: pyine.evals.common.EvalResult,
         *,
-        table_key: str | None = None,
-        max_rows: int = 32,
+        max_rows: int | None = None,
         include_only_incorrect: bool = False,
-        max_text_length: int = 512,
+        max_text_length: int | None = None,
         step: int | None = None,
     ) -> wandb.Table:
-        """Log a subset of model predictions to W&B for qualitative inspection.
+        """Log code execution predictions to W&B (as a table) for qualitative inspection.
 
-        This logs a limited number of predictions with full text (inputs, expected, predicted)
-        for manual review and debugging. Text fields are truncated to `max_text_length`.
-        For comprehensive per-sample metrics analysis, use `log_sample_metrics` instead.
+        This logs predictions with full text (inputs, expected, predicted) for manual review
+        and debugging. For comprehensive per-sample metrics analysis, use `log_sample_metrics`
+        instead.
+
+        The table is logged under the ``benchmark/{subset_name}/predictions`` key.
 
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged. If not
-                provided, the table will be logged to the `benchmark/<subset_name>/predictions` key.
-            max_rows: Maximum number of prediction rows to log (default: 32).
+            max_rows: Maximum number of prediction rows to log. None means no limit (default).
             include_only_incorrect: Whether to restrict the table to incorrect predictions.
-            max_text_length: Maximum length per text field before truncation.
+            max_text_length: Maximum length per text field before truncation. None means
+                no truncation (default).
             step: Optional W&B step override.
 
         Returns:
@@ -200,8 +210,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
             log_sample_metrics: For per-sample accuracy and complexity metrics (all samples).
             log_metrics: For subset-level aggregated metrics.
         """
-        if table_key is None:
-            table_key = f"benchmark/{subset_name}/predictions"
+        table_key = f"benchmark/{subset_name}/predictions"
         assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
         incorrect: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
         correct: list[pyine.evals.code_exec.utils.CodeExecEvalArtifact] = []
@@ -217,9 +226,9 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
 
         def _truncate_text(
             value: str,
-            max_length: int,
+            max_length: int | None,
         ) -> str:
-            if len(value) <= max_length:
+            if max_length is None or len(value) <= max_length:
                 return value
             if max_length <= 3:
                 return value[:max_length]
@@ -286,25 +295,20 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         subset_name: str,
         subset_results: pyine.evals.common.EvalResult,
         *,
-        table_key: str | None = None,
         step: int | None = None,
     ) -> wandb.Table:
-        """Log per-sample accuracy and complexity metrics to W&B for quantitative analysis.
+        """Log per-sample code execution metrics to W&B (as a table) for quantitative analyses.
 
-        Unlike `log_predictions` (which logs a limited subset for qualitative inspection),
-        this method logs ALL samples with numerical metrics needed for quantitative analysis
-        such as accuracy vs complexity correlations. No text fields are included to keep
-        the table size manageable.
+        Unlike `log_predictions` (which logs predictions for qualitative inspection), this
+        method logs sample-wise numerical metrics (accuracy, complexity, token usage) needed
+        for quantitative analyses. No text fields are included.
 
-        The resulting table can be fetched later using
-        `pyine.evals.code_exec.analysis.fetch_sample_metrics_table` for offline analysis.
+        The table is logged under the ``benchmark/{subset_name}/sample_metrics`` key.
 
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged. If not
-                provided, the table will be logged to the `benchmark/<subset_name>/sample_metrics` key.
             step: Optional W&B step override.
 
         Returns:
@@ -316,8 +320,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
             get_sample_metrics_columns: The shared column schema in utils.
             artifact_to_sample_metrics_row: The shared row extraction logic in utils.
         """
-        if table_key is None:
-            table_key = f"benchmark/{subset_name}/sample_metrics"
+        table_key = f"benchmark/{subset_name}/sample_metrics"
         assert isinstance(subset_results, pyine.evals.code_exec.utils.CodeExecEvalResult)
         columns = pyine.evals.code_exec.utils.get_sample_metrics_columns()
         table = wandb.Table(columns=columns)

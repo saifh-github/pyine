@@ -581,22 +581,3 @@ class TestFetchSampleMetricsTable:
         assert "identifier" in result.columns
         assert "hard_match" in result.columns
         assert result.iloc[0]["identifier"] == "s1"
-
-    def test_uses_custom_table_key(self) -> None:
-        """fetch_sample_metrics_table matches custom table_key in file name."""
-        table_data = {
-            "columns": ["identifier", "hard_match"],
-            "data": [["s1", 1]],
-        }
-        file = MockWandBFile(
-            name="media/table/custom_key_abc123.table.json",
-            table_data=table_data,
-        )
-        run = MockWandBRunWithFiles(run_id="r1", files=[file])
-        result = pyine.evals.code_exec.analysis.fetch_sample_metrics_table(
-            run,
-            subset_name="test",
-            table_key="custom_key",
-        )
-        assert result is not None
-        assert len(result) == 1

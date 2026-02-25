@@ -586,7 +586,6 @@ def summarize_runs_to_dataframe(
 def fetch_sample_metrics_table(
     run: wandb.apis.public.Run,
     subset_name: str,
-    table_key: str | None = None,
 ) -> pd.DataFrame | None:
     """Fetches the per-sample metrics table from a wandb run.
 
@@ -595,11 +594,11 @@ def fetch_sample_metrics_table(
     `filter_samples_dataframe`, `compute_binned_accuracy`, and the accuracy vs complexity
     plotting functions.
 
+    The table is read from the ``benchmark/{subset_name}/sample_metrics`` key.
+
     Args:
         run: The wandb Run object.
         subset_name: Name of the evaluation subset (e.g., "train", "test").
-        table_key: Optional override for the table key. If not provided, defaults to
-            "benchmark/{subset_name}/sample_metrics".
 
     Returns:
         DataFrame with per-sample metrics, or None if the table was not found.
@@ -620,8 +619,7 @@ def fetch_sample_metrics_table(
         filter_samples_dataframe: For filtering the returned DataFrame.
         plot_accuracy_vs_complexity_grid: For visualizing accuracy vs complexity.
     """
-    if table_key is None:
-        table_key = f"benchmark/{subset_name}/sample_metrics"
+    table_key = f"benchmark/{subset_name}/sample_metrics"
     result = pyine.utils.wandb_utils.fetch_table(run, table_key)
     if result is not None:
         return result

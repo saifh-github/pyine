@@ -19,12 +19,27 @@ class EvalType(enum.StrEnum):
     # TODO: if this becomes a fundamental 'task definition' thing, move to `pyine.configs.schemas`?
 
     CODE_EXEC = enum.auto()
-    """Code execution model evaluation pipeline."""
-    # TODO: add more here later
+    """Code execution model evaluation pipeline.
+
+    Under this task, a model is asked to interpret Python code and predict some execution outcome
+    given input arguments. Depending on how the model is trained, it may misbehave under specific
+    conditions (e.g. when shortcuts based on hints are available, or when specific keywords are
+    used). Code execution evaluations are therefore useful to measure the capability of models in
+    solving complex reasoning tasks in the presence/absence of misbehavior-triggering information.
+    """
+    CORRECTNESS = enum.auto()
+    """Guardrail correctness evaluation pipeline.
+
+    Under this task, a guardrail is asked to determine if a code execution prediction made by
+    another model is correct or not. Assessing correctness requires in-depth analysis of either
+    model activations or inputs/reasoning/outputs; some guardrails may also work in a passive
+    fashion (in which case they are 'monitors'), while others may interact with the predictive
+    models they intend to guard.
+    """
 
 
 class EvalResult(pydantic.BaseModel):
-    """Container for evaluation metrics and captured artifacts."""
+    """Base container for evaluation metrics and captured artifacts."""
 
     model_config = pydantic.ConfigDict(frozen=True)
     """Pydantic model configuration (immutable)."""
@@ -34,10 +49,10 @@ class EvalResult(pydantic.BaseModel):
 
 
 class RunnableEvalConfig(pydantic.BaseModel):
-    """Configuration for runnable evaluations."""
+    """Configuration for LangChain Runnable evaluations."""
 
     model_config = pydantic.ConfigDict(frozen=True)
-    """Pydantic model configuration (freezes the dataclass)."""
+    """Pydantic model configuration (immutable)."""
 
     parallel: bool = True
     """Whether to run the evaluations in parallel or sequentially."""
@@ -49,20 +64,22 @@ class RunnableEvalConfig(pydantic.BaseModel):
 
 
 class BaseEvalsConfig(pydantic.BaseModel):
-    """Base configuration class for evaluation settings.
+    """Base configuration class for generic evaluation settings.
 
     Classes that inherit this base class are expected to override the `eval_type` field and
-    the various methods below that perform task-specific evaluations.
+    the various methods below that perform task-specific evaluations by redirecting to task-specific
+    implementations.
     """
 
     model_config = pydantic.ConfigDict(frozen=True, extra="allow")
-    """Pydantic model configuration (freezes the dataclass)."""
+    """Pydantic model configuration (immutable)."""
 
     eval_type: EvalType | None = None
     """Type of evaluation that should be conducted. If None, no evaluation occurs in the main app."""
 
     eval_runnable_config: RunnableEvalConfig = RunnableEvalConfig()
-    """Configuration for runnable evaluations."""
+    """Configuration for LangChain Runnable evaluations."""
+
     category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = pydantic.Field(
         default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,
     )
@@ -77,16 +94,16 @@ class BaseEvalsConfig(pydantic.BaseModel):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
-        """Evaluates a LangChain text prediction chain using the specified subset.
+        """Evaluates a LangChain Runnable chain using a specified data subset.
 
         Args:
-            chain: The LangChain Runnable that will be used to generate model responses.
+            chain: The LangChain Runnable that will be used to generate responses.
             datamodule: The datamodule from which to load the evaluation data.
             eval_subset_name: The name of the subset to fetch from the datamodule and evaluate on.
             verbose: Whether to verbosely report progress.
 
         Returns:
-            The evaluation results, which contains a dictionary of metrics.
+            An `EvalResult` object, which contains a dictionary of metric values.
         """
         if self.eval_type is None:
             return EvalResult(metrics={})
@@ -100,7 +117,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
-        """Evaluates a HuggingFace-Transformers model using the specified subset.
+        """Evaluates a HuggingFace-Transformers-based model using the specified subset.
 
         Args:
             model: The pretrained HuggingFace-Transformers model to evaluate.
@@ -110,7 +127,37 @@ class BaseEvalsConfig(pydantic.BaseModel):
             verbose: Whether to verbosely report progress.
 
         Returns:
-            The evaluation results, which contains a dictionary of metrics.
+            An `EvalResult` object, which contains a dictionary of metric values.
+        """
+        if self.eval_type is None:
+            return EvalResult(metrics={})
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+
+    async def evaluate_wrapped_model(
+        self,
+        wrapped_model: typing.Any | typing.Sequence[typing.Any],
+        verbose: bool = False,
+    ) -> EvalResult:
+        """Evaluates wrapped models (e.g. guardrails, monitors, ...).
+
+        Unlike evaluate_runnable_model and evaluate_hf_model which evaluate a target model's
+        generation quality, this method evaluates models that produce non-text outputs (such as
+        classification decisions). The concrete semantics depend on the eval type.
+
+        A single model or a sequence of models can be provided. When multiple models are given,
+        they are treated as independent instances of the same modeling pipeline (e.g. guardrails
+        trained with different seeds). The pipeline evaluates each independently, then aggregates
+        results across them to produce cross-run statistics (mean, std, percentiles, hierarchical
+        bootstrap CIs) that capture pipeline variance.
+
+        Args:
+            wrapped_model: A single wrapped model component, or a sequence of them for multi-run
+                aggregation. The concrete type depends on the eval type (e.g. GuardrailScorer for
+                correctness evals).
+            verbose: Whether to verbosely report progress.
+
+        Returns:
+            An `EvalResult` object, which contains a dictionary of metric values.
         """
         if self.eval_type is None:
             return EvalResult(metrics={})
@@ -121,7 +168,18 @@ class BaseEvalsConfig(pydantic.BaseModel):
         wandb_run: wandb.Run,
         prefix: str | None = None,
     ) -> None:
-        """Defines the evaluation metrics for the given wandb run."""
+        """Registers evaluation metric definitions with a W&B run.
+
+        This should be called once before logging any metrics, so that W&B can properly track them
+        as summary metrics (e.g. with ``summary="max"``). Each eval type registers the metric names
+        it will later emit via ``log_metrics``.
+
+        Does nothing when ``eval_type`` is None (no evaluation configured).
+
+        Args:
+            wandb_run: The W&B run object where metric definitions should be registered.
+            prefix: Optional prefix prepended to all metric names (e.g. an eval subset name).
+        """
         if self.eval_type is None:
             return
         raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
@@ -131,19 +189,21 @@ class BaseEvalsConfig(pydantic.BaseModel):
         wandb_run: wandb.Run,
         results_by_subset: dict[str, EvalResult],
         *,
-        table_key: str = "benchmark/metrics_table",
         step: int | None = None,
     ) -> wandb.Table | None:
         """Log aggregated evaluation metrics to a W&B table.
 
-        This logs subset-level aggregated metrics (e.g., overall accuracy) to the wandb run
-        summary and a summary table. For per-sample metrics, use `log_sample_metrics`.
-        For qualitative inspection of individual predictions, use `log_predictions`.
+        This builds a single cross-subset comparison table (one row per subset) and logs it
+        under the ``benchmark/metrics_table`` key. Implementations may also write individual
+        metrics to the run summary under ``benchmark/{subset_name}/{metric_name}`` keys for
+        convenient programmatic access.
+
+        For per-sample metrics, use `log_sample_metrics`. For qualitative inspection of
+        individual predictions, use `log_predictions`.
 
         Args:
             wandb_run: Run object where the table should be logged.
             results_by_subset: Mapping of subset names to evaluation results.
-            table_key: Key under which the table will be logged.
             step: Optional W&B step override.
 
         Returns:
@@ -163,25 +223,25 @@ class BaseEvalsConfig(pydantic.BaseModel):
         subset_name: str,
         subset_results: EvalResult,
         *,
-        table_key: str | None = None,
-        max_rows: int = 32,
-        max_text_length: int = 512,
+        max_rows: int | None = None,
+        max_text_length: int | None = None,
         step: int | None = None,
     ) -> wandb.Table | None:
-        """Log a subset of model predictions to W&B for qualitative inspection.
+        """Log a subset of model predictions to W&B (as tables) for qualitative inspection.
 
         This logs a limited number of predictions with full text (inputs, expected, predicted)
-        for manual review and debugging. Text fields are truncated to `max_text_length`.
-        For comprehensive per-sample metrics analysis, use `log_sample_metrics` instead.
+        for manual review and debugging. For comprehensive per-sample metrics analysis, use
+        `log_sample_metrics` instead.
+
+        The table should be logged under the ``benchmark/{subset_name}/predictions`` key.
 
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `benchmark/<subset_name>/predictions` key.
-            max_rows: Maximum number of prediction rows to log (default: 32).
-            max_text_length: Maximum length per text field before truncation.
+            max_rows: Maximum number of prediction rows to log. None means no limit (default).
+            max_text_length: Maximum length per text field before truncation. None means
+                no truncation (default).
             step: Optional W&B step override.
 
         Returns:
@@ -201,24 +261,22 @@ class BaseEvalsConfig(pydantic.BaseModel):
         subset_name: str,
         subset_results: EvalResult,
         *,
-        table_key: str | None = None,
         step: int | None = None,
     ) -> wandb.Table | None:
-        """Log per-sample metrics to W&B for quantitative analysis.
+        """Log per-sample metrics to W&B (as tables) for quantitative analyses.
 
         Unlike `log_predictions` (which logs a limited subset for qualitative inspection),
-        this method logs ALL samples with numerical metrics needed for quantitative analysis.
-        No text fields are included.
+        this method logs sample-wise numerical metrics needed for quantitative analyses. No text
+        fields are included, so there should be no need to limit/truncate these metrics.
 
-        The resulting table can be fetched later using
-        `pyine.evals.code_exec.analysis.fetch_sample_metrics_table` for offline analysis.
+        The table should be logged under the ``benchmark/{subset_name}/sample_metrics`` key, and
+        can be fetched later using ``pyine.evals.code_exec.analysis.fetch_sample_metrics_table``
+        for offline analysis.
 
         Args:
             wandb_run: Run object where the table should be logged.
             subset_name: Name of the evaluated subset.
             subset_results: Captured evaluation results for the subset.
-            table_key: Optional override for the W&B key under which the table is logged.
-                If not provided, the table will be logged to the `benchmark/<subset_name>/sample_metrics` key.
             step: Optional W&B step override.
 
         Returns:
@@ -237,6 +295,7 @@ class EvalExportConfig(pydantic.BaseModel):
     """Configuration for exporting evaluation results to disk as an LMDB dataset."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (immutable)."""
 
     output_path: pathlib.Path
     """Base directory for LMDB exports. Each subset creates a subdirectory."""
@@ -325,9 +384,13 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     ) -> "GenerationEvalsConfig":
         """Creates a config with literature-standard Pass@K defaults (nucleus sampling).
 
-        Default values follow LiveCodeBench conventions for code generation evaluation.
-        Explicit arguments override the built-in defaults; any additional keyword arguments
-        are forwarded to the ``GenerationEvalsConfig`` constructor.
+        IMPORTANT: The default parameter values defined here are the canonical settings for
+        all standard evaluations and cross-run comparisons. Override them only when intentionally
+        deviating from the standard protocol.
+
+        Default values follow LiveCodeBench conventions for code generation evaluation. Explicit
+        arguments override the built-in defaults; any additional keyword arguments are forwarded
+        to the ``GenerationEvalsConfig`` constructor.
 
         If ``eval_generation_config`` is passed in ``kwargs``, it takes precedence over the
         generation config built from ``temperature``/``top_p``.
@@ -342,6 +405,8 @@ class GenerationEvalsConfig(BaseEvalsConfig):
         defaults: dict[str, typing.Any] = {
             "num_attempts_per_sample": num_attempts_per_sample,
             "eval_generation_max_new_tokens_override": max_new_tokens,
+            "sampling_temperature_override": temperature,
+            "sampling_top_p_override": top_p,
             "eval_generation_config": pyine.utils.transformers.GenerationConfig(
                 **{"do_sample": True, "temperature": temperature, "top_p": top_p},
             ),
