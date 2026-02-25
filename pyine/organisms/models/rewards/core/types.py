@@ -128,8 +128,6 @@ class SampleContext:
     trajectory needed for reward computation. Reward computation is per-sample (not per-token).
     """
 
-    # @@@@ TODO: should this be a base class, and derived version include sample data + code exec eval results?
-
     prompt: str
     """Prompt text shown to the model."""
     model_output: str

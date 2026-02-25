@@ -38,6 +38,3 @@ def test_get_chain(
     chain = pyine.prompts.manager.get_prompt_chain(model, "code_analysis")
     assert isinstance(chain, langchain_core.runnables.RunnableSequence)
     assert isinstance(chain.last, langchain_core.output_parsers.PydanticOutputParser)
-
-
-# @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability

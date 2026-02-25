@@ -39,6 +39,3 @@ def test_get_full_output_config_and_template() -> None:
     )
     assert "Enter name: " in rendered_str
     assert "An algorithm." in rendered_str
-
-
-# @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability

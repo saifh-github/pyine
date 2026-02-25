@@ -4,7 +4,6 @@ if typing.TYPE_CHECKING:
     import pyine.prompts.types
 
 # @@@@ TODO: if we figure out that we want to work with udiffs, impl something here
-# @@@@ TODO: detect+fix "soft refusals": some models (e.g. o3) always want to put spoiling comments in...
 # @@@@ TODO: for response structure, add regular pydantic model + a response wrapper w/ invalid flag opt
 
 invalid_code_token = "INVALID_CODE"  # noqa: S105 - harmless sentinel token

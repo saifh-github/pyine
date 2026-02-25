@@ -334,6 +334,4 @@ class SampleBuilder(torch.utils.data.Dataset[_samples_common.SampleData]):
                 pregenerated_output_lmdb_path=pregen_record.source_lmdb_path,
                 pregenerated_output_lmdb_key=pregen_record.source_key,
             )
-        # compute stats using sample here @@@@@
-        # @@@@ consider caching results here too? (if they're expensive to compute, and not too voluminous?)
         return sample

@@ -50,7 +50,7 @@ class SFTTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigB
         description="If set, the collator will cap sequence length to the min of this value or the model's cap.",
     )
     collator_pad_to_multiple_of: int | None = pydantic.Field(
-        default=None,  # 32,  # @@@@ TODO test speed with and without?
+        default=None,  # 32,  # TODO test speed with and without?
         description="If set, the collator will pad the sequence length to a multiple of this value.",
     )
     collator_batch_logging: bool = pydantic.Field(
@@ -157,8 +157,6 @@ def _get_trainer_args_configs(
             "hydra_convert": "object",
         },
     )
-    # TODO @@@@@@ add distrib trainer config with local_rank and ddp/fsdp stuff? or deepspeed/accelerate?
-    # TODO @@@@@@ add configs w/ debug settings? (and tokens/sec or tokens seen metrics?)
     train_default_config = pyine.configs.utils.make_config_description(
         pyine.utils.transformers.TrainingArgsConfig,
         name="train_default",
