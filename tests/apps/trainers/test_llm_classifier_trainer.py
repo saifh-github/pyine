@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import typing
 from unittest.mock import MagicMock
 
@@ -366,30 +367,39 @@ class TestWeightedLossTrainer:
 class TestLogClassDistribution:
     """Tests for the class distribution logging function."""
 
-    def test_logs_both_splits(self, caplog: pytest.LogCaptureFixture) -> None:
-        import logging
+    @pytest.fixture
+    def log(self) -> logging.Logger:
+        """Dedicated test logger unaffected by hydra's logging config."""
+        return logging.getLogger("test.log_class_distribution")
 
+    def test_logs_both_splits(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        log: logging.Logger,
+    ) -> None:
         ds_dict = datasets.DatasetDict(
             {
                 "train": datasets.Dataset.from_dict({"label": [0, 0, 1, 1, 1]}),
                 "valid": datasets.Dataset.from_dict({"label": [0, 1]}),
             }
         )
-        with caplog.at_level(logging.INFO):
-            llm_trainer._log_class_distribution(ds_dict, llm_trainer.logger)
+        with caplog.at_level(logging.INFO, logger=log.name):
+            llm_trainer._log_class_distribution(ds_dict, log)
         assert "train split" in caplog.text
         assert "valid split" in caplog.text
 
-    def test_logs_correct_counts(self, caplog: pytest.LogCaptureFixture) -> None:
-        import logging
-
+    def test_logs_correct_counts(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        log: logging.Logger,
+    ) -> None:
         ds_dict = datasets.DatasetDict(
             {
                 "train": datasets.Dataset.from_dict({"label": [0, 0, 0, 1]}),
             }
         )
-        with caplog.at_level(logging.INFO):
-            llm_trainer._log_class_distribution(ds_dict, llm_trainer.logger)
+        with caplog.at_level(logging.INFO, logger=log.name):
+            llm_trainer._log_class_distribution(ds_dict, log)
         assert "pos=1" in caplog.text
         assert "neg=3" in caplog.text
 
