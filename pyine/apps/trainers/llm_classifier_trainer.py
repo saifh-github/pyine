@@ -154,46 +154,40 @@ def build_compute_metrics(
         Function compatible with Trainer's compute_metrics parameter.
     """
 
+    @typing.no_type_check
     def compute_metrics(eval_pred: transformers.EvalPrediction) -> dict[str, float]:
         # Handle tuple logits: some HF versions return (logits, hidden_states, ...)
-        raw_preds = eval_pred.predictions  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
-        logits = raw_preds[0] if isinstance(raw_preds, tuple) else raw_preds  # pyright: ignore[reportUnknownVariableType]
-        labels = eval_pred.label_ids  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
-
-        predictions = np.argmax(logits, axis=1)  # pyright: ignore[reportUnknownArgumentType]
-        probs = scipy.special.softmax(logits, axis=1)[:, 1]  # pyright: ignore[reportUnknownMemberType]  # scipy stubs  # P(correct)
-
+        raw_preds = eval_pred.predictions
+        logits = raw_preds[0] if isinstance(raw_preds, tuple) else raw_preds
+        labels = eval_pred.label_ids
+        predictions = np.argmax(logits, axis=1)
+        probs = scipy.special.softmax(logits, axis=1)[:, 1]
         metrics: dict[str, float] = {
-            "accuracy": float(sklearn.metrics.accuracy_score(labels, predictions)),  # pyright: ignore[reportUnknownMemberType]  # sklearn stubs
-            "f1": float(sklearn.metrics.f1_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
-            "precision": float(sklearn.metrics.precision_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
-            "recall": float(sklearn.metrics.recall_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
+            "accuracy": float(sklearn.metrics.accuracy_score(labels, predictions)),
+            "f1": float(sklearn.metrics.f1_score(labels, predictions, zero_division=0)),
+            "precision": float(sklearn.metrics.precision_score(labels, predictions, zero_division=0)),
+            "recall": float(sklearn.metrics.recall_score(labels, predictions, zero_division=0)),
         }
-
         # AUROC — guard against single-class eval AND degenerate probability
         # distributions (all identical probs).
-        unique_labels = {int(v) for v in labels}  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-        if len(unique_labels) >= 2 and len(labels) >= 2:  # pyright: ignore[reportUnknownArgumentType]
-            metrics["auroc"] = float(
-                sklearn.metrics.roc_auc_score(labels, probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
-            )
+        unique_labels = {int(v) for v in labels}
+        if len(unique_labels) >= 2 and len(labels) >= 2:
+            metrics["auroc"] = float(sklearn.metrics.roc_auc_score(labels, probs))
         else:
             metrics["auroc"] = float("nan")
-
         # Per-code-type metrics (if code_type_id available via include_for_metrics)
         if id_to_code_type is not None:
             _add_per_code_type_metrics(
                 metrics,
-                labels,  # pyright: ignore[reportArgumentType]  # transformers stubs return ndarray | tuple
+                labels,
                 probs,
                 predictions,
                 eval_pred,
                 id_to_code_type,
             )
-
         return metrics
 
-    return compute_metrics
+    return compute_metrics  # type: ignore[reportUnknownVariableType]
 
 
 class WeightedLossTrainer(transformers.Trainer):

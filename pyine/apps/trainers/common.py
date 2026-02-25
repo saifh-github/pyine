@@ -140,6 +140,8 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
         config: The application configuration to validate.
     """
     do_train, _do_eval, do_predict = get_training_flags(config)
+    if not isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
+        return  # not relying on vllm if we don't have any generation to do...
     has_vllm_evals_config = config.evals_config.vllm_provider_config is not None
     if do_train and do_predict and has_vllm_evals_config:
         training_type = "RL" if is_rl_config(config) else "SFT"
@@ -1138,7 +1140,9 @@ async def evaluate_model(
             pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
             evaluation_results[eval_subset_name] = evaluation_result
     elif pyine.utils.transformers.is_hf_model(model):
-        # Local HF model mode: use model.generate()
+        # Local HF model mode: assume we must use model.generate()
+        if not isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
+            raise ValueError(f"invalid evals config type for HF model eval: {type(config.evals_config).__name__}")
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
         if config.evals_config.eval_padding_side != tokenizer.padding_side:
@@ -1256,6 +1260,36 @@ def is_rl_config(config: AppMainConfig) -> bool:
     return hasattr(config, "grpo_config") and not hasattr(config, "training_args_config")
 
 
+def load_model_and_tokenizer_for_prediction(
+    config: ModelTokenizerConfigBase,
+    resume_artifacts: ResumeArtifacts | None,
+    evals_config: pydantic.SerializeAsAny[pyine.evals.common.BaseEvalsConfig] | None = None,
+) -> tuple[transformers.PreTrainedModel | None, transformers.PreTrainedTokenizer | None]:
+    """Load model and tokenizer for predict-only mode (no training).
+
+    Handles three cases: vLLM provider (skip loading), resume from checkpoint,
+    and fresh base model loading.
+
+    Args:
+        config: The model/tokenizer config (provides ``get_model``/``get_tokenizer``).
+        resume_artifacts: Optional resume artifacts with checkpoint path.
+        evals_config: Optional evals config; when its ``vllm_provider_config`` is set,
+            model/tokenizer loading is skipped entirely.
+
+    Returns:
+        Tuple of (model, tokenizer), both None when using a vLLM provider.
+    """
+    if evals_config is not None and getattr(evals_config, "vllm_provider_config", None) is not None:
+        logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
+        return None, None
+    if resume_artifacts is not None:
+        return (
+            config.get_model(checkpoint_path=resume_artifacts.checkpoint_path),
+            config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path),
+        )
+    return config.get_model(), config.get_tokenizer()
+
+
 def get_vllm_provider_model_name(
     config: AppMainConfig,
 ) -> str | None:
@@ -1267,9 +1301,10 @@ def get_vllm_provider_model_name(
     Returns:
         The vLLM provider model name or None.
     """
-    if config.evals_config.vllm_provider_config is None:
+    vllm_provider_config = getattr(config.evals_config, "vllm_provider_config", None)
+    if vllm_provider_config is None:
         return None
-    return config.evals_config.vllm_provider_config.model_kwargs.get("model", "default")
+    return vllm_provider_config.model_kwargs.get("model", "default")
 
 
 def prepare_resume_train_kwargs(

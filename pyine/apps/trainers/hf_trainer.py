@@ -352,12 +352,10 @@ async def main(
         )
 
     with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
-        # extract training flags and determine config type
         is_rl = pyine.apps.trainers.common.is_rl_config(config)
         do_train, _, do_predict = pyine.apps.trainers.common.get_training_flags(config)
-        if is_rl:
-            # RL training path
-            if do_train:
+        if do_train:
+            if is_rl:
                 trainer = rl_train(
                     datamodule=datamodule,
                     config=config,  # type: ignore[arg-type]
@@ -365,22 +363,7 @@ async def main(
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
                 )
-                model = typing.cast("transformers.PreTrainedModel", trainer.model)  # type: ignore[reportUnknownMemberType]
-                tokenizer = typing.cast("transformers.PreTrainedTokenizer", trainer.processing_class)  # type: ignore[reportUnknownMemberType]
-            else:  # predict-only mode; if using vLLM provider, skip model loading to save GPU memory
-                if config.evals_config.vllm_provider_config is not None:
-                    logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
-                    model = None  # type: ignore[assignment]
-                    tokenizer = None  # type: ignore[assignment]
-                elif resume_artifacts is not None:
-                    model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
-                    tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
-                else:
-                    model = config.get_model()
-                    tokenizer = config.get_tokenizer()
-        else:  # not is_rl
-            # SFT training path (SFTTrainerAppMainConfig or test mock with training_args_config)
-            if do_train:
+            else:
                 trainer = sft_train(
                     datamodule=datamodule,
                     config=config,  # type: ignore[arg-type]
@@ -388,27 +371,14 @@ async def main(
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
                 )
-                model = typing.cast(
-                    "transformers.PreTrainedModel",
-                    trainer.model,  # type: ignore[reportUnknownMemberType]
-                )
-                tokenizer = typing.cast(
-                    "transformers.PreTrainedTokenizer",
-                    trainer.processing_class,  # type: ignore[reportUnknownMemberType]
-                )
-            else:  # predict-only mode; if using vLLM provider, skip model loading to save GPU memory
-                if config.evals_config.vllm_provider_config is not None:
-                    logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
-                    model = None  # type: ignore[assignment]
-                    tokenizer = None  # type: ignore[assignment]
-                    # note: tokenizer not needed; prompt chain handles formatting internally
-                elif resume_artifacts is not None:
-                    model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
-                    tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
-                else:
-                    model = config.get_model()
-                    tokenizer = config.get_tokenizer()
-
+            model = typing.cast("transformers.PreTrainedModel", trainer.model)  # type: ignore[reportUnknownMemberType]
+            tokenizer = typing.cast("transformers.PreTrainedTokenizer", trainer.processing_class)  # type: ignore[reportUnknownMemberType]
+        else:
+            model, tokenizer = pyine.apps.trainers.common.load_model_and_tokenizer_for_prediction(
+                config=config,  # type: ignore[arg-type]
+                resume_artifacts=resume_artifacts,
+                evals_config=config.evals_config,
+            )
         pyine.utils.distrib.barrier()
 
         # prediction/evaluation phase

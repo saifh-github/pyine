@@ -163,13 +163,13 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
         if not hasattr(parser_config, "params"):
             raise ValueError(f"default_dataparser_config has no 'params' attribute: {type(parser_config)}")
         params = parser_config.params
-        if params is None:
+        if params is None:  # type: ignore[reportUnnecessaryComparison]
             raise ValueError("default_dataparser_config.params is None")
         if isinstance(params, pydantic.BaseModel):
             selection_config = getattr(params, "selection_config", None)
             if selection_config is not None:
                 return bool(getattr(selection_config, "allow_db_lookups", False))
-        elif isinstance(params, dict):
+        elif isinstance(params, dict):  # type: ignore[reportUnnecessaryIsInstance]
             selection_config = typing.cast("dict[str, typing.Any]", params.get("selection_config", {}))
             return bool(selection_config.get("allow_db_lookups", False))
         else:
