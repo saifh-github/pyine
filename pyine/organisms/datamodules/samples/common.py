@@ -790,6 +790,8 @@ def get_code_type_set_from_str(augm_type: str | None) -> frozenset[SampleCodeTyp
     found_types: set[SampleCodeType] = set()
     patterns = pyine.data.traces.dataset_utils.AugmentPatterns
     # first, check the code types directly (skip if negated by prefix)
+    if SampleCodeType.original.value in augm_type and not _is_negated_pattern(augm_type, SampleCodeType.original.value):
+        found_types.add(SampleCodeType.original)
     if patterns.OBFUSCATED in augm_type and not _is_negated_pattern(augm_type, patterns.OBFUSCATED):
         found_types.add(SampleCodeType.obfuscated)
     if patterns.BUGGED_SUBSTRING in augm_type and not _is_negated_pattern(augm_type, patterns.BUGGED_SUBSTRING):

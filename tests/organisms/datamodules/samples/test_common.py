@@ -410,6 +410,24 @@ class TestGetCodeTypeSetFromStr:
         assert SampleCodeType.hinted not in result_hintless
         assert result_hintless == frozenset({SampleCodeType.original})
 
+    def test_original_detected_in_compound_string(self) -> None:
+        # "original_bugged" should detect both original and bugged
+        result = get_code_type_set_from_str("original_bugged")
+        assert SampleCodeType.original in result
+        assert SampleCodeType.bugged in result
+
+    def test_original_with_other_type_produces_forbidden_set(self) -> None:
+        # the resulting {original, bugged} frozenset should be caught as forbidden by SampleCodeTypeSet
+        result = get_code_type_set_from_str("original_bugged")
+        with pytest.raises(ValueError, match="forbidden"):
+            SampleCodeTypeSet(result)
+
+    def test_original_in_subset_name_detected(self) -> None:
+        # "train_original_hinted" should detect both original and hinted
+        result = get_code_type_set_from_str("train_original_hinted")
+        assert SampleCodeType.original in result
+        assert SampleCodeType.hinted in result
+
     def test_negation_pattern_word_boundary(self) -> None:
         # "no_" as part of "notification_" should NOT negate the pattern
         result = get_code_type_set_from_str("train_no_notification_hinted")
