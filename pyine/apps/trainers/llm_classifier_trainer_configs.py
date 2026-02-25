@@ -46,72 +46,53 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     """Probe data configuration (LMDB source, splitting, filtering, label balancing)."""
 
     # --- HuggingFace Training Arguments ---
-    training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = pydantic.Field(
-        ...,
-        description="HuggingFace TrainingArguments configuration.",
-    )
+    training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = ...
+    """HuggingFace TrainingArguments configuration."""
 
     # --- Encoder-appropriate tokenizer defaults ---
     # Override causal-LM defaults from ModelTokenizerConfigBase:
     # Encoder models typically truncate on the right (drop end tokens, preserving
     # [CLS] at the start) and pad on the right. The causal-LM defaults (left
     # truncation, right padding) are inappropriate for encoder classification.
-    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
-        default=False,
-        description="Disabled for encoder models. Encoder tokenizers should truncate right (default).",
-    )
+    tokenizer_override_truncation_to_left_side: bool = False
+    """Disabled for encoder models. Encoder tokenizers should truncate right (default)."""
 
     # --- Code type metrics ---
-    log_per_code_type_metrics: bool = pydantic.Field(default=True)
+    log_per_code_type_metrics: bool = True
 
     # --- Tokenization ---
-    max_seq_length: int = pydantic.Field(
-        default=3000,
-        description="Maximum sequence length for tokenization. Should not exceed model's max position embeddings.",
-    )
-    truncation_side: typing.Literal["right", "left"] | None = pydantic.Field(
-        default=None,
-        description=(
-            "Which side to truncate when sequences exceed max_seq_length. "
-            "None = use tokenizer default (usually 'right'). 'left' preserves "
-            "the completion (at the end) at the cost of dropping prompt tokens. "
-            "This is applied after get_tokenizer() and overrides its settings."
-        ),
-    )
+    max_seq_length: int = 3000
+    """Maximum sequence length for tokenization. Should not exceed model's max position embeddings."""
+    truncation_side: typing.Literal["right", "left"] | None = None
+    """Which side to truncate when sequences exceed max_seq_length.
+
+    None = use tokenizer default (usually 'right'). 'left' preserves the completion
+    (at the end) at the cost of dropping prompt tokens. This is applied after
+    get_tokenizer() and overrides its settings.
+    """
 
     # --- Output ---
-    save_model: bool = pydantic.Field(
-        default=True,
-        description="Whether to save the trained model at the end of training.",
-    )
+    save_model: bool = True
+    """Whether to save the trained model at the end of training."""
 
     # --- Class imbalance ---
-    class_weight_mode: typing.Literal["none", "balanced"] = pydantic.Field(
-        default="none",
-        description=(
-            "How to handle class imbalance in the loss function. 'none' = standard "
-            "CrossEntropyLoss. 'balanced' = compute class weights inversely "
-            "proportional to class frequency and pass them to CrossEntropyLoss "
-            "via a custom Trainer. Label distribution is always logged regardless "
-            "of this setting. Note: this is separate from label balancing via "
-            "datamodule_config.label_balance (which resamples the data). Using "
-            "both simultaneously is usually undesirable."
-        ),
-    )
+    class_weight_mode: typing.Literal["none", "balanced"] = "none"
+    """How to handle class imbalance in the loss function.
+
+    'none' = standard CrossEntropyLoss. 'balanced' = compute class weights inversely
+    proportional to class frequency and pass them to CrossEntropyLoss via a custom
+    Trainer. Label distribution is always logged regardless of this setting.
+    Note: this is separate from label balancing via datamodule_config.label_balance
+    (which resamples the data). Using both simultaneously is usually undesirable.
+    """
 
     # --- Classification model ---
-    num_labels: int = pydantic.Field(
-        default=2,
-        description="Number of classification labels. Default 2 for binary classification.",
-    )
-    id2label: dict[int, str] = pydantic.Field(
-        default_factory=lambda: {0: "incorrect", 1: "correct"},
-        description="Mapping from label ID to human-readable name.",
-    )
-    label2id: dict[str, int] = pydantic.Field(
-        default_factory=lambda: {"incorrect": 0, "correct": 1},
-        description="Mapping from human-readable name to label ID.",
-    )
+    num_labels: int = 2
+    """Number of classification labels. Default 2 for binary classification."""
+    id2label: dict[int, str] = pydantic.Field(default_factory=lambda: {0: "incorrect", 1: "correct"})
+    """Mapping from label ID to human-readable name."""
+    label2id: dict[str, int] = pydantic.Field(default_factory=lambda: {"incorrect": 0, "correct": 1})
+    """Mapping from human-readable name to label ID."""
 
     @property
     @typing.override
