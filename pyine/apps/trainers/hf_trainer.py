@@ -408,14 +408,6 @@ async def main(
 
 
 if __name__ == "__main__":
-    # DeepSpeed's native launcher passes --local_rank=N as a CLI argument, but Hydra
-    # doesn't recognize it. Filter it out since distributed training already uses
-    # LOCAL_RANK environment variable (set by DeepSpeed/torchrun). This is a no-op
-    # when using accelerate's standard launcher which only sets env vars.
-    # TODO: to be removed when deepspeed++ will be handle in different ways or no conflict with hydra
-    import sys
-
-    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
 
     def _register_combined_hydra_configs(
         *args: typing.Any,

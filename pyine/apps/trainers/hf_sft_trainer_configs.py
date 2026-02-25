@@ -348,7 +348,7 @@ def register_hydra_configs(
         common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
-        description="Entrypoint settings for the HuggingFace trainer app.",
+        description="Entrypoint settings for the HuggingFace SFT trainer app.",
         config={
             # -------------
             "populate_full_signature": True,

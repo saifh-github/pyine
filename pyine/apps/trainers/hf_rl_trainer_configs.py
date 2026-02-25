@@ -1,4 +1,4 @@
-"""Hydra-zen config builder for RL training with GRPO.
+"""Hydra-zen config builder for RL training.
 
 If you execute this script directly, it will print all available experiment configs for this app.
 """
@@ -355,7 +355,7 @@ def register_hydra_configs(
         common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
-        description="Entrypoint settings for the RL trainer app.",
+        description="Entrypoint settings for the HuggingFace TRL trainer app.",
         config={
             # -------------
             "populate_full_signature": True,

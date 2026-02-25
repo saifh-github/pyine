@@ -114,7 +114,7 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
         Overrides the base class to use the correct AutoModel class for encoder
         classification. Handles attention implementation fallback and LoRA.
         """
-        resolved_config = common._resolve_attn_implementation(self.auto_model_config)  # pyright: ignore[reportPrivateUsage]
+        resolved_config = common.resolve_attn_implementation(self.auto_model_config)
         model_kwargs: dict[str, typing.Any] = {
             "torch_dtype": self.target_dtype,
             "device_map": self.device_map,
