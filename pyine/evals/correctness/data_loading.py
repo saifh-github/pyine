@@ -1,0 +1,97 @@
+"""LMDB reading for the guardrail correctness evaluation pipeline.
+
+Loads pregenerated evaluation records from LMDB datasets (produced by ``DiskEvalLogger``)
+and converts them into ``EvalRecord`` objects.
+"""
+
+from __future__ import annotations
+
+import logging
+import pathlib  # noqa: TC003
+import typing
+
+import pyine.data.utils.lmdb_io
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.splits as correctness_splits
+import pyine.evals.correctness.types as correctness_types
+
+logger = logging.getLogger(__name__)
+
+
+def load_records_from_lmdb(
+    lmdb_paths: typing.Sequence[pathlib.Path],
+    label_type: correctness_configs.LabelType,
+) -> list[correctness_types.EvalRecord]:
+    """Load EvalRecords from one or more LMDB datasets.
+
+    Follows the pattern from ``pyine.evals.code_exec.reeval``: opens each LMDB with
+    ``LMDBReader``, validates ``record_type == 'benchmark'``, and converts records to
+    ``EvalRecord`` objects.
+
+    Args:
+        lmdb_paths: Paths to LMDB datasets containing eval records.
+        label_type: Which correctness label to use (hard_match or soft_match).
+
+    Returns:
+        Flat list of EvalRecord objects from all LMDBs.
+
+    Raises:
+        ValueError: If an LMDB has wrong record_type or duplicate (sample_id, attempt_index).
+    """
+    records: list[correctness_types.EvalRecord] = []
+    seen_keys: set[tuple[str, int]] = set()
+    for lmdb_path in lmdb_paths:
+        reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        try:
+            metadata = reader.get_metadata()
+            record_type = metadata.get("record_type")
+            if record_type != "benchmark":
+                raise ValueError(
+                    f"LMDB at '{lmdb_path}' has record_type={record_type!r}, expected 'benchmark'; "
+                    "ensure this is an eval export produced by DiskEvalLogger"
+                )
+            for record_idx in range(reader.sample_count):
+                record = reader.get(record_idx)
+                sample_id: str = record["sample_id"]
+                attempt_index: int = record["attempt_index"]
+                record_key = (sample_id, attempt_index)
+                if record_key in seen_keys:
+                    raise ValueError(
+                        f"duplicate (sample_id, attempt_index) = ({sample_id!r}, {attempt_index}) across LMDB datasets"
+                    )
+                seen_keys.add(record_key)
+                # extract label based on label_type
+                if label_type == correctness_configs.LabelType.HARD_MATCH:
+                    label = bool(record["hard_match"])
+                elif label_type == correctness_configs.LabelType.SOFT_MATCH:
+                    label = bool(record["soft_match"])
+                else:
+                    raise ValueError(f"unsupported label_type: {label_type!r}")
+                model_output: str = record["model_output"]
+                final_answer: str | None = record.get("final_answer")
+                expected_output: str = record["expected_output"]
+                code_type: str | None = record.get("code_type")
+                if not code_type:
+                    raise ValueError(
+                        f"record {sample_id!r} (attempt {attempt_index}) has missing or empty code_type; "
+                        f"ensure the LMDB export includes the code_type field"
+                    )
+                tags: list[str] = record.get("tags") or []
+                problem_id = correctness_splits.extract_problem_id(sample_id)
+                eval_record = correctness_types.EvalRecord(
+                    sample_id=sample_id,
+                    problem_id=problem_id,
+                    attempt_index=attempt_index,
+                    model_output=model_output,
+                    final_answer=final_answer,
+                    expected_output=expected_output,
+                    label=label,
+                    code_type=code_type,
+                    tags=tags,
+                    record=record,
+                    difficulty_score=float(record["difficulty_score"]) if "difficulty_score" in record else None,
+                )
+                records.append(eval_record)
+        finally:
+            reader.close()
+    return records
