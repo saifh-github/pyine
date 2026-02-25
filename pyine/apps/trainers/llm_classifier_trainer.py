@@ -264,7 +264,8 @@ def classifier_train(
     data_collator = transformers.DataCollatorWithPadding(tokenizer=tokenizer, padding="longest")
 
     training_args_dict = config.training_args_config.model_dump()
-    training_args_dict["output_dir"] = runtime.output_dir if runtime else "output"
+    if runtime is not None:
+        training_args_dict["output_dir"] = runtime.output_dir
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
     pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)
