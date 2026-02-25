@@ -181,6 +181,8 @@ class CodeExecEvalArtifact(pydantic.BaseModel):
     """Evaluation result associated with the prediction."""
     parsed_output: pyine.utils.parsing.ParsedOutput | None = None
     """Structured parsed output (reasoning, final_answer) when output parsing is enabled."""
+    difficulty_score: float | None = None
+    """Per-sample difficulty score (when difficulty estimation is enabled)."""
 
     @property
     def sample_identifier(self) -> str:
@@ -300,9 +302,16 @@ def define_metrics_for_wandb(
                 hidden=True,
                 summary="none",
             )
-
-
-# @@@@ TODO: we might want to refactor/integrate difficulty stats + aggregation here too
+    for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+        difficulty_name = f"difficulty/score_{aggr_name}"
+        if prefix:
+            difficulty_name = f"{prefix}/{difficulty_name}"
+        wandb_run.define_metric(
+            name=difficulty_name,
+            step_metric=step_metric,
+            hidden=True,
+            summary="none",
+        )
 
 
 def compute_aggregated_complexity_stats(
@@ -332,6 +341,27 @@ def compute_aggregated_complexity_stats(
         arr = np.array(values)
         for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
             output[f"{metric_name}_{aggr_name}"] = float(aggr_func(arr))
+    return output
+
+
+def compute_aggregated_difficulty_stats(
+    difficulty_scores: typing.Iterable[float],
+) -> dict[str, float]:
+    """Compute aggregated difficulty statistics across all samples.
+
+    Args:
+        difficulty_scores: Iterable of difficulty score values.
+
+    Returns:
+        Dict mapping metric names (with aggregation suffix) to values.
+    """
+    values = list(difficulty_scores)
+    if not values:
+        return {}
+    arr = np.array(values)
+    output: dict[str, float] = {}
+    for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
+        output[f"score_{aggr_name}"] = float(aggr_func(arr))
     return output
 
 
@@ -386,6 +416,7 @@ async def get_metrics(
     token_usage: pyine.evals.utils.TokenUsageInfo,
     attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
+    difficulty_scores: dict[str, float | None] | None = None,
     pass_at_k_values: list[int] | None = None,
     num_attempts_per_sample: int = 1,
     partial: bool = False,
@@ -397,6 +428,7 @@ async def get_metrics(
         token_usage: Total token usage across all attempts.
         attempt_token_usage: Per-attempt token usage keyed by (identifier, attempt_index).
         sample_data_store: Sample data keyed by bare identifier.
+        difficulty_scores: Optional mapping from sample identifier to difficulty score.
         pass_at_k_values: Resolved list of k values for Pass@K, or None to skip Pass@K.
         num_attempts_per_sample: Number of attempts per sample for validation.
         partial: When True, relaxes validation (subset checks only). Use for progress
@@ -413,6 +445,10 @@ async def get_metrics(
         output_metrics[f"attempt_token_usage/{key}"] = value  # these should always be floats
     for key, value in compute_aggregated_complexity_stats(sample_data_store.values()).items():
         output_metrics[f"complexity/{key}"] = value  # these should always be floats
+    if difficulty_scores is not None:
+        valid_scores = [score for score in difficulty_scores.values() if score is not None]
+        for key, value in compute_aggregated_difficulty_stats(valid_scores).items():
+            output_metrics[f"difficulty/{key}"] = value
     return output_metrics
 
 
@@ -421,6 +457,7 @@ async def get_category_wise_metrics(
     attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
     category_to_identifiers: dict[str, list[str]],
+    difficulty_scores: dict[str, float | None] | None = None,
     pass_at_k_values: list[int] | None = None,
     num_attempts_per_sample: int = 1,
 ) -> pyine.evals.utils.MetricsDictType:
@@ -431,6 +468,7 @@ async def get_category_wise_metrics(
         attempt_token_usage: Per-attempt token usage keyed by (identifier, attempt_index).
         sample_data_store: Sample data keyed by bare identifier.
         category_to_identifiers: Per-sample identifiers grouped by category.
+        difficulty_scores: Optional mapping from sample identifier to difficulty score.
         pass_at_k_values: Resolved list of k values for Pass@K, or None.
         num_attempts_per_sample: Number of attempts per sample for validation.
     """
@@ -461,6 +499,14 @@ async def get_category_wise_metrics(
             output_metrics[f"{category}/attempt_token_usage/{key}"] = value
         for key, value in compute_aggregated_complexity_stats(category_sample_data).items():
             output_metrics[f"{category}/complexity/{key}"] = value
+        if difficulty_scores is not None:
+            category_scores: list[float] = []
+            for sample_identifier in identifiers:
+                score = difficulty_scores.get(sample_identifier)
+                if score is not None:
+                    category_scores.append(score)
+            for key, value in compute_aggregated_difficulty_stats(category_scores).items():
+                output_metrics[f"{category}/difficulty/{key}"] = value
     return output_metrics
 
 
@@ -508,6 +554,8 @@ def get_sample_metrics_columns() -> list[str]:
         *token_usage_columns,
         # complexity metrics
         *pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS,
+        # difficulty metrics
+        "difficulty_score",
     ]
 
 
@@ -557,4 +605,6 @@ def artifact_to_sample_metrics_row(artifact: CodeExecEvalArtifact) -> dict[str, 
         **{t: token_usage[t] if token_usage[t] != "unknown" else None for t in token_usage_columns},
         # complexity metrics
         **sample.complexity_metrics,
+        # difficulty metrics
+        "difficulty_score": artifact.difficulty_score,
     }

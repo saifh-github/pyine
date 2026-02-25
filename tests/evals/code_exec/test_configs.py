@@ -21,6 +21,7 @@ import pyine.evals.code_exec._impl
 import pyine.evals.code_exec.configs
 import pyine.evals.code_exec.utils
 import pyine.evals.common
+import pyine.utils.code.difficulty as difficulty_utils
 import pyine.utils.langchain
 import tests.utils.transformers.utils
 
@@ -89,6 +90,7 @@ def impl_monkeypatches(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         token_usage: typing.Any,
         attempt_token_usage: typing.Any,
         sample_data_store: typing.Any,
+        difficulty_scores: typing.Any = None,
         pass_at_k_values: typing.Any = None,
         num_attempts_per_sample: int = 1,
         partial: bool = False,
@@ -385,6 +387,7 @@ class TestEvaluateHFModel:
             token_usage: typing.Any,
             attempt_token_usage: typing.Any,
             sample_data_store: typing.Any,
+            difficulty_scores: typing.Any = None,
             pass_at_k_values: typing.Any = None,
             num_attempts_per_sample: int = 1,
             partial: bool = False,
@@ -706,3 +709,63 @@ class TestExtractPromptFromHandler:
         msg_store: dict[str, list[dict[str, typing.Any]]] = {}
         pyine.evals.code_exec._impl._extract_prompt_from_handler(handler, "s1", text_store, msg_store)
         assert msg_store["s1"][0]["content"] == "second"
+
+
+class TestBuildDifficultyScorer:
+    """Tests for _build_difficulty_scorer()."""
+
+    def test_returns_none_when_no_config(self) -> None:
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig()
+        assert config.difficulty_config is None
+        scorer = pyine.evals.code_exec._impl._build_difficulty_scorer(config, tokenizer=None)
+        assert scorer is None
+
+    def test_returns_none_when_disabled(self) -> None:
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            difficulty_config=difficulty_utils.DifficultyConfig(enabled=False),
+        )
+        scorer = pyine.evals.code_exec._impl._build_difficulty_scorer(config, tokenizer=None)
+        assert scorer is None
+
+    def test_returns_scorer_when_enabled(self) -> None:
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            difficulty_config=difficulty_utils.DifficultyConfig(
+                primary_source="trace_step_count",
+            ),
+        )
+        scorer = pyine.evals.code_exec._impl._build_difficulty_scorer(config, tokenizer=None)
+        assert isinstance(scorer, difficulty_utils.DifficultyScorer)
+
+    def test_raises_when_token_source_without_tokenizer(self) -> None:
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            difficulty_config=difficulty_utils.DifficultyConfig(
+                primary_source="code_tokens",
+            ),
+        )
+        with pytest.raises(ValueError, match="token-based sources"):
+            pyine.evals.code_exec._impl._build_difficulty_scorer(config, tokenizer=None)
+
+
+class TestDifficultyStats:
+    """Tests for compute_aggregated_difficulty_stats."""
+
+    def test_aggregation_computes_all_statistics(self) -> None:
+        stats = pyine.evals.code_exec.utils.compute_aggregated_difficulty_stats([1.0, 2.0, 3.0, 4.0, 5.0])
+        assert "score_mean" in stats
+        assert "score_median" in stats
+        assert "score_std" in stats
+        assert "score_min" in stats
+        assert "score_max" in stats
+        assert stats["score_mean"] == pytest.approx(3.0)
+        assert stats["score_median"] == pytest.approx(3.0)
+        assert stats["score_min"] == pytest.approx(1.0)
+        assert stats["score_max"] == pytest.approx(5.0)
+
+    def test_empty_input_returns_empty_dict(self) -> None:
+        assert pyine.evals.code_exec.utils.compute_aggregated_difficulty_stats([]) == {}
+
+    def test_single_value(self) -> None:
+        stats = pyine.evals.code_exec.utils.compute_aggregated_difficulty_stats([42.0])
+        assert stats["score_mean"] == pytest.approx(42.0)
+        assert stats["score_min"] == pytest.approx(42.0)
+        assert stats["score_max"] == pytest.approx(42.0)

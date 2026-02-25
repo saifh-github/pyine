@@ -235,6 +235,7 @@ class FakeArtifact:
     token_usage: object
     eval_result: object
     parsed_output: object = None
+    difficulty_score: float | None = None
 
 
 @dataclasses.dataclass

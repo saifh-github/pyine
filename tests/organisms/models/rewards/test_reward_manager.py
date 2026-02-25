@@ -8,6 +8,7 @@ import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
+import pyine.utils.code.difficulty
 import pyine.utils.distrib
 import pyine.utils.parsing
 import tests.organisms.models.rewards.conftest as rewards_conftest
@@ -422,7 +423,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
-            difficulty=pyine.organisms.models.rewards.core.configs.DifficultyConfig(
+            difficulty=pyine.utils.code.difficulty.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",
             ),

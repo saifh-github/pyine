@@ -11,8 +11,8 @@ import typing
 import pydantic
 
 import pyine.evals.utils
-import pyine.organisms.models.rewards.core.difficulty as difficulty_module
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.code.difficulty as difficulty_utils
 import pyine.utils.parsing
 
 type RewardTermParamsType = dict[str, pydantic.JsonValue]
@@ -150,212 +150,6 @@ class VerbosityScalingConfig(reward_types.BaseConfig):
                 raise ValueError(
                     f"end_tokens ({self.end_tokens}) must be > threshold_tokens ({self.threshold_tokens}) "
                     "when mode='absolute' and decay_type='linear'"
-                )
-        return self
-
-
-class DifficultyConfig(reward_types.BaseConfig):
-    """Configuration for task difficulty estimation and logging.
-
-    When enabled, computes difficulty metrics for each sample based on code complexity
-    metrics and/or trace execution characteristics. Metrics are logged alongside rewards
-    to analyze how model performance scales with task difficulty.
-
-    Difficulty Axes:
-        Task difficulty for code execution reasoning can be decomposed into two axes:
-
-        1. **Reasoning depth**: The number of sequential reasoning steps required to solve the
-           problem, reflecting how far logical dependencies span across the trace. This is
-           well-captured by `trace_step_count` (the default primary_source).
-
-        2. **Computational burden**: The amount and brittleness of exact symbolic/numeric
-           manipulation within and across steps --- how much state (variables, values) must be
-           faithfully carried and updated. We currently lack good metrics for this axis; the
-           `halstead_effort` (included in secondary_sources by default) serves as a rough
-           code-level proxy, but it measures static code complexity rather than dynamic
-           execution state. Better metrics would require trace-level variable statistics or
-           evaluations using reference reasoning models directly.
-
-    Binning Strategy:
-        Bins are always defined in difficulty-score-space (after normalization). The bin edges
-        depend on the normalization_mode:
-        - fixed_range: uniform edges in [0, 1] (no overflow bin needed);
-        - log: uniform edges in [0, bin_max_score], plus an overflow bin (edge=inf) if
-          scores can exceed the last edge (i.e., no score_clip_max, or score_clip_max > bin_max_score).
-
-    Important:
-        When `SampleData.has_code_override=True`, the trace_step_count and complexity_metrics are
-        still from the original traced code. This means that they might not be reliable indicators
-        of sample difficulty (depending on how the code was modified). The `code_override_mode`
-        setting controls handling in those cases.
-    """
-
-    enabled: bool = True
-    """Whether difficulty estimation is active."""
-
-    primary_source: str = "trace_step_count"
-    """Primary metric key for difficulty computation.
-
-    Supported sources:
-
-    Execution-relation (affected by has_code_override, use code_override_mode to control):
-    - 'trace_step_count': number of trace steps (default);
-    - 'segment_span': last_line - first_line;
-    - any key from complexity_metrics (e.g., 'halstead_effort', 'cyclomatic_complexity').
-
-    Context-related (valid even with has_code_override):
-    - 'code_length': character length of sample code;
-    - 'inputs_length': character length of inputs;
-    - 'output_length': character length of expected output (from sample data, not model prediction).
-
-    Token-based sources (require tokenizer):
-    - 'code_tokens': token count of sample code;
-    - 'inputs_tokens': token count of inputs;
-    - 'output_tokens': token count of expected output (from sample data, not model prediction).
-
-    To analyze total context size, configure all three token sources as secondary_sources
-    and sum them in post-processing. The breakdown is more useful than pre-aggregating.
-    """
-
-    secondary_sources: frozenset[str] = frozenset({"halstead_effort"})
-    """Additional sources to log raw values for (e.g., to analyze computational burden axis).
-
-    Default includes 'halstead_effort' as a rough proxy for computational burden.
-
-    Logging secondary sources may be useful for downstream/offline difficulty analyses.
-    """
-
-    normalization_mode: typing.Literal["none", "log", "fixed_range"] = "log"
-    """Specifies how to normalize raw difficulty values.
-
-    Supported modes:
-    - none: Use raw values directly (requires explicit bin_edges)
-    - log: Apply log1p transform; score is unbounded but well-behaved (typically 0-7)
-    - fixed_range: For known-range metrics; score in [0, 1]. Uses source_ranges config.
-    """
-
-    source_ranges: dict[str, tuple[float, float, bool]] | None = None
-    """Custom ranges for fixed_range normalization.
-
-    Keys are targeted source names, values are `(min, max, invert)` tuples. Score is computed as
-    `(clamped - min) / (max - min)`, then if `invert=True`, `score = 1 - score`. Use invert=True
-    when higher raw values indicate easier tasks (lower difficulty). Defaults merged with
-    DEFAULT_SOURCE_RANGES (which includes maintainability_index).
-
-    Example: `{'custom_metric': (0.0, 1000.0, False)}` for a metric whose values typically range
-    from 0 to 1000, and where 0.0 indicates an easier problem.
-    """
-
-    score_clip_max: float | None = None
-    """Optional ceiling applied to normalized score. Prevents rare outliers from dominating bins.
-
-    When set and <= bin_max_score (or the auto-derived bin max), no overflow bin is added since all
-    scores are bounded within the bin range. When score_clip_max > bin_max_score, an overflow bin
-    is still added for scores between bin_max_score and score_clip_max.
-    """
-
-    num_difficulty_bins: int = 10
-    """Number of bins for difficulty-stratified reward logging."""
-
-    bin_max_score: float | None = None
-    """Maximum score for bin edges (log mode only).
-
-    If None, defaults to score_clip_max if set, otherwise log1p(10_000) = 9.21...; scores above this
-    go into an overflow bin.
-    """
-
-    bin_edges: list[float] | None = None
-    """Optional manual bin edges. If provided, overrides automatic edge computation.
-
-    Should be a sorted list of floats. The number of bins = len(bin_edges) - 1.
-
-    Example: `[0.0, 1.0, 2.0, 3.0, float('inf')]` for 4 bins with overflow.
-    """
-
-    code_override_mode: difficulty_module.CodeOverrideMode = difficulty_module.CodeOverrideMode.skip
-    """How to handle samples with `has_code_override=True`, i.e. without reliable trace coverage.
-
-    Default is 'skip' because trace/complexity metrics are from the original code, not the
-    overridden code the model actually saw. For context difficulty (token sources), use
-    secondary_sources which still work with overrides.
-
-    Options:
-    - 'skip': skip execution difficulty metrics, context metrics (token sources) still logged;
-    - 'use_original': use original traced metrics (may not reflect actual prediction task difficulty);
-    - 'recompute_step_count': recompute trace_step_count from segment indices if available,
-      otherwise fall back to original trace_step_count.
-    """
-
-    track_percentiles: typing.Literal["disabled", "eval_only", "always"] = "disabled"
-    """When to track difficulty score distribution for percentile computation.
-
-    Stores all difficulty scores in memory for accurate median/p90/p99.
-
-    Options:
-    - 'disabled': do not track percentiles;
-    - 'eval_only': only track during eval phase;
-    - 'always': track every generation (use with caution for long runs).
-    """
-
-    track_per_term_rewards: typing.Literal["disabled", "eval_only", "always"] = "disabled"
-    """When to track per-term reward stats within difficulty bins.
-
-    Logs per-bin statistics for each individual reward term (in addition to total reward).
-    This multiplies the number of logged metrics by the number of terms.
-
-    Options:
-    - 'disabled': do not track per-term rewards;
-    - 'eval_only': only track during eval phase;
-    - 'always': track every generation (use with caution for long runs).
-    """
-
-    track_bin_quantiles: typing.Literal["disabled", "eval_only", "always"] = "disabled"
-    """When to track per-difficulty-bin reward quantiles (p10/p50/p90).
-
-    Stores all reward values per difficulty bin in memory for quantile computation.
-
-    Options:
-    - 'disabled': do not track bin quantiles;
-    - 'eval_only': only track during eval phase;
-    - 'always': track every generation (use with caution for long runs).
-    """
-
-    @pydantic.model_validator(mode="after")
-    def _validate_config(self) -> "DifficultyConfig":
-        """Validate configuration consistency."""
-        # validate num_difficulty_bins
-        if self.num_difficulty_bins < 1:
-            raise ValueError("num_difficulty_bins must be >= 1")
-        # validate bin_edges if provided
-        if self.bin_edges is not None:
-            if len(self.bin_edges) < 2:
-                raise ValueError("bin_edges must have at least 2 values")
-            if self.bin_edges != sorted(self.bin_edges):
-                raise ValueError("bin_edges must be sorted in ascending order")
-        # validate bin_max_score
-        if self.bin_max_score is not None and self.bin_max_score <= 0:
-            raise ValueError("bin_max_score must be positive if set")
-        # validate score_clip_max
-        if self.score_clip_max is not None and self.score_clip_max <= 0:
-            raise ValueError("score_clip_max must be positive if set")
-        # CRITICAL: normalization_mode="none" is incoherent with auto-binning
-        if self.normalization_mode == "none" and self.bin_edges is None:
-            raise ValueError(
-                "normalization_mode='none' requires explicit bin_edges; "
-                "raw scores have unbounded ranges, making auto-binning meaningless. "
-                "Either provide bin_edges or use normalization_mode='log'"
-            )
-        # CRITICAL: fixed_range requires source with known range for auto-binning
-        if self.normalization_mode == "fixed_range" and self.bin_edges is None:
-            all_ranges = {**difficulty_module.DEFAULT_SOURCE_RANGES, **(self.source_ranges or {})}
-            if self.primary_source not in all_ranges:
-                known_sources = ", ".join(sorted(all_ranges.keys()))
-                raise ValueError(
-                    f"normalization_mode='fixed_range' with auto-binning requires primary_source "
-                    f"to have a known range. Known sources: {known_sources}. "
-                    f"Got primary_source={self.primary_source!r}. "
-                    "Either use normalization_mode='log', provide explicit bin_edges, "
-                    "add an entry to source_ranges, or choose a known-range source."
                 )
         return self
 
@@ -663,7 +457,7 @@ class RewardManagerConfig(reward_types.BaseConfig):
     """Optional parsing configuration used to populate `SampleContext.parsed`."""
     verbosity_scaling: VerbosityScalingConfig | None = None
     """Optional verbosity-based reward scaling configuration."""
-    difficulty: DifficultyConfig | None = None
+    difficulty: difficulty_utils.DifficultyConfig | None = None
     """Optional task difficulty estimation configuration."""
 
     @pydantic.model_validator(mode="after")

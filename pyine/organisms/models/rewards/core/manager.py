@@ -18,6 +18,7 @@ import pyine.organisms.models.rewards.core.difficulty as difficulty_module
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.core.verbosity_scaling as verbosity_scaling
+import pyine.utils.code.difficulty as difficulty_utils
 import pyine.utils.distrib
 import pyine.utils.parsing
 import pyine.utils.stats as stats_utils
@@ -209,7 +210,7 @@ class RewardManager:
         needs_difficulty_tokens = False
         if self._config.difficulty is not None and self._config.difficulty.enabled:
             all_sources = {self._config.difficulty.primary_source} | set(self._config.difficulty.secondary_sources)
-            needs_difficulty_tokens = bool(all_sources & difficulty_module.TOKEN_SOURCES)
+            needs_difficulty_tokens = bool(all_sources & difficulty_utils.TOKEN_SOURCES)
         if not needs_parsing_tokens and not needs_verbosity_tokens and not needs_difficulty_tokens:
             return None
         if tokenizer is not None:

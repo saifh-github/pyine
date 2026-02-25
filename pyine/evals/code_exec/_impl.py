@@ -20,6 +20,7 @@ import pyine.evals.common
 import pyine.evals.logging
 import pyine.evals.utils
 import pyine.organisms.datamodules.samples
+import pyine.utils.code.difficulty
 import pyine.utils.concurrency
 import pyine.utils.langchain
 import pyine.utils.parsing
@@ -27,6 +28,32 @@ import pyine.utils.portability
 import pyine.utils.transformers
 
 logger = logging.getLogger(__name__)
+
+
+def _build_difficulty_scorer(
+    eval_config: pyine.evals.code_exec.configs.CodeExecEvalsConfig,
+    tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast | None,
+) -> pyine.utils.code.difficulty.DifficultyScorer | None:
+    config = eval_config.difficulty_config
+    if config is None or not config.enabled:
+        return None
+    token_counter: typing.Callable[[str], int] | None = None
+    all_sources = {config.primary_source} | set(config.secondary_sources)
+    if all_sources & pyine.utils.code.difficulty.TOKEN_SOURCES:
+        if tokenizer is None:
+            raise ValueError(
+                "difficulty_config uses token-based sources but no tokenizer was provided; "
+                "disable token sources or pass a tokenizer"
+            )
+
+        def _count_tokens(text: str) -> int:
+            return len(tokenizer.encode(text, add_special_tokens=False))  # type: ignore[reportUnknownMemberType]
+
+        token_counter = _count_tokens
+    return pyine.utils.code.difficulty.DifficultyScorer(
+        config,
+        token_counter=token_counter,
+    )
 
 
 def _extract_prompt_from_handler(
@@ -166,6 +193,7 @@ async def evaluate_runnable_model(
     if eval_config.output_parsing_config is not None:
         output_parser = pyine.utils.parsing.TagsOutputParser(eval_config.output_parsing_config)
         parsed_output_store = {}
+    difficulty_scorer = _build_difficulty_scorer(eval_config, tokenizer=None)
     # prompt capture and model metadata setup (only when disk export enabled)
     prompt_text_store: dict[str, str] | None = None
     prompt_messages_store: dict[str, list[dict[str, typing.Any]]] | None = None
@@ -306,6 +334,7 @@ async def evaluate_runnable_model(
         total_token_usage=total_token_usage,
         attempt_token_usage=attempt_token_usage,
         sample_data_store=sample_data_store,
+        difficulty_scorer=difficulty_scorer,
         category_extraction_config=eval_config.category_extraction_config,
         pass_at_k_values=eval_config.pass_at_k_values,
         num_attempts_per_sample=num_attempts_per_sample,
@@ -458,6 +487,7 @@ async def evaluate_hf_model(
     if eval_config.output_parsing_config is not None:
         output_parser = pyine.utils.parsing.TagsOutputParser(eval_config.output_parsing_config)
         parsed_output_store = {}
+    difficulty_scorer = _build_difficulty_scorer(eval_config, tokenizer=tokenizer)
     export_metadata: dict[str, typing.Any] | None = None
     prompt_text_store: dict[str, str] | None = None
     if eval_config.disk_export_config is not None:
@@ -534,6 +564,7 @@ async def evaluate_hf_model(
         total_token_usage=total_token_usage,
         attempt_token_usage=attempt_token_usage,
         sample_data_store=sample_data_store,
+        difficulty_scorer=difficulty_scorer,
         category_extraction_config=eval_config.category_extraction_config,
         pass_at_k_values=eval_config.pass_at_k_values,
         num_attempts_per_sample=num_attempts_per_sample,
@@ -550,7 +581,8 @@ async def finalize_evaluation_results(
     total_token_usage: pyine.evals.utils.TokenUsageInfo,
     attempt_token_usage: dict[pyine.evals.code_exec.utils.AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
-    category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None,
+    difficulty_scorer: pyine.utils.code.difficulty.DifficultyScorer | None = None,
+    category_extraction_config: pyine.evals.utils.SampleCategoryExtractionConfig | None = None,
     pass_at_k_values: list[int] | None = None,
     num_attempts_per_sample: int = 1,
     disk_export_config: pyine.evals.common.EvalExportConfig | None = None,
@@ -562,11 +594,29 @@ async def finalize_evaluation_results(
     category_to_identifiers_override: dict[str, list[str]] | None = None,
 ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
     """Finalizes the evaluation results by aggregating metrics and preparing captured prediction artifacts."""
+    difficulty_scores: dict[str, float | None] | None = None
+    if difficulty_scorer is not None:
+        difficulty_scores = {}
+        for identifier, sample_data in sample_data_store.items():
+            score = difficulty_scorer.compute_score(sample_data)
+            difficulty_scores[identifier] = float(score) if score is not None else None
+        missing_scores = [identifier for identifier, score in difficulty_scores.items() if score is None]
+        if missing_scores:
+            examples = ", ".join(repr(identifier) for identifier in missing_scores[:5])
+            diff_cfg = difficulty_scorer.config
+            raise ValueError(
+                f"difficulty scorer returned None for {len(missing_scores)} sample(s); "
+                "the primary difficulty estimation source may be missing from sample data. "
+                f"primary_source={diff_cfg.primary_source!r}, "
+                f"code_override_mode={diff_cfg.code_override_mode!r}. "
+                f"Missing examples: {examples}"
+            )
     output_metrics = await pyine.evals.code_exec.utils.get_metrics(
         evaluator=evaluator,
         token_usage=total_token_usage,
         attempt_token_usage=attempt_token_usage,
         sample_data_store=sample_data_store,
+        difficulty_scores=difficulty_scores,
         pass_at_k_values=pass_at_k_values,
         num_attempts_per_sample=num_attempts_per_sample,
     )
@@ -590,6 +640,7 @@ async def finalize_evaluation_results(
             attempt_token_usage=attempt_token_usage,
             sample_data_store=sample_data_store,
             category_to_identifiers=category_to_identifiers,
+            difficulty_scores=difficulty_scores,
             pass_at_k_values=pass_at_k_values,
             num_attempts_per_sample=num_attempts_per_sample,
         )
@@ -607,6 +658,7 @@ async def finalize_evaluation_results(
                 token_usage=attempt_token_usage[attempt_key],
                 eval_result=sample_eval,
                 parsed_output=parsed_output_store.get(attempt_key) if parsed_output_store else None,
+                difficulty_score=(difficulty_scores[sample_eval.identifier] if difficulty_scores is not None else None),
             )
         )
     if disk_export_config is not None:

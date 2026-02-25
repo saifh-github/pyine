@@ -36,10 +36,12 @@ def load_records_from_lmdb(
         Flat list of EvalRecord objects from all LMDBs.
 
     Raises:
-        ValueError: If an LMDB has wrong record_type or duplicate (sample_id, attempt_index).
+        ValueError: If an LMDB has the wrong record_type or duplicate (sample_id, attempt_index).
     """
     records: list[correctness_types.EvalRecord] = []
     seen_keys: set[tuple[str, int]] = set()
+    seen_difficulty_scores = False
+    missing_difficulty_ids: list[str] = []
     for lmdb_path in lmdb_paths:
         reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
         try:
@@ -77,6 +79,18 @@ def load_records_from_lmdb(
                         f"ensure the LMDB export includes the code_type field"
                     )
                 tags: list[str] = record.get("tags") or []
+                difficulty_score = record.get("difficulty_score")
+                if difficulty_score is not None:
+                    try:
+                        difficulty_score = float(difficulty_score)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"record {sample_id!r} (attempt {attempt_index}) has invalid difficulty_score "
+                            f"{difficulty_score!r}; expected a numeric value"
+                        ) from exc
+                    seen_difficulty_scores = True
+                else:
+                    missing_difficulty_ids.append(sample_id)
                 problem_id = correctness_splits.extract_problem_id(sample_id)
                 eval_record = correctness_types.EvalRecord(
                     sample_id=sample_id,
@@ -89,9 +103,17 @@ def load_records_from_lmdb(
                     code_type=code_type,
                     tags=tags,
                     record=record,
-                    difficulty_score=float(record["difficulty_score"]) if "difficulty_score" in record else None,
+                    difficulty_score=difficulty_score,
                 )
                 records.append(eval_record)
         finally:
             reader.close()
+    if seen_difficulty_scores and missing_difficulty_ids:
+        sample_examples = ", ".join(repr(sample_id) for sample_id in missing_difficulty_ids[:5])
+        detail = f" missing examples: {sample_examples}" if sample_examples else ""
+        raise ValueError(
+            "LMDB records have mixed difficulty_score availability; "
+            "either include difficulty_score for all records or omit it entirely. "
+            f"Missing count: {len(missing_difficulty_ids)}.{detail}"
+        )
     return records

@@ -5,6 +5,7 @@ import pytest
 import pyine.organisms.datamodules.samples.common as samples_common
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.difficulty as difficulty_module
+import pyine.utils.code.difficulty as difficulty_utils
 
 
 def _make_sample_data(
@@ -47,7 +48,7 @@ class TestBinEdges:
 
     def test_bin_edges_fixed_range(self) -> None:
         """Fixed range mode should produce uniform edges in [0, 1]."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="maintainability_index",
             normalization_mode="fixed_range",
@@ -66,7 +67,7 @@ class TestBinEdges:
 
     def test_bin_edges_log_with_overflow(self) -> None:
         """Log mode should produce uniform edges plus overflow bin."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -83,7 +84,7 @@ class TestBinEdges:
     def test_bin_edges_manual(self) -> None:
         """Manual bin edges should be used when provided."""
         manual_edges = [0.0, 1.0, 2.0, 3.0, float("inf")]
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -98,7 +99,7 @@ class TestNormalization:
 
     def test_log_normalization(self) -> None:
         """Log normalization should apply log1p transform."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -111,7 +112,7 @@ class TestNormalization:
     def test_score_clip_max(self) -> None:
         """score_clip_max should cap normalized score."""
         sample_data = _make_sample_data(trace_step_count=50)
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -125,7 +126,7 @@ class TestNormalization:
     def test_fixed_range_with_invert(self) -> None:
         """Fixed range with invert=True should invert the score (higher raw = lower difficulty)."""
         sample_data = _make_sample_data(complexity_metrics={"maintainability_index": 80.0})
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="maintainability_index",
             normalization_mode="fixed_range",
@@ -143,10 +144,10 @@ class TestCodeOverrideHandling:
     def test_code_override_skip(self) -> None:
         """Skip mode should return limited metrics when has_code_override=True."""
         sample_data = _make_sample_data(has_code_override=True, trace_step_count=50)
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
-            code_override_mode=difficulty_module.CodeOverrideMode.skip,
+            code_override_mode=difficulty_utils.CodeOverrideMode.skip,
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         metrics = estimator.compute(sample_data, reward_total=1.0)
@@ -157,10 +158,10 @@ class TestCodeOverrideHandling:
     def test_code_override_use_original(self) -> None:
         """use_original mode should use original trace_step_count."""
         sample_data = _make_sample_data(has_code_override=True, trace_step_count=50)
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
-            code_override_mode=difficulty_module.CodeOverrideMode.use_original,
+            code_override_mode=difficulty_utils.CodeOverrideMode.use_original,
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         metrics = estimator.compute(sample_data, reward_total=1.0)
@@ -175,10 +176,10 @@ class TestCodeOverrideHandling:
             first_step_idx=10,
             last_step_idx=30,
         )
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
-            code_override_mode=difficulty_module.CodeOverrideMode.recompute_step_count,
+            code_override_mode=difficulty_utils.CodeOverrideMode.recompute_step_count,
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         raw = estimator.get_raw_value(sample_data, "trace_step_count")
@@ -191,7 +192,7 @@ class TestRunSummaries:
     def test_run_summaries_basic_metrics(self) -> None:
         """Run summaries should include score stats and per-bin reward stats."""
         sample_data = _make_sample_data(trace_step_count=50)
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             num_difficulty_bins=3,
@@ -204,7 +205,7 @@ class TestRunSummaries:
 
     def test_run_summaries_correlation(self) -> None:
         """Run summaries should include correlation between difficulty and reward."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
         )
@@ -222,10 +223,10 @@ class TestRunSummaries:
     def test_run_summaries_return_minimal_metrics_when_no_scores(self) -> None:
         """Run summaries should still include diagnostic ratios even when no scores were computed."""
         sample_data = _make_sample_data(has_code_override=True)
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
-            code_override_mode=difficulty_module.CodeOverrideMode.skip,
+            code_override_mode=difficulty_utils.CodeOverrideMode.skip,
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         metrics = estimator.compute(sample_data, reward_total=0.5)
@@ -237,7 +238,7 @@ class TestRunSummaries:
 
     def test_run_summaries_percentiles(self) -> None:
         """Run summaries should include percentiles when track_percentiles is enabled."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             track_percentiles="always",
@@ -258,7 +259,7 @@ class TestConfigValidation:
     def test_config_rejects_none_without_bin_edges(self) -> None:
         """normalization_mode='none' requires explicit bin_edges."""
         with pytest.raises(ValueError, match="normalization_mode='none' requires explicit bin_edges"):
-            reward_configs.DifficultyConfig(
+            difficulty_utils.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",
                 normalization_mode="none",
@@ -266,7 +267,7 @@ class TestConfigValidation:
 
     def test_config_allows_none_with_explicit_bin_edges(self) -> None:
         """normalization_mode='none' with explicit bin_edges should be valid."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="none",
@@ -277,7 +278,7 @@ class TestConfigValidation:
     def test_config_rejects_fixed_range_with_unknown_source(self) -> None:
         """fixed_range with auto-binning requires known-range source."""
         with pytest.raises(ValueError, match="normalization_mode='fixed_range'"):
-            reward_configs.DifficultyConfig(
+            difficulty_utils.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",  # not a known-range metric
                 normalization_mode="fixed_range",
@@ -285,7 +286,7 @@ class TestConfigValidation:
 
     def test_config_allows_fixed_range_with_known_source(self) -> None:
         """fixed_range with known-range source should be valid."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="maintainability_index",
             normalization_mode="fixed_range",
@@ -294,7 +295,7 @@ class TestConfigValidation:
 
     def test_config_allows_fixed_range_with_custom_source_range(self) -> None:
         """fixed_range with custom source_ranges should be valid."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="custom_metric",
             normalization_mode="fixed_range",
@@ -305,7 +306,7 @@ class TestConfigValidation:
     def test_config_rejects_unsorted_bin_edges(self) -> None:
         """bin_edges must be sorted."""
         with pytest.raises(ValueError, match="sorted in ascending order"):
-            reward_configs.DifficultyConfig(
+            difficulty_utils.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",
                 bin_edges=[0.0, 3.0, 1.0, 5.0],  # not sorted
@@ -317,7 +318,7 @@ class TestTokenSources:
 
     def test_token_sources_require_token_counter(self) -> None:
         """Token sources should require a token_counter."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="code_tokens",
         )
@@ -326,7 +327,7 @@ class TestTokenSources:
 
     def test_token_sources_work_with_token_counter(self) -> None:
         """Token sources should work when token_counter is provided."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="code_tokens",
         )
@@ -351,7 +352,7 @@ class TestSecondarySources:
             trace_step_count=50,
             complexity_metrics={"halstead_effort": 100.0},
         )
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             secondary_sources=frozenset({"halstead_effort"}),
@@ -363,7 +364,7 @@ class TestSecondarySources:
 
     def test_secondary_sources_correlation_tracked(self) -> None:
         """Secondary sources should have correlation tracked via getters (for table logging)."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             secondary_sources=frozenset({"code_length"}),
@@ -386,7 +387,7 @@ class TestStateSerialization:
 
     def test_round_trip_state(self) -> None:
         """Estimator state should survive serialization round trip."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             track_percentiles="always",
@@ -406,7 +407,7 @@ class TestStateSerialization:
 
     def test_from_state_rejects_mismatched_bin_count(self) -> None:
         """from_state should raise ValueError if bin counts don't match config."""
-        config_5_bins = reward_configs.DifficultyConfig(
+        config_5_bins = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             num_difficulty_bins=5,
@@ -416,7 +417,7 @@ class TestStateSerialization:
         estimator.compute(sample_data, reward_total=0.5)
         state = estimator.as_state()
         # try to restore with different bin count
-        config_10_bins = reward_configs.DifficultyConfig(
+        config_10_bins = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             num_difficulty_bins=10,
@@ -426,12 +427,12 @@ class TestStateSerialization:
 
     def test_merge_rejects_mismatched_bin_count(self) -> None:
         """merge should raise ValueError if bin counts don't match."""
-        config_5_bins = reward_configs.DifficultyConfig(
+        config_5_bins = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             num_difficulty_bins=5,
         )
-        config_10_bins = reward_configs.DifficultyConfig(
+        config_10_bins = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             num_difficulty_bins=10,
@@ -451,10 +452,10 @@ class TestTokenSourcesWithOverride:
         def token_counter(s: str) -> int:
             return len(s.split())
 
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="code_tokens",  # token source, not execution source
-            code_override_mode=difficulty_module.CodeOverrideMode.skip,
+            code_override_mode=difficulty_utils.CodeOverrideMode.skip,
         )
         estimator = difficulty_module.DifficultyEstimator(config, token_counter=token_counter)
         # code is "def foo(): pass" which splits into 3 tokens
@@ -472,11 +473,11 @@ class TestTokenSourcesWithOverride:
 
     def test_context_secondary_sources_logged_when_execution_skipped(self) -> None:
         """Context secondary sources should still be logged when execution is skipped."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",  # execution source
             secondary_sources=frozenset({"code_length", "inputs_length"}),  # context sources
-            code_override_mode=difficulty_module.CodeOverrideMode.skip,
+            code_override_mode=difficulty_utils.CodeOverrideMode.skip,
         )
         estimator = difficulty_module.DifficultyEstimator(config)
         sample_data = _make_sample_data(
@@ -500,7 +501,7 @@ class TestOverflowBinBehavior:
 
     def test_no_overflow_bin_when_score_clip_max_bounds_to_bin_max(self) -> None:
         """No overflow bin when score_clip_max <= bin_max_score (all scores within bin range)."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -515,7 +516,7 @@ class TestOverflowBinBehavior:
 
     def test_overflow_bin_when_no_score_clip_max(self) -> None:
         """When score_clip_max is not set, overflow bin should be added."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -529,7 +530,7 @@ class TestOverflowBinBehavior:
 
     def test_overflow_bin_when_score_clip_max_exceeds_bin_max(self) -> None:
         """Overflow bin needed when score_clip_max > bin_max_score (scores can exceed last edge)."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -545,7 +546,7 @@ class TestOverflowBinBehavior:
 
     def test_no_overflow_bin_when_score_clip_max_equals_bin_max(self) -> None:
         """No overflow bin when score_clip_max == bin_max_score (boundary case)."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             normalization_mode="log",
@@ -623,7 +624,7 @@ class TestTrackingModes:
 
     def test_always_mode_tracks_all(self) -> None:
         """Always mode should track every generation."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             track_percentiles="always",
@@ -637,7 +638,7 @@ class TestTrackingModes:
 
     def test_eval_only_mode_respects_phase(self) -> None:
         """Eval-only mode should only track during eval phase."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             track_percentiles="eval_only",
@@ -657,7 +658,7 @@ class TestTrackingModes:
 
     def test_disabled_mode_never_tracks(self) -> None:
         """Disabled mode should never track percentiles."""
-        config = reward_configs.DifficultyConfig(
+        config = difficulty_utils.DifficultyConfig(
             enabled=True,
             primary_source="trace_step_count",
             track_percentiles="disabled",

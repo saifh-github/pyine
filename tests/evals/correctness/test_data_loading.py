@@ -184,6 +184,22 @@ class TestLoadRecordsFromLmdb:
         )
         assert result[0].difficulty_score is None
 
+    def test_mixed_difficulty_score_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        record_with_score = _make_lmdb_record(sample_id="TACO/TRAIN/p000001/s0000/t0001")
+        record_with_score["difficulty_score"] = 0.1
+        record_without_score = _make_lmdb_record(sample_id="TACO/TRAIN/p000001/s0000/t0002")
+        records = [record_with_score, record_without_score]
+        reader = _FakeLMDBReader(records, {"record_type": "benchmark"})
+        monkeypatch.setattr(
+            "pyine.evals.correctness.data_loading.pyine.data.utils.lmdb_io.LMDBReader",
+            lambda path: reader,
+        )
+        with pytest.raises(ValueError, match="mixed difficulty_score availability"):
+            correctness_data_loading.load_records_from_lmdb(
+                [pathlib.Path("/fake/path")],
+                correctness_configs.LabelType.HARD_MATCH,
+            )
+
     def test_final_answer_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         records = [_make_lmdb_record(final_answer=None)]
         reader = _FakeLMDBReader(records, {"record_type": "benchmark"})
