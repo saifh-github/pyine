@@ -1392,7 +1392,8 @@ class DiskRewardLogger:
             "reward_terms": dict(terms) if terms is not None else None,
             "reward_metrics": dict(metrics) if metrics is not None else None,
             "reward_terms_raw": dict(raw_terms) if raw_terms is not None else None,
-            "step": step,
+            "step": step if step is not None else self._step,
+            "epoch": self._epoch,
             "batch_count": batch_count,
             "local_batch_idx": local_batch_idx,
             "completion_idx": completion_idx,
@@ -1560,7 +1561,7 @@ class CompositeRewardLogger:
         """Set key prefix on all inner loggers."""
         self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
         for inner in self._loggers:
-            inner.set_key_prefix(key_prefix)
+            inner.set_key_prefix(self._key_prefix)
 
     def get_key_prefix(self) -> str:
         """Get the current key prefix."""

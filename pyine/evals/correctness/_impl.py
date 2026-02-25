@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class CorrectnessEvalResult(pyine.evals.common.EvalResult):
     """Correctness evaluation results container.
 
-    Extends EvalResult with a AggregatedResult object for downstream consumers that need its rich
+    Extends EvalResult with an AggregatedResult object for downstream consumers that need its rich
     structure (per-run results, bootstrap CIs, etc.). The base ``metrics`` dict from the parent
     class contains the flattened pipeline-mean metrics.
     """
@@ -405,7 +405,7 @@ def _aggregate_runs(
             continue
         arr = np.array(valid_values)
         cross_run_mean[metric_name] = float(np.mean(arr))
-        cross_run_std[metric_name] = float(np.std(arr))
+        cross_run_std[metric_name] = float(np.std(arr, ddof=1)) if len(valid_values) >= 2 else 0.0
         cross_run_p5[metric_name] = float(np.percentile(arr, 5))
     # hierarchical bootstrap CIs
     hierarchical_cis = correctness_metrics.compute_hierarchical_bootstrap_cis(  # type: ignore[reportUnknownMemberType]

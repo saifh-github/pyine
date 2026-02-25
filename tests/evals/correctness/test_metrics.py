@@ -691,6 +691,22 @@ class TestDifficultyStats:
         assert result.bucket_boundaries is not None
         assert "easy" in result.per_bucket_sample_count
 
+    def test_constant_difficulty_gives_none_correlation(self) -> None:
+        records = [_make_record(f"s{idx}", f"p{idx}", label=(idx < 5), difficulty_score=3.0) for idx in range(10)]
+        scores = np.array([idx / 10.0 for idx in range(10)])
+        labels = np.array([rec.label for rec in records])
+        result = correctness_metrics.compute_difficulty_stats(records, scores, labels, {0.05: 0.5}, [0.05])
+        assert result is not None
+        assert result.difficulty_accuracy_rank_correlation is None
+
+    def test_constant_accuracy_gives_none_correlation(self) -> None:
+        records = [_make_record(f"s{idx}", f"p{idx}", label=True, difficulty_score=float(idx)) for idx in range(10)]
+        scores = np.array([0.9] * 10)
+        labels = np.array([True] * 10)
+        result = correctness_metrics.compute_difficulty_stats(records, scores, labels, {0.05: 0.5}, [0.05])
+        assert result is not None
+        assert result.difficulty_accuracy_rank_correlation is None
+
 
 class TestVerificationCostStats:
     def test_returns_none_when_unavailable(self) -> None:
@@ -765,6 +781,40 @@ class TestVerificationCostStats:
             _make_record("s1", "p1", attempt_index=0, label=True, difficulty_score=None),
             _make_record("s2", "p2", attempt_index=0, label=False, difficulty_score=None),
             _make_record("s3", "p3", attempt_index=0, label=True, difficulty_score=None),
+        ]
+        costs = [1.0, 5.0, 9.0]
+        labels = np.array([True, False, True])
+        accepted = np.array([True, False, True])
+        result = correctness_metrics.compute_verification_cost_stats(
+            costs,
+            labels,
+            accepted,
+            0.05,
+            cost_unit="tokens",
+            records=records,
+        )
+        assert result is not None
+        assert result.cost_difficulty_rank_correlation is None
+
+    def test_constant_costs_gives_none_accuracy_correlation(self) -> None:
+        costs = [5.0, 5.0, 5.0]
+        labels = np.array([True, False, True])
+        accepted = np.array([True, False, True])
+        result = correctness_metrics.compute_verification_cost_stats(
+            costs,
+            labels,
+            accepted,
+            0.05,
+            cost_unit="tokens",
+        )
+        assert result is not None
+        assert result.cost_accuracy_rank_correlation is None
+
+    def test_constant_difficulty_gives_none_cost_difficulty_correlation(self) -> None:
+        records = [
+            _make_record("s1", "p1", attempt_index=0, label=True, difficulty_score=3.0),
+            _make_record("s2", "p2", attempt_index=0, label=False, difficulty_score=3.0),
+            _make_record("s3", "p3", attempt_index=0, label=True, difficulty_score=3.0),
         ]
         costs = [1.0, 5.0, 9.0]
         labels = np.array([True, False, True])

@@ -226,7 +226,7 @@ def _resplit_valid_problems(
     if not stratify_by_label:
         shuffled = list(valid_problem_ids)
         rng.shuffle(shuffled)
-        split_point = int(len(shuffled) * guardrail_valid_fraction)
+        split_point = round(len(shuffled) * guardrail_valid_fraction)
         guardrail_valid_ids = set(shuffled[:split_point])
         guardrail_train_ids = set(shuffled[split_point:])
         return guardrail_train_ids, guardrail_valid_ids
@@ -262,7 +262,7 @@ def _resplit_valid_problems(
     guardrail_valid_ids: set[str] = set()
     for stratum_pids in all_strata:
         rng.shuffle(stratum_pids)
-        split_point = int(len(stratum_pids) * guardrail_valid_fraction)
+        split_point = round(len(stratum_pids) * guardrail_valid_fraction)
         guardrail_valid_ids.update(stratum_pids[:split_point])
         guardrail_train_ids.update(stratum_pids[split_point:])
     return guardrail_train_ids, guardrail_valid_ids

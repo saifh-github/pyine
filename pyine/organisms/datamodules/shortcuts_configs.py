@@ -160,17 +160,20 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     def _check_allow_db_lookups(self) -> bool:
         """Check if prompt-DB lookups are enabled in the default dataparser config."""
         parser_config = self.default_dataparser_config
-        assert hasattr(parser_config, "params")
+        if not hasattr(parser_config, "params"):
+            raise ValueError(f"default_dataparser_config has no 'params' attribute: {type(parser_config)}")
         params = parser_config.params
-        assert params is not None
+        if params is None:
+            raise ValueError("default_dataparser_config.params is None")
         if isinstance(params, pydantic.BaseModel):
             selection_config = getattr(params, "selection_config", None)
             if selection_config is not None:
                 return bool(getattr(selection_config, "allow_db_lookups", False))
-        else:
-            assert isinstance(params, dict)
+        elif isinstance(params, dict):
             selection_config = typing.cast("dict[str, typing.Any]", params.get("selection_config", {}))
             return bool(selection_config.get("allow_db_lookups", False))
+        else:
+            raise ValueError(f"unexpected params type: {type(params)}")
         return False
 
     @pydantic.model_validator(mode="after")

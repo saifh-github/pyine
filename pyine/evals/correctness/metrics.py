@@ -32,6 +32,15 @@ def _assert_finite(
         raise ValueError(f"{name} contains {num_bad} non-finite value(s) (NaN or inf)")
 
 
+def _is_constant(
+    array: npt.NDArray[np.float64],
+) -> bool:
+    """Return True when all values in the array are (approximately) identical."""
+    if array.size == 0:
+        return True
+    return np.allclose(array, array[0])
+
+
 @typing.no_type_check  # sklearn type stubs are partially unknown
 def compute_threshold_free_metrics(
     scores: npt.NDArray[np.floating[typing.Any]],
@@ -79,7 +88,9 @@ def compute_threshold_free_metrics(
             precision_grid=empty,
             recall_grid=empty,
         )
-    # single-class check
+    if labels.dtype != np.bool_:
+        raise ValueError(f"labels must be a boolean array, got dtype={labels.dtype}")
+    # single-class check (after dtype validation to catch bad input even for single-class)
     unique_labels = np.unique(labels)
     if len(unique_labels) < 2:
         logger.warning(
@@ -96,8 +107,6 @@ def compute_threshold_free_metrics(
             precision_grid=empty,
             recall_grid=empty,
         )
-    if labels.dtype != np.bool_:
-        raise ValueError(f"labels must be a boolean array, got dtype={labels.dtype}")
     if not np.array_equal(unique_labels, np.array([False, True])):
         raise ValueError(f"expected both label classes [False, True], got {unique_labels}")
     # compute ROC
@@ -1085,8 +1094,13 @@ def compute_difficulty_stats(
     mean_accuracies = [float(np.mean(sample_to_accuracy[sid])) for sid in sample_ids_sorted]
     correlation: float | None
     if len(sample_ids_sorted) >= 3:
-        corr_result = scipy.stats.spearmanr(mean_difficulties, mean_accuracies)
-        correlation = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
+        difficulty_arr = np.array(mean_difficulties, dtype=np.float64)
+        accuracy_arr = np.array(mean_accuracies, dtype=np.float64)
+        if _is_constant(difficulty_arr) or _is_constant(accuracy_arr):
+            correlation = None
+        else:
+            corr_result = scipy.stats.spearmanr(difficulty_arr, accuracy_arr)
+            correlation = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
     else:
         correlation = None
     return correctness_types.DifficultyStats(
@@ -1180,8 +1194,12 @@ def compute_verification_cost_stats(
     correct_classification = (accepted & labels) | (~accepted & ~labels)
     cost_accuracy_corr: float | None
     if len(costs) >= 3:
-        corr_result = scipy.stats.spearmanr(costs, correct_classification.astype(np.float64))
-        cost_accuracy_corr = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
+        classification = correct_classification.astype(np.float64)
+        if _is_constant(costs) or _is_constant(classification):
+            cost_accuracy_corr = None
+        else:
+            corr_result = scipy.stats.spearmanr(costs, classification)
+            cost_accuracy_corr = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
     else:
         cost_accuracy_corr = None
     # rank correlation: cost vs difficulty (per-sample)
@@ -1196,8 +1214,13 @@ def compute_verification_cost_stats(
         if len(sample_ids_sorted) >= 3:
             mean_costs = [float(np.mean(sample_to_costs[sid])) for sid in sample_ids_sorted]
             mean_difficulties = [float(np.mean(sample_to_difficulty[sid])) for sid in sample_ids_sorted]
-            corr_result = scipy.stats.spearmanr(mean_costs, mean_difficulties)
-            cost_difficulty_corr = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
+            cost_arr = np.array(mean_costs, dtype=np.float64)
+            difficulty_arr = np.array(mean_difficulties, dtype=np.float64)
+            if _is_constant(cost_arr) or _is_constant(difficulty_arr):
+                cost_difficulty_corr = None
+            else:
+                corr_result = scipy.stats.spearmanr(cost_arr, difficulty_arr)
+                cost_difficulty_corr = None if np.isnan(corr_result.statistic) else float(corr_result.statistic)
     return correctness_types.VerificationCostStats(
         target_fpr=target_fpr,
         cost_unit=cost_unit,
