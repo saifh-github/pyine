@@ -46,7 +46,7 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     """Probe data configuration (LMDB source, splitting, filtering, label balancing)."""
 
     # --- HuggingFace Training Arguments ---
-    training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = ...
+    training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = ...  # type: ignore[assignment]
     """HuggingFace TrainingArguments configuration."""
 
     # --- Encoder-appropriate tokenizer defaults ---
