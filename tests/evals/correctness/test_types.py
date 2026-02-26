@@ -325,23 +325,6 @@ class TestSampleLevelMetrics:
         )
 
 
-class TestGuardrailSplits:
-    def test_to_summary(self) -> None:
-        splits = correctness_types.GuardrailSplits(
-            guardrail_train=[],
-            guardrail_valid=[],
-            guardrail_test=[],
-            train_problem_ids=frozenset({"a", "b"}),
-            valid_problem_ids=frozenset({"c"}),
-            test_problem_ids=frozenset({"d", "e"}),
-        )
-        summary = splits.to_summary()
-        assert summary["train_problem_ids"] == ["a", "b"]
-        assert summary["valid_problem_ids"] == ["c"]
-        assert summary["test_problem_ids"] == ["d", "e"]
-        assert summary["train_record_count"] == 0
-
-
 class TestAggregatedResult:
     def test_empty_per_run_raises(self) -> None:
         with pytest.raises(pydantic.ValidationError, match="at least one"):

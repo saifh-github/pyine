@@ -1,7 +1,7 @@
 """LMDB reading for the guardrail correctness evaluation pipeline.
 
-Loads pregenerated evaluation records from LMDB datasets (produced by ``DiskEvalLogger``)
-and converts them into ``EvalRecord`` objects.
+Loads pregenerated evaluation records from LMDB datasets (produced by ``DiskEvalLogger`` during
+a code execution evaluation run) and converts them into ``EvalRecord`` objects.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import pathlib  # noqa: TC003
 import typing
 
 import pyine.data.utils.lmdb_io
-import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
 
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def load_records_from_lmdb(
     lmdb_paths: typing.Sequence[pathlib.Path],
-    label_type: correctness_configs.LabelType,
+    label_type: correctness_types.LabelType,
 ) -> list[correctness_types.EvalRecord]:
     """Load EvalRecords from one or more LMDB datasets.
 
@@ -63,9 +62,9 @@ def load_records_from_lmdb(
                     )
                 seen_keys.add(record_key)
                 # extract label based on label_type
-                if label_type == correctness_configs.LabelType.HARD_MATCH:
+                if label_type == correctness_types.LabelType.HARD_MATCH:
                     label = bool(record["hard_match"])
-                elif label_type == correctness_configs.LabelType.SOFT_MATCH:
+                elif label_type == correctness_types.LabelType.SOFT_MATCH:
                     label = bool(record["soft_match"])
                 else:
                     raise ValueError(f"unsupported label_type: {label_type!r}")

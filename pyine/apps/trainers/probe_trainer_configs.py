@@ -14,6 +14,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
 import pyine.probes.base  # noqa: TC001
 import pyine.probes.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
@@ -24,9 +25,13 @@ logger = logging.getLogger(__name__)
 class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBase):
     """Configuration for probe training on frozen LLM activations."""
 
-    # --- Override: evals not needed for probe training ---
+    # --- Override: optional correctness benchmarking after probe training ---
     evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
-    """Not used for probe training. Kept for AppMainConfig compatibility."""
+    """Optional correctness eval config for post-training benchmarking.
+
+    When set (e.g. via ``+evals_config=correctness_base`` on the hydra command line), the trained
+    probes are evaluated as guardrail scorers on the correctness pipeline after training completes.
+    """
 
     # --- Override: use ProbeDataModuleConfig instead of generic BaseDataModuleConfig ---
     datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
@@ -104,6 +109,12 @@ def _get_app_configs(
         },
     )
 
+    # --- Correctness eval configs (registered so user can opt-in via hydra) ---
+    evals_configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
+        group=f"{group}/evals_config",
+    )
+
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         ProbeTrainerAppMainConfig,
@@ -119,7 +130,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config]
+    return [app_main_config, datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(

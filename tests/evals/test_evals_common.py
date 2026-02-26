@@ -155,7 +155,12 @@ class TestBaseEvalsConfig:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
-        result = await config.evaluate_wrapped_model(wrapped_model=[mocker.MagicMock()])
+        mock_dm = mocker.MagicMock()
+        result = await config.evaluate_wrapped_model(
+            wrapped_model=[mocker.MagicMock()],
+            datamodule=mock_dm,
+            eval_subset_name="valid",
+        )
         assert result.metrics == {}
 
     @pytest.mark.asyncio
@@ -164,7 +169,12 @@ class TestBaseEvalsConfig:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
-        result = await config.evaluate_wrapped_model(wrapped_model=mocker.MagicMock())
+        mock_dm = mocker.MagicMock()
+        result = await config.evaluate_wrapped_model(
+            wrapped_model=mocker.MagicMock(),
+            datamodule=mock_dm,
+            eval_subset_name="valid",
+        )
         assert result.metrics == {}
 
     @pytest.mark.asyncio
@@ -173,5 +183,10 @@ class TestBaseEvalsConfig:
         mocker: pytest_mock.MockerFixture,
     ) -> None:
         config = pyine.evals.common.BaseEvalsConfig(eval_type=pyine.evals.common.EvalType.CODE_EXEC)
+        mock_dm = mocker.MagicMock()
         with pytest.raises(NotImplementedError, match="evaluation type code_exec not implemented"):
-            await config.evaluate_wrapped_model(wrapped_model=[mocker.MagicMock()])
+            await config.evaluate_wrapped_model(
+                wrapped_model=[mocker.MagicMock()],
+                datamodule=mock_dm,
+                eval_subset_name="valid",
+            )

@@ -11,7 +11,12 @@ import pytest
 
 import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.datamodule as correctness_datamodule
+import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
+import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
+
+_FAKE_LMDB_PATH = pathlib.Path("/fake/lmdb")
 
 
 class _MockGuardrailScorer:
@@ -63,6 +68,52 @@ def _make_record(
     )
 
 
+def _make_dm_config() -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
+    return correctness_datamodule_configs.CorrectnessDataModuleConfig(
+        lmdb_paths=(_FAKE_LMDB_PATH,),
+        split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+    )
+
+
+def _build_mock_datamodule(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_records: list[correctness_types.EvalRecord],
+    test_records: list[correctness_types.EvalRecord],
+    train_records: list[correctness_types.EvalRecord] | None = None,
+) -> correctness_datamodule.CorrectnessDataModule:
+    """Build a datamodule with mocked LMDB/split loading."""
+    if train_records is None:
+        train_records = []
+    all_records = train_records + valid_records + test_records
+    valid_pids = frozenset({rec.problem_id for rec in valid_records})
+    test_pids = frozenset({rec.problem_id for rec in test_records})
+    train_pids = frozenset({rec.problem_id for rec in train_records})
+    splits = correctness_splits.GuardrailSplits(
+        guardrail_train=train_records,
+        guardrail_valid=valid_records,
+        guardrail_test=test_records,
+        train_problem_ids=train_pids,
+        valid_problem_ids=valid_pids,
+        test_problem_ids=test_pids,
+    )
+    monkeypatch.setattr(
+        "pyine.data.utils.lmdb_io.resolve_lmdb_paths",
+        lambda raw_paths: list(raw_paths),
+    )
+    monkeypatch.setattr(
+        "pyine.evals.correctness.datamodule.correctness_data_loading.load_records_from_lmdb",
+        lambda *_args, **_kwargs: all_records,
+    )
+    monkeypatch.setattr(
+        "pyine.evals.correctness.datamodule.correctness_splits.build_guardrail_splits",
+        lambda *_args, **_kwargs: splits,
+    )
+    dm = correctness_datamodule.CorrectnessDataModule(_make_dm_config())
+    dm.prepare_data()
+    dm.setup()
+    return dm
+
+
 class _FakeLMDBReader:
     def __init__(
         self,
@@ -88,7 +139,6 @@ class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_full_pipeline_with_mock_scorer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """End-to-end: synthetic data -> mock scorer -> verify AggregatedResult structure."""
-        # build synthetic LMDB records: 20 problems, 3 attempts each
         rng = np.random.default_rng(42)
         lmdb_records: list[dict[str, typing.Any]] = []
         for prob_idx in range(20):
@@ -112,7 +162,6 @@ class TestEndToEnd:
             "pyine.evals.correctness.data_loading.pyine.data.utils.lmdb_io.LMDBReader",
             lambda path: reader,
         )
-        # mock split result: problems 0-9 valid, 10-19 test (no train in LMDB)
         subset_map = {
             "valid": [f"TACO/TRAIN/p{idx:06d}" for idx in range(10)],
             "test": [f"TACO/TRAIN/p{idx:06d}" for idx in range(10, 20)],
@@ -124,53 +173,69 @@ class TestEndToEnd:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             lambda _source: mock_split_result,
         )
-        config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake/path")],
-            split_config=correctness_configs.GuardrailSplitConfig(
+        monkeypatch.setattr(
+            "pyine.data.utils.lmdb_io.resolve_lmdb_paths",
+            lambda raw_paths: list(raw_paths),
+        )
+        dm_config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
+            lmdb_paths=(_FAKE_LMDB_PATH,),
+            split_config=correctness_types.GuardrailSplitConfig(
                 split_source="TACO",
                 guardrail_valid_fraction=0.5,
                 seed=42,
             ),
+        )
+        dm = correctness_datamodule.CorrectnessDataModule(dm_config)
+        dm.prepare_data()
+        dm.setup()
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=dm_config,
             target_fpr_values=[0.01, 0.05],
-            num_bootstrap_replicates=20,  # small for speed
+            num_bootstrap_replicates=20,
             roc_fpr_grid_size=50,
         )
         scorer = _MockGuardrailScorer(noise_seed=0)
-        result = await correctness_impl.evaluate_wrapped_model_impl(
+        result = await correctness_impl.evaluate_guardrail_replicas(
             config=config,
             guardrails=[scorer],
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
             verbose=True,
         )
-        # verify structure
         assert isinstance(result, correctness_impl.CorrectnessEvalResult)
         agg = result.aggregated
         assert len(agg.per_run) == 1
         assert agg.class_balance.overall_positive_rate > 0.0
-        # verify metrics exist
         single_run = agg.per_run[0]
         assert single_run.threshold_free.auroc is not None
         assert 0.01 in single_run.attempt_metrics
         assert 0.05 in single_run.attempt_metrics
         assert 0.01 in single_run.sample_metrics
-        # verify flat dict has expected keys
         flat = agg.to_flat_dict()
         assert "auroc/mean" in flat
         assert "class_balance/overall_positive_rate" in flat
         assert "record_count" in flat
         assert "auroc/num_valid_runs" in flat
-        # verify base_pass_rate is aggregated
         assert any(key.endswith("/base_pass_rate/mean") for key in flat)
-        # verify guardrail metadata
         assert single_run.guardrail_metadata["name"] == "mock"
 
     @pytest.mark.asyncio
-    async def test_empty_guardrails_raises(self) -> None:
+    async def test_empty_guardrails_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        valid_records = [
+            _make_record("v0/s0/t0", "v0", 0, True),
+            _make_record("v0/s0/t0", "v0", 1, False),
+        ]
+        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
         config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
+            datamodule_config=_make_dm_config(),
         )
         with pytest.raises(ValueError, match="guardrails must not be empty"):
-            await correctness_impl.evaluate_wrapped_model_impl(config=config, guardrails=[])
+            await correctness_impl.evaluate_guardrail_replicas(
+                config=config,
+                guardrails=[],
+                datamodule=dm,
+                eval_subset_name="guardrail_valid",
+            )
 
     @pytest.mark.asyncio
     async def test_perfect_scorer_sanity(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,11 +256,10 @@ class TestEndToEnd:
             def get_verification_cost_unit(self) -> str | None:
                 return None
 
-        # use 20 valid + 20 test problems with 4 attempts each for enough calibration data
         lmdb_records: list[dict[str, typing.Any]] = []
         for prob_idx in range(40):
             for attempt_idx in range(4):
-                label = attempt_idx < 2  # 50% correct
+                label = attempt_idx < 2
                 lmdb_records.append(
                     {
                         "sample_id": f"TACO/TRAIN/p{prob_idx:06d}/s0000/t0000",
@@ -225,20 +289,33 @@ class TestEndToEnd:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             lambda _source: mock_split_result,
         )
-        config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake/path")],
-            split_config=correctness_configs.GuardrailSplitConfig(
+        monkeypatch.setattr(
+            "pyine.data.utils.lmdb_io.resolve_lmdb_paths",
+            lambda raw_paths: list(raw_paths),
+        )
+        dm_config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
+            lmdb_paths=(_FAKE_LMDB_PATH,),
+            split_config=correctness_types.GuardrailSplitConfig(
                 split_source="TACO",
                 guardrail_valid_fraction=0.5,
                 seed=42,
             ),
-            target_fpr_values=[0.1],  # relaxed FPR to allow some through
+            eval_subset_names=("guardrail_test",),
+        )
+        dm = correctness_datamodule.CorrectnessDataModule(dm_config)
+        dm.prepare_data()
+        dm.setup()
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=dm_config,
+            target_fpr_values=[0.1],
             num_bootstrap_replicates=10,
             roc_fpr_grid_size=20,
         )
-        result = await correctness_impl.evaluate_wrapped_model_impl(
+        result = await correctness_impl.evaluate_guardrail_replicas(
             config=config,
             guardrails=[_PerfectScorer()],
+            datamodule=dm,
+            eval_subset_name="guardrail_test",
         )
         agg = result.aggregated
         single_run = agg.per_run[0]
@@ -248,107 +325,24 @@ class TestEndToEnd:
         assert att.fpr == pytest.approx(0.0)
 
 
-class TestSplitValidation:
-    """Tests for split validation checks in evaluate_wrapped_model_impl."""
-
+class TestEvalSubsetValidation:
     @pytest.mark.asyncio
-    async def test_empty_records_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_data_loading.load_records_from_lmdb",
-            lambda *_args, **_kwargs: [],
-        )
+    async def test_guardrail_train_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        valid_records = [
+            _make_record("v0/s0/t0", "v0", 0, True),
+            _make_record("v0/s0/t0", "v0", 1, False),
+        ]
+        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
         config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake")],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
+            datamodule_config=_make_dm_config(),
         )
-        with pytest.raises(ValueError, match="no records loaded"):
-            await correctness_impl.evaluate_wrapped_model_impl(
+        with pytest.raises(ValueError, match="guardrail_train is not supported"):
+            await correctness_impl.evaluate_guardrail_replicas(
                 config=config,
                 guardrails=[_MockGuardrailScorer()],
+                datamodule=dm,
+                eval_subset_name="guardrail_train",
             )
-
-    @pytest.mark.asyncio
-    async def test_empty_valid_split_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        splits = correctness_types.GuardrailSplits(
-            guardrail_train=[],
-            guardrail_valid=[],
-            guardrail_test=[_make_record("s1", "p1", 0, True)],
-            train_problem_ids=frozenset(),
-            valid_problem_ids=frozenset(),
-            test_problem_ids=frozenset({"p1"}),
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_data_loading.load_records_from_lmdb",
-            lambda *_args, **_kwargs: [_make_record("s1", "p1", 0, True)],
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_splits.build_guardrail_splits",
-            lambda *_args, **_kwargs: splits,
-        )
-        config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake")],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
-        )
-        scorer = _MockGuardrailScorer()
-        with pytest.raises(ValueError, match="guardrail_valid split is empty"):
-            await correctness_impl.evaluate_wrapped_model_impl(config=config, guardrails=[scorer])
-
-    @pytest.mark.asyncio
-    async def test_empty_test_split_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        splits = correctness_types.GuardrailSplits(
-            guardrail_train=[],
-            guardrail_valid=[_make_record("s1", "p1", 0, True)],
-            guardrail_test=[],
-            train_problem_ids=frozenset(),
-            valid_problem_ids=frozenset({"p1"}),
-            test_problem_ids=frozenset(),
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_data_loading.load_records_from_lmdb",
-            lambda *_args, **_kwargs: [_make_record("s1", "p1", 0, True)],
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_splits.build_guardrail_splits",
-            lambda *_args, **_kwargs: splits,
-        )
-        config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake")],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
-        )
-        scorer = _MockGuardrailScorer()
-        with pytest.raises(ValueError, match="guardrail_test split is empty"):
-            await correctness_impl.evaluate_wrapped_model_impl(config=config, guardrails=[scorer])
-
-    @pytest.mark.asyncio
-    async def test_single_class_valid_split_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # all valid records have label=True (no negatives for calibration)
-        valid_records = [
-            _make_record("s1", "p1", 0, True),
-            _make_record("s1", "p1", 1, True),
-        ]
-        splits = correctness_types.GuardrailSplits(
-            guardrail_train=[],
-            guardrail_valid=valid_records,
-            guardrail_test=[_make_record("s2", "p2", 0, False)],
-            train_problem_ids=frozenset(),
-            valid_problem_ids=frozenset({"p1"}),
-            test_problem_ids=frozenset({"p2"}),
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_data_loading.load_records_from_lmdb",
-            lambda *_args, **_kwargs: valid_records,
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_splits.build_guardrail_splits",
-            lambda *_args, **_kwargs: splits,
-        )
-        config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake")],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
-        )
-        scorer = _MockGuardrailScorer()
-        with pytest.raises(ValueError, match="only one label class"):
-            await correctness_impl.evaluate_wrapped_model_impl(config=config, guardrails=[scorer])
 
 
 class TestFastEndToEnd:
@@ -357,7 +351,6 @@ class TestFastEndToEnd:
     @pytest.mark.asyncio
     async def test_mini_pipeline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Minimal E2E: mocked LMDB/splits, tiny bootstrap, verify result structure."""
-        # build minimal records: 3 valid problems + 3 test problems, 2 attempts each
         valid_records = []
         test_records = []
         for prob_idx in range(3):
@@ -380,42 +373,26 @@ class TestFastEndToEnd:
                         label=(attempt_idx == 0),
                     )
                 )
-        splits = correctness_types.GuardrailSplits(
-            guardrail_train=[],
-            guardrail_valid=valid_records,
-            guardrail_test=test_records,
-            train_problem_ids=frozenset(),
-            valid_problem_ids=frozenset(f"TACO/TRAIN/p{idx:06d}" for idx in range(3)),
-            test_problem_ids=frozenset(f"TACO/TRAIN/p{idx:06d}" for idx in range(3, 6)),
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_data_loading.load_records_from_lmdb",
-            lambda *_args, **_kwargs: valid_records + test_records,
-        )
-        monkeypatch.setattr(
-            "pyine.evals.correctness._impl.correctness_splits.build_guardrail_splits",
-            lambda *_args, **_kwargs: splits,
-        )
+        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=test_records)
         config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[pathlib.Path("/fake")],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
+            datamodule_config=_make_dm_config(),
             target_fpr_values=[0.05],
-            num_bootstrap_replicates=5,  # minimal for speed
+            num_bootstrap_replicates=5,
             roc_fpr_grid_size=10,
         )
         scorer = _MockGuardrailScorer(noise_seed=0)
-        result = await correctness_impl.evaluate_wrapped_model_impl(
+        result = await correctness_impl.evaluate_guardrail_replicas(
             config=config,
             guardrails=[scorer],
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
         )
         assert isinstance(result, correctness_impl.CorrectnessEvalResult)
         flat = result.aggregated.to_flat_dict()
         assert "auroc/mean" in flat
         assert "sample_count" in flat
-        assert flat["sample_count"] == 3  # 3 test problems
-        # verify category metrics are aggregated (not just first-run)
+        assert flat["sample_count"] == 3  # 3 valid problems
         assert "category/regular/auroc/mean" in flat
-        # verify category sample-level metrics are surfaced
         assert "category/regular/fpr_0_05/guarded_pass_rate/mean" in flat
 
 
@@ -531,7 +508,7 @@ class TestCostCorrelationCollection:
             _make_record("s2", "p2", 0, False),
         ]
         test_scores = np.array([0.9, 0.1], dtype=np.float64)
-        splits = correctness_types.GuardrailSplits(
+        splits = correctness_splits.GuardrailSplits(
             guardrail_train=[],
             guardrail_valid=[],
             guardrail_test=test_records,
@@ -539,17 +516,15 @@ class TestCostCorrelationCollection:
             valid_problem_ids=frozenset(),
             test_problem_ids=frozenset({"p1", "p2"}),
         )
-        # skip expensive bootstrap and class balance by mocking
         monkeypatch.setattr(
             "pyine.evals.correctness._impl.correctness_metrics.compute_hierarchical_bootstrap_cis",
             lambda **_kwargs: {},
         )
         config = correctness_configs.CorrectnessEvalsConfig(
-            lmdb_paths=[],
-            split_config=correctness_configs.GuardrailSplitConfig(split_source="TACO"),
+            datamodule_config=_make_dm_config(),
             target_fpr_values=[0.05],
         )
-        test_class_balance = correctness_types.ClassBalanceStats(
+        eval_class_balance = correctness_types.ClassBalanceStats(
             overall_positive_rate=0.5,
             per_sample_positive_rates=[1.0, 0.0],
             num_all_correct_samples=1,
@@ -563,7 +538,7 @@ class TestCostCorrelationCollection:
             per_run_scores=[test_scores],
             per_run_thresholds={0.05: [0.5]},
             guardrail_splits=splits,
-            test_class_balance=test_class_balance,
+            eval_class_balance=eval_class_balance,
             config=config,
         )
         assert "fpr_0_05/cost_accuracy_rank_correlation" in aggregated.cross_run_mean

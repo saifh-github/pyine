@@ -1,8 +1,4 @@
-"""Main pipeline orchestration for guardrail correctness evaluation.
-
-Provides ``evaluate_wrapped_model_impl`` which runs the full evaluation pipeline:
-load records, build splits, score, calibrate, compute metrics, aggregate.
-"""
+"""Main pipeline orchestration functions for guardrail correctness evaluations."""
 
 from __future__ import annotations
 
@@ -14,13 +10,13 @@ import pydantic
 
 import pyine.evals.common
 import pyine.evals.correctness.calibration as correctness_calibration
-import pyine.evals.correctness.data_loading as correctness_data_loading
 import pyine.evals.correctness.metrics as correctness_metrics
-import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
 
 if typing.TYPE_CHECKING:
     import pyine.evals.correctness.configs as correctness_configs
+    import pyine.evals.correctness.datamodule as correctness_datamodule
+    import pyine.evals.correctness.splits as correctness_splits
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +36,11 @@ class CorrectnessEvalResult(pyine.evals.common.EvalResult):
     """Full aggregated result with per-run details, splits, and CIs."""
 
 
-async def evaluate_wrapped_model_impl(
+async def evaluate_guardrail_replicas(
     config: correctness_configs.CorrectnessEvalsConfig,
     guardrails: typing.Sequence[correctness_types.GuardrailScorer],
+    datamodule: correctness_datamodule.CorrectnessDataModule,
+    eval_subset_name: str,
     verbose: bool = False,
 ) -> CorrectnessEvalResult:
     """Run the full guardrail correctness evaluation pipeline.
@@ -51,6 +49,8 @@ async def evaluate_wrapped_model_impl(
         config: Correctness evaluation configuration.
         guardrails: Sequence of one or more GuardrailScorer instances to evaluate (we might be
             using replicas).
+        datamodule: The prepared correctness evaluation datamodule.
+        eval_subset_name: Which subset to evaluate on (e.g. ``"guardrail_valid"``).
         verbose: Whether to verbosely report progress.
 
     Returns:
@@ -58,41 +58,25 @@ async def evaluate_wrapped_model_impl(
     """
     if not guardrails:
         raise ValueError("guardrails must not be empty; provide at least one GuardrailScorer")
-    # step 1: load records
-    records = correctness_data_loading.load_records_from_lmdb(config.lmdb_paths, config.label_type)
-    if not records:
+    if eval_subset_name == "guardrail_train":
         raise ValueError(
-            f"no records loaded from {len(config.lmdb_paths)} LMDB path(s); "
-            f"check that the paths exist and contain benchmark records"
+            "evaluating on guardrail_train is not supported (would be misleading); "
+            "use 'guardrail_valid' or 'guardrail_test'"
         )
-    logger.info(f"loaded {len(records)} records from {len(config.lmdb_paths)} LMDB(s)")
-    # step 2: build splits
-    guardrail_splits = correctness_splits.build_guardrail_splits(records, config.split_config)
+
+    # retrieve records from the datamodule
+    eval_records = datamodule.get_records_for_subset(eval_subset_name)
+    if not eval_records:
+        raise ValueError(f"eval subset '{eval_subset_name}' is empty; cannot evaluate")
+    calibration_records = datamodule.get_records_for_calibration()
+    guardrail_splits = datamodule.get_guardrail_splits()
     logger.info(
-        f"split: train={len(guardrail_splits.guardrail_train)}, "
-        f"valid={len(guardrail_splits.guardrail_valid)}, "
-        f"test={len(guardrail_splits.guardrail_test)}"
+        f"evaluating on '{eval_subset_name}': {len(eval_records)} eval records, "
+        f"{len(calibration_records)} calibration records"
     )
-    # step 2b: validate splits are usable
-    if not guardrail_splits.guardrail_valid:
-        raise ValueError(
-            "guardrail_valid split is empty after re-splitting; increase the number of "
-            "original validation problems or adjust guardrail_valid_fraction"
-        )
-    if not guardrail_splits.guardrail_test:
-        raise ValueError(
-            "guardrail_test split is empty; ensure the split file contains test problems that match the LMDB records"
-        )
-    valid_has_positive = any(rec.label for rec in guardrail_splits.guardrail_valid)
-    valid_has_negative = any(not rec.label for rec in guardrail_splits.guardrail_valid)
-    if not valid_has_positive or not valid_has_negative:
-        raise ValueError(
-            "guardrail_valid split has only one label class; threshold calibration requires "
-            "both correct and incorrect attempts in the validation set"
-        )
-    # step 3: class balance on test
-    test_class_balance = correctness_metrics.compute_class_balance(guardrail_splits.guardrail_test)
-    # step 4: run each guardrail
+    eval_class_balance = correctness_metrics.compute_class_balance(eval_records)
+
+    # run each guardrail that we were provided (the input is a sequence of GuardrailScorer replicas)
     per_run_results: list[correctness_types.SingleRunResult] = []
     per_run_records_for_hierarchical: list[list[correctness_types.EvalRecord]] = []
     per_run_scores_for_hierarchical: list[np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]] = []
@@ -102,22 +86,23 @@ async def evaluate_wrapped_model_impl(
             logger.info(f"evaluating guardrail run {run_idx + 1}/{len(guardrails)}")
         run_result = _evaluate_single_run(
             guardrail=guardrail,
-            guardrail_splits=guardrail_splits,
+            eval_records=eval_records,
+            calibration_records=calibration_records,
             config=config,
         )
         per_run_results.append(run_result.result)
-        per_run_records_for_hierarchical.append(guardrail_splits.guardrail_test)
-        per_run_scores_for_hierarchical.append(run_result.test_scores)
+        per_run_records_for_hierarchical.append(eval_records)
+        per_run_scores_for_hierarchical.append(run_result.eval_scores)
         for target_fpr in config.target_fpr_values:
             per_run_thresholds_for_hierarchical[target_fpr].append(run_result.thresholds[target_fpr])
-    # step 5: aggregate across runs
+    # aggregate across runs
     aggregated = _aggregate_runs(
         per_run_results=per_run_results,
         per_run_records=per_run_records_for_hierarchical,
         per_run_scores=per_run_scores_for_hierarchical,
         per_run_thresholds=per_run_thresholds_for_hierarchical,
         guardrail_splits=guardrail_splits,
-        test_class_balance=test_class_balance,
+        eval_class_balance=eval_class_balance,
         config=config,
     )
     return CorrectnessEvalResult(
@@ -130,87 +115,86 @@ class _SingleRunOutput(typing.NamedTuple):
     """Internal container for a single guardrail run's output."""
 
     result: correctness_types.SingleRunResult
-    test_scores: np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]
+    eval_scores: np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]
     thresholds: dict[float, float]
 
 
 def _evaluate_single_run(
     guardrail: correctness_types.GuardrailScorer,
-    guardrail_splits: correctness_types.GuardrailSplits,
+    eval_records: list[correctness_types.EvalRecord],
+    calibration_records: list[correctness_types.EvalRecord],
     config: correctness_configs.CorrectnessEvalsConfig,
 ) -> _SingleRunOutput:
     """Evaluate a single guardrail instance.
 
     Args:
         guardrail: GuardrailScorer instance.
-        guardrail_splits: Train/valid/test splits.
+        eval_records: Records to evaluate on (e.g. guardrail_valid or guardrail_test).
+        calibration_records: Records for threshold calibration (always based on guardrail_valid).
         config: Evaluation configuration.
 
     Returns:
-        _SingleRunOutput with results, test scores, and thresholds.
+        _SingleRunOutput with results, eval scores, and thresholds.
     """
-    # score valid and test sets
-    valid_result = guardrail.score_records(guardrail_splits.guardrail_valid)
-    if len(valid_result.scores) != len(guardrail_splits.guardrail_valid):
+    # score calibration and eval sets
+    calibration_result = guardrail.score_records(calibration_records)
+    if len(calibration_result.scores) != len(calibration_records):
         raise ValueError(
-            f"scorer returned {len(valid_result.scores)} scores for "
-            f"{len(guardrail_splits.guardrail_valid)} valid records"
+            f"scorer returned {len(calibration_result.scores)} scores for "
+            f"{len(calibration_records)} calibration records"
         )
-    test_result = guardrail.score_records(guardrail_splits.guardrail_test)
-    if len(test_result.scores) != len(guardrail_splits.guardrail_test):
-        raise ValueError(
-            f"scorer returned {len(test_result.scores)} scores for {len(guardrail_splits.guardrail_test)} test records"
-        )
+    eval_result = guardrail.score_records(eval_records)
+    if len(eval_result.scores) != len(eval_records):
+        raise ValueError(f"scorer returned {len(eval_result.scores)} scores for {len(eval_records)} eval records")
     metadata = guardrail.get_metadata()
     cost_unit = guardrail.get_verification_cost_unit()
-    valid_scores = np.array(valid_result.scores, dtype=np.float64)
-    valid_labels = np.array([rec.label for rec in guardrail_splits.guardrail_valid], dtype=np.bool_)
-    test_scores = np.array(test_result.scores, dtype=np.float64)
-    test_labels = np.array([rec.label for rec in guardrail_splits.guardrail_test], dtype=np.bool_)
-    test_records = guardrail_splits.guardrail_test
+    calibration_scores = np.array(calibration_result.scores, dtype=np.float64)
+    calibration_labels = np.array([rec.label for rec in calibration_records], dtype=np.bool_)
+    eval_scores = np.array(eval_result.scores, dtype=np.float64)
+    eval_labels = np.array([rec.label for rec in eval_records], dtype=np.bool_)
     # calibrate thresholds and compute thresholded metrics
     thresholds: dict[float, float] = {}
     attempt_metrics: dict[float, correctness_types.ThresholdedMetrics] = {}
     sample_metrics: dict[float, correctness_types.SampleLevelMetrics] = {}
     verification_cost_stats: dict[float, correctness_types.VerificationCostStats] = {}
     for target_fpr in config.target_fpr_values:
-        threshold = correctness_calibration.calibrate_threshold(valid_scores, valid_labels, target_fpr)
+        threshold = correctness_calibration.calibrate_threshold(calibration_scores, calibration_labels, target_fpr)
         thresholds[target_fpr] = threshold
         attempt_metrics[target_fpr] = correctness_metrics.compute_thresholded_metrics(
-            test_scores,
-            test_labels,
+            eval_scores,
+            eval_labels,
             threshold,
             target_fpr,
         )
         sample_metrics[target_fpr] = correctness_metrics.compute_sample_level_metrics(
-            test_records,
-            test_scores,
+            eval_records,
+            eval_scores,
             threshold,
             target_fpr,
         )
         # verification cost stats
-        accepted = test_scores >= threshold
+        accepted = eval_scores >= threshold
         cost_stats = correctness_metrics.compute_verification_cost_stats(  # type: ignore[reportUnknownMemberType]
-            test_result.verification_costs,
-            test_labels,
+            eval_result.verification_costs,
+            eval_labels,
             accepted,
             target_fpr,
             cost_unit=cost_unit,
-            records=test_records,
+            records=eval_records,
         )
         if cost_stats is not None:
             verification_cost_stats[target_fpr] = cost_stats
     # threshold-free metrics
     threshold_free = correctness_metrics.compute_threshold_free_metrics(  # type: ignore[reportUnknownMemberType]
-        test_scores,
-        test_labels,
+        eval_scores,
+        eval_labels,
         config.target_fpr_values,
         config.roc_fpr_grid_size,
     )
     # category-wise metrics
     category_results = correctness_metrics.compute_category_results(
-        test_records,
-        test_scores,
+        eval_records,
+        eval_scores,
         thresholds,
         config.target_fpr_values,
         config.category_config,
@@ -219,16 +203,16 @@ def _evaluate_single_run(
     )
     # difficulty stats
     difficulty_stats = correctness_metrics.compute_difficulty_stats(  # type: ignore[reportUnknownMemberType]
-        test_records,
-        test_scores,
-        test_labels,
+        eval_records,
+        eval_scores,
+        eval_labels,
         thresholds,
         config.target_fpr_values,
     )
     # bootstrap CIs
     bootstrap_cis = correctness_metrics.compute_clustered_bootstrap_cis(  # type: ignore[reportUnknownMemberType]
-        test_records,
-        test_scores,
+        eval_records,
+        eval_scores,
         thresholds,
         config.target_fpr_values,
         config.num_bootstrap_replicates,
@@ -245,7 +229,7 @@ def _evaluate_single_run(
         difficulty_stats=difficulty_stats,
         verification_cost_stats=verification_cost_stats if verification_cost_stats else None,
     )
-    return _SingleRunOutput(result=run_result, test_scores=test_scores, thresholds=thresholds)
+    return _SingleRunOutput(result=run_result, eval_scores=eval_scores, thresholds=thresholds)
 
 
 def _aggregate_runs(
@@ -253,19 +237,19 @@ def _aggregate_runs(
     per_run_records: list[list[correctness_types.EvalRecord]],
     per_run_scores: list[np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]],
     per_run_thresholds: dict[float, list[float]],
-    guardrail_splits: correctness_types.GuardrailSplits,
-    test_class_balance: correctness_types.ClassBalanceStats,
+    guardrail_splits: correctness_splits.GuardrailSplits,
+    eval_class_balance: correctness_types.ClassBalanceStats,
     config: correctness_configs.CorrectnessEvalsConfig,
 ) -> correctness_types.AggregatedResult:
     """Aggregate results across R independent guardrail runs.
 
     Args:
         per_run_results: SingleRunResult for each run.
-        per_run_records: Test records for each run (same for all runs currently).
-        per_run_scores: Test score arrays for each run.
+        per_run_records: Eval records for each run (same for all runs currently).
+        per_run_scores: Eval score arrays for each run.
         per_run_thresholds: Thresholds per target_fpr per run.
         guardrail_splits: The split used for all runs.
-        test_class_balance: Class balance stats for the test set.
+        eval_class_balance: Class balance stats for the evaluated subset.
         config: Evaluation configuration.
 
     Returns:
@@ -423,7 +407,7 @@ def _aggregate_runs(
     verification_cost_stats = _aggregate_cost_stats(per_run_results, config.target_fpr_values)
     return correctness_types.AggregatedResult(
         split_summary=guardrail_splits.to_summary(),
-        class_balance=test_class_balance,
+        class_balance=eval_class_balance,
         per_run=per_run_results,
         cross_run_mean=cross_run_mean,
         cross_run_std=cross_run_std,
@@ -568,3 +552,48 @@ def _aggregate_cost_stats(
             ),
         )
     return aggregated if aggregated else None
+
+
+async def evaluate_guardrail_types(
+    config: correctness_configs.CorrectnessEvalsConfig,
+    guardrails_by_type: dict[str, typing.Sequence[correctness_types.GuardrailScorer]],
+    datamodule: correctness_datamodule.CorrectnessDataModule,
+    eval_subset_name: str,
+    wandb_run: typing.Any | None = None,
+    verbose: bool = False,
+) -> dict[str, CorrectnessEvalResult]:
+    """Evaluate multiple guardrail types independently, each with optional replicas.
+
+    Each key in ``guardrails_by_type`` is a type name (e.g. ``"mean_pool_L8"``). The
+    associated sequence contains replica instances of that type, which get cross-run
+    aggregation. Results and W&B metrics are prefixed with the type name.
+
+    Args:
+        config: Correctness evaluation configuration.
+        guardrails_by_type: Mapping from type name to a sequence of GuardrailScorer replicas.
+        datamodule: The prepared correctness evaluation datamodule.
+        eval_subset_name: Which subset to evaluate on.
+        wandb_run: Optional W&B run for metric logging.
+        verbose: Whether to verbosely report progress.
+
+    Returns:
+        Mapping from type_name to its CorrectnessEvalResult.
+    """
+    results: dict[str, CorrectnessEvalResult] = {}
+    for type_name, replicas in guardrails_by_type.items():
+        if not replicas:
+            raise ValueError(f"guardrail type '{type_name}' has an empty replicas list")
+        logger.info(f"evaluating guardrail type '{type_name}' ({len(replicas)} replica(s))...")
+        result = await evaluate_guardrail_replicas(
+            config=config,
+            guardrails=replicas,
+            datamodule=datamodule,
+            eval_subset_name=eval_subset_name,
+            verbose=verbose,
+        )
+        results[type_name] = result
+        if wandb_run is not None:
+            type_prefix = f"benchmark/{eval_subset_name}/{type_name}"
+            for metric_name, metric_val in result.metrics.items():
+                wandb_run.summary[f"{type_prefix}/{metric_name}"] = metric_val  # type: ignore[reportUnknownMemberType]
+    return results

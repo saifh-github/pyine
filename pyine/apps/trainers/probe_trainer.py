@@ -23,10 +23,14 @@ import pyine.apps.trainers.common
 import pyine.apps.trainers.probe_trainer_configs as probe_trainer_configs
 import pyine.configs.schemas
 import pyine.evals.common
+import pyine.evals.correctness._impl as correctness_impl
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.datamodule as correctness_datamodule
+import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.probes.collection
 import pyine.probes.data.datamodule
 import pyine.probes.extraction
-import pyine.utils.distrib
+import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
 
 if typing.TYPE_CHECKING:
     import accelerate
@@ -563,10 +567,21 @@ def save_probe_checkpoints(
     return output_dir
 
 
+class ProbeTrainResult(typing.NamedTuple):
+    """Return value of probe_train() with extra context for downstream evaluation."""
+
+    probe_collection: pyine.probes.collection.ProbeCollection
+    """The trained probe collection containing all probes across layers and replicas."""
+    model: torch.nn.Module
+    """The base model that was used for activation extraction during training."""
+    tokenizer: transformers.PreTrainedTokenizerBase
+    """The tokenizer associated with the base model."""
+
+
 def probe_train(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> pyine.probes.collection.ProbeCollection:
+) -> ProbeTrainResult:
     """Core probe training loop."""
     import accelerate
 
@@ -796,9 +811,14 @@ def probe_train(
     extractor.remove_hooks()
 
     logger.info("Probe training complete.")
-    return typing.cast(
+    unwrapped_collection = typing.cast(
         "pyine.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
+    return ProbeTrainResult(
+        probe_collection=unwrapped_collection,
+        model=model,
+        tokenizer=tokenizer,
     )
 
 
@@ -819,19 +839,47 @@ async def main(
         logger.info("dry run mode -- skipping probe training")
         return
 
-    probe_collection = probe_train(config=config, runtime=runtime)
+    train_result = probe_train(config=config, runtime=runtime)
+    probe_collection = train_result.probe_collection
 
     # benchmarking phase (if enabled)
     if config.evals_config is not None:
-        if pyine.utils.distrib.is_main_process():
-            await pyine.apps.trainers.common.evaluate_model(
-                model=probe_collection,  # @@@@@ TODO: wrap this in GuardrailScorer-compat wrapper!
-                tokenizer=None,
-                datamodule=None,
-                config=config,
-                runtime=runtime,
+        if pyine.utils.distrib.is_main_process():  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+            evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
+            eval_dm = evals_config.prepare_eval_datamodule(None)
+            eval_dm_typed = typing.cast("correctness_datamodule.CorrectnessDataModule", eval_dm)
+            # collect target layers from all probes, create a fresh extractor for scoring
+            target_layers = sorted(
+                {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
             )
-        pyine.utils.distrib.barrier()
+            extractor = pyine.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+                train_result.model, target_layers
+            )
+            # group probes by type (base_name), creating one ProbeScorer per probe
+            scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
+            for probe_name, probe_module in probe_collection.probes.items():
+                probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
+                base_name = probe_cfg.base_name or probe_cfg.name
+                scorer = correctness_scorers.ProbeScorer(
+                    probe=typing.cast("pyine.probes.base.BaseProbe", probe_module),
+                    probe_config=probe_cfg,
+                    model=train_result.model,
+                    tokenizer=train_result.tokenizer,
+                    extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
+                    max_seq_length=config.max_seq_length,
+                    text_field=evals_config.text_field,
+                )
+                scorers_by_type.setdefault(base_name, []).append(scorer)
+            for eval_subset_name in eval_dm_typed.config.eval_subset_names:
+                await correctness_impl.evaluate_guardrail_types(
+                    config=evals_config,
+                    guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]
+                    datamodule=eval_dm_typed,
+                    eval_subset_name=eval_subset_name,
+                    wandb_run=runtime.wandb_run if runtime else None,
+                )
+            extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
+        pyine.utils.distrib.barrier()  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     if runtime is not None:
         runtime.finalize()

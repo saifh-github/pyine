@@ -7,8 +7,8 @@ import typing
 
 import pytest
 
-import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.data_loading as correctness_data_loading
+import pyine.evals.correctness.types as correctness_types
 
 
 class _FakeLMDBReader:
@@ -70,7 +70,7 @@ class TestLoadRecordsFromLmdb:
         )
         result = correctness_data_loading.load_records_from_lmdb(
             [pathlib.Path("/fake/path")],
-            correctness_configs.LabelType.HARD_MATCH,
+            correctness_types.LabelType.HARD_MATCH,
         )
         assert len(result) == 2
         assert result[0].label is True
@@ -88,7 +88,7 @@ class TestLoadRecordsFromLmdb:
         )
         result = correctness_data_loading.load_records_from_lmdb(
             [pathlib.Path("/fake/path")],
-            correctness_configs.LabelType.SOFT_MATCH,
+            correctness_types.LabelType.SOFT_MATCH,
         )
         assert result[0].label is True
 
@@ -101,7 +101,7 @@ class TestLoadRecordsFromLmdb:
         with pytest.raises(ValueError, match="record_type='other'"):
             correctness_data_loading.load_records_from_lmdb(
                 [pathlib.Path("/fake/path")],
-                correctness_configs.LabelType.HARD_MATCH,
+                correctness_types.LabelType.HARD_MATCH,
             )
 
     def test_duplicate_keys_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +114,7 @@ class TestLoadRecordsFromLmdb:
         with pytest.raises(ValueError, match="duplicate"):
             correctness_data_loading.load_records_from_lmdb(
                 [pathlib.Path("/fake/path")],
-                correctness_configs.LabelType.HARD_MATCH,
+                correctness_types.LabelType.HARD_MATCH,
             )
 
     def test_missing_code_type_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,7 +128,7 @@ class TestLoadRecordsFromLmdb:
         with pytest.raises(ValueError, match="missing or empty code_type"):
             correctness_data_loading.load_records_from_lmdb(
                 [pathlib.Path("/fake/path")],
-                correctness_configs.LabelType.HARD_MATCH,
+                correctness_types.LabelType.HARD_MATCH,
             )
 
     def test_empty_code_type_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,7 +141,7 @@ class TestLoadRecordsFromLmdb:
         with pytest.raises(ValueError, match="missing or empty code_type"):
             correctness_data_loading.load_records_from_lmdb(
                 [pathlib.Path("/fake/path")],
-                correctness_configs.LabelType.HARD_MATCH,
+                correctness_types.LabelType.HARD_MATCH,
             )
 
     def test_invalid_label_type_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,7 +167,7 @@ class TestLoadRecordsFromLmdb:
         )
         result = correctness_data_loading.load_records_from_lmdb(
             [pathlib.Path("/fake/path")],
-            correctness_configs.LabelType.HARD_MATCH,
+            correctness_types.LabelType.HARD_MATCH,
         )
         assert result[0].difficulty_score == pytest.approx(0.42)
 
@@ -180,7 +180,7 @@ class TestLoadRecordsFromLmdb:
         )
         result = correctness_data_loading.load_records_from_lmdb(
             [pathlib.Path("/fake/path")],
-            correctness_configs.LabelType.HARD_MATCH,
+            correctness_types.LabelType.HARD_MATCH,
         )
         assert result[0].difficulty_score is None
 
@@ -197,7 +197,7 @@ class TestLoadRecordsFromLmdb:
         with pytest.raises(ValueError, match="mixed difficulty_score availability"):
             correctness_data_loading.load_records_from_lmdb(
                 [pathlib.Path("/fake/path")],
-                correctness_configs.LabelType.HARD_MATCH,
+                correctness_types.LabelType.HARD_MATCH,
             )
 
     def test_final_answer_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,6 +209,6 @@ class TestLoadRecordsFromLmdb:
         )
         result = correctness_data_loading.load_records_from_lmdb(
             [pathlib.Path("/fake/path")],
-            correctness_configs.LabelType.HARD_MATCH,
+            correctness_types.LabelType.HARD_MATCH,
         )
         assert result[0].final_answer is None

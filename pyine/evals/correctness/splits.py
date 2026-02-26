@@ -7,6 +7,7 @@ training pipelines. It does not depend on ``_impl`` or ``metrics``.
 from __future__ import annotations
 
 import collections
+import dataclasses
 import logging
 import typing
 
@@ -17,10 +18,44 @@ import pyine.data.utils.splits
 import pyine.evals.correctness.types as correctness_types
 import pyine.organisms.datamodules.samples.common as samples_common
 
-if typing.TYPE_CHECKING:
-    import pyine.evals.correctness.configs as correctness_configs
-
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class GuardrailSplits:
+    """Problem-level splits for guardrail training, calibration, and evaluation.
+
+    All 3 splits are exposed so that training pipelines can import and use them directly via the
+    standalone splits module.
+    """
+
+    guardrail_train: list[correctness_types.EvalRecord]
+    """Records for guardrail training (from original validation problems)."""
+    guardrail_valid: list[correctness_types.EvalRecord]
+    """Records for threshold calibration (from original validation problems)."""
+    guardrail_test: list[correctness_types.EvalRecord]
+    """Records for final evaluation (from original test problems)."""
+    train_problem_ids: frozenset[str]
+    """Coding problem IDs assigned to guardrail_train."""
+    valid_problem_ids: frozenset[str]
+    """Coding problem IDs assigned to guardrail_valid."""
+    test_problem_ids: frozenset[str]
+    """Coding problem IDs assigned to guardrail_test."""
+
+    def to_summary(self) -> dict[str, typing.Any]:
+        """Return a lightweight summary suitable for AggregatedResult persistence.
+
+        Includes problem_ids (as sorted lists for JSON serializability) and record counts
+        per split. Does NOT include full EvalRecord objects.
+        """
+        return {
+            "train_problem_ids": sorted(self.train_problem_ids),
+            "valid_problem_ids": sorted(self.valid_problem_ids),
+            "test_problem_ids": sorted(self.test_problem_ids),
+            "train_record_count": len(self.guardrail_train),
+            "valid_record_count": len(self.guardrail_valid),
+            "test_record_count": len(self.guardrail_test),
+        }
 
 
 def extract_problem_id(
@@ -65,8 +100,8 @@ def extract_problem_id(
 
 def build_guardrail_splits(
     records: list[correctness_types.EvalRecord],
-    split_config: correctness_configs.GuardrailSplitConfig,
-) -> correctness_types.GuardrailSplits:
+    split_config: correctness_types.GuardrailSplitConfig,
+) -> GuardrailSplits:
     """Build guardrail train/valid/test splits from eval records and a dataset split.
 
     Public entry point. Loads the SplitResult, then delegates to internal logic.
@@ -94,7 +129,7 @@ def _assign_guardrail_subsets(
     guardrail_valid_fraction: float,
     seed: int,
     stratify_by_label: bool,
-) -> correctness_types.GuardrailSplits:
+) -> GuardrailSplits:
     """Assign records to guardrail train/valid/test based on original dataset splits.
 
     Original train problems are discarded. Original test problems go to guardrail_test.
@@ -193,7 +228,7 @@ def _assign_guardrail_subsets(
         raise ValueError(
             f"record count mismatch: {total_assigned} assigned + {total_discarded} discarded != {len(records)} total"
         )
-    return correctness_types.GuardrailSplits(
+    return GuardrailSplits(
         guardrail_train=train_records,
         guardrail_valid=valid_records,
         guardrail_test=test_records,

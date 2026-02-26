@@ -14,7 +14,7 @@ subpackages.
       eval_type=CODE_EXEC                 eval_type=CORRECTNESS
                │                                 │
      GenerationEvalsConfig                CorrectnessEvalsConfig
-  (generation params, LMDB export,  (LMDB split config, record categories,
+  (generation params, LMDB export,  (LMDB import/split, record categories,
         output parsing)               target FPRs, bootstrap settings)
                │                                 │
     ┌──────────┴──────────┐                      │
@@ -65,7 +65,7 @@ correctness pipeline.**
 BaseEvalsConfig                 # eval_type, category_extraction_config, runnable_config
 ├── GenerationEvalsConfig       # generation params, disk_export_config, output_parsing_config
 │   └── CodeExecEvalsConfig     # code-execution-specific: evaluator, pass_at_k_values, etc.
-└── CorrectnessEvalsConfig      # split config, target_fprs, record categories, bootstrap settings
+└── CorrectnessEvalsConfig      # datamodule_config, target_fprs, record categories, bootstrap
 ```
 
 Callers construct the appropriate config and call `evaluate_[runnable,hf,wrapped]_model()`, which
@@ -103,21 +103,26 @@ pyine/evals/
 ├── constants.py        # package-wide constants: aggregation stat names/functions
 ├── logging.py          # DiskEvalLogger: LMDB-based export of evaluation artifacts
 ├── utils.py            # TokenUsageInfo, category extraction helpers, metric helpers
-├── code_exec/          # CODE_EXEC task
-│   ├── _impl.py        # evaluate_runnable_model, evaluate_hf_model, finalize_evaluation_results
-│   ├── configs.py      # CodeExecEvalsConfig (extends GenerationEvalsConfig)
-│   ├── evaluator.py    # OutcomeEvaluator: hard match, soft match, optional LLM grading
-│   ├── analysis.py     # offline analysis helpers (W&B fetch, DataFrames, plotting)
-│   ├── reeval.py       # reevaluate_from_lmdb
-│   └── utils.py        # SampleEval, CodeExecEvalArtifact, CodeExecEvalResult, metric computation
-└── correctness/        # CORRECTNESS task
-    ├── _impl.py        # evaluate_wrapped_model_impl: main pipeline orchestration
-    ├── configs.py      # CorrectnessEvalsConfig, GuardrailSplitConfig, RecordCategoryConfig
-    ├── splits.py       # standalone split logic (importable by training pipelines)
-    ├── data_loading.py # LMDB reading -> list[EvalRecord]
-    ├── calibration.py  # FPR-constrained threshold selection
-    ├── metrics.py      # threshold-free, thresholded, sample-level, bootstrap CI computation
-    └── types.py        # EvalRecord, GuardrailScorer, ScoringResult, result containers
+│
+├── code_exec/                # CODE_EXEC task
+│   ├── _impl.py              # evaluate_runnable_model, evaluate_hf_model, finalize_evaluation_results
+│   ├── configs.py            # CodeExecEvalsConfig (extends GenerationEvalsConfig)
+│   ├── evaluator.py          # OutcomeEvaluator: hard match, soft match, optional LLM grading
+│   ├── analysis.py           # offline analysis helpers (W&B fetch, DataFrames, plotting)
+│   ├── reeval.py             # reevaluate_from_lmdb
+│   └── utils.py              # SampleEval, CodeExecEvalArtifact, CodeExecEvalResult, metric computation
+│
+└── correctness/              # CORRECTNESS task
+    ├── _impl.py              # evaluate_guardrail_replicas / evaluate_guardrail_types: orchestration
+    ├── configs.py            # CorrectnessEvalsConfig, RecordCategoryConfig, hydra-zen registration
+    ├── datamodule.py         # CorrectnessDataModule: lifecycle, split access, HF DatasetDict adapter
+    ├── datamodule_configs.py # CorrectnessDataModuleConfig: LMDB paths, label type, split config
+    ├── scorers.py            # ProbeScorer, LLMClassifierScorer: GuardrailScorer adapters
+    ├── splits.py             # GuardrailSplits, build_guardrail_splits() (standalone, importable)
+    ├── data_loading.py       # LMDB reading -> list[EvalRecord]
+    ├── calibration.py        # FPR-constrained threshold selection
+    ├── metrics.py            # threshold-free, thresholded, sample-level, bootstrap CI computation
+    └── types.py              # LabelType, GuardrailSplitConfig, EvalRecord, GuardrailScorer, etc.
 ```
 
 ## Metrics Reference

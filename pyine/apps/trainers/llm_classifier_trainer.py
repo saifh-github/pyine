@@ -22,6 +22,8 @@ import transformers
 import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.evals.common
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.probes.data.datamodule
 
 if typing.TYPE_CHECKING:
@@ -215,10 +217,19 @@ class WeightedLossTrainer(transformers.Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+class ClassifierTrainResult(typing.NamedTuple):
+    """Return value of classifier_train() with extra context for downstream evaluation."""
+
+    trainer: transformers.Trainer
+    """The HuggingFace Trainer containing the fine-tuned classifier model."""
+    tokenizer: transformers.PreTrainedTokenizerBase
+    """The tokenizer associated with the classifier model."""
+
+
 def classifier_train(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> transformers.Trainer:
+) -> ClassifierTrainResult:
     """Core LLM classifier training loop.
 
     Args:
@@ -226,7 +237,7 @@ def classifier_train(
         runtime: Runtime configuration (wandb, output dir, etc.).
 
     Returns:
-        The trained HuggingFace Trainer instance.
+        ClassifierTrainResult with the trained Trainer and tokenizer.
     """
     # --- 1. Load model + tokenizer ---
     tokenizer = config.get_tokenizer()
@@ -313,7 +324,7 @@ def classifier_train(
     if config.save_model:
         trainer.save_model()
 
-    return trainer
+    return ClassifierTrainResult(trainer=trainer, tokenizer=tokenizer)
 
 
 async def main(
@@ -333,14 +344,23 @@ async def main(
         logger.info("dry run mode; skipping classifier training")
         return
 
-    trainer = classifier_train(config=config, runtime=runtime)
+    train_result = classifier_train(config=config, runtime=runtime)
 
-    # benchmarking phase (if enabled)
+    # benchmarking phase (if enabled); goes through the standard evaluate_model pipeline
+    # which handles datamodule setup, W&B metric definition, logging, etc.
     if config.evals_config is not None:
-        await pyine.apps.trainers.common.evaluate_model(
-            model=trainer.model,  # @@@@@ TODO: wrap this in GuardrailScorer-compat wrapper!
+        classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
+        evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
+        scorer = correctness_scorers.LLMClassifierScorer(
+            model=classifier_model,
+            tokenizer=train_result.tokenizer,
+            max_seq_length=config.max_seq_length,
+            text_field=evals_config.text_field,
+        )
+        await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            model=scorer,
             tokenizer=None,
-            datamodule=None,
+            datamodule=None,  # correctness pipeline constructs its own datamodule
             config=config,
             runtime=runtime,
         )

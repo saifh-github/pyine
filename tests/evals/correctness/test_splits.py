@@ -129,9 +129,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -154,9 +152,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -178,9 +174,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -203,9 +197,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -240,9 +232,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -273,9 +263,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -305,9 +293,7 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
@@ -332,12 +318,27 @@ class TestBuildGuardrailSplits:
             "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
             return_value=mock_split_result,
         )
-        import pyine.evals.correctness.configs as correctness_configs
-
-        config = correctness_configs.GuardrailSplitConfig(
+        config = correctness_types.GuardrailSplitConfig(
             split_source="TACO",
             guardrail_valid_fraction=0.5,
             seed=42,
         )
         with pytest.raises(ValueError, match="not found in SplitResult"):
             correctness_splits.build_guardrail_splits(records, config)
+
+
+class TestGuardrailSplits:
+    def test_to_summary(self) -> None:
+        splits = correctness_splits.GuardrailSplits(
+            guardrail_train=[],
+            guardrail_valid=[],
+            guardrail_test=[],
+            train_problem_ids=frozenset({"a", "b"}),
+            valid_problem_ids=frozenset({"c"}),
+            test_problem_ids=frozenset({"d", "e"}),
+        )
+        summary = splits.to_summary()
+        assert summary["train_problem_ids"] == ["a", "b"]
+        assert summary["valid_problem_ids"] == ["c"]
+        assert summary["test_problem_ids"] == ["d", "e"]
+        assert summary["train_record_count"] == 0

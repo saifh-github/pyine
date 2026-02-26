@@ -18,6 +18,7 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
 import pyine.probes.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 import pyine.utils.transformers
@@ -37,9 +38,13 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     code_type_filter, label_balance, etc.) live in datamodule_config.
     """
 
-    # --- Override: evals not needed for classifier training ---
+    # --- Override: optional correctness benchmarking after classifier training ---
     evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
-    """Not used for classifier training. Kept for AppMainConfig compatibility."""
+    """Optional correctness eval config for post-training benchmarking.
+
+    When set (e.g. via ``+evals_config=correctness_base`` on the hydra command line), the trained
+    classifier is evaluated as a guardrail scorer on the correctness pipeline after training completes.
+    """
 
     # --- Override: use ProbeDataModuleConfig (same as probe trainer) ---
     datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
@@ -230,6 +235,12 @@ def _get_app_configs(
         },
     )
 
+    # --- Correctness eval configs (registered so user can opt-in via hydra) ---
+    evals_configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
+        group=f"{group}/evals_config",
+    )
+
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         LLMClassifierTrainerAppMainConfig,
@@ -246,7 +257,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config]
+    return [app_main_config, datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(

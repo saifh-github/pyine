@@ -1,63 +1,21 @@
-"""Configuration for guardrail correctness evaluation.
-
-Provides ``CorrectnessEvalsConfig`` and supporting config models for split strategy,
-record categorization, and label type selection.
-"""
+"""Configuration classes and helpers for the guardrail correctness evaluation pipeline."""
 
 from __future__ import annotations
 
-import enum
-import pathlib  # noqa: TC003
 import typing
 
 import pydantic
 import wandb
 
+import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
+import pyine.evals.correctness._impl as correctness_impl
+import pyine.evals.correctness.datamodule as correctness_datamodule_mod
+import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
+import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.utils
-
-
-class LabelType(enum.StrEnum):
-    """Selects which correctness label to use from LMDB records."""
-
-    HARD_MATCH = enum.auto()
-    """Use the hard_match field (exact string equality)."""
-    SOFT_MATCH = enum.auto()
-    """Use the soft_match field (relaxed matching with tolerance)."""
-
-
-class GuardrailSplitConfig(pydantic.BaseModel):
-    """Standalone config for building guardrail splits from an existing code problem split.
-
-    Designed to be importable and usable independently by training pipelines.
-    """
-
-    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
-    """Pydantic model configuration (freezes the dataclass)."""
-
-    split_source: str | pathlib.Path
-    """Dataset name or path to a split file, resolved via get_dataset_split_result()."""
-    guardrail_valid_fraction: float = 0.5
-    """Fraction of original validation problems assigned to guardrail_valid (rest to guardrail_train).
-
-    Must be in (0, 1) exclusive.
-    """
-    seed: int = 42
-    """Random seed for the valid-to-train/valid re-split."""
-    stratify_by_label: bool = True
-    """Stratify the valid to train/valid re-split by per-problem correctness rate."""
-
-    @pydantic.field_validator("guardrail_valid_fraction")
-    @classmethod
-    def _validate_fraction(
-        cls,
-        value: float,
-    ) -> float:
-        """Validates guardrail validation dataset fraction."""
-        if value <= 0.0 or value >= 1.0:
-            raise ValueError(f"guardrail_valid_fraction must be in (0, 1), got {value}")
-        return value
 
 
 class RecordCategoryConfig(pydantic.BaseModel):
@@ -103,19 +61,9 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     eval_type: pyine.evals.common.EvalType | None = pyine.evals.common.EvalType.CORRECTNESS
     """Type of evaluation to be conducted (overrides base class field default)."""
 
-    # data sources @@@@@@ TODO: move all data-related settings to an internal datamodule config
-    lmdb_paths: list[pathlib.Path]
-    """Paths to LMDB datasets containing eval records from DiskEvalLogger.
+    datamodule_config: correctness_datamodule_configs.CorrectnessDataModuleConfig
+    """Configuration for the correctness evaluation datamodule (holds LMDB paths, label type, split config)."""
 
-    TODO @@@@@@: currently, we cannot overlap samples across different runs, so we cannot combine
-    pregenerated LMDB datasets from different model organisms; revisit this later?
-    """
-    label_type: LabelType = LabelType.SOFT_MATCH
-    """Which correctness label to use from LMDB records."""
-    split_config: GuardrailSplitConfig
-    """Configuration for building guardrail train/valid/test splits."""
-
-    # category config
     category_config: RecordCategoryConfig = pydantic.Field(default_factory=RecordCategoryConfig)
     """Configuration for code_type grouping (regular vs biasing).
 
@@ -125,19 +73,16 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     filtered out of the base extractor to avoid duplication.
     """
 
-    # threshold calibration
+    text_field: str = "model_output"
+    """Which ``EvalRecord`` field to use as input text for scoring (e.g. ``"model_output"``)."""
     target_fpr_values: list[float] = pydantic.Field(default_factory=lambda: [0.001, 0.01, 0.05])
     """FPR constraints for threshold calibration. Must be sorted, unique, and in (0, 1)."""
-
-    # bootstrap
     num_bootstrap_replicates: pydantic.PositiveInt = 1000
     """Number of bootstrap replicates for CI computation."""
     bootstrap_seed: int = 0
     """Random seed for bootstrap resampling."""
     confidence_level: float = pydantic.Field(default=0.95, gt=0.0, lt=1.0)
     """Confidence level for bootstrap CIs. Must be in (0, 1)."""
-
-    # ROC/PR curve resolution
     roc_fpr_grid_size: int = pydantic.Field(default=200, gt=1)
     """Number of points in the FPR grid for ROC curve plotting."""
 
@@ -172,7 +117,15 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         expect the parent/caller to be providing any datamodule. If they do so, this is unexpected,
         and we won't know what to do with it.
         """
-        TODO  # @@@@@@@ add instantiation of new correctness eval datamodule here!
+        if datamodule is not None:
+            raise ValueError(
+                "CorrectnessEvalsConfig constructs its own datamodule; "
+                f"caller should not provide one (got {type(datamodule).__name__})"
+            )
+        eval_dm = self.datamodule_config.instantiate_datamodule()
+        eval_dm.prepare_data()
+        eval_dm.setup()
+        return eval_dm
 
     @typing.override
     async def evaluate_wrapped_model(
@@ -184,42 +137,40 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     ) -> pyine.evals.common.EvalResult:
         """Evaluates guardrail scorers on pregenerated LMDB data.
 
-        Accepts a single GuardrailScorer or a sequence of them. When multiple scorers
-        are provided, each is evaluated independently and results are aggregated across
-        runs (cross-run mean/std/p5, hierarchical bootstrap CIs).
-
-        Note about the (lack of) datamodule / eval subset usage: unlike the code execution pipeline,
-        the guardrail correctness eval task relies on LMDB eval records that are NOT provided by
-        the datamodule, and instead specified as part of the eval config itself. This allows us to
-        train/validate guardrails on data that is entirely dissociated from the real (final) eval
-        data, which may come from a combination of sources.
+        Accepts a single GuardrailScorer or a sequence of them. When multiple scorers are provided,
+        each is evaluated independently and results are aggregated across runs (cross-run
+        mean/std/p5, hierarchical bootstrap CIs).
 
         Args:
             wrapped_model: A single GuardrailScorer instance, or a sequence of them for
                 multi-run aggregation.
-            datamodule: The datamodule from which to load the evaluation data.
+            datamodule: The correctness evaluation datamodule (must be a CorrectnessDataModule).
             eval_subset_name: The name of the subset to fetch from the datamodule and evaluate on.
             verbose: Whether to verbosely report progress.
 
         Returns:
             CorrectnessEvalResult wrapping the full AggregatedResult.
         """
-        import pyine.evals.correctness._impl as correctness_impl
-
-        del datamodule  # unused; see docstring above
-        del eval_subset_name  # unused; see docstring above
+        if not isinstance(datamodule, correctness_datamodule_mod.CorrectnessDataModule):
+            raise TypeError(
+                f"expected a CorrectnessDataModule, got {type(datamodule).__name__}; "
+                f"ensure prepare_eval_datamodule() was called first"
+            )
         guardrails: list[typing.Any]
         if isinstance(wrapped_model, (list, tuple)):
             guardrails = list(wrapped_model)  # type: ignore[reportUnknownArgumentType]
         else:
             guardrails = [wrapped_model]
-        return await correctness_impl.evaluate_wrapped_model_impl(  # type: ignore[reportArgumentType]
+        return await correctness_impl.evaluate_guardrail_replicas(  # type: ignore[reportArgumentType]
             config=self,
             guardrails=guardrails,
+            datamodule=datamodule,
+            eval_subset_name=eval_subset_name,
             verbose=verbose,
         )
 
     @typing.override
+    @typing.no_type_check  # wandb typing is incomplete
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
@@ -227,20 +178,147 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     ) -> None:
         """Registers correctness metric definitions with a W&B run.
 
-        Registers metric names (AUROC, average precision) so W&B can track them as summary
-        metrics. Uses the flat dict key namespace from ``AggregatedResult.to_flat_dict()``.
-        Should be called once before logging any metrics.
+        Defines metric summary strategies so W&B can track key metrics. Uses the flat dict key
+        namespace from ``AggregatedResult.to_flat_dict()``. Should be called once before logging
+        any metrics.
+
+        Key metrics (AUROC, guarded_pass_rate, TPR, etc.) get ``summary="max"`` so their best
+        values surface in the W&B run table. Safety metrics (unsafe_slip_rate) get ``"min"``.
+        Descriptive metrics (class balance, counts, variability stats, CIs) are hidden to avoid
+        flooding the dashboard; a glob catch-all ensures they are still logged.
 
         Args:
             wandb_run: The W&B run object where metric definitions should be registered.
             eval_subset_names: A sequence of subset names that will be evaluated (for metric name
                 prefixing, if needed).
         """
-        # TODO: this is just a simplified pass, might need to update it w/ all actual metrics
+        step_metric = "train/global_step"
         for eval_subset_name in eval_subset_names:
-            metric_prefix = f"benchmark/{eval_subset_name}"
+            prefix = f"benchmark/{eval_subset_name}"
+            # catch-all for category-wise and any other data-dependent metrics; more-specific
+            # definitions below take precedence over this glob in wandb
+            wandb_run.define_metric(name=f"{prefix}/*", step_metric=step_metric)
+            # -- primary ranking metrics (higher is better) --
             for metric_name in ["auroc", "average_precision"]:
-                wandb_run.define_metric(f"{metric_prefix}/{metric_name}/mean", summary="max")  # type: ignore[reportUnknownMemberType]
+                wandb_run.define_metric(
+                    name=f"{prefix}/{metric_name}/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+            # -- TPR@FPR metrics (higher is better) --
+            for target_fpr in self.target_fpr_values:
+                fpr_key = correctness_metrics.format_fpr_key(target_fpr)
+                wandb_run.define_metric(
+                    name=f"{prefix}/tpr_at_{fpr_key}/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+            # -- per-FPR operating-point metrics --
+            for target_fpr in self.target_fpr_values:
+                fpr_key = correctness_metrics.format_fpr_key(target_fpr)
+                # key attempt-level metrics
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/tpr/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+                # key sample-level metrics
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/guarded_pass_rate/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/unsafe_slip_rate/mean",
+                    step_metric=step_metric,
+                    summary="min",  # lower is better for safety
+                )
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/best_of_k_success_rate/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+                # conservative sample-level metrics (visible, higher is better for pass/justify)
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/cons_pass_rate/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/cons_unsafe_slip_rate/mean",
+                    step_metric=step_metric,
+                    summary="min",  # lower is better for safety
+                )
+                wandb_run.define_metric(
+                    name=f"{prefix}/{fpr_key}/cons_justified_reject_rate/mean",
+                    step_metric=step_metric,
+                    summary="max",
+                )
+                # secondary attempt-level and sample-level metrics (hidden)
+                secondary_metrics = [
+                    f"{fpr_key}/fpr/mean",
+                    f"{fpr_key}/fnr/mean",
+                    f"{fpr_key}/precision/mean",
+                    f"{fpr_key}/npv/mean",
+                    f"{fpr_key}/base_pass_rate/mean",
+                    f"{fpr_key}/total_block_rate/mean",
+                ]
+                for secondary_name in secondary_metrics:
+                    wandb_run.define_metric(
+                        name=f"{prefix}/{secondary_name}",
+                        step_metric=step_metric,
+                        hidden=True,
+                        summary="none",
+                    )
+                # cost metrics (lower is better for totals/means; correlations are descriptive)
+                cost_metrics_min = [
+                    "cost_total",
+                    "cost_mean",
+                    "cost_median",
+                    "cost_std",
+                    "cost_per_correct_acceptance",
+                    "cost_per_incorrect_block",
+                ]
+                for cost_name in cost_metrics_min:
+                    wandb_run.define_metric(
+                        name=f"{prefix}/{fpr_key}/{cost_name}/mean",
+                        step_metric=step_metric,
+                        summary="min",
+                    )
+                cost_metrics_last = [
+                    "cost_accuracy_rank_correlation",
+                    "cost_difficulty_rank_correlation",
+                ]
+                for cost_name in cost_metrics_last:
+                    wandb_run.define_metric(
+                        name=f"{prefix}/{fpr_key}/{cost_name}/mean",
+                        step_metric=step_metric,
+                        summary="last",
+                    )
+            # -- variability, CI, and descriptive metrics (hidden) --
+            hidden_suffixes = [
+                "std",
+                "p5",
+                "num_valid_runs",
+                "bootstrap_ci_point",
+                "bootstrap_ci_lower",
+                "bootstrap_ci_upper",
+            ]
+            for suffix in hidden_suffixes:
+                wandb_run.define_metric(
+                    name=f"{prefix}/*/{suffix}",
+                    step_metric=step_metric,
+                    hidden=True,
+                    summary="none",
+                )
+            # class balance and counts
+            for hidden_name in ["class_balance/*", "record_count", "sample_count"]:
+                wandb_run.define_metric(
+                    name=f"{prefix}/{hidden_name}",
+                    step_metric=step_metric,
+                    hidden=True,
+                    summary="none",
+                )
 
     @typing.override
     @typing.no_type_check  # wandb typing is incomplete
@@ -363,12 +441,35 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
 def get_evals_configs(
     group: str,
-) -> list[typing.Any]:
+) -> list[pyine.configs.schemas.ConfigDescription]:
     """Config provider for EvalType.CORRECTNESS, called by pyine/evals/configs.py dispatch.
 
-    Returns an empty list for now (no preset configs); users construct CorrectnessEvalsConfig
-    directly with their LMDB paths and split config.
-
-    @@@@ TODO: integrate w/ hydra-zen when app wiring is complete
+    Returns a base ``CorrectnessEvalsConfig`` and its nested ``CorrectnessDataModuleConfig`` for
+    hydra-zen config composition. Required fields (``lmdb_paths``, ``split_config.split_source``)
+    are left as MISSING: the user must provide them at runtime or in a YAML override.
     """
-    return []
+    datamodule_config = pyine.configs.utils.make_config_description(
+        correctness_datamodule_configs.CorrectnessDataModuleConfig,
+        name="correctness_dm_base",
+        group=f"{group}/datamodule_config",
+        description="Base correctness evaluation datamodule settings (LMDB source, label type, splitting).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    base_config = pyine.configs.utils.make_config_description(
+        CorrectnessEvalsConfig,
+        name="correctness_base",
+        group=group,
+        description="Correctness evaluation settings with canonical defaults for guardrail benchmarking.",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            "hydra_defaults": [
+                "_self_",
+                {"datamodule_config": "correctness_dm_base"},
+            ],
+        },
+    )
+    return [base_config, datamodule_config]

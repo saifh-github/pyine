@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
+import pathlib  # noqa: TC003
 import typing
 
 import numpy as np  # noqa: TC002
@@ -10,6 +12,48 @@ import numpy.typing as npt  # noqa: TC002
 import pydantic
 
 import pyine.utils.metrics.confidence  # noqa: TC001
+
+
+class LabelType(enum.StrEnum):
+    """Selects which correctness label to use from LMDB records."""
+
+    HARD_MATCH = enum.auto()
+    """Use the hard_match field (exact string equality)."""
+    SOFT_MATCH = enum.auto()
+    """Use the soft_match field (relaxed matching with tolerance)."""
+
+
+class GuardrailSplitConfig(pydantic.BaseModel):
+    """Standalone config for building guardrail splits from an existing code problem split.
+
+    Designed to be importable and usable independently by training pipelines.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    split_source: str | pathlib.Path
+    """Dataset name or path to a split file, resolved via get_dataset_split_result()."""
+    guardrail_valid_fraction: float = 0.5
+    """Fraction of original validation problems assigned to guardrail_valid (rest to guardrail_train).
+
+    Must be in (0, 1) exclusive.
+    """
+    seed: int = 42
+    """Random seed for the valid-to-train/valid re-split."""
+    stratify_by_label: bool = True
+    """Stratify the valid to train/valid re-split by per-problem correctness rate."""
+
+    @pydantic.field_validator("guardrail_valid_fraction")
+    @classmethod
+    def _validate_fraction(
+        cls,
+        value: float,
+    ) -> float:
+        """Validates guardrail validation dataset fraction."""
+        if value <= 0.0 or value >= 1.0:
+            raise ValueError(f"guardrail_valid_fraction must be in (0, 1), got {value}")
+        return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -500,7 +544,7 @@ class AggregatedResult(pydantic.BaseModel):
     """Pydantic model configuration (freezes the dataclass)."""
 
     split_summary: dict[str, typing.Any]
-    """Lightweight split metadata from GuardrailSplits.to_summary()."""
+    """Lightweight split metadata from ``splits.GuardrailSplits.to_summary()``."""
     class_balance: ClassBalanceStats
     """Label distribution on the test set."""
     per_run: list[SingleRunResult]
@@ -594,40 +638,3 @@ class AggregatedResult(pydantic.BaseModel):
         # above (e.g. mean/fpr_0_01/cost_total, mean/category/regular/auroc, etc.)
         # the aggregated VerificationCostStats is available on self for programmatic access
         return flat
-
-
-@dataclasses.dataclass(frozen=True)
-class GuardrailSplits:
-    """Problem-level splits for guardrail training, calibration, and evaluation.
-
-    All 3 splits are exposed so that training pipelines can import and use them directly via the
-    standalone splits module.
-    """
-
-    guardrail_train: list[EvalRecord]
-    """Records for guardrail training (from original validation problems)."""
-    guardrail_valid: list[EvalRecord]
-    """Records for threshold calibration (from original validation problems)."""
-    guardrail_test: list[EvalRecord]
-    """Records for final evaluation (from original test problems)."""
-    train_problem_ids: frozenset[str]
-    """Coding problem IDs assigned to guardrail_train."""
-    valid_problem_ids: frozenset[str]
-    """Coding problem IDs assigned to guardrail_valid."""
-    test_problem_ids: frozenset[str]
-    """Coding problem IDs assigned to guardrail_test."""
-
-    def to_summary(self) -> dict[str, typing.Any]:
-        """Return a lightweight summary suitable for AggregatedResult persistence.
-
-        Includes problem_ids (as sorted lists for JSON serializability) and record counts
-        per split. Does NOT include full EvalRecord objects.
-        """
-        return {
-            "train_problem_ids": sorted(self.train_problem_ids),
-            "valid_problem_ids": sorted(self.valid_problem_ids),
-            "test_problem_ids": sorted(self.test_problem_ids),
-            "train_record_count": len(self.guardrail_train),
-            "valid_record_count": len(self.guardrail_valid),
-            "test_record_count": len(self.guardrail_test),
-        }
