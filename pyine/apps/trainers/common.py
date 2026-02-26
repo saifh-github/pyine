@@ -812,11 +812,13 @@ def prepare_datamodule(
         and pyine.utils.distrib.is_main_process()
     ):
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets: list[str] = list({
-            *config.datamodule_config.train_subset_names,
-            *config.datamodule_config.valid_subset_names,
-            *config.datamodule_config.eval_subset_names,
-        })
+        target_subsets: list[str] = list(
+            {
+                *config.datamodule_config.train_subset_names,
+                *config.datamodule_config.valid_subset_names,
+                *config.datamodule_config.eval_subset_names,
+            }
+        )
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]
@@ -1105,7 +1107,7 @@ async def evaluate_model(
     eval_dm = config.evals_config.prepare_eval_datamodule(datamodule)
     eval_dm_subset_names = eval_dm.config.eval_subset_names
     logger.info(f"will evaluate using {len(eval_dm_subset_names)} subset(s): {eval_dm_subset_names}")
-    if runtime.wandb_run is not None:
+    if config.use_wandb_logging and runtime is not None and runtime.wandb_run is not None:
         config.evals_config.define_metrics_for_wandb(
             wandb_run=runtime.wandb_run,
             eval_subset_names=eval_dm_subset_names,

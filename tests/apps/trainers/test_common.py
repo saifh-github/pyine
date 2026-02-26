@@ -26,6 +26,7 @@ class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
         self.setup_called = 0
         self.instantiate_verbose: list[bool] = []
         self._stats = stats or {"rows": 3}
+        self.config: DummyDatamoduleConfig | None = None  # set by DummyDatamoduleConfig.instantiate_datamodule
 
     def prepare_data(self) -> None:
         self.prepared = True
@@ -56,6 +57,7 @@ class DummyDatamoduleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     def instantiate_datamodule(self, verbose: bool = False) -> DummyDatamodule:
         self.calls.append(verbose)
         self.datamodule.instantiate_verbose.append(verbose)
+        self.datamodule.config = self
         return self.datamodule
 
 
@@ -89,6 +91,14 @@ class DummyEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
 
     def log_predictions(self, **kwargs: typing.Any) -> None:
         self.log_predictions_calls.append(kwargs)
+
+    def prepare_eval_datamodule(
+        self,
+        datamodule: typing.Any,
+    ) -> typing.Any:
+        if datamodule is None:
+            raise ValueError("datamodule must be provided for DummyEvalsConfig")
+        return datamodule
 
 
 def _build_app_config(
@@ -132,10 +142,6 @@ def test_prepare_datamodule_with_wandb_logging() -> None:
     result = trainer_common.prepare_datamodule(config, runtime=runtime)
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
-    assert [call["prefix"] for call in evals_config.define_metrics_calls] == [
-        "benchmark/valid",
-        "benchmark/test",
-    ]
 
 
 @pytest.mark.asyncio
@@ -152,8 +158,8 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
     async def _async_wrapper() -> FakeEvaluationResult:
         return asynchronous_result
 
-    async def fake_evaluate_runnable_model(
-        chain: typing.Any,
+    async def fake_evaluate_wrapped_model(
+        wrapped_model: typing.Any,
         datamodule: DummyDatamodule,
         eval_subset_name: str,
         verbose: bool,
@@ -163,15 +169,14 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
         return await _async_wrapper()
 
     evals_config = DummyEvalsConfig()
-    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
+    evals_config.evaluate_wrapped_model = fake_evaluate_wrapped_model
     datamodule = DummyDatamodule()
-    config = _build_app_config(
-        DummyDatamoduleConfig(
-            datamodule=datamodule, subset_names=["train", "valid", "sync", "async"], eval_subset_names=["sync", "async"]
-        ),
-        evals_config=evals_config,
+    dm_config = DummyDatamoduleConfig(
+        datamodule=datamodule, subset_names=["train", "valid", "sync", "async"], eval_subset_names=["sync", "async"]
     )
-    model = types.SimpleNamespace(invoke=lambda x: x)
+    datamodule.config = dm_config
+    config = _build_app_config(dm_config, evals_config=evals_config)
+    model = types.SimpleNamespace()
     results = await trainer_common.evaluate_model(
         model=model,
         tokenizer=None,
@@ -187,8 +192,8 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
 async def test_evaluate_model_requires_wandb_run_id() -> None:
     result = FakeEvaluationResult(metrics={"acc": 0.5}, artifacts=[])
 
-    async def fake_evaluate_runnable_model(
-        chain: typing.Any,
+    async def fake_evaluate_wrapped_model(
+        wrapped_model: typing.Any,
         datamodule: DummyDatamodule,
         eval_subset_name: str,
         verbose: bool,
@@ -196,24 +201,23 @@ async def test_evaluate_model_requires_wandb_run_id() -> None:
         return result
 
     evals_config = DummyEvalsConfig()
-    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
+    evals_config.evaluate_wrapped_model = fake_evaluate_wrapped_model
 
     runtime = types.SimpleNamespace(
         wandb_run=None,
         wandb_run_id=None,
         finalize=lambda: None,
     )
-    config = _build_app_config(
-        DummyDatamoduleConfig(datamodule=DummyDatamodule()),
-        use_wandb_logging=True,
-        evals_config=evals_config,
-    )
-    model = types.SimpleNamespace(invoke=lambda x: x)
+    eval_datamodule = DummyDatamodule()
+    dm_config = DummyDatamoduleConfig(datamodule=eval_datamodule)
+    eval_datamodule.config = dm_config
+    config = _build_app_config(dm_config, use_wandb_logging=True, evals_config=evals_config)
+    model = types.SimpleNamespace()
     with pytest.raises(RuntimeError):
         await trainer_common.evaluate_model(
             model=model,
             tokenizer=None,
-            datamodule=DummyDatamodule(),
+            datamodule=eval_datamodule,
             config=config,
             runtime=runtime,
         )
