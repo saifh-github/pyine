@@ -448,6 +448,18 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         return None
 
 
+_RESAMPLING_PRESETS: list[tuple[str, str]] = [
+    ("skewed_pos", "for_skewed_positive"),
+    ("balanced", "for_balanced"),
+    ("original_only", "for_original_only"),
+    ("mostly_original", "for_mostly_original"),
+    ("helpful_bias", "for_helpful_bias"),
+    ("skewed_pos_helpful_bias", "for_skewed_positive_helpful_bias"),
+    ("oversample_balanced", "for_oversample_balanced"),
+]
+"""Mapping of preset name to factory classmethod name on RecordResamplingConfig."""
+
+
 def get_evals_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
@@ -456,6 +468,9 @@ def get_evals_configs(
     Returns a base ``CorrectnessEvalsConfig`` and its nested ``CorrectnessDataModuleConfig`` for
     hydra-zen config composition. Required fields (``lmdb_paths``, ``split_config.split_source``)
     are left as MISSING: the user must provide them at runtime or in a YAML override.
+
+    Also registers canonical resampling presets under both ``calibration_resampling`` and
+    ``datamodule_config/train_resampling`` hydra groups.
     """
     datamodule_config = pyine.configs.utils.make_config_description(
         correctness_datamodule_configs.CorrectnessDataModuleConfig,
@@ -501,4 +516,27 @@ def get_evals_configs(
             "hydra_convert": "object",
         },
     )
-    return [base_config, datamodule_config, calibration_resampling_config, train_resampling_config]
+    configs = [base_config, datamodule_config, calibration_resampling_config, train_resampling_config]
+    resampling_groups = [
+        f"{group}/calibration_resampling",
+        f"{group}/datamodule_config/train_resampling",
+    ]
+    for preset_name, factory_name in _RESAMPLING_PRESETS:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        preset_instance = factory()
+        overrides = preset_instance.model_dump(exclude_defaults=True)
+        for resampling_group in resampling_groups:
+            configs.append(
+                pyine.configs.utils.make_config_description(
+                    correctness_types.RecordResamplingConfig,
+                    name=preset_name,
+                    group=resampling_group,
+                    description=factory.__doc__ or f"Resampling preset: {preset_name}",
+                    config={
+                        "populate_full_signature": True,
+                        "hydra_convert": "object",
+                        **overrides,
+                    },
+                )
+            )
+    return configs

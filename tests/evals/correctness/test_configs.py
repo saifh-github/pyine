@@ -60,6 +60,29 @@ class TestRecordCategoryConfig:
         assert config.report_per_code_type is True
 
 
+class TestGetEvalsConfigs:
+    def test_total_config_count(self) -> None:
+        configs = correctness_configs.get_evals_configs("test_group")
+        # 4 base configs + 7 presets * 2 groups = 18 total
+        assert len(configs) == 18
+
+    def test_preset_names_registered_in_both_groups(self) -> None:
+        configs = correctness_configs.get_evals_configs("test_group")
+        preset_names = {
+            "skewed_pos",
+            "balanced",
+            "original_only",
+            "mostly_original",
+            "helpful_bias",
+            "skewed_pos_helpful_bias",
+            "oversample_balanced",
+        }
+        cal_names = {cfg.name for cfg in configs if cfg.group == "test_group/calibration_resampling"}
+        train_names = {cfg.name for cfg in configs if cfg.group == "test_group/datamodule_config/train_resampling"}
+        assert preset_names.issubset(cal_names)
+        assert preset_names.issubset(train_names)
+
+
 class TestCorrectnessEvalsConfig:
     def test_target_fpr_values_empty_raises(self) -> None:
         with pytest.raises(pydantic.ValidationError, match="must not be empty"):

@@ -59,6 +59,45 @@ class RecordResamplingConfig(pydantic.BaseModel):
         """True when this config will not alter the record list."""
         return self.target_positive_ratio is None and self.code_type_proportions is None and self.max_records is None
 
+    @classmethod
+    def for_skewed_positive(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: 80% positive label ratio."""
+        return cls(seed=seed, target_positive_ratio=0.8)
+
+    @classmethod
+    def for_balanced(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: forced 50/50 label balance via subsampling."""
+        return cls(seed=seed, target_positive_ratio=0.5)
+
+    @classmethod
+    def for_original_only(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: only original (non-biasing) code types."""
+        return cls(seed=seed, code_type_proportions={"original": 1.0})
+
+    @classmethod
+    def for_mostly_original(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: 90% original, 5% hinted, 5% misleading."""
+        return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.05, "misleading": 0.05})
+
+    @classmethod
+    def for_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: 90% original, 9% hinted, 1% misleading."""
+        return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01})
+
+    @classmethod
+    def for_skewed_positive_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: 80% positive ratio + helpful-bias-dominant code types."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01},
+        )
+
+    @classmethod
+    def for_oversample_balanced(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: forced 50/50 label balance via oversampling."""
+        return cls(seed=seed, target_positive_ratio=0.5, strategy="oversample")
+
     @pydantic.field_validator("code_type_proportions")
     @classmethod
     def _validate_code_type_proportions(

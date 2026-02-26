@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import typing
 
 import pydantic
 import pytest
@@ -371,3 +372,95 @@ class TestResampleRecordsEdgeCases:
         config = correctness_types.RecordResamplingConfig(min_records_per_label=1)
         result = correctness_resampling.resample_records(records, config)
         assert len(result) == 5
+
+
+class TestResamplingPresets:
+    """Tests for RecordResamplingConfig factory classmethod presets."""
+
+    _PRESET_FACTORIES: typing.ClassVar[list[tuple[str, dict[str, object]]]] = [
+        ("for_skewed_positive", {"target_positive_ratio": 0.8}),
+        ("for_balanced", {"target_positive_ratio": 0.5}),
+        ("for_original_only", {"code_type_proportions": {"original": 1.0}}),
+        (
+            "for_mostly_original",
+            {"code_type_proportions": {"original": 0.9, "hinted": 0.05, "misleading": 0.05}},
+        ),
+        (
+            "for_helpful_bias",
+            {"code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01}},
+        ),
+        (
+            "for_skewed_positive_helpful_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01},
+            },
+        ),
+        ("for_oversample_balanced", {"target_positive_ratio": 0.5, "strategy": "oversample"}),
+    ]
+
+    @pytest.mark.parametrize(
+        ("factory_name", "expected_fields"),
+        _PRESET_FACTORIES,
+        ids=[name for name, _ in _PRESET_FACTORIES],
+    )
+    def test_preset_returns_valid_config(
+        self,
+        factory_name: str,
+        expected_fields: dict[str, object],
+    ) -> None:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        config = factory()
+        assert isinstance(config, correctness_types.RecordResamplingConfig)
+        for field_name, expected_value in expected_fields.items():
+            assert getattr(config, field_name) == expected_value
+
+    @pytest.mark.parametrize(
+        ("factory_name", "_expected_fields"),
+        _PRESET_FACTORIES,
+        ids=[name for name, _ in _PRESET_FACTORIES],
+    )
+    def test_preset_default_seed_is_zero(
+        self,
+        factory_name: str,
+        _expected_fields: dict[str, object],
+    ) -> None:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        config = factory()
+        assert config.seed == 0
+
+    @pytest.mark.parametrize(
+        ("factory_name", "_expected_fields"),
+        _PRESET_FACTORIES,
+        ids=[name for name, _ in _PRESET_FACTORIES],
+    )
+    def test_preset_respects_seed_override(
+        self,
+        factory_name: str,
+        _expected_fields: dict[str, object],
+    ) -> None:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        config = factory(seed=42)
+        assert config.seed == 42
+
+    @pytest.mark.parametrize(
+        ("factory_name", "_expected_fields"),
+        _PRESET_FACTORIES,
+        ids=[name for name, _ in _PRESET_FACTORIES],
+    )
+    def test_preset_roundtrips_through_model_dump(
+        self,
+        factory_name: str,
+        _expected_fields: dict[str, object],
+    ) -> None:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        config = factory()
+        dumped = config.model_dump()
+        restored = correctness_types.RecordResamplingConfig.model_validate(dumped)
+        assert restored == config
+
+    def test_preset_is_not_noop(self) -> None:
+        for factory_name, _ in self._PRESET_FACTORIES:
+            factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+            config = factory()
+            assert not config.is_noop, f"{factory_name} should not be a noop"
