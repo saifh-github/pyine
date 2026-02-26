@@ -330,10 +330,20 @@ async def main(
     )
 
     if runtime is not None and runtime.dry_run:
-        logger.info("dry run mode — skipping classifier training")
+        logger.info("dry run mode; skipping classifier training")
         return
 
-    classifier_train(config=config, runtime=runtime)
+    trainer = classifier_train(config=config, runtime=runtime)
+
+    # benchmarking phase (if enabled)
+    if config.evals_config is not None:
+        await pyine.apps.trainers.common.evaluate_model(
+            model=trainer.model,  # @@@@@ TODO: wrap this in GuardrailScorer-compat wrapper!
+            tokenizer=None,
+            datamodule=None,
+            config=config,
+            runtime=runtime,
+        )
 
     if runtime is not None:
         runtime.finalize()
@@ -352,7 +362,7 @@ if __name__ == "__main__":
     import pyine.apps.trainers.llm_classifier_trainer_configs as llm_classifier_configs
 
     pyine.apps.trainers.common.hydra_main(
-        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=llm_classifier_configs.register_hydra_configs,
         async_main_wrapper=async_classifier_trainer_main_wrapper,
     )

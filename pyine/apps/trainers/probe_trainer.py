@@ -26,6 +26,7 @@ import pyine.evals.common
 import pyine.probes.collection
 import pyine.probes.data.datamodule
 import pyine.probes.extraction
+import pyine.utils.distrib
 
 if typing.TYPE_CHECKING:
     import accelerate
@@ -818,7 +819,19 @@ async def main(
         logger.info("dry run mode -- skipping probe training")
         return
 
-    probe_train(config=config, runtime=runtime)
+    probe_collection = probe_train(config=config, runtime=runtime)
+
+    # benchmarking phase (if enabled)
+    if config.evals_config is not None:
+        if pyine.utils.distrib.is_main_process():
+            await pyine.apps.trainers.common.evaluate_model(
+                model=probe_collection,  # @@@@@ TODO: wrap this in GuardrailScorer-compat wrapper!
+                tokenizer=None,
+                datamodule=None,
+                config=config,
+                runtime=runtime,
+            )
+        pyine.utils.distrib.barrier()
 
     if runtime is not None:
         runtime.finalize()
@@ -836,7 +849,7 @@ if __name__ == "__main__":
     import pyine.apps.trainers.common
 
     pyine.apps.trainers.common.hydra_main(
-        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=probe_trainer_configs.register_hydra_configs,
         async_main_wrapper=async_probe_trainer_main_wrapper,
     )

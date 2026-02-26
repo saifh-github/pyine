@@ -88,7 +88,7 @@ class TestBaseEvalsConfig:
     ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
         mock_wandb_run = mocker.MagicMock()
-        config.define_metrics_for_wandb(wandb_run=mock_wandb_run, prefix="test")
+        config.define_metrics_for_wandb(wandb_run=mock_wandb_run, eval_subset_names=["test"])
 
     def test_define_metrics_for_wandb_raises_when_eval_type_set(
         self,
@@ -97,7 +97,7 @@ class TestBaseEvalsConfig:
         config = pyine.evals.common.BaseEvalsConfig(eval_type=pyine.evals.common.EvalType.CODE_EXEC)
         mock_wandb_run = mocker.MagicMock()
         with pytest.raises(NotImplementedError, match="evaluation type code_exec not implemented"):
-            config.define_metrics_for_wandb(wandb_run=mock_wandb_run)
+            config.define_metrics_for_wandb(wandb_run=mock_wandb_run, eval_subset_names=["test"])
 
     def test_log_metrics_returns_none_when_eval_type_none(
         self,

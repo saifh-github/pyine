@@ -145,6 +145,7 @@ async def evaluate_runnable_model(
     processing (activated by default).
 
     Args:
+        eval_config: The settings to use for the evaluation.
         chain: The LangChain Runnable that will be used to generate model responses.
         datamodule: The datamodule from which to load the evaluation data.
         eval_subset_name: The name of the subset to fetch from the datamodule and evaluate on.
@@ -362,6 +363,7 @@ async def evaluate_hf_model(
     using the generation settings specified in the evals config.
 
     Args:
+        eval_config: The settings to use for the evaluation.
         model: The pretrained HuggingFace-Transformers model to evaluate.
         tokenizer: The tokenizer of the above model to use for input/output transformations.
         datamodule: The datamodule from which to load the evaluation data.

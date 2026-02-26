@@ -70,7 +70,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only_dry_run(
             do_train_override: False,
             do_predict_override: True,
         },
-        config_name="hf_trainer",
+        config_name="entrypoint",
         version_base=pyine.configs.base.target_hydra_version,
     )
 

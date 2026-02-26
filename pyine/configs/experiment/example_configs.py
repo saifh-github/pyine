@@ -150,7 +150,10 @@ def register_hydra_configs(
         The list of newly generated app configs to be registered in the framework.
     """
     # the YAML example that is also provided targets the openai_finetune app, so this one will not
-    if app_name not in ["hf_trainer", "hf_precacher"] or eval_type != pyine.evals.common.EvalType.CODE_EXEC:
+    if (
+        app_name not in ["hf_sft_trainer", "hf_rl_trainer", "hf_precacher"]
+        or eval_type != pyine.evals.common.EvalType.CODE_EXEC
+    ):
         return []
     # define new app configs for new experiments which target much smaller models
     return [

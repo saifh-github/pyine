@@ -812,20 +812,14 @@ def prepare_datamodule(
         and pyine.utils.distrib.is_main_process()
     ):
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets = [
+        target_subsets: list[str] = list({
             *config.datamodule_config.train_subset_names,
             *config.datamodule_config.valid_subset_names,
             *config.datamodule_config.eval_subset_names,
-        ]
+        })
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]
-        if config.evals_config is not None:  # type: ignore[reportUnnecessaryComparison]
-            for eval_subset_name in config.datamodule_config.eval_subset_names:
-                config.evals_config.define_metrics_for_wandb(
-                    wandb_run=runtime.wandb_run,
-                    prefix=f"benchmark/{eval_subset_name}",
-                )
     return dm
 
 
@@ -1081,28 +1075,41 @@ def instantiate_model(
 async def evaluate_model(
     model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel | typing.Any | None,
     tokenizer: transformers.PreTrainedTokenizer | None,
-    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+    datamodule: pyine.data.datamodule.BaseDataModule[typing.Any] | None,
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> dict[str, pyine.evals.common.EvalResult]:
     """Evaluates the given model following the strategy defined in the app's evals config.
 
     Args:
-        model: The model to evaluate, in langchain runnable, HF-transformers, or invocable format.
-            Can be None when using vLLM provider (model is served remotely via vLLM server). If we
-            cannot deduce the model type and it is not None, we'll let the downstream eval pipeline
-            determine if it is compatible with its 'evaluate_wrapped_model' function.
-        tokenizer: The tokenizer to use for evaluation, if applicable (only for HF models).
-        datamodule: The datamodule from which to load the evaluation data.
-        config: The application configuration, which should contain the evals config.
-        runtime: The runtime configuration, which may contain W&B run information for logging.
+        model: The model to evaluate, in langchain runnable, HF-transformers, or invocable/wrapped
+            format. Can be None when using vLLM provider (model is served remotely via vLLM server).
+            If we cannot deduce the model type and it is not None, we'll let the downstream eval
+            pipeline determine if it is compatible with its 'evaluate_wrapped_model' function.
+        tokenizer: The tokenizer to use for evaluation, if applicable and relevant (likely only
+            useful for e.g. HF model evals, or evals involving vLLM and requiring token stats).
+        datamodule: The datamodule from which to load the evaluation data (if not configured as
+            part of the evals config itself). If one is provided and not expected by the configured
+            eval strategy, an error is raised, and vice versa.
+        config: The application configuration, which should contain the evals config, but that will
+            also likely be used to log evaluation metadata.
+        runtime: The runtime configuration, which may contain W&B run information and relevant info
+            for logging.
 
     Returns:
-        The evaluation results as a dictionary indexed by evaluated subset name.
+        The evaluation results as a dictionary indexed by evaluated data subset name.
     """
     evaluation_results: dict[str, pyine.evals.common.EvalResult] = {}
-    if config.evals_config.eval_type is None:
+    if config.evals_config is None or config.evals_config.eval_type is None:  # type: ignore[reportUnnecessaryComparison]
         return evaluation_results
+    eval_dm = config.evals_config.prepare_eval_datamodule(datamodule)
+    eval_dm_subset_names = eval_dm.config.eval_subset_names
+    logger.info(f"will evaluate using {len(eval_dm_subset_names)} subset(s): {eval_dm_subset_names}")
+    if runtime.wandb_run is not None:
+        config.evals_config.define_metrics_for_wandb(
+            wandb_run=runtime.wandb_run,
+            eval_subset_names=eval_dm_subset_names,
+        )
     start_time = time.time()
     # resolve which eval method to call based on model type; each branch validates preconditions
     # and binds all arguments except eval_subset_name into a partial
@@ -1113,11 +1120,16 @@ async def evaluate_model(
         if model is not None:
             raise ValueError("model should be None when using vLLM provider mode")
         vllm_model = vllm_provider_config.get_model()
-        chain = datamodule.config.get_prompt_chain(vllm_model)
+        if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+            raise ValueError(
+                "datamodule should be provided as a conversation DM when using vLLM provider mode "
+                "(it specifies the prompt config, otherwise we cannot access it)"
+            )
+        chain = eval_dm.config.get_prompt_chain(vllm_model)
         run_subset_eval = functools.partial(
             config.evals_config.evaluate_runnable_model,
             chain=chain,
-            datamodule=datamodule,
+            datamodule=eval_dm,
             verbose=True,
         )
         eval_label = "vLLM chain"
@@ -1127,6 +1139,8 @@ async def evaluate_model(
             raise ValueError(f"invalid evals config type for HF model eval: {type(config.evals_config).__name__}")
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
+        if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+            raise ValueError("invalid datamodule type for HF model eval: must be ConversationDataModule")
         if config.evals_config.eval_padding_side != tokenizer.padding_side:
             new_padding_side = config.evals_config.eval_padding_side
             logger.debug(f"overriding tokenizer padding side to '{new_padding_side}' for evals")
@@ -1136,7 +1150,7 @@ async def evaluate_model(
             config.evals_config.evaluate_hf_model,
             model=hf_model,
             tokenizer=tokenizer,
-            datamodule=datamodule,
+            datamodule=eval_dm,
             verbose=True,
         )
         eval_label = "HF model"
@@ -1147,11 +1161,13 @@ async def evaluate_model(
         if tokenizer is not None:
             raise NotImplementedError("tokenizer support in runnable chain / wrapped model eval is not implemented")
         if pyine.utils.langchain.is_invocable_chain(model):
+            if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+                raise ValueError("invalid datamodule type for runnable chain eval: must be ConversationDataModule")
             chain_model = typing.cast("pyine.evals.utils.InvocableModelChain", model)
             run_subset_eval = functools.partial(
                 config.evals_config.evaluate_runnable_model,
                 chain=chain_model,
-                datamodule=datamodule,
+                datamodule=eval_dm,
                 verbose=True,
             )
             eval_label = "invocable chain"
@@ -1160,11 +1176,11 @@ async def evaluate_model(
             run_subset_eval = functools.partial(
                 config.evals_config.evaluate_wrapped_model,
                 wrapped_model=model,
-                datamodule=datamodule,
+                datamodule=eval_dm,
                 verbose=True,
             )
             eval_label = "wrapped model"
-    for eval_subset_name in config.datamodule_config.eval_subset_names:
+    for eval_subset_name in eval_dm_subset_names:
         logger.info(f"running {eval_label} evaluation on the {eval_subset_name} subset...")
         evaluation_result = await run_subset_eval(eval_subset_name=eval_subset_name)
         assert isinstance(evaluation_result, pyine.evals.common.EvalResult)

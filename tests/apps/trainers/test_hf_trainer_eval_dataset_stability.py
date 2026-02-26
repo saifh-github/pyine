@@ -131,7 +131,7 @@ def test_v0_rl_valid_traces_stable_across_epochs(
             "hydra/job_logging=disabled",
             "hydra/hydra_logging=disabled",
         ],
-        config_name="hf_trainer",
+        config_name="entrypoint",
         version_base=pyine.configs.base.target_hydra_version,
         with_log_configuration=False,
     )

@@ -103,7 +103,7 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     eval_type: pyine.evals.common.EvalType | None = pyine.evals.common.EvalType.CORRECTNESS
     """Type of evaluation to be conducted (overrides base class field default)."""
 
-    # data sources
+    # data sources @@@@@@ TODO: move all data-related settings to an internal datamodule config
     lmdb_paths: list[pathlib.Path]
     """Paths to LMDB datasets containing eval records from DiskEvalLogger.
 
@@ -112,8 +112,6 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     """
     label_type: LabelType = LabelType.SOFT_MATCH
     """Which correctness label to use from LMDB records."""
-
-    # split config
     split_config: GuardrailSplitConfig
     """Configuration for building guardrail train/valid/test splits."""
 
@@ -163,10 +161,24 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     # ---------- evaluation method overrides ----------
 
     @typing.override
+    def prepare_eval_datamodule(
+        self,
+        datamodule: pyine.data.datamodule.BaseDataModule[typing.Any] | None,
+    ) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
+        """Prepares the evaluation datamodule for upcoming correctness evaluation passes.
+
+        For the correctness prediction task, the evaluation config contains everything that should
+        be needed to instantiate the evaluation/benchmarking datamodule from scratch, so we do NOT
+        expect the parent/caller to be providing any datamodule. If they do so, this is unexpected,
+        and we won't know what to do with it.
+        """
+        TODO  # @@@@@@@ add instantiation of new correctness eval datamodule here!
+
+    @typing.override
     async def evaluate_wrapped_model(
         self,
         wrapped_model: typing.Any | typing.Sequence[typing.Any],
-        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+        datamodule: pyine.data.datamodule.BaseDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> pyine.evals.common.EvalResult:
@@ -211,7 +223,7 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
-        prefix: str | None = None,
+        eval_subset_names: typing.Sequence[str],
     ) -> None:
         """Registers correctness metric definitions with a W&B run.
 
@@ -221,11 +233,14 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
         Args:
             wandb_run: The W&B run object where metric definitions should be registered.
-            prefix: Optional prefix prepended to all metric names (e.g. an eval subset name).
+            eval_subset_names: A sequence of subset names that will be evaluated (for metric name
+                prefixing, if needed).
         """
-        metric_prefix = f"{prefix}/" if prefix else ""
-        for metric_name in ["auroc", "average_precision"]:
-            wandb_run.define_metric(f"{metric_prefix}{metric_name}/mean", summary="max")  # type: ignore[reportUnknownMemberType]
+        # TODO: this is just a simplified pass, might need to update it w/ all actual metrics
+        for eval_subset_name in eval_subset_names:
+            metric_prefix = f"benchmark/{eval_subset_name}"
+            for metric_name in ["auroc", "average_precision"]:
+                wandb_run.define_metric(f"{metric_prefix}/{metric_name}/mean", summary="max")  # type: ignore[reportUnknownMemberType]
 
     @typing.override
     @typing.no_type_check  # wandb typing is incomplete

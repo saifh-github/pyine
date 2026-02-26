@@ -583,25 +583,13 @@ class TestWandBIntegration:
         # import the function from utils since it's defined there
         pyine.evals.code_exec.utils.define_metrics_for_wandb(
             wandb_run=mock_wandb_run,
-            prefix="test",
+            metric_prefix="test123",
         )
         defined_names = mock_wandb_run.get_defined_metric_names()
         # check that some expected metrics are defined
         assert any("grader" in name for name in defined_names)
         assert any("sample_count" in name for name in defined_names)
-
-    def test_define_metrics_with_no_prefix(
-        self,
-        mock_wandb_run: typing.Any,
-    ) -> None:
-        """define_metrics_for_wandb works without prefix."""
-        pyine.evals.code_exec.utils.define_metrics_for_wandb(
-            wandb_run=mock_wandb_run,
-            prefix=None,
-        )
-
-        defined_names = mock_wandb_run.get_defined_metric_names()
-        assert len(defined_names) > 0
+        assert all(name.startswith("test123/") for name in defined_names)
 
 
 class TestComplexityStats:

@@ -87,6 +87,28 @@ class BaseEvalsConfig(pydantic.BaseModel):
 
     # ---------------- public overridable evaluation methods ----------------
 
+    def prepare_eval_datamodule(
+        self,
+        datamodule: pyine.data.datamodule.BaseDataModule[typing.Any] | None,
+    ) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
+        """Prepares the evaluation datamodule for upcoming evaluation passes.
+
+        The datamodule that is provided is 'optional' in the sense that some evaluation tasks may
+        not expect the caller to provide anything (i.e. the eval config itself contains all
+        relevant settings for datamodule preparation). In other cases, the provided datamodule may
+        be returned as-is if the eval config does not contain any datamodule-specific settings. In
+        this latter case, if a datamodule is not provided (or one is provided that does not possess
+        evaluation subsets), this method will raise an error.
+
+        Args:
+            datamodule: The datamodule to prepare for evaluation, or None if no datamodule can be
+                prepared by the caller.
+
+        Returns:
+            The prepared datamodule that should possess at least one eval subset.
+        """
+        raise NotImplementedError(f"evaluation type {self.eval_type} not implemented")
+
     async def evaluate_runnable_model(
         self,
         chain: pyine.evals.utils.InvocableModelChain,
@@ -94,7 +116,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
-        """Evaluates a LangChain Runnable chain using a specified data subset.
+        """Evaluates a LangChain Runnable chain using a specified conversation data subset.
 
         Args:
             chain: The LangChain Runnable that will be used to generate responses.
@@ -117,7 +139,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
-        """Evaluates a HuggingFace-Transformers-based model using the specified subset.
+        """Evaluates a HuggingFace-based model using a specified conversation data subset.
 
         Args:
             model: The pretrained HuggingFace-Transformers model to evaluate.
@@ -136,7 +158,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     async def evaluate_wrapped_model(
         self,
         wrapped_model: typing.Any | typing.Sequence[typing.Any],
-        datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+        datamodule: pyine.data.datamodule.BaseDataModule[typing.Any],
         eval_subset_name: str,
         verbose: bool = False,
     ) -> EvalResult:
@@ -170,7 +192,7 @@ class BaseEvalsConfig(pydantic.BaseModel):
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
-        prefix: str | None = None,
+        eval_subset_names: typing.Sequence[str],
     ) -> None:
         """Registers evaluation metric definitions with a W&B run.
 
@@ -182,7 +204,8 @@ class BaseEvalsConfig(pydantic.BaseModel):
 
         Args:
             wandb_run: The W&B run object where metric definitions should be registered.
-            prefix: Optional prefix prepended to all metric names (e.g. an eval subset name).
+            eval_subset_names: A sequence of subset names that will be evaluated (for metric name
+                prefixing, if needed).
         """
         if self.eval_type is None:
             return

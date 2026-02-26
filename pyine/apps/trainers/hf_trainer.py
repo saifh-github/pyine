@@ -5,6 +5,10 @@ This app wires together:
 - a dataset of (potentially multi-turn) conversations;
 - a function that converts conversations into supervised examples;
 - a Trainer that handles batching/padding/masking + the training loop.
+
+This trainer supports both SFT and RL training (the latter is based on HuggingFace-TRL), but only
+targets the "code execution" task, i.e. training/evaluating models to predict code execution
+outcomes. Refer to the probe_trainer or llm_classifier_trainer apps for guardrail training tasks.
 """
 
 from __future__ import annotations
@@ -417,7 +421,7 @@ if __name__ == "__main__":
         hf_sft_trainer_configs.register_hydra_configs(*args, **kwargs)
         hf_rl_trainer_configs.register_hydra_configs(*args, **kwargs)
 
-    # TODO: if we ever have more than one eval type, make new entrypoint scripts w/ different eval types
+    # this trainer ONLY supports the code execution task
     pyine.apps.trainers.common.hydra_main(
         eval_type=pyine.evals.common.EvalType.CODE_EXEC,
         hydra_config_registration_fn=_register_combined_hydra_configs,

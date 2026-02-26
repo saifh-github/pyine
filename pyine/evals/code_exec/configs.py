@@ -30,6 +30,29 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
     # ---------------- public overridable evaluation methods ----------------
 
     @typing.override
+    def prepare_eval_datamodule(
+        self,
+        datamodule: pyine.data.datamodule.BaseDataModule[typing.Any] | None,
+    ) -> pyine.data.datamodule.ConversationDataModule[typing.Any]:
+        """Prepares the evaluation datamodule for upcoming code execution evaluation passes.
+
+        For the code execution task, the evaluation config does not contain anything to add to the
+        datamodule, and the same datamodule used for training/validation is expected to be used for
+        final capability benchmarking. Here, we simply make sure that this datamodule is properly
+        configured, and return it as-is.
+        """
+        if datamodule is None:
+            raise ValueError("datamodule must be provided by caller for code execution evaluations")
+        if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
+            raise ValueError(f"datamodule must be a ConversationDataModule, got {type(datamodule)}")
+        dm_config = datamodule.config
+        if not isinstance(dm_config, pyine.data.datamodule.ConversationDataModuleConfig):
+            raise ValueError(f"datamodule must be a ConversationDataModuleConfig, got {type(dm_config)}")
+        if not dm_config.eval_subset_names:
+            raise ValueError("eval_subset_names must be set in the datamodule config for code exec evals")
+        return datamodule
+
+    @typing.override
     async def evaluate_runnable_model(
         self,
         chain: langchain_core.runnables.Runnable[
@@ -40,7 +63,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
-        """Evaluates a LangChain text prediction chain for code execution using the specified subset.
+        """Evaluates a LangChain text prediction chain for code execution using a specified data subset.
 
         The model is expected to be already wrapped inside a LangChain Runnable chain whose invocation
         with a sample returns a LangChain AIMessage object directly. This function supports async
@@ -74,7 +97,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
         eval_subset_name: str,
         verbose: bool = False,
     ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
-        """Evaluates a HuggingFace-Transformers model for code execution using the specified subset.
+        """Evaluates a HuggingFace-based model for code execution using a specified data subset.
 
         The model is expected to be a HuggingFace-Transformers pretrained model paired with its
         tokenizer. We will use its `transformers.GenerationMixin` interface to generate predictions
@@ -105,7 +128,7 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
-        prefix: str | None = None,
+        eval_subset_names: typing.Sequence[str],
     ) -> None:
         """Registers code execution metric definitions with a W&B run.
 
@@ -114,14 +137,16 @@ class CodeExecEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
 
         Args:
             wandb_run: The W&B run object where metric definitions should be registered.
-            prefix: Optional prefix prepended to all metric names (e.g. an eval subset name).
+            eval_subset_names: A sequence of subset names that will be evaluated (for metric name
+                prefixing, if needed).
         """
-        pyine.evals.code_exec.utils.define_metrics_for_wandb(  # type: ignore[reportUnknownMemberType]
-            wandb_run=wandb_run,
-            prefix=prefix,
-            pass_at_k_values=self.pass_at_k_values,
-            num_attempts_per_sample=self.num_attempts_per_sample,
-        )
+        for eval_subset_name in eval_subset_names:
+            pyine.evals.code_exec.utils.define_metrics_for_wandb(  # type: ignore[reportUnknownMemberType]
+                wandb_run=wandb_run,
+                metric_prefix=f"benchmark/{eval_subset_name}",
+                pass_at_k_values=self.pass_at_k_values,
+                num_attempts_per_sample=self.num_attempts_per_sample,
+            )
 
     @typing.override
     @typing.no_type_check  # because wandb sucks at typing

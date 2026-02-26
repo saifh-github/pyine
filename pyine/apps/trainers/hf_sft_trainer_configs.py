@@ -358,7 +358,7 @@ def register_hydra_configs(
             ],
         },
     )
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_sft_trainer")
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
     configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(
@@ -370,7 +370,7 @@ def register_hydra_configs(
     )
     configs_to_register.extend(experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        app_name="hf_trainer",
+        app_name="hf_sft_trainer",
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
         app_configs=[*base_configs, *configs_to_register],
@@ -385,8 +385,7 @@ def register_hydra_configs(
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
-    # TODO: if we ever have more than one eval type, add a selector based on launch args here
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
-        app_name="hf_trainer",
+        app_name="hf_sft_trainer",
     )

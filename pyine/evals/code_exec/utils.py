@@ -249,7 +249,7 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
 @typing.no_type_check  # because wandb sucks at typing
 def define_metrics_for_wandb(
     wandb_run: typing.Any,
-    prefix: str | None = None,
+    metric_prefix: str,
     pass_at_k_values: list[int] | None = None,
     num_attempts_per_sample: int = 1,
 ) -> None:
@@ -257,7 +257,7 @@ def define_metrics_for_wandb(
 
     Args:
         wandb_run: The wandb run to define metrics on.
-        prefix: Optional prefix for all metric names.
+        metric_prefix: The metric name prefix to use (which should specify the eval subset).
         pass_at_k_values: Resolved list of k values, or None for base metrics only.
         num_attempts_per_sample: Number of attempts per sample.
     """
@@ -271,30 +271,22 @@ def define_metrics_for_wandb(
     # catch-all for category-wise metrics (e.g. code_type/original/accuracy_hard) whose
     # category values are data-dependent and unknown at definition time. more-specific
     # definitions below take precedence over this glob in wandb.
-    glob_pattern = f"{prefix}/*" if prefix else "*"
-    wandb_run.define_metric(name=glob_pattern, step_metric=step_metric)
+    wandb_run.define_metric(name=f"{metric_prefix}/*", step_metric=step_metric)
     for metric_name in OutcomeEvaluator.get_supported_metric_names(pass_at_k_values, num_attempts_per_sample):
-        full_name = f"{prefix}/{metric_name}" if prefix else metric_name
-        wandb_run.define_metric(name=full_name, step_metric=step_metric)
+        wandb_run.define_metric(name=f"{metric_prefix}/{metric_name}", step_metric=step_metric)
     # define token usage metrics (matching get_metrics output format)
     for token_metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():
         # total token usage metrics (total_token_usage/{metric})
-        token_usage_name = f"total_token_usage/{token_metric_name}"
-        if prefix:
-            token_usage_name = f"{prefix}/{token_usage_name}"
+        token_usage_name = f"{metric_prefix}/total_token_usage/{token_metric_name}"
         wandb_run.define_metric(name=token_usage_name, step_metric=step_metric)
         # per-attempt aggregated token usage metrics (attempt_token_usage/{metric}_{aggr})
         for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
-            attempt_token_name = f"attempt_token_usage/{token_metric_name}_{aggr_name}"
-            if prefix:
-                attempt_token_name = f"{prefix}/{attempt_token_name}"
+            attempt_token_name = f"{metric_prefix}/attempt_token_usage/{token_metric_name}_{aggr_name}"
             wandb_run.define_metric(name=attempt_token_name, step_metric=step_metric)
     # define complexity metrics (matching get_metrics output format)
     for complexity_metric_name in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS:
         for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
-            complexity_name = f"complexity/{complexity_metric_name}_{aggr_name}"
-            if prefix:
-                complexity_name = f"{prefix}/{complexity_name}"
+            complexity_name = f"{metric_prefix}/complexity/{complexity_metric_name}_{aggr_name}"
             # these are interesting for analyses, but not for plotting
             wandb_run.define_metric(
                 name=complexity_name,
@@ -303,9 +295,7 @@ def define_metrics_for_wandb(
                 summary="none",
             )
     for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
-        difficulty_name = f"difficulty/score_{aggr_name}"
-        if prefix:
-            difficulty_name = f"{prefix}/{difficulty_name}"
+        difficulty_name = f"{metric_prefix}/difficulty/score_{aggr_name}"
         wandb_run.define_metric(
             name=difficulty_name,
             step_metric=step_metric,
