@@ -15,6 +15,7 @@ import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.datamodule as correctness_datamodule_mod
 import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
 import pyine.evals.correctness.metrics as correctness_metrics
+import pyine.evals.correctness.types as correctness_types
 import pyine.evals.utils
 
 
@@ -71,6 +72,14 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     fields (predict_type, has_keyword, identifier_suffix, tags) are extracted via the inherited
     ``category_extraction_config`` from the base class. The code_type field is automatically
     filtered out of the base extractor to avoid duplication.
+    """
+
+    calibration_resampling: correctness_types.RecordResamplingConfig | None = None
+    """Optional resampling config for calibration records.
+
+    When set, guardrail_valid records are resampled before being used for threshold calibration.
+    Allows studying guardrail robustness to imperfect calibration datasets (e.g. skewed positive to
+    negative label ratios, reduced code type diversity).
     """
 
     text_field: str = "model_output"
@@ -472,4 +481,24 @@ def get_evals_configs(
             ],
         },
     )
-    return [base_config, datamodule_config]
+    calibration_resampling_config = pyine.configs.utils.make_config_description(
+        correctness_types.RecordResamplingConfig,
+        name="resampling_base",
+        group=f"{group}/calibration_resampling",
+        description="Base resampling config with reasonable defaults for robustness testing.",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    train_resampling_config = pyine.configs.utils.make_config_description(
+        correctness_types.RecordResamplingConfig,
+        name="resampling_base",
+        group=f"{group}/datamodule_config/train_resampling",
+        description="Base resampling config for training data composition control.",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    return [base_config, datamodule_config, calibration_resampling_config, train_resampling_config]

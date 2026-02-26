@@ -68,7 +68,9 @@ async def evaluate_guardrail_replicas(
     eval_records = datamodule.get_records_for_subset(eval_subset_name)
     if not eval_records:
         raise ValueError(f"eval subset '{eval_subset_name}' is empty; cannot evaluate")
-    calibration_records = datamodule.get_records_for_calibration()
+    calibration_records = datamodule.get_records_for_calibration(
+        resampling_config=config.calibration_resampling,
+    )
     guardrail_splits = datamodule.get_guardrail_splits()
     logger.info(
         f"evaluating on '{eval_subset_name}': {len(eval_records)} eval records, "

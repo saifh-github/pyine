@@ -14,6 +14,72 @@ import pydantic
 import pyine.utils.metrics.confidence  # noqa: TC001
 
 
+class RecordResamplingConfig(pydantic.BaseModel):
+    """Controls record resampling for calibration and training data.
+
+    Supports three independent axes of control, applied in order:
+    1. **Code type filtering/rebalancing** (``code_type_proportions``): removes records whose
+       code_type is not listed, then resamples each listed code_type to match the target
+       proportions.
+    2. **Label ratio adjustment** (``target_positive_ratio``): downsamples (or oversamples) to
+       achieve the target fraction of correct (label=True) records.
+    3. **Size cap** (``max_records``): if the result exceeds this limit, a stratified random
+       sample is drawn to the cap.
+
+    After all steps, a validation check ensures both label classes are present with at least
+    ``min_records_per_label`` each.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    seed: int = 0
+    """Random seed for deterministic resampling."""
+    target_positive_ratio: float | None = pydantic.Field(default=None, gt=0.0, lt=1.0)
+    """Target fraction of label=True records. None preserves natural distribution.
+
+    Bounds (0, 1) exclusive, but with small datasets, rounding may still drive a class count to
+    zero, in which case ``resample_records`` raises a ``ValueError``.
+    """
+    code_type_proportions: dict[str, float] | None = None
+    """Target relative weights for code_type groups (normalized internally).
+
+    Keys are code_type strings. Unlisted code types are excluded. None preserves all code types at
+    natural proportions.
+    """
+    strategy: typing.Literal["subsample", "oversample"] = "subsample"
+    """'subsample' drops excess records (no duplicates); 'oversample' duplicates minority."""
+    max_records: int | None = pydantic.Field(default=None, gt=0)
+    """Cap on output size (applied after all other steps). None means no cap."""
+    min_records_per_label: int = pydantic.Field(default=2, ge=1)
+    """Minimum records per label class in the output (raises ValueError if violated)."""
+
+    @property
+    def is_noop(self) -> bool:
+        """True when this config will not alter the record list."""
+        return self.target_positive_ratio is None and self.code_type_proportions is None and self.max_records is None
+
+    @pydantic.field_validator("code_type_proportions")
+    @classmethod
+    def _validate_code_type_proportions(
+        cls,
+        value: dict[str, float] | None,
+    ) -> dict[str, float] | None:
+        """Validates that code_type_proportions is non-empty with finite positive values when set."""
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("code_type_proportions must be non-empty when set")
+        import math
+
+        for key, weight in value.items():
+            if not math.isfinite(weight) or weight <= 0:
+                raise ValueError(
+                    f"code_type_proportions values must be finite and positive, got {weight} for key {key!r}"
+                )
+        return value
+
+
 class LabelType(enum.StrEnum):
     """Selects which correctness label to use from LMDB records."""
 

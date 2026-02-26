@@ -22,6 +22,22 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _collect_record_stats(
+    records: list[correctness_types.EvalRecord],
+    prefix: str,
+    out: dict[str, int | float | str],
+) -> None:
+    """Collect record counts, label distribution, and code_type distribution into ``out``."""
+    out[f"{prefix}/num_records"] = len(records)
+    problem_ids = {rec.problem_id for rec in records}
+    out[f"{prefix}/num_problems"] = len(problem_ids)
+    out[f"{prefix}/num_positive"] = sum(1 for rec in records if rec.label)
+    out[f"{prefix}/num_negative"] = sum(1 for rec in records if not rec.label)
+    code_type_counts: dict[str, int] = collections.Counter(rec.code_type for rec in records)
+    for code_type, count in sorted(code_type_counts.items()):
+        out[f"{prefix}/code_type/{code_type}"] = count
+
+
 class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDataModuleConfig"]):
     """DataModule for correctness evaluation on LMDB eval records.
 
@@ -133,22 +149,42 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             raise ValueError(f"unknown subset name: {subset_name!r}; expected one of {self.config.subset_names!r}")
         return subset_to_records[subset_name]
 
-    def get_records_for_calibration(self) -> list[correctness_types.EvalRecord]:
-        """Return the guardrail_valid records used for threshold calibration.
+    def get_records_for_calibration(
+        self,
+        resampling_config: correctness_types.RecordResamplingConfig | None = None,
+    ) -> list[correctness_types.EvalRecord]:
+        """Return guardrail_valid records for threshold calibration, optionally resampled.
 
         Calibration always uses the validation split regardless of which subset is being evaluated,
         so that thresholds are never tuned on test data.
 
-        TODO @@@@@@:
-            Accept a calibration settings config (e.g. from ``CorrectnessEvalsConfig``) that
-            specifies target class/record balance for the calibration set. This would allow
-            studying how robust guardrails are to imperfect calibration datasets (e.g.
-            skewed positive/negative ratios, subsampled code types, reduced problem diversity).
+        Args:
+            resampling_config: Optional resampling configuration. When set, records are resampled
+                before being returned (e.g. to study guardrail robustness to imperfect calibration
+                datasets with skewed ratios or reduced code type diversity).
 
         Raises:
             RuntimeError: If called before ``setup()``.
         """
-        return self.get_records_for_subset("guardrail_valid")
+        records = self.get_records_for_subset("guardrail_valid")
+        if resampling_config is not None:
+            import pyine.evals.correctness.resampling as correctness_resampling
+
+            records = correctness_resampling.resample_records(records, resampling_config)
+        return records
+
+    def get_records_for_training(self) -> list[correctness_types.EvalRecord]:
+        """Return guardrail_train records, resampled if ``config.train_resampling`` is set.
+
+        Raises:
+            RuntimeError: If called before ``setup()``.
+        """
+        records = self.get_records_for_subset("guardrail_train")
+        if self.config.train_resampling is not None:
+            import pyine.evals.correctness.resampling as correctness_resampling
+
+            records = correctness_resampling.resample_records(records, self.config.train_resampling)
+        return records
 
     def get_all_records(self) -> list[correctness_types.EvalRecord]:
         """Return all records before splitting.
@@ -169,6 +205,9 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         The resulting dataset has columns: ``text``, ``label``, ``sample_id``, ``code_type``
         (same schema as ``ProbeDataModule.get_probe_dataset()``).
 
+        Training records are resampled if ``config.train_resampling`` is set on the datamodule
+        config (applied transparently via ``get_records_for_training()``).
+
         Args:
             text_field: Which ``EvalRecord`` field to use as the ``text`` column.
                 Common choices: ``"model_output"``, ``"final_answer"``, ``"expected_output"``.
@@ -177,11 +216,10 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             RuntimeError: If called before ``setup()``.
             ValueError: If ``text_field`` refers to a None-valued field on any record.
         """
-        splits = self.get_guardrail_splits()
         split_map = {
-            "guardrail_train": splits.guardrail_train,
-            "guardrail_valid": splits.guardrail_valid,
-            "guardrail_test": splits.guardrail_test,
+            "guardrail_train": self.get_records_for_training(),
+            "guardrail_valid": self.get_records_for_subset("guardrail_valid"),
+            "guardrail_test": self.get_records_for_subset("guardrail_test"),
         }
         hf_splits: dict[str, datasets.Dataset] = {}
         for split_name, records in split_map.items():
@@ -216,20 +254,23 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self,
         target_subsets: list[str] | None = None,
     ) -> dict[str, int | float | str]:
-        """Return per-subset record counts, positive/negative label counts, and code_type distribution."""
+        """Return per-subset record counts, positive/negative label counts, and code_type distribution.
+
+        Reports raw stats for each subset. If ``config.train_resampling`` is set, also adds
+        ``guardrail_train_resampled/...`` stats showing the post-resampling composition.
+
+        Args:
+            target_subsets: Subset names to report raw stats for. Defaults to all subsets.
+        """
         if self._guardrail_splits is None:
             raise RuntimeError("datamodule not set up, call setup() first")
         stats: dict[str, int | float | str] = {}
         for subset_name in target_subsets or list(self.config.subset_names):
             records = self.get_records_for_subset(subset_name)
-            stats[f"{subset_name}/num_records"] = len(records)
-            problem_ids = {rec.problem_id for rec in records}
-            stats[f"{subset_name}/num_problems"] = len(problem_ids)
-            stats[f"{subset_name}/num_positive"] = sum(1 for rec in records if rec.label)
-            stats[f"{subset_name}/num_negative"] = sum(1 for rec in records if not rec.label)
-            code_type_counts: dict[str, int] = collections.Counter(rec.code_type for rec in records)
-            for code_type, count in sorted(code_type_counts.items()):
-                stats[f"{subset_name}/code_type/{code_type}"] = count
+            _collect_record_stats(records, prefix=subset_name, out=stats)
+        if self.config.train_resampling is not None and (target_subsets is None or "guardrail_train" in target_subsets):
+            resampled_train = self.get_records_for_training()
+            _collect_record_stats(resampled_train, prefix="guardrail_train_resampled", out=stats)
         return stats
 
     def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:

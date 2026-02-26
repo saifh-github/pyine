@@ -10,7 +10,12 @@ dev set, computes a ton of metrics, and aggregates across multiple independent r
 ```
 CorrectnessEvalsConfig
     │
+    ├────► apply optional calibration data resampling
+    │      (depends on whether calibration_resampling is set)
+    │
     ├────────────────► CorrectnessDataModuleConfig
+    │                              ├────► apply optional training data resampling
+    │                              │      (depends on whether train_resampling is set)
     │                              │
     │                    prepare_data() + setup()
     │                              │
@@ -18,8 +23,10 @@ CorrectnessEvalsConfig
     │                    CorrectnessDataModule
     │                      ├── load_records_from_lmdb()  ──►  list[EvalRecord]
     │                      ├── build_guardrail_splits()  ──►  GuardrailSplits
-    │                      ├── get_records_for_subset("guardrail_valid"|"guardrail_test")
-    │                      └── get_records_for_calibration()  (always guardrail_valid)
+    │                      ├── get_records_for_subset("guardrail_train"|"..._valid"|"..._test")
+    │                      ├── get_records_for_calibration(resampling_config=...)
+    │                      ├── get_records_for_training()   (applies train_resampling if provided)
+    │                      └── get_hf_dataset_dict()        (train split via get_records_for_training)
     │
     ├── text_field ──► selects which EvalRecord field to score (default: "model_output")
     │
@@ -211,18 +218,32 @@ DataModule lifecycle (`prepare_data()` -> `setup()` -> data accessors -> `teardo
 
 - `lmdb_paths`: paths (or glob patterns) to pregenerated eval records from the code exec pipeline;
 - `label_type`: which correctness label to use (`SOFT_MATCH` by default);
-- `split_config`: split source, valid fraction, seed, stratification.
+- `split_config`: split source, valid fraction, seed, stratification;
+- `train_resampling`: optional `RecordResamplingConfig` for training data composition control
+  (e.g. label balance, code type diversity). When set, `get_records_for_training()` and
+  `get_hf_dataset_dict()` apply it transparently.
+
+`CorrectnessEvalsConfig` additionally holds:
+
+- `calibration_resampling`: optional `RecordResamplingConfig` for calibration data resampling.
+  When set, `get_records_for_calibration()` resamples the validation records before threshold
+  calibration (e.g. to study guardrail robustness to skewed calibration sets).
 
 After `setup()`, the datamodule provides:
 
-- `get_records_for_subset(name)`: returns records for `"guardrail_train"`, `"guardrail_valid"`, or
-  `"guardrail_test"`;
-- `get_records_for_calibration()`: always returns `guardrail_valid` records, or a subset of them
-  (threshold calibration must never use test data);
+- `get_records_for_subset(name)`: returns raw records for `"guardrail_train"`,
+  `"guardrail_valid"`, or `"guardrail_test"`;
+- `get_records_for_calibration(resampling_config=None)`: always draws from `guardrail_valid`
+  records, optionally resampled (threshold calibration must never use test data);
+- `get_records_for_training()`: returns `guardrail_train` records, resampled if
+  `config.train_resampling` is set;
 - `get_guardrail_splits()`: returns the full `GuardrailSplits` object;
 - `get_all_records()`: returns all records before splitting;
 - `get_hf_dataset_dict(text_field)`: converts splits into an HF `DatasetDict` with `text`,
-  `label`, `sample_id`, `code_type` columns (for consumption by training pipelines).
+  `label`, `sample_id`, `code_type` columns (for consumption by training pipelines). Training
+  records are resampled transparently via `get_records_for_training()`;
+- `get_stats()`: returns per-subset record/label/code_type counts. When `train_resampling` is
+  set, also includes `guardrail_train_resampled/...` stats.
 
 `CorrectnessEvalsConfig.prepare_eval_datamodule()` instantiates and sets up the datamodule
 automatically; callers should not provide their own datamodule for this evaluation pipeline.
