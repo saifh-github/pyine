@@ -340,6 +340,7 @@ def classifier_train(
 async def main(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Main entrypoint for LLM classifier training."""
     import pyine.utils.reprod
@@ -354,16 +355,28 @@ async def main(
         logger.info("dry run mode; skipping classifier training")
         return
 
-    train_result = classifier_train(config=config, runtime=runtime)
+    if skip_training:
+        if config.classifier_checkpoint_path is None:
+            raise ValueError("skip_training=True requires config.classifier_checkpoint_path to be set")
+        logger.info(f"skip_training mode; loading classifier from {config.classifier_checkpoint_path}")
+        classifier_model = config.get_model(checkpoint_path=config.classifier_checkpoint_path)
+        classifier_model.eval()
+        classifier_model.requires_grad_(False)
+        tokenizer = config.get_tokenizer(checkpoint_path=config.classifier_checkpoint_path)
+        if config.truncation_side is not None:
+            tokenizer.truncation_side = config.truncation_side
+    else:
+        train_result = classifier_train(config=config, runtime=runtime)
+        classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
+        tokenizer = train_result.tokenizer
 
     # benchmarking phase (if enabled); goes through the standard evaluate_model pipeline
     # which handles datamodule setup, W&B metric definition, logging, etc.
     if config.evals_config is not None:
-        classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
         evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
         scorer = correctness_scorers.LLMClassifierScorer(
             model=classifier_model,
-            tokenizer=train_result.tokenizer,
+            tokenizer=tokenizer,
             max_seq_length=config.max_seq_length,
             text_field=evals_config.text_field,
         )
@@ -382,9 +395,10 @@ async def main(
 def async_classifier_trainer_main_wrapper(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Synchronous wrapper around the async main."""
-    asyncio.run(main(config=config, runtime=runtime))
+    asyncio.run(main(config=config, runtime=runtime, skip_training=skip_training))
 
 
 if __name__ == "__main__":

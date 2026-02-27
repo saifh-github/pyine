@@ -7,6 +7,8 @@ import typing
 import torch
 
 if typing.TYPE_CHECKING:
+    import pathlib
+
     import pyine.probes.base
 
 # avoid circular import at module level; build_probe is imported lazily.
@@ -67,6 +69,43 @@ class ProbeCollection(torch.nn.Module):
             hidden_states = activations[probe.config.layer]
             results[name] = probe(hidden_states, attention_mask)
         return results
+
+    @classmethod
+    def load_from_checkpoint(
+        cls,
+        checkpoint_dir: pathlib.Path,
+        hidden_dim: int,
+    ) -> ProbeCollection:
+        """Load a saved ProbeCollection from a checkpoint directory.
+
+        Args:
+            checkpoint_dir: Directory containing per-probe subdirectories, each with
+                ``probe_config.json`` and ``probe_state_dict.pt`` (as written by
+                ``save_probe_checkpoints``).
+            hidden_dim: Hidden dimension of the base model (must match the original).
+
+        Returns:
+            A new ProbeCollection with loaded weights.
+        """
+        import pyine.probes.base
+
+        probe_configs: list[pyine.probes.base.ProbeConfig] = []
+        for probe_subdir in sorted(checkpoint_dir.iterdir()):
+            if not probe_subdir.is_dir():
+                continue
+            config_path = probe_subdir / "probe_config.json"
+            if not config_path.exists():
+                continue
+            probe_config = pyine.probes.base.ProbeConfig.model_validate_json(config_path.read_text())
+            probe_configs.append(probe_config)
+        if not probe_configs:
+            raise ValueError(f"No probe configs found in {checkpoint_dir}")
+        collection = cls(probe_configs, hidden_dim)
+        for probe_config in probe_configs:
+            state_dict_path = checkpoint_dir / probe_config.name / "probe_state_dict.pt"
+            state_dict = torch.load(state_dict_path, map_location="cpu", weights_only=True)
+            collection.probes[probe_config.name].load_state_dict(state_dict)
+        return collection
 
     def get_parameter_groups(self) -> list[dict[str, list[torch.nn.Parameter] | float]]:
         """Per-probe parameter groups with individual learning rates."""

@@ -827,6 +827,7 @@ def probe_train(
 async def main(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Main entrypoint for probe training."""
     import pyine.utils.reprod
@@ -841,8 +842,28 @@ async def main(
         logger.info("dry run mode -- skipping probe training")
         return
 
-    train_result = probe_train(config=config, runtime=runtime)
-    probe_collection = train_result.probe_collection
+    if skip_training:
+        if config.probe_checkpoint_dir is None:
+            raise ValueError("skip_training=True requires config.probe_checkpoint_dir to be set")
+        logger.info(f"skip_training mode; loading probes from {config.probe_checkpoint_dir}")
+        checkpoint_path = config.llm_checkpoint_path
+        model = config.get_model(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
+        model.eval()
+        model.requires_grad_(False)
+        tokenizer = config.get_tokenizer(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
+        hidden_dim: int = model.config.hidden_size
+        probe_collection = pyine.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+            checkpoint_dir=config.probe_checkpoint_dir,
+            hidden_dim=hidden_dim,
+        )
+        probe_collection = probe_collection.to(dtype=config.target_dtype, device=model.device)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+        probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
+    else:
+        train_result = probe_train(config=config, runtime=runtime)
+        probe_collection = train_result.probe_collection
+        model = train_result.model
+        tokenizer = train_result.tokenizer
+    probe_collection = typing.cast("pyine.probes.collection.ProbeCollection", probe_collection)
 
     # benchmarking phase (if enabled)
     if config.evals_config is not None:
@@ -855,7 +876,7 @@ async def main(
                 {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
             )
             extractor = pyine.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
-                train_result.model, target_layers
+                model, target_layers
             )
             # group probes by type (base_name), creating one ProbeScorer per probe
             scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
@@ -865,8 +886,8 @@ async def main(
                 scorer = correctness_scorers.ProbeScorer(
                     probe=typing.cast("pyine.probes.base.BaseProbe", probe_module),
                     probe_config=probe_cfg,
-                    model=train_result.model,
-                    tokenizer=train_result.tokenizer,
+                    model=model,
+                    tokenizer=tokenizer,
                     extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
                     max_seq_length=config.max_seq_length,
                     text_field=evals_config.text_field,
@@ -890,9 +911,10 @@ async def main(
 def async_probe_trainer_main_wrapper(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Synchronous wrapper around the async main."""
-    asyncio.run(main(config=config, runtime=runtime))
+    asyncio.run(main(config=config, runtime=runtime, skip_training=skip_training))
 
 
 if __name__ == "__main__":

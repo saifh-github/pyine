@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib  # noqa: TC003
 import typing
 
 import pydantic
@@ -49,8 +50,18 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     """Path to model checkpoint. If None, uses base_model directly."""
 
     # --- Probe configurations ---
-    probe_configs: list[pyine.probes.base.ProbeConfig]
-    """List of probe configs, each specifying architecture, layer, and hyperparams."""
+    probe_configs: list[pyine.probes.base.ProbeConfig] = pydantic.Field(default_factory=lambda: [])
+    """List of probe configs, each specifying architecture, layer, and hyperparams.
+
+    May be empty when ``probe_checkpoint_dir`` is set (eval-only mode).
+    """
+
+    # --- Checkpoint loading (eval-only mode) ---
+    probe_checkpoint_dir: pathlib.Path | None = None
+    """Path to a directory of saved probe checkpoints (as written by ``save_probe_checkpoints``).
+
+    Used in eval-only mode (``skip_training=True``) to load pretrained probes without re-training.
+    """
 
     # --- Training/logging options (not data-related, stay here) ---
     log_per_code_type_metrics: bool = True
@@ -94,9 +105,20 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_probe_names_unique(self) -> ProbeTrainerAppMainConfig:
+        if not self.probe_configs:
+            return self  # empty is valid when using probe_checkpoint_dir
         names = [probe_config.name for probe_config in self.probe_configs]
         if len(names) != len(set(names)):
             raise ValueError(f"Probe names must be unique. Got duplicates in: {names}")
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_has_probes_or_checkpoint(self) -> ProbeTrainerAppMainConfig:
+        if not self.probe_configs and self.probe_checkpoint_dir is None:
+            raise ValueError(
+                "Either probe_configs must be non-empty (training mode) or "
+                "probe_checkpoint_dir must be set (eval-only mode)."
+            )
         return self
 
 
@@ -165,6 +187,7 @@ def register_hydra_configs(
         description="Entrypoint settings for the probe trainer app.",
         config={
             "populate_full_signature": True,
+            "skip_training": False,
             "hydra_defaults": [
                 "_self_",
                 {"config": "base"},

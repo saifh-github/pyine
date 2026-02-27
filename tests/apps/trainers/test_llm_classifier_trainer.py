@@ -409,6 +409,85 @@ class TestLogClassDistribution:
 # ---------------------------------------------------------------------------
 
 
+class TestSkipTrainingClassifierTrainer:
+    """Tests for the skip_training code path in classifier trainer main."""
+
+    def test_skip_training_requires_checkpoint_path(self) -> None:
+        import asyncio
+
+        from pyine.apps.trainers.llm_classifier_trainer_configs import (
+            LLMClassifierTrainerAppMainConfig,
+        )
+
+        cfg = LLMClassifierTrainerAppMainConfig(
+            **{
+                "base_model": "prajjwal1/bert-tiny",
+                "datamodule_config": {"lmdb_path": "/tmp/fake-lmdb"},  # noqa: S108
+                "training_args_config": {
+                    "output_dir": "/tmp/test-output",  # noqa: S108
+                    "num_train_epochs": 1,
+                    "per_device_train_batch_size": 2,
+                    "per_device_eval_batch_size": 2,
+                    "report_to": "none",
+                    "use_cpu": True,
+                },
+            }
+        )
+        assert cfg.classifier_checkpoint_path is None
+        with pytest.raises(ValueError, match="skip_training=True requires"):
+            asyncio.run(llm_trainer.main(config=cfg, runtime=None, skip_training=True))
+
+    @pytest.mark.slow
+    def test_skip_training_loads_saved_model(self, tmp_path: pathlib.Path) -> None:
+        """Round-trip: train + save, then load via skip_training."""
+        import asyncio
+
+        from pyine.apps.trainers.llm_classifier_trainer_configs import (
+            LLMClassifierTrainerAppMainConfig,
+        )
+        from pyine.probes.data.debug_dataset import create_debug_probe_lmdb
+
+        lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
+        output_dir = tmp_path / "output"
+        cfg = LLMClassifierTrainerAppMainConfig(
+            base_model="prajjwal1/bert-tiny",
+            datamodule_config={"lmdb_path": str(lmdb_path)},
+            training_args_config={
+                "output_dir": str(output_dir),
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 4,
+                "per_device_eval_batch_size": 4,
+                "report_to": "none",
+                "use_cpu": True,
+                "eval_strategy": "no",
+                "save_strategy": "no",
+                "logging_steps": 1,
+                "load_best_model_at_end": False,
+            },
+            max_seq_length=64,
+            log_per_code_type_metrics=False,
+            save_model=True,
+        )
+        llm_trainer.classifier_train(config=cfg, runtime=None)
+        # now load via skip_training path (no evals_config, so it just loads and exits)
+        skip_cfg = LLMClassifierTrainerAppMainConfig(
+            base_model="prajjwal1/bert-tiny",
+            classifier_checkpoint_path=output_dir,
+            datamodule_config={"lmdb_path": str(lmdb_path)},
+            training_args_config={
+                "output_dir": str(tmp_path / "skip_output"),
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 2,
+                "per_device_eval_batch_size": 2,
+                "report_to": "none",
+                "use_cpu": True,
+            },
+            max_seq_length=64,
+        )
+        # should complete without error (no evals_config -> just loads model and returns)
+        asyncio.run(llm_trainer.main(config=skip_cfg, runtime=None, skip_training=True))
+
+
 class TestClassifierTrainUnit:
     """Unit tests for the training loop with a small model.
 

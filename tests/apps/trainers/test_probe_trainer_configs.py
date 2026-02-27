@@ -104,6 +104,34 @@ class TestHydraConfigRegistration:
         assert dm_config is not None
 
 
+class TestProbeTrainerEvalOnlyConfig:
+    def test_checkpoint_dir_accepted(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(
+            **_make_minimal_config(
+                probe_checkpoint_dir="/tmp/fake-probes",  # noqa: S108
+            )
+        )
+        assert cfg.probe_checkpoint_dir is not None
+
+    def test_empty_probes_with_checkpoint_dir_valid(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(
+            **_make_minimal_config(
+                probe_configs=[],
+                probe_checkpoint_dir="/tmp/fake-probes",  # noqa: S108
+            )
+        )
+        assert len(cfg.probe_configs) == 0
+        assert cfg.probe_checkpoint_dir is not None
+
+    def test_empty_probes_without_checkpoint_dir_raises(self) -> None:
+        with pytest.raises(ValueError, match="probe_configs must be non-empty"):
+            ProbeTrainerAppMainConfig(**_make_minimal_config(probe_configs=[]))
+
+    def test_checkpoint_dir_default_is_none(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.probe_checkpoint_dir is None
+
+
 class TestProbeTrainerConfigReplicas:
     def test_num_replicas_default_is_1(self) -> None:
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
+import pathlib  # noqa: TC003
 import typing
 
 import pydantic
 import torch
 import transformers
-
-if typing.TYPE_CHECKING:
-    import pathlib
 
 import pyine.apps.trainers.common as common
 import pyine.configs.base
@@ -82,6 +80,13 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     None = use tokenizer default (usually 'right'). 'left' preserves the completion
     (at the end) at the cost of dropping prompt tokens. This is applied after
     get_tokenizer() and overrides its settings.
+    """
+
+    # --- Checkpoint loading (eval-only mode) ---
+    classifier_checkpoint_path: pathlib.Path | None = None
+    """Path to a saved classifier checkpoint directory (as written by ``Trainer.save_model()``).
+
+    Used in eval-only mode (``skip_training=True``) to load a pretrained model without re-training.
     """
 
     # --- Output ---
@@ -295,6 +300,7 @@ def register_hydra_configs(
         description="Entrypoint settings for the LLM classifier trainer app.",
         config={
             "populate_full_signature": True,
+            "skip_training": False,
             "hydra_defaults": [
                 "_self_",
                 {"config": "base"},

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import typing
+
+import pytest
 import torch
 
 import pyine.probes.base
 import pyine.probes.collection
 import tests.probes.conftest
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 
 class TestProbeCollection:
@@ -193,3 +199,105 @@ class TestReplicaSeeding:
             sample_probe_configs, hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM
         )
         assert len(coll.probes) == len(sample_probe_configs)
+
+
+def _save_collection_to_dir(
+    collection: pyine.probes.collection.ProbeCollection,
+    output_dir: pathlib.Path,
+) -> None:
+    """Save a ProbeCollection to disk in the same format as save_probe_checkpoints."""
+    for name, module in collection.probes.items():
+        probe = typing.cast("pyine.probes.base.BaseProbe", module)
+        probe_dir = output_dir / name
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
+        (probe_dir / "probe_config.json").write_text(probe.config.model_dump_json(indent=2))
+
+
+class TestLoadFromCheckpoint:
+    @pytest.fixture
+    def saved_collection(
+        self,
+        sample_probe_configs: list[pyine.probes.base.ProbeConfig],
+        tmp_path: pathlib.Path,
+    ) -> tuple[pyine.probes.collection.ProbeCollection, pathlib.Path]:
+        coll = pyine.probes.collection.ProbeCollection(
+            sample_probe_configs, hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM
+        )
+        checkpoint_dir = tmp_path / "probes"
+        _save_collection_to_dir(coll, checkpoint_dir)
+        return coll, checkpoint_dir
+
+    def test_round_trip_preserves_weights(
+        self,
+        saved_collection: tuple[pyine.probes.collection.ProbeCollection, pathlib.Path],
+    ) -> None:
+        original, checkpoint_dir = saved_collection
+        loaded = pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM,
+        )
+        assert set(loaded.probes.keys()) == set(original.probes.keys())
+        for name in original.probes:
+            for (orig_name, orig_param), (load_name, load_param) in zip(
+                original.probes[name].named_parameters(),
+                loaded.probes[name].named_parameters(),
+                strict=True,
+            ):
+                assert orig_name == load_name
+                torch.testing.assert_close(orig_param, load_param)
+
+    def test_round_trip_preserves_probe_configs(
+        self,
+        saved_collection: tuple[pyine.probes.collection.ProbeCollection, pathlib.Path],
+    ) -> None:
+        original, checkpoint_dir = saved_collection
+        loaded = pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM,
+        )
+        for name in original.probes:
+            orig_cfg = original._probe_configs[name]
+            load_cfg = loaded._probe_configs[name]
+            assert orig_cfg.name == load_cfg.name
+            assert orig_cfg.architecture == load_cfg.architecture
+            assert orig_cfg.layer == load_cfg.layer
+
+    def test_loaded_collection_produces_output(
+        self,
+        saved_collection: tuple[pyine.probes.collection.ProbeCollection, pathlib.Path],
+        random_activations: dict[int, torch.Tensor],
+        random_attention_mask: torch.Tensor,
+    ) -> None:
+        _, checkpoint_dir = saved_collection
+        loaded = pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM,
+        )
+        results = loaded(random_activations, random_attention_mask)
+        assert len(results) > 0
+        for logits in results.values():
+            assert logits.shape == (tests.probes.conftest.PROBE_BATCH_SIZE, 1)
+
+    def test_empty_dir_raises(self, tmp_path: pathlib.Path) -> None:
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="No probe configs found"):
+            pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+                checkpoint_dir=empty_dir,
+                hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM,
+            )
+
+    def test_loads_to_cpu_by_default(
+        self,
+        saved_collection: tuple[pyine.probes.collection.ProbeCollection, pathlib.Path],
+    ) -> None:
+        """Weights are loaded to CPU regardless of where they were saved."""
+        _, checkpoint_dir = saved_collection
+        loaded = pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            hidden_dim=tests.probes.conftest.PROBE_HIDDEN_DIM,
+        )
+        for module in loaded.probes.values():
+            for param in module.parameters():
+                assert param.device == torch.device("cpu")
