@@ -222,7 +222,7 @@ def _save_single_probe_to_disk(
     import pyine.guardrails.probes.base as probe_base
 
     probe = _typing.cast("probe_base.BaseProbe", collection.probes[probe_name])
-    ckpt_dir = probe_dir / checkpoint_name
+    ckpt_dir = probe_dir / probe_name / checkpoint_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     torch.save(probe.state_dict(), ckpt_dir / "probe_state_dict.pt")
     (ckpt_dir / "probe_config.json").write_text(probe.config.model_dump_json(indent=2))

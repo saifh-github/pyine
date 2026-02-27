@@ -116,58 +116,71 @@ class ProbeCollection(torch.nn.Module):
         *,
         checkpoint_name: str | None = None,
     ) -> ProbeCollection:
-        """Load a probe checkpoint from a specific probe directory.
+        """Load probe checkpoints from a multi-probe directory.
 
         Expected directory structure::
 
             checkpoint_dir/
-              <checkpoint_name>/
-                probe_config.json
-                probe_state_dict.pt
+              <probe_name>/
+                <checkpoint_name>/
+                  probe_config.json
+                  probe_state_dict.pt
 
         Args:
-            checkpoint_dir: Path to a specific probe directory containing
-                checkpoint subdirectories (e.g., ``final/``, ``step-0350/``).
+            checkpoint_dir: Path to the probes base directory containing
+                one subdirectory per probe, each with checkpoint
+                subdirectories (e.g., ``final/``, ``step-0350/``).
             hidden_dim: Hidden dimension of the LLM (must match checkpoint configs).
             checkpoint_name: Which checkpoint to load
                 (e.g., ``"final"``, ``"step-0050"``). When ``None`` (default),
-                auto-detects the latest: prefers ``final/`` if present,
+                auto-detects per probe: prefers ``final/`` if present,
                 otherwise picks the highest ``step-*`` checkpoint.
 
         Returns:
             ProbeCollection with loaded weights in eval mode.
 
         Raises:
-            FileNotFoundError: If ``checkpoint_dir`` doesn't exist or the
-                requested checkpoint is not found.
+            FileNotFoundError: If ``checkpoint_dir`` doesn't exist or no
+                valid probes are found.
         """
         import pyine.guardrails.probes.base as probe_base
 
         if not checkpoint_dir.is_dir():
             raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
 
-        if checkpoint_name is None:
-            checkpoint_name = cls._resolve_checkpoint_name(checkpoint_dir)
+        configs: list[pyine.guardrails.probes.base.ProbeConfig] = []
+        state_dicts: dict[str, dict[str, typing.Any]] = {}
 
-        ckpt_dir = checkpoint_dir / checkpoint_name
-        config_path = ckpt_dir / "probe_config.json"
-        weights_path = ckpt_dir / "probe_state_dict.pt"
+        for probe_dir in sorted(checkpoint_dir.iterdir()):
+            if not probe_dir.is_dir():
+                continue
 
-        if not config_path.exists() or not weights_path.exists():
-            raise FileNotFoundError(
-                f"Checkpoint '{checkpoint_name}' not found in {checkpoint_dir}. "
-                f"Expected {config_path} and {weights_path} to exist."
+            try:
+                resolved = checkpoint_name if checkpoint_name is not None else cls._resolve_checkpoint_name(probe_dir)
+            except FileNotFoundError:
+                continue
+
+            ckpt_dir = probe_dir / resolved
+            config_path = ckpt_dir / "probe_config.json"
+            weights_path = ckpt_dir / "probe_state_dict.pt"
+
+            if not config_path.exists() or not weights_path.exists():
+                continue
+
+            config = probe_base.ProbeConfig.model_validate_json(config_path.read_text())
+            state_dicts[config.name] = torch.load(
+                weights_path,
+                map_location="cpu",
+                weights_only=True,
             )
+            configs.append(config)
 
-        config = probe_base.ProbeConfig.model_validate_json(config_path.read_text())
-        state_dict = torch.load(
-            weights_path,
-            map_location="cpu",
-            weights_only=True,
-        )
+        if not configs:
+            raise FileNotFoundError(f"No valid probes found in {checkpoint_dir}")
 
-        collection = cls([config], hidden_dim)
-        collection.probes[config.name].load_state_dict(state_dict)
+        collection = cls(configs, hidden_dim)
+        for name, sd in state_dicts.items():
+            collection.probes[name].load_state_dict(sd)
         collection.eval()
         return collection
 
