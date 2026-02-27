@@ -3,6 +3,7 @@ import pathlib
 import types
 import typing
 
+import datasets
 import hydra
 import hydra.core.utils
 import hydra_zen
@@ -1019,3 +1020,122 @@ class TestCreateModelOrganismRewardComponents:
                 tokenizer=None,
                 generation_export_config=export_config,
             )
+
+
+class _MockTokenizerWithChatTemplate:
+    """Mock tokenizer that has a chat_template (simulates chat-tuned models)."""
+
+    chat_template = "{% for msg in messages %}{{ msg.role }}:{{ msg.content }}|{% endfor %}"
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, typing.Any]] | list[list[dict[str, typing.Any]]],
+        tokenize: bool = True,
+        **kwargs: typing.Any,
+    ) -> list[str]:
+        is_batch = isinstance(conversation[0], list)
+        if is_batch:
+            return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conv) for conv in conversation]
+        return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conversation)]
+
+
+class _MockTokenizerNoChatTemplate:
+    """Mock tokenizer without a chat_template (simulates encoder models like BERT)."""
+
+    pass  # no chat_template attribute at all
+
+
+class _MockTokenizerChatTemplateNoApply:
+    """Mock tokenizer with chat_template but no apply_chat_template."""
+
+    chat_template = "{% for msg in messages %}{{ msg.role }}:{{ msg.content }}|{% endfor %}"
+
+
+def _make_messages_dataset() -> datasets.DatasetDict:
+    """Create a small DatasetDict with messages column for testing."""
+    train_data = {
+        "messages": [
+            [{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "4"}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there"}],
+        ],
+        "label": [1, 0],
+        "sample_id": ["s1", "s2"],
+        "code_type": ["original", "original"],
+    }
+    valid_data = {
+        "messages": [
+            [{"role": "user", "content": "Test?"}, {"role": "assistant", "content": "Yes"}],
+        ],
+        "label": [1],
+        "sample_id": ["s3"],
+        "code_type": ["original"],
+    }
+    return datasets.DatasetDict(
+        {
+            "train": datasets.Dataset.from_dict(train_data),
+            "valid": datasets.Dataset.from_dict(valid_data),
+        }
+    )
+
+
+class TestTokenizerHasChatTemplate:
+    def test_with_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerWithChatTemplate()) is True
+
+    def test_without_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerNoChatTemplate()) is False
+
+    def test_with_chat_template_missing_apply_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerChatTemplateNoApply()) is False
+
+    def test_with_none_chat_template(self) -> None:
+        tokenizer = _MockTokenizerNoChatTemplate()
+        tokenizer.chat_template = None  # type: ignore[attr-defined]
+        assert trainer_common.tokenizer_has_chat_template(tokenizer) is False
+
+
+class TestApplyMessagesFormatting:
+    def test_with_chat_template_uses_template(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerWithChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "text" in result["train"].column_names
+        # chat template produces "role:content|" format
+        assert "user:What is 2+2?|" in result["train"][0]["text"]
+        assert "assistant:4|" in result["train"][0]["text"]
+        assert "messages" not in result["train"].column_names
+        assert result["train"]["label"] == [1, 0]
+        assert result["train"]["sample_id"] == ["s1", "s2"]
+        assert result["train"]["code_type"] == ["original", "original"]
+
+    def test_without_chat_template_concatenates_content(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "text" in result["train"].column_names
+        # fallback produces role-tagged content joined with \n\n
+        assert result["train"][0]["text"] == "user: What is 2+2?\n\nassistant: 4"
+        assert result["train"][1]["text"] == "user: Hello\n\nassistant: Hi there"
+        assert result["valid"][0]["text"] == "user: Test?\n\nassistant: Yes"
+
+    def test_without_chat_template_removes_messages_column(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "messages" not in result["train"].column_names
+
+    def test_preserves_other_columns(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert result["train"]["label"] == [1, 0]
+        assert result["train"]["sample_id"] == ["s1", "s2"]
+        assert result["train"]["code_type"] == ["original", "original"]
+
+    def test_both_splits_processed(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "train" in result
+        assert "valid" in result
+        assert "text" in result["valid"].column_names

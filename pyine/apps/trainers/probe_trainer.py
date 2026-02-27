@@ -15,6 +15,7 @@ import pathlib
 import statistics
 import typing
 
+import datasets  # noqa: TC002
 import sklearn.metrics
 import torch
 import transformers
@@ -28,13 +29,11 @@ import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.probes.collection
-import pyine.probes.data.datamodule
 import pyine.probes.extraction
 import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
 
 if typing.TYPE_CHECKING:
     import accelerate
-    import datasets
     import numpy as np
     import numpy.typing as npt
 
@@ -54,7 +53,8 @@ def _tokenize_split(
 ) -> datasets.Dataset:
     """Tokenize a probe dataset split (plain text, no special tokens).
 
-    Maps ``code_type`` strings to integer IDs for DDP-safe gathering.
+    Expects a ``text`` column (produced by ``apply_messages_formatting``) and maps ``code_type``
+    strings to integer IDs for DDP-safe gathering.
     """
 
     def _tokenize(examples: dict[str, list[str] | list[int]]) -> transformers.BatchEncoding:
@@ -627,12 +627,12 @@ def probe_train(
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
     # --- 3. Prepare datasets via DataModule ---
-    logger.info(f"Loading probe dataset from LMDB: {config.datamodule_config.lmdb_path}")
+    logger.info("Loading probe dataset from datamodule...")
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.probes.data.datamodule.ProbeDataModule)
-    raw_ds = datamodule.get_probe_dataset()
-    code_type_to_id = datamodule.code_type_to_id
-    id_to_code_type = datamodule.id_to_code_type
+    # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
+    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     if accelerator.is_main_process:
         for split_name in ["train", "valid"]:
@@ -642,6 +642,8 @@ def probe_train(
                 code_type_counts[code_type] = code_type_counts.get(code_type, 0) + 1
             logger.info(f"  {split_name} code_type distribution: {code_type_counts}")
 
+    # format messages -> text (uses chat template if available, else role-tagged concatenation)
+    raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
     train_loader = build_dataloader(

@@ -15,6 +15,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
+import pyine.evals.correctness.datamodule_configs  # noqa: TC001
 import pyine.probes.base  # noqa: TC001
 import pyine.probes.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
@@ -33,9 +34,15 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     probes are evaluated as guardrail scorers on the correctness pipeline after training completes.
     """
 
-    # --- Override: use ProbeDataModuleConfig instead of generic BaseDataModuleConfig ---
-    datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
-    """Probe data configuration (LMDB source, splitting, filtering)."""
+    # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
+    datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
+        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig
+        | pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
+    ] = ...  # type: ignore[assignment]
+    """Data configuration (LMDB source, splitting, filtering).
+
+    Accepts ProbeDataModuleConfig or CorrectnessDataModuleConfig.
+    """
 
     # --- LLM checkpoint ---
     llm_checkpoint_path: str | None = None
@@ -108,13 +115,22 @@ def _get_app_configs(
             "hydra_convert": "object",
         },
     )
-
+    # --- Correctness datamodule config ---
+    correctness_datamodule_config = pyine.configs.utils.make_config_description(
+        pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig,
+        name="correctness_base",
+        group=f"{group}/datamodule_config",
+        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
     # --- Correctness eval configs (registered so user can opt-in via hydra) ---
     evals_configs = pyine.evals.configs.get_evals_configs(
         eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         group=f"{group}/evals_config",
     )
-
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         ProbeTrainerAppMainConfig,
@@ -130,7 +146,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config, *evals_configs]
+    return [app_main_config, datamodule_config, correctness_datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(

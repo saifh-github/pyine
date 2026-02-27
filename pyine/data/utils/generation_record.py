@@ -2,11 +2,17 @@
 
 Both ``DiskRewardLogger`` (reward pipeline) and ``DiskEvalLogger`` (eval pipeline) produce
 LMDB records that share a common set of columns. This module defines the shared schema as a
-TypedDict and provides a builder function to construct it.
+TypedDict and provides a builder function to construct it. Additionally, it provides a utility
+to extract structured message lists from records for training pipelines.
 """
 
 import collections.abc
+import logging
 import typing
+
+logger = logging.getLogger(__name__)
+
+_warned_prompt_fallback = False
 
 
 class SharedGenerationRecordFields(typing.TypedDict):
@@ -99,3 +105,64 @@ def build_shared_record_fields(
         categories=list(categories) if categories is not None else None,
         key_prefix=key_prefix,
     )
+
+
+def build_messages_from_record(
+    record: dict[str, typing.Any],
+    model_output: str,
+) -> list[dict[str, str]]:
+    """Build a structured message list from an LMDB record and model output.
+
+    Attempts to reconstruct the conversation as a list of role-attributed messages suitable for
+    ``tokenizer.apply_chat_template()``.
+
+    Resolution order:
+    1. If ``record["prompt_messages"]`` exists, use it as-is and append the assistant reply.
+    2. Else, if ``record["prompt"]`` exists, construct a two-message conversation (user + assistant)
+       with a warning about manual reassembly.
+    3. Otherwise, raise ``ValueError``, as the record is malformed.
+
+    Args:
+        record: full LMDB record dict (produced by DiskRewardLogger or DiskEvalLogger).
+        model_output: Model output string to use as the assistant message content.
+
+    Returns:
+        List of messages, i.e. ``{"role": ..., "content": ...}`` dicts.
+
+    Raises:
+        ValueError: If neither ``prompt_messages`` nor ``prompt`` is available in the record.
+    """
+    sample_id = record.get("sample_id", "<unknown>")
+    prompt_messages = record.get("prompt_messages")
+    if prompt_messages is not None:
+        if not isinstance(prompt_messages, list) or not prompt_messages:
+            raise ValueError(f"record {sample_id!r} has invalid prompt_messages; expected non-empty list")
+        validated_messages = typing.cast("list[dict[str, str]]", prompt_messages)
+        for msg in validated_messages:
+            if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:  # pyright: ignore[reportUnnecessaryIsInstance]
+                raise ValueError(
+                    f"record {sample_id!r} has invalid prompt_messages; each message must have role and content"
+                )
+        if validated_messages[-1].get("role") == "assistant":
+            raise ValueError(
+                f"record {sample_id!r} has prompt_messages ending with an assistant turn; "
+                "this would cause a duplicate assistant message, fix the data export "
+                "or strip the trailing assistant message from prompt_messages"
+            )
+        messages: list[dict[str, str]] = [dict(msg) for msg in validated_messages]
+        messages.append({"role": "assistant", "content": model_output})
+        return messages
+    prompt = record.get("prompt")
+    if prompt is not None:
+        global _warned_prompt_fallback  # noqa: PLW0603
+        if not _warned_prompt_fallback:
+            logger.warning(
+                f"record {sample_id!r} (and possibly others) has 'prompt' but no 'prompt_messages'; "
+                "manually reassembling inputs; multi-turn context/system prompts may be lost"
+            )
+            _warned_prompt_fallback = True
+        return [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": model_output},
+        ]
+    raise ValueError(f"record for {sample_id!r} has neither 'prompt_messages' nor 'prompt'; cannot build messages")

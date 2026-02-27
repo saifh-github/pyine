@@ -24,7 +24,6 @@ import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.scorers as correctness_scorers
-import pyine.probes.data.datamodule
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Columns from the raw LMDB dataset that should be removed after tokenization.
 # We explicitly list source columns to remove (rather than keeping a whitelist)
 # so that tokenizer-generated columns like token_type_ids are preserved.
-_RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type")
+_RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type", "messages")
 
 
 def _tokenize_for_classification(
@@ -46,6 +45,7 @@ def _tokenize_for_classification(
     tokenizer: transformers.PreTrainedTokenizerBase,
     max_seq_length: int,
     code_type_to_id: dict[str, int] | None = None,
+    add_special_tokens: bool = True,
 ) -> datasets.Dataset:
     """Tokenize a dataset split for sequence classification.
 
@@ -54,6 +54,8 @@ def _tokenize_for_classification(
         tokenizer: Encoder tokenizer (adds [CLS]/[SEP] automatically).
         max_seq_length: Maximum sequence length.
         code_type_to_id: Optional mapping for per-code-type metrics.
+        add_special_tokens: Whether to add special tokens (e.g. [CLS]/[SEP]). Set to False when
+            text already contains special tokens from a chat template to avoid double insertion.
 
     Returns:
         Tokenized dataset with input_ids, attention_mask, labels columns.
@@ -67,6 +69,7 @@ def _tokenize_for_classification(
             max_length=max_seq_length,
             truncation=True,
             padding=False,  # Dynamic padding in collator
+            add_special_tokens=add_special_tokens,
         )
         tokenized["labels"] = examples["label"]
         if code_type_to_id is not None:
@@ -249,26 +252,33 @@ def classifier_train(
 
     # --- 3. Load LMDB data via DataModule (handles DDP coordination + caching) ---
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.probes.data.datamodule.ProbeDataModule)
-    raw_ds = datamodule.get_probe_dataset()
-    code_type_to_id = datamodule.code_type_to_id
-    id_to_code_type = datamodule.id_to_code_type
+    # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
+    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     # --- 4. Log class distribution (always, regardless of class_weight_mode) ---
     _log_class_distribution(raw_ds, logger)
 
-    # --- 5. Tokenize ---
+    # --- 5. Format messages -> text (chat template if available, else plain concat), then tokenize ---
+    has_chat_template = pyine.apps.trainers.common.tokenizer_has_chat_template(tokenizer)
+    raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
+    # when a chat template produced the text, special tokens are already embedded;
+    # encoder tokenizers (no chat template) need add_special_tokens=True for [CLS]/[SEP]
+    add_special_tokens = not has_chat_template
     train_ds = _tokenize_for_classification(
-        raw_ds["train"],
-        tokenizer,
-        config.max_seq_length,
-        code_type_to_id if config.log_per_code_type_metrics else None,
+        dataset=raw_ds["train"],
+        tokenizer=tokenizer,
+        max_seq_length=config.max_seq_length,
+        code_type_to_id=code_type_to_id if config.log_per_code_type_metrics else None,
+        add_special_tokens=add_special_tokens,
     )
     valid_ds = _tokenize_for_classification(
-        raw_ds["valid"],
-        tokenizer,
-        config.max_seq_length,
-        code_type_to_id if config.log_per_code_type_metrics else None,
+        dataset=raw_ds["valid"],
+        tokenizer=tokenizer,
+        max_seq_length=config.max_seq_length,
+        code_type_to_id=code_type_to_id if config.log_per_code_type_metrics else None,
+        add_special_tokens=add_special_tokens,
     )
 
     # --- 6. Setup training ---

@@ -4,8 +4,12 @@
 
 The LLM classifier trainer fine-tunes an encoder model (e.g., ModernBERT, DeBERTa-v3) as a
 **binary classifier** on the same LMDB data used by the probe trainer. It predicts whether a
-model's completion is correct (`label=1`) or incorrect (`label=0`) from the concatenated
-`prompt + model_output` text.
+model's completion is correct (`label=1`) or incorrect (`label=0`).
+
+Data is loaded as structured **message lists** (role-attributed conversations). The trainer
+automatically formats messages into text: if the tokenizer defines a `chat_template` (e.g.,
+chat-tuned models), it is applied; otherwise (typical for encoder models like ModernBERT,
+DeBERTa), messages are concatenated into role-tagged plain text (e.g., `user: ...`, `assistant: ...`).
 
 Unlike the probe trainer (which trains lightweight heads on frozen LLM activations), this trainer
 fine-tunes the entire encoder model (or LoRA adapters) end-to-end using HuggingFace `Trainer`.
@@ -58,7 +62,7 @@ The main config class is `LLMClassifierTrainerAppMainConfig` in
 | Field                       | Default    | Description                                                |
 | --------------------------- | ---------- | ---------------------------------------------------------- |
 | `base_model`                | (required) | HuggingFace model ID (e.g., `answerdotai/ModernBERT-base`) |
-| `datamodule_config`         | (required) | `ProbeDataModuleConfig` — same as probe trainer            |
+| `datamodule_config`         | (required) | `ProbeDataModuleConfig` or `CorrectnessDataModuleConfig`   |
 | `training_args_config`      | (required) | HuggingFace `TrainingArguments` wrapper                    |
 | `max_seq_length`            | `3000`     | Max token length for tokenization                          |
 | `num_labels`                | `2`        | Number of classification labels                            |
@@ -70,7 +74,10 @@ The main config class is `LLMClassifierTrainerAppMainConfig` in
 
 ### Data Source Config (`datamodule_config`)
 
-Same `ProbeDataModuleConfig` used by the probe trainer:
+The trainer accepts either `ProbeDataModuleConfig` (reward LMDBs from `DiskRewardLogger`) or
+`CorrectnessDataModuleConfig` (eval LMDBs from `DiskEvalLogger`).
+
+#### Option A: Reward LMDB (`ProbeDataModuleConfig`, default)
 
 | Field                | Default                              | Description                                        |
 | -------------------- | ------------------------------------ | -------------------------------------------------- |
@@ -81,6 +88,15 @@ Same `ProbeDataModuleConfig` used by the probe trainer:
 | `selection_strategy` | `latest`                             | Deduplication strategy (`latest` or `best_reward`) |
 | `label_balance`      | `None`                               | Optional `LabelBalanceConfig` for resampling       |
 | `code_type_filter`   | `None`                               | Filter to specific code types                      |
+
+#### Option B: Correctness LMDB (`CorrectnessDataModuleConfig`)
+
+| Field          | Default      | Description                                                       |
+| -------------- | ------------ | ----------------------------------------------------------------- |
+| `lmdb_paths`   | (required)   | Path(s) or glob patterns to LMDBs exported by `DiskEvalLogger`    |
+| `label_type`   | `soft_match` | Which correctness label to use (`soft_match` or `hard_match`)     |
+| `split_config` | (required)   | `GuardrailSplitConfig` for building train/valid/test splits       |
+| `resampling`   | `None`       | Optional `RecordResamplingConfig` applied to train and valid data |
 
 ### Training Arguments (`training_args_config`)
 
@@ -105,7 +121,22 @@ ______________________________________________________________________
 
 See `pyine/configs/experiment/llm_classifier/v0_modernbert.yaml`.
 
-### With Label Balancing
+### With Correctness Datamodule (records exported from the correctness eval pipeline)
+
+```yaml
+config:
+  datamodule_config:
+    _target_: pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
+    lmdb_paths: /path/to/eval_logs.lmdb
+    label_type: soft_match
+    split_config:
+      split_source: my_dataset
+      guardrail_valid_fraction: 0.5
+    resampling:
+      target_positive_ratio: 0.5
+```
+
+### With Probe Datamodule (records exported from the reward manager training pipeline)
 
 ```yaml
 config:
@@ -162,7 +193,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 model = AutoModelForSequenceClassification.from_pretrained("path/to/checkpoint")
 tokenizer = AutoTokenizer.from_pretrained("path/to/checkpoint")
 
-inputs = tokenizer("prompt + completion text", return_tensors="pt", truncation=True)
+inputs = tokenizer("user: prompt text\n\nassistant: completion text", return_tensors="pt", truncation=True)
 outputs = model(**inputs)
 probs = torch.softmax(outputs.logits, dim=-1)
 predicted_class = probs.argmax(dim=-1)

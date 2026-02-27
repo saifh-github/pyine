@@ -54,14 +54,29 @@ class ProbeDataModule(pyine.data.datamodule.BaseDataModule["ProbeDataModuleConfi
         ds.save_to_disk(str(cache_path))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
         logger.info("Saved probe dataset to %s (hash: %s)", cache_path, cache_path.name)
 
+    _REQUIRED_COLUMNS = frozenset({"messages", "label", "sample_id", "code_type"})
+    """Columns expected in every split of the cached probe dataset."""
+
     @typing.override
     def setup(self, stage: str | None = None) -> None:
-        """Load the cached DatasetDict from disk (all ranks)."""
+        """Load the cached DatasetDict from disk (all ranks).
+
+        Also validates that the cached dataset has the expected schema (``messages``, ``label``,
+        ``sample_id``, ``code_type`` columns), raising if outdated data is found.
+        """
         cache_path = self._get_cache_path()
         if not cache_path.exists():
             raise RuntimeError(f"Probe dataset cache not found at {cache_path}. Call prepare_data() first.")
         self._dataset_dict = datasets.DatasetDict.load_from_disk(str(cache_path))  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
-
+        # validate schema: stale caches may have 'text' instead of 'messages'
+        for split_name in self._dataset_dict:
+            columns = set(self._dataset_dict[split_name].column_names)
+            missing = self._REQUIRED_COLUMNS - columns
+            if missing:
+                raise ValueError(
+                    f"missing columns in split '{split_name}' ({missing}); "
+                    f"delete cache at {cache_path} and rerun prepare_data()"
+                )
         # Build code_type mappings from the dataset content
         all_code_types = sorted(
             set(typing.cast("list[str]", self._dataset_dict["train"]["code_type"]))
@@ -81,7 +96,7 @@ class ProbeDataModule(pyine.data.datamodule.BaseDataModule["ProbeDataModuleConfi
     def get_probe_dataset(self) -> datasets.DatasetDict:
         """Return the prepared DatasetDict with ``"train"`` and ``"valid"`` splits.
 
-        Each split has columns: ``text`` (str), ``label`` (int),
+        Each split has columns: ``messages`` (list[dict[str, str]]), ``label`` (int),
         ``sample_id`` (str), ``code_type`` (str).
         """
         if self._dataset_dict is None:

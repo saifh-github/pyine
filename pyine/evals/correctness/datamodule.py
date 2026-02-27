@@ -1,4 +1,9 @@
-"""DataModule for correctness evaluations based on LMDB pregenerated eval records."""
+"""DataModule for correctness evaluations based on LMDB pregenerated eval records.
+
+Also provides a probe-compatible interface via ``get_probe_dataset()``, ``code_type_to_id``, and
+``id_to_code_type``, allowing this datamodule to serve as a drop-in replacement for
+``ProbeDataModule`` in training pipelines.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ import typing
 import datasets
 
 import pyine.data.datamodule
+import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.evals.correctness.data_loading as correctness_data_loading
 import pyine.evals.correctness.splits as correctness_splits
@@ -49,7 +55,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
     the `pyine.apps.trainers.common.evaluate_model` pipeline, but only implements the basic
     datamodule components needed; trying to access traditional train/valid/test dataloaders will
     fail. Instead, primary accessors are `get_guardrail_splits`, `get_records_for_subset`,
-    `get_all_records`, and `get_hf_dataset_dict`.
+    `get_all_records`, and `get_probe_dataset`.
     """
 
     def __init__(self, config: CorrectnessDataModuleConfig) -> None:
@@ -58,6 +64,8 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self._resolved_lmdb_paths: list[pathlib.Path] | None = None
         self._all_records: list[correctness_types.EvalRecord] | None = None
         self._guardrail_splits: correctness_splits.GuardrailSplits | None = None
+        self._code_type_to_id: dict[str, int] | None = None
+        self._id_to_code_type: dict[int, str] | None = None
 
     @typing.override
     def prepare_data(self) -> None:
@@ -98,6 +106,10 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             )
         self._all_records = records
         self._guardrail_splits = guardrail_splits
+        # build code_type mappings from all records (sorted alphabetically for determinism)
+        all_code_types = sorted({rec.code_type for rec in records})
+        self._code_type_to_id = {ct: idx for idx, ct in enumerate(all_code_types)}
+        self._id_to_code_type = {idx: ct for ct, idx in self._code_type_to_id.items()}
         logger.info(
             f"correctness datamodule setup: {len(records)} records total, "
             f"train={len(guardrail_splits.guardrail_train)}, "
@@ -115,6 +127,8 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self._resolved_lmdb_paths = None
         self._all_records = None
         self._guardrail_splits = None
+        self._code_type_to_id = None
+        self._id_to_code_type = None
 
     def get_guardrail_splits(self) -> correctness_splits.GuardrailSplits:
         """Return the full splits object.
@@ -174,16 +188,32 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         return records
 
     def get_records_for_training(self) -> list[correctness_types.EvalRecord]:
-        """Return guardrail_train records, resampled if ``config.train_resampling`` is set.
+        """Return guardrail_train records, resampled if ``config.resampling`` is set.
 
         Raises:
             RuntimeError: If called before ``setup()``.
         """
         records = self.get_records_for_subset("guardrail_train")
-        if self.config.train_resampling is not None:
+        if self.config.resampling is not None:
             import pyine.evals.correctness.resampling as correctness_resampling
 
-            records = correctness_resampling.resample_records(records, self.config.train_resampling)
+            records = correctness_resampling.resample_records(records, self.config.resampling)
+        return records
+
+    def get_records_for_validation(self) -> list[correctness_types.EvalRecord]:
+        """Return guardrail_valid records, resampled if ``config.resampling`` is set.
+
+        Applies the same resampling as ``get_records_for_training()`` to ensure training and
+        validation distributions are consistent.
+
+        Raises:
+            RuntimeError: If called before ``setup()``.
+        """
+        records = self.get_records_for_subset("guardrail_valid")
+        if self.config.resampling is not None:
+            import pyine.evals.correctness.resampling as correctness_resampling
+
+            records = correctness_resampling.resample_records(records, self.config.resampling)
         return records
 
     def get_all_records(self) -> list[correctness_types.EvalRecord]:
@@ -196,36 +226,56 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             raise RuntimeError("DataModule not set up. Call setup() first.")
         return self._all_records
 
-    def get_hf_dataset_dict(
+    @property
+    def code_type_to_id(self) -> dict[str, int]:
+        """Map from code_type string to integer ID (built during ``setup()``)."""
+        if self._code_type_to_id is None:
+            raise RuntimeError("DataModule not set up. Call setup() first.")
+        return self._code_type_to_id
+
+    @property
+    def id_to_code_type(self) -> dict[int, str]:
+        """Map from integer ID to code_type string (built during ``setup()``)."""
+        if self._id_to_code_type is None:
+            raise RuntimeError("DataModule not set up. Call setup() first.")
+        return self._id_to_code_type
+
+    def get_probe_dataset(
         self,
         text_field: str = "model_output",
     ) -> datasets.DatasetDict:
-        """Convert guardrail splits into an HF ``DatasetDict``.
+        """Return an HF ``DatasetDict`` with ``"train"`` and ``"valid"`` splits (probe-compatible).
 
-        The resulting dataset has columns: ``text``, ``label``, ``sample_id``, ``code_type``
-        (same schema as ``ProbeDataModule.get_probe_dataset()``).
+        This method provides the same interface as ``ProbeDataModule.get_probe_dataset()``,
+        allowing ``CorrectnessDataModule`` to serve as a drop-in replacement in training pipelines.
 
-        Training records are resampled if ``config.train_resampling`` is set on the datamodule
-        config (applied transparently via ``get_records_for_training()``).
+        Maps ``guardrail_train`` -> ``train``, ``guardrail_valid`` -> ``valid``.
+        Resampling is applied to both splits when ``config.resampling`` is set.
+
+        Each split has columns: ``messages`` (list[dict[str, str]]), ``label`` (int),
+        ``sample_id`` (str), ``code_type`` (str).
 
         Args:
-            text_field: Which ``EvalRecord`` field to use as the ``text`` column.
-                Common choices: ``"model_output"``, ``"final_answer"``, ``"expected_output"``.
+            text_field: Which ``EvalRecord`` field to use as the assistant message content.
+                Common choices: ``"model_output"`` (default), ``"final_answer"``.
 
         Raises:
             RuntimeError: If called before ``setup()``.
             ValueError: If ``text_field`` refers to a None-valued field on any record.
+            ValueError: If any required split has no records.
         """
         split_map = {
-            "guardrail_train": self.get_records_for_training(),
-            "guardrail_valid": self.get_records_for_subset("guardrail_valid"),
-            "guardrail_test": self.get_records_for_subset("guardrail_test"),
+            "train": self.get_records_for_training(),
+            "valid": self.get_records_for_validation(),
         }
         hf_splits: dict[str, datasets.Dataset] = {}
         for split_name, records in split_map.items():
             if not records:
-                continue
-            texts: list[str] = []
+                raise ValueError(
+                    f"no records available for split {split_name!r} when building probe dataset; "
+                    "check split_config/resampling settings"
+                )
+            all_messages: list[list[dict[str, str]]] = []
             labels: list[int] = []
             sample_ids: list[str] = []
             code_types: list[str] = []
@@ -236,13 +286,17 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
                         f"record {record.sample_id!r} has None for text_field={text_field!r}; "
                         f"choose a field that is always populated"
                     )
-                texts.append(str(text_value))
+                messages = pyine.data.utils.generation_record.build_messages_from_record(
+                    record=record.record,
+                    model_output=str(text_value),
+                )
+                all_messages.append(messages)
                 labels.append(int(record.label))
                 sample_ids.append(record.sample_id)
                 code_types.append(record.code_type)
             hf_splits[split_name] = datasets.Dataset.from_dict(  # pyright: ignore[reportUnknownMemberType]
                 {
-                    "text": texts,
+                    "messages": all_messages,
                     "label": labels,
                     "sample_id": sample_ids,
                     "code_type": code_types,
@@ -256,8 +310,9 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
     ) -> dict[str, int | float | str]:
         """Return per-subset record counts, positive/negative label counts, and code_type distribution.
 
-        Reports raw stats for each subset. If ``config.train_resampling`` is set, also adds
-        ``guardrail_train_resampled/...`` stats showing the post-resampling composition.
+        Reports raw stats for each subset. If ``config.resampling`` is set, also adds
+        ``guardrail_train_resampled/...`` and ``guardrail_valid_resampled/...`` stats showing
+        the post-resampling composition.
 
         Args:
             target_subsets: Subset names to report raw stats for. Defaults to all subsets.
@@ -268,9 +323,13 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         for subset_name in target_subsets or list(self.config.subset_names):
             records = self.get_records_for_subset(subset_name)
             _collect_record_stats(records, prefix=subset_name, out=stats)
-        if self.config.train_resampling is not None and (target_subsets is None or "guardrail_train" in target_subsets):
-            resampled_train = self.get_records_for_training()
-            _collect_record_stats(resampled_train, prefix="guardrail_train_resampled", out=stats)
+        if self.config.resampling is not None:
+            if target_subsets is None or "guardrail_train" in target_subsets:
+                resampled_train = self.get_records_for_training()
+                _collect_record_stats(resampled_train, prefix="guardrail_train_resampled", out=stats)
+            if target_subsets is None or "guardrail_valid" in target_subsets:
+                resampled_valid = self.get_records_for_validation()
+                _collect_record_stats(resampled_valid, prefix="guardrail_valid_resampled", out=stats)
         return stats
 
     def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:
@@ -291,6 +350,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             "use get_records_for_subset() or get_guardrail_splits() instead"
         )
 
+    @typing.override
     def val_dataloader(self) -> typing.NoReturn:
         raise NotImplementedError(
             "CorrectnessDataModule does not provide data loaders directly; "
@@ -304,6 +364,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             "use get_records_for_subset() or get_guardrail_splits() instead"
         )
 
+    @typing.override
     def predict_dataloader(self) -> typing.NoReturn:
         raise NotImplementedError(
             "CorrectnessDataModule does not provide data loaders directly; "

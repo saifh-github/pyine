@@ -22,17 +22,18 @@ def _make_record(
     label: bool,
     code_type: str = "original",
 ) -> correctness_types.EvalRecord:
+    model_output = f"output for {sample_id}"
     return correctness_types.EvalRecord(
         sample_id=sample_id,
         problem_id=problem_id,
         attempt_index=attempt_index,
-        model_output=f"output for {sample_id}",
+        model_output=model_output,
         final_answer="42",
         expected_output="expected",
         label=label,
         code_type=code_type,
         tags=[],
-        record={},
+        record={"prompt": f"prompt for {sample_id}", "model_output": model_output},
         difficulty_score=None,
     )
 
@@ -143,49 +144,6 @@ class TestGetRecordsForSubset:
             dm.get_records_for_subset("nonexistent")
 
 
-class TestGetHfDatasetDict:
-    def _make_config(self) -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
-        return correctness_datamodule_configs.CorrectnessDataModuleConfig(
-            lmdb_paths=(_FAKE_LMDB_PATH,),
-            split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-        )
-
-    def test_returns_correct_columns(self, mock_data: correctness_splits.GuardrailSplits) -> None:
-        config = self._make_config()
-        dm = correctness_datamodule.CorrectnessDataModule(config)
-        dm.prepare_data()
-        dm.setup()
-        hf_dict = dm.get_hf_dataset_dict()
-        assert isinstance(hf_dict, datasets.DatasetDict)
-        assert "guardrail_train" in hf_dict
-        assert "guardrail_valid" in hf_dict
-        assert "guardrail_test" in hf_dict
-        for split_name in hf_dict:
-            ds = hf_dict[split_name]
-            assert "text" in ds.column_names
-            assert "label" in ds.column_names
-            assert "sample_id" in ds.column_names
-            assert "code_type" in ds.column_names
-
-    def test_text_field_parameter(self, mock_data: correctness_splits.GuardrailSplits) -> None:
-        config = self._make_config()
-        dm = correctness_datamodule.CorrectnessDataModule(config)
-        dm.prepare_data()
-        dm.setup()
-        hf_dict = dm.get_hf_dataset_dict(text_field="final_answer")
-        valid_ds = hf_dict["guardrail_valid"]
-        assert valid_ds[0]["text"] == "42"  # all records have final_answer="42"
-
-    def test_default_text_field_uses_model_output(self, mock_data: correctness_splits.GuardrailSplits) -> None:
-        config = self._make_config()
-        dm = correctness_datamodule.CorrectnessDataModule(config)
-        dm.prepare_data()
-        dm.setup()
-        hf_dict = dm.get_hf_dataset_dict()
-        valid_ds = hf_dict["guardrail_valid"]
-        assert "output for" in valid_ds[0]["text"]
-
-
 class TestGetStats:
     def _make_config(self) -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
         return correctness_datamodule_configs.CorrectnessDataModuleConfig(
@@ -211,12 +169,13 @@ class TestGetStats:
         dm.setup()
         stats = dm.get_stats()
         assert "guardrail_train_resampled/num_records" not in stats
+        assert "guardrail_valid_resampled/num_records" not in stats
 
-    def test_resampled_train_stats_when_configured(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+    def test_resampled_stats_when_configured(self, mock_data: correctness_splits.GuardrailSplits) -> None:
         config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),
             split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-            train_resampling=correctness_types.RecordResamplingConfig(
+            resampling=correctness_types.RecordResamplingConfig(
                 target_positive_ratio=0.5,
                 seed=42,
                 min_records_per_label=1,
@@ -228,10 +187,14 @@ class TestGetStats:
         stats = dm.get_stats()
         # raw stats still present
         assert "guardrail_train/num_records" in stats
-        # resampled stats also present
+        assert "guardrail_valid/num_records" in stats
+        # resampled stats also present for both train and valid
         assert "guardrail_train_resampled/num_records" in stats
         assert "guardrail_train_resampled/num_positive" in stats
         assert "guardrail_train_resampled/num_negative" in stats
+        assert "guardrail_valid_resampled/num_records" in stats
+        assert "guardrail_valid_resampled/num_positive" in stats
+        assert "guardrail_valid_resampled/num_negative" in stats
 
     def test_resampled_stats_excluded_when_subset_scoped(
         self,
@@ -240,7 +203,7 @@ class TestGetStats:
         config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),
             split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-            train_resampling=correctness_types.RecordResamplingConfig(
+            resampling=correctness_types.RecordResamplingConfig(
                 target_positive_ratio=0.5,
                 seed=42,
                 min_records_per_label=1,
@@ -249,9 +212,10 @@ class TestGetStats:
         dm = correctness_datamodule.CorrectnessDataModule(config)
         dm.prepare_data()
         dm.setup()
-        stats = dm.get_stats(target_subsets=["guardrail_valid"])
-        assert "guardrail_valid/num_records" in stats
+        stats = dm.get_stats(target_subsets=["guardrail_test"])
+        assert "guardrail_test/num_records" in stats
         assert "guardrail_train_resampled/num_records" not in stats
+        assert "guardrail_valid_resampled/num_records" not in stats
 
     def test_raises_before_setup(self) -> None:
         config = self._make_config()
@@ -306,7 +270,7 @@ class TestGetRecordsForTraining:
         config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),
             split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-            train_resampling=correctness_types.RecordResamplingConfig(
+            resampling=correctness_types.RecordResamplingConfig(
                 target_positive_ratio=0.5,
                 seed=42,
                 min_records_per_label=1,
@@ -322,23 +286,84 @@ class TestGetRecordsForTraining:
         assert False in labels
 
 
-class TestGetHfDatasetDictWithResampling:
-    def test_without_config_unchanged(self, mock_data: correctness_splits.GuardrailSplits) -> None:
-        config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
+class TestCodeTypeMappings:
+    def _make_config(self) -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
+        return correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),
             split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
         )
-        dm = correctness_datamodule.CorrectnessDataModule(config)
+
+    def test_populated_after_setup(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
         dm.prepare_data()
         dm.setup()
-        hf_dict = dm.get_hf_dataset_dict()
-        assert len(hf_dict["guardrail_train"]) == len(mock_data.guardrail_train)
+        ct_to_id = dm.code_type_to_id
+        id_to_ct = dm.id_to_code_type
+        assert len(ct_to_id) > 0
+        assert len(id_to_ct) == len(ct_to_id)
+        for ct, ct_id in ct_to_id.items():
+            assert id_to_ct[ct_id] == ct
 
-    def test_with_config_train_resampled(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+    def test_before_setup_raises(self) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        with pytest.raises(RuntimeError, match="not set up"):
+            _ = dm.code_type_to_id
+        with pytest.raises(RuntimeError, match="not set up"):
+            _ = dm.id_to_code_type
+
+    def test_cleared_after_teardown(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        dm.prepare_data()
+        dm.setup()
+        dm.teardown()
+        with pytest.raises(RuntimeError, match="not set up"):
+            _ = dm.code_type_to_id
+
+
+class TestGetProbeDataset:
+    def _make_config(self) -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
+        return correctness_datamodule_configs.CorrectnessDataModuleConfig(
+            lmdb_paths=(_FAKE_LMDB_PATH,),
+            split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+        )
+
+    def test_returns_train_valid_splits(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        dm.prepare_data()
+        dm.setup()
+        ds = dm.get_probe_dataset()
+        assert isinstance(ds, datasets.DatasetDict)
+        assert "train" in ds
+        assert "valid" in ds
+        assert "guardrail_test" not in ds  # not included
+
+    def test_has_messages_column(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        dm.prepare_data()
+        dm.setup()
+        ds = dm.get_probe_dataset()
+        for split_name in ("train", "valid"):
+            assert "messages" in ds[split_name].column_names
+            assert "label" in ds[split_name].column_names
+            assert "sample_id" in ds[split_name].column_names
+            assert "code_type" in ds[split_name].column_names
+            assert "text" not in ds[split_name].column_names
+
+    def test_messages_are_structured(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        dm.prepare_data()
+        dm.setup()
+        ds = dm.get_probe_dataset()
+        first_messages = ds["train"][0]["messages"]
+        assert isinstance(first_messages, list)
+        assert len(first_messages) >= 2
+        assert first_messages[-1]["role"] == "assistant"
+
+    def test_resampling_applied(self, mock_data: correctness_splits.GuardrailSplits) -> None:
         config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),
             split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-            train_resampling=correctness_types.RecordResamplingConfig(
+            resampling=correctness_types.RecordResamplingConfig(
                 target_positive_ratio=0.5,
                 seed=42,
                 min_records_per_label=1,
@@ -347,11 +372,44 @@ class TestGetHfDatasetDictWithResampling:
         dm = correctness_datamodule.CorrectnessDataModule(config)
         dm.prepare_data()
         dm.setup()
-        hf_dict = dm.get_hf_dataset_dict()
-        assert len(hf_dict["guardrail_train"]) <= len(mock_data.guardrail_train)
-        # valid and test should be unchanged
-        assert len(hf_dict["guardrail_valid"]) == len(mock_data.guardrail_valid)
-        assert len(hf_dict["guardrail_test"]) == len(mock_data.guardrail_test)
+        ds = dm.get_probe_dataset()
+        assert len(ds["train"]) <= len(mock_data.guardrail_train)
+        assert len(ds["valid"]) <= len(mock_data.guardrail_valid)
+
+
+class TestGetRecordsForValidation:
+    def test_without_resampling_returns_all_valid(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
+            lmdb_paths=(_FAKE_LMDB_PATH,),
+            split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+        )
+        dm = correctness_datamodule.CorrectnessDataModule(config)
+        dm.prepare_data()
+        dm.setup()
+        records = dm.get_records_for_validation()
+        assert len(records) == len(mock_data.guardrail_valid)
+
+    def test_with_resampling_symmetric_with_training(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
+            lmdb_paths=(_FAKE_LMDB_PATH,),
+            split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+            resampling=correctness_types.RecordResamplingConfig(
+                target_positive_ratio=0.5,
+                seed=42,
+                min_records_per_label=1,
+            ),
+        )
+        dm = correctness_datamodule.CorrectnessDataModule(config)
+        dm.prepare_data()
+        dm.setup()
+        valid_records = dm.get_records_for_validation()
+        train_records = dm.get_records_for_training()
+        # both should be resampled (possibly smaller than raw)
+        assert len(valid_records) <= len(mock_data.guardrail_valid)
+        assert len(train_records) <= len(mock_data.guardrail_train)
+        # both should have both labels
+        assert {rec.label for rec in valid_records} == {True, False}
+        assert {rec.label for rec in train_records} == {True, False}
 
 
 class TestDataLoaderStubs:

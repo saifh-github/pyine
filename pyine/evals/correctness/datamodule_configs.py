@@ -43,12 +43,13 @@ class CorrectnessDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     split_config: correctness_types.GuardrailSplitConfig
     """Configuration for building guardrail train/valid/test splits."""
 
-    train_resampling: correctness_types.RecordResamplingConfig | None = None
-    """Optional resampling config for training records.
+    resampling: correctness_types.RecordResamplingConfig | None = None
+    """Optional resampling config applied symmetrically to training and validation records.
 
-    When set, guardrail_train records are resampled before being exposed via
-    ``get_records_for_training()`` and ``get_hf_dataset_dict()``. Allows controlling training data
-    composition (e.g. label imbalance, code type diversity).
+    When set, both guardrail_train and guardrail_valid records are resampled before being exposed
+    via ``get_records_for_training()``, ``get_records_for_validation()``, and ``get_probe_dataset()``.
+    This ensures training and validation distributions are consistent.
+    Allows controlling data composition (e.g. label imbalance, code type diversity).
     """
 
     subset_names: tuple[str, ...] = ("guardrail_train", "guardrail_valid", "guardrail_test")

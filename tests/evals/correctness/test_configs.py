@@ -78,7 +78,7 @@ class TestGetEvalsConfigs:
             "oversample_balanced",
         }
         cal_names = {cfg.name for cfg in configs if cfg.group == "test_group/calibration_resampling"}
-        train_names = {cfg.name for cfg in configs if cfg.group == "test_group/datamodule_config/train_resampling"}
+        train_names = {cfg.name for cfg in configs if cfg.group == "test_group/datamodule_config/resampling"}
         assert preset_names.issubset(cal_names)
         assert preset_names.issubset(train_names)
 

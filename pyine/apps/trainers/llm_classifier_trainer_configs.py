@@ -19,6 +19,7 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
+import pyine.evals.correctness.datamodule_configs  # noqa: TC001
 import pyine.probes.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 import pyine.utils.transformers
@@ -33,9 +34,10 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     auto_model_config, lora_config, etc.) and overrides get_model() to use
     AutoModelForSequenceClassification instead of AutoModelForCausalLM.
 
-    Embeds ProbeDataModuleConfig for LMDB data loading — same config used by the
-    probe trainer. All LMDB fields (lmdb_path, label_metric_key, split config,
-    code_type_filter, label_balance, etc.) live in datamodule_config.
+    Embeds ProbeDataModuleConfig (or CorrectnessDataModuleConfig) for LMDB data loading. Data is
+    loaded as structured message lists; the trainer auto-detects chat template support on the
+    tokenizer. If a ``chat_template`` is defined (chat-tuned models), it is applied; otherwise
+    (encoder models like ModernBERT, DeBERTa), messages are concatenated into role-tagged plain text.
     """
 
     # --- Override: optional correctness benchmarking after classifier training ---
@@ -46,9 +48,15 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     classifier is evaluated as a guardrail scorer on the correctness pipeline after training completes.
     """
 
-    # --- Override: use ProbeDataModuleConfig (same as probe trainer) ---
-    datamodule_config: pydantic.SerializeAsAny[pyine.probes.data.datamodule_configs.ProbeDataModuleConfig] = ...  # type: ignore[assignment]
-    """Probe data configuration (LMDB source, splitting, filtering, label balancing)."""
+    # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
+    datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
+        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig
+        | pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
+    ] = ...  # type: ignore[assignment]
+    """Data configuration (LMDB source, splitting, filtering, label balancing).
+
+    Accepts ProbeDataModuleConfig or CorrectnessDataModuleConfig.
+    """
 
     # --- HuggingFace Training Arguments ---
     training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = ...  # type: ignore[assignment]
@@ -154,7 +162,8 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
 
     @pydantic.model_validator(mode="after")
     def _validate_class_weight_with_label_balance(self) -> LLMClassifierTrainerAppMainConfig:
-        if self.class_weight_mode == "balanced" and self.datamodule_config.label_balance is not None:
+        label_balance = getattr(self.datamodule_config, "label_balance", None)
+        if self.class_weight_mode == "balanced" and label_balance is not None:
             import warnings
 
             warnings.warn(
@@ -234,13 +243,22 @@ def _get_app_configs(
             "hydra_convert": "object",
         },
     )
-
+    # --- Correctness datamodule config ---
+    correctness_datamodule_config = pyine.configs.utils.make_config_description(
+        pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig,
+        name="correctness_base",
+        group=f"{group}/datamodule_config",
+        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
     # --- Correctness eval configs (registered so user can opt-in via hydra) ---
     evals_configs = pyine.evals.configs.get_evals_configs(
         eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         group=f"{group}/evals_config",
     )
-
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         LLMClassifierTrainerAppMainConfig,
@@ -257,7 +275,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config, *evals_configs]
+    return [app_main_config, datamodule_config, correctness_datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(

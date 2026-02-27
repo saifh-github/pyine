@@ -470,7 +470,7 @@ def get_evals_configs(
     are left as MISSING: the user must provide them at runtime or in a YAML override.
 
     Also registers canonical resampling presets under both ``calibration_resampling`` and
-    ``datamodule_config/train_resampling`` hydra groups.
+    ``datamodule_config/resampling`` hydra groups.
     """
     datamodule_config = pyine.configs.utils.make_config_description(
         correctness_datamodule_configs.CorrectnessDataModuleConfig,
@@ -506,20 +506,20 @@ def get_evals_configs(
             "hydra_convert": "object",
         },
     )
-    train_resampling_config = pyine.configs.utils.make_config_description(
+    resampling_config = pyine.configs.utils.make_config_description(
         correctness_types.RecordResamplingConfig,
         name="resampling_base",
-        group=f"{group}/datamodule_config/train_resampling",
-        description="Base resampling config for training data composition control.",
+        group=f"{group}/datamodule_config/resampling",
+        description="Base resampling config for training and validation data composition control.",
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
         },
     )
-    configs = [base_config, datamodule_config, calibration_resampling_config, train_resampling_config]
+    configs = [base_config, datamodule_config, calibration_resampling_config, resampling_config]
     resampling_groups = [
         f"{group}/calibration_resampling",
-        f"{group}/datamodule_config/train_resampling",
+        f"{group}/datamodule_config/resampling",
     ]
     for preset_name, factory_name in _RESAMPLING_PRESETS:
         factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
