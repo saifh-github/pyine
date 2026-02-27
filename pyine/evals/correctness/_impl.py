@@ -71,6 +71,16 @@ async def evaluate_guardrail_replicas(
     calibration_records = datamodule.get_records_for_calibration(
         resampling_config=config.calibration_resampling,
     )
+    if eval_subset_name == "guardrail_valid":
+        resampling_note = ""
+        if config.calibration_resampling is not None:
+            resampling_note = " (calibration is resampled but still drawn from guardrail_valid)"
+        logger.warning(
+            "evaluating on 'guardrail_valid' uses the same split as threshold calibration%s; "
+            "thresholded metrics will be optimistically biased. Prefer 'guardrail_test' for "
+            "unbiased evaluation.",
+            resampling_note,
+        )
     guardrail_splits = datamodule.get_guardrail_splits()
     logger.info(
         f"evaluating on '{eval_subset_name}': {len(eval_records)} eval records, "

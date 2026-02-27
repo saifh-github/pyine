@@ -599,6 +599,7 @@ def compute_class_balance(
     num_records = len(records)
     code_type_counts: dict[str, int] = collections.defaultdict(int)
     predict_type_counts: dict[str, int] = collections.defaultdict(int)
+    compound_example: tuple[str, list[str]] | None = None
     for rec in records:
         code_type_set = _parse_code_type_set(rec.code_type)
         if code_type_set:
@@ -612,6 +613,11 @@ def compute_class_balance(
             code_type_set_str = str(code_type_set_obj)
             code_type_counts[code_type_set_str] += 1  # compound entry (e.g. "bugged_hinted")
             if len(code_type_set) > 1:
+                if compound_example is None:
+                    compound_example = (
+                        rec.code_type,
+                        sorted(code_type.value for code_type in code_type_set),
+                    )
                 for code_type in code_type_set:
                     code_type_counts[code_type.value] += 1  # individual component entries
         else:
@@ -620,6 +626,15 @@ def compute_class_balance(
         if predict_type is not None:
             predict_type_counts[str(predict_type)] += 1
     code_type_proportions = {ct: count / num_records for ct, count in sorted(code_type_counts.items())}
+    if compound_example is not None:
+        compound_str, component_strs = compound_example
+        logger.warning(
+            "code_type_proportions are not mutually exclusive: compound code types are counted "
+            "both as a compound entry and as individual components. Example: '%s' contributes to "
+            "%s and its compound key. Interpret proportions accordingly.",
+            compound_str,
+            component_strs,
+        )
     predict_type_proportions = {pt: count / num_records for pt, count in sorted(predict_type_counts.items())}
     return correctness_types.ClassBalanceStats(
         overall_positive_rate=overall_positive_rate,
