@@ -35,6 +35,10 @@ def _make_record(
 class _MockProbe(pyine.probes.base.BaseProbe):
     """Minimal probe that returns random logits."""
 
+    def __init__(self, config: pyine.probes.base.ProbeConfig) -> None:
+        super().__init__(config)
+        self._dummy = torch.nn.Parameter(torch.zeros(1))  # pyright: ignore[reportUnknownMemberType]
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -64,7 +68,8 @@ class _MockModel(torch.nn.Module):
         batch_size, seq_len = input_ids.shape
         hidden_dim = self.config.hidden_size
         hidden_states = torch.randn(batch_size, seq_len, hidden_dim)  # pyright: ignore[reportUnknownMemberType]
-        # simulate passing through layers (hooks won't capture this without real forward)
+        for layer in self.model.layers:  # type: ignore[reportUnknownMemberType]
+            hidden_states = layer(hidden_states)
         return type("Output", (), {"last_hidden_state": hidden_states})()
 
 
@@ -98,6 +103,9 @@ class TestProbeScorer:
         result = scorer.score_records(records)
         assert len(result.scores) == 5
         assert all(0.0 <= score <= 1.0 for score in result.scores)
+        assert result.verification_costs is not None
+        assert len(result.verification_costs) == 5
+        assert all(cost >= 0.0 for cost in result.verification_costs)
         extractor.remove_hooks()
 
     def test_get_metadata_returns_dict(self) -> None:
@@ -131,7 +139,7 @@ class TestProbeScorer:
         assert metadata["scorer_type"] == "probe"
         extractor.remove_hooks()
 
-    def test_no_verification_cost(self) -> None:
+    def test_verification_cost_unit_is_flops(self) -> None:
         import pyine.probes.extraction
 
         hidden_dim = 32
@@ -151,7 +159,7 @@ class TestProbeScorer:
             max_seq_length=32,
             text_field="model_output",
         )
-        assert scorer.get_verification_cost_unit() is None
+        assert scorer.get_verification_cost_unit() == "FLOPs"
         extractor.remove_hooks()
 
 
@@ -163,7 +171,6 @@ class TestLLMClassifierScorer:
         scorer = correctness_scorers.LLMClassifierScorer(
             model=model,
             tokenizer=tokenizer,
-            batch_size=4,
             max_seq_length=64,
             text_field="model_output",
         )
@@ -171,6 +178,9 @@ class TestLLMClassifierScorer:
         result = scorer.score_records(records)
         assert len(result.scores) == 6
         assert all(0.0 <= score <= 1.0 for score in result.scores)
+        assert result.verification_costs is not None
+        assert len(result.verification_costs) == 6
+        assert all(cost > 0.0 for cost in result.verification_costs)
 
     def test_get_metadata_returns_dict(self) -> None:
         model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)
@@ -185,7 +195,7 @@ class TestLLMClassifierScorer:
         assert "model_name" in metadata
         assert metadata["scorer_type"] == "llm_classifier"
 
-    def test_no_verification_cost(self) -> None:
+    def test_verification_cost_unit_is_flops(self) -> None:
         model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)
         tokenizer = transformers.AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
         scorer = correctness_scorers.LLMClassifierScorer(
@@ -194,4 +204,31 @@ class TestLLMClassifierScorer:
             max_seq_length=64,
             text_field="model_output",
         )
-        assert scorer.get_verification_cost_unit() is None
+        assert scorer.get_verification_cost_unit() == "FLOPs"
+
+    def test_longer_inputs_have_higher_costs(self) -> None:
+        model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)
+        tokenizer = transformers.AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
+        scorer = correctness_scorers.LLMClassifierScorer(
+            model=model,
+            tokenizer=tokenizer,
+            max_seq_length=512,
+            text_field="model_output",
+        )
+        short_record = _make_record("short")
+        long_record = correctness_types.EvalRecord(
+            sample_id="long",
+            problem_id="p1",
+            attempt_index=0,
+            model_output="hello world " * 50,
+            final_answer="42",
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={},
+            difficulty_score=None,
+        )
+        result = scorer.score_records([short_record, long_record])
+        assert result.verification_costs is not None
+        assert result.verification_costs[1] > result.verification_costs[0]
